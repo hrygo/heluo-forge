@@ -5,17 +5,37 @@ import { once } from 'node:events';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
+const subprocessTest = { timeout: 120_000 };
 const backendUrl = new URL('../src/sqlite-backend.mjs', import.meta.url).href;
 const keyringUrl = new URL('../src/keyring.mjs', import.meta.url).href;
 const source = `import { createSqliteBackend } from ${JSON.stringify(backendUrl)};
 import { createFileKeyProvider } from ${JSON.stringify(keyringUrl)};
-import { existsSync, writeSync } from 'node:fs';
+import fs, { existsSync, writeSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 const dir = process.argv[1], role = process.argv[2], timeout = Number(process.argv[3]);
 const keyProvider = createFileKeyProvider({ path: join(dir + '.keys', 'keyring.json') });
+if (role === 'second') {
+  const marker = join(dir, 'credentials.sqlite.init');
+  const openSync = fs.openSync;
+  // Report the first real conflict with the initializer's marker.
+  fs.openSync = (path, ...args) => {
+    try { return openSync(path, ...args); }
+    catch (error) {
+      if (path === marker && error.code === 'EEXIST') {
+        fs.openSync = openSync;
+        syncBuiltinESMExports();
+        writeSync(1, 'initialization-busy\\n');
+      }
+      throw error;
+    }
+  };
+  syncBuiltinESMExports();
+}
 const keys = role === 'first' ? { ...keyProvider, initialize(kid) {
   writeSync(1, 'initializing\\n');
   const wait = new Int32Array(new SharedArrayBuffer(4));
@@ -31,6 +51,7 @@ const keys = role === 'first' ? { ...keyProvider, initialize(kid) {
     try { return originalExec.call(this, sql); }
     catch (error) {
       if ((sql === 'BEGIN EXCLUSIVE' || sql === 'COMMIT') && (error.errcode === 5 || error.errcode === 6)) {
+        DatabaseSync.prototype.exec = originalExec;
         writeSync(1, 'activation-busy\\n');
       }
       throw error;
@@ -39,26 +60,35 @@ const keys = role === 'first' ? { ...keyProvider, initialize(kid) {
 }} : keyProvider;
 const db = createSqliteBackend({ directory: dir, keyProvider: keys, readOnly: false, lockTimeoutMs: timeout });
 try {
-  if (role === 'second') writeSync(1, 'started\\n');
   await db.withLock(token => db.commit(token, () => db.set({ id: role, kind:'ref', owner:'', envelope: Buffer.from('synthetic'), kid:'k1' })));
   await db.close();
   writeSync(1, 'success\\n');
 } catch (error) { writeSync(1, 'error:' + (error.code || 'unknown') + ':' + (error.errcode ?? 'none') + '\\n'); process.exitCode = 1; }`;
 
-function child(directory, role, timeout) {
-  const process = spawn(globalThis.process.execPath, ['--input-type=module', '-e', source, directory, role, String(timeout)], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let output = ''; let stderr = '';
-  process.stdout.on('data', (chunk) => { output += chunk; });
-  process.stderr.on('data', (chunk) => { stderr += chunk; });
-  const exit = once(process, 'close').then(([code, signal]) => ({ code, signal, output, stderr }));
+function child(directory, role, lockTimeoutMs) {
+  const subprocess = spawn(process.execPath, ['--input-type=module', '-e', source, directory, role, String(lockTimeoutMs)], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  let stderr = '';
+  subprocess.stdout.on('data', (chunk) => { output += chunk; });
+  subprocess.stderr.on('data', (chunk) => { stderr += chunk; });
+  const phases = createInterface({ input: subprocess.stdout })[Symbol.asyncIterator]();
+  const exit = once(subprocess, 'close').then(([code, signal]) => ({ code, signal, output, stderr }));
   void exit.catch(() => {});
-  return { process, exit, async waitFor(text) {
-    const limit = Date.now() + 3000;
-    while (!output.includes(text)) {
-      if (process.exitCode !== null || Date.now() > limit) throw Error(`child did not reach ${text}: ${output} ${stderr}`);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-  } };
+  return {
+    process: subprocess,
+    exit,
+    async waitFor(phase) {
+      while (true) {
+        const line = await phases.next();
+        if (line.done) break;
+        if (line.value === phase) return;
+      }
+      const { code, signal, output, stderr } = await exit;
+      throw new Error(`${role} child exited before ${phase} (code=${code}, signal=${signal})\n${output}${stderr}`);
+    },
+  };
 }
 
 async function setup(t) {
@@ -83,7 +113,12 @@ async function setup(t) {
     if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
     await rm(root, { recursive: true, force: true });
   });
-  const start = (role, timeout = 5000) => { const c = child(directory, role, timeout); children.push(c); return c; };
+  // Successful interleavings use the test watchdog as their time budget.
+  const start = (role, lockTimeoutMs = subprocessTest.timeout) => {
+    const c = child(directory, role, lockTimeoutMs);
+    children.push(c);
+    return c;
+  };
   const own = (resource) => {
     let closing;
     const close = () => closing ??= Promise.resolve().then(() => resource.close());
@@ -93,13 +128,12 @@ async function setup(t) {
   return { directory, start, own };
 }
 
-test('two processes safely write during the first initialization', async (t) => {
+test('two processes safely write during the first initialization', subprocessTest, async (t) => {
   const { directory, start, own } = await setup(t);
   const first = start('first');
   await first.waitFor('initializing');
   const second = start('second');
-  await second.waitFor('started');
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await second.waitFor('initialization-busy');
   await writeFile(join(directory, 'release'), 'go');
   const [a, b] = await Promise.all([first.exit, second.exit]);
   assert.equal(a.code, 0, a.output + a.stderr);
@@ -111,7 +145,7 @@ test('two processes safely write during the first initialization', async (t) => 
   await closeDb();
 });
 
-test('initialization waits for a reader before activating the single generated key', async (t) => {
+test('initialization waits for a reader before activating the single generated key', subprocessTest, async (t) => {
   const { directory, start, own } = await setup(t);
   const first = start('after-key');
   await first.waitFor('key-ready');
@@ -176,7 +210,7 @@ test('writers sharing one backend wait until initialization activates the key', 
   }
 });
 
-test('initialization contention timeout preserves the generated key and fails closed', async (t) => {
+test('initialization contention timeout preserves the generated key and fails closed', subprocessTest, async (t) => {
   const { directory, start, own } = await setup(t);
   const first = start('after-key', 100);
   await first.waitFor('key-ready');
@@ -205,7 +239,7 @@ test('initialization contention timeout preserves the generated key and fails cl
   } finally { await closeReader(); }
 });
 
-test('interrupted initialization never regenerates a key or overwrites the database', async (t) => {
+test('interrupted initialization never regenerates a key or overwrites the database', subprocessTest, async (t) => {
   const { directory, start } = await setup(t);
   const first = start('first');
   await first.waitFor('initializing');
