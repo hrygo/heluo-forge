@@ -16,6 +16,8 @@ import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs'
 
 isolateHostDiagnostics();
 
+// One watchdog covers SQLite setup, Host readiness and child process exit.
+const processTestOptions = { timeout: 60_000 };
 const bin = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
 const config = {
   issuer: 'https://iam.corp.example', authorizationEndpoint: 'https://iam.corp.example/authorize',
@@ -62,7 +64,7 @@ function ownChild(own, child) {
 function startCli(own, directory, url, extraEnv = {}) {
   const child = spawn(process.execPath, [bin, 'auth', 'token'], {
     env: { HELUO_FORGE_STORE_DIRECTORY: directory, HELUO_FORGE_IAM_URL: url, ...extraEnv },
-    stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
@@ -136,23 +138,22 @@ function host(provider, adapter) {
   return { handler, dispose, service: provided.iam };
 }
 
-async function waitForCapability(provider) {
-  const deadline = Date.now() + 1500;
-  while (Date.now() < deadline) {
+async function waitForCapability(provider, signal) {
+  while (true) {
+    signal.throwIfAborted();
     const value = (await provider.resolve(BRIDGE_REF))?.value;
     if (value) return value;
-    await delay(10);
+    await delay(10, undefined, { signal });
   }
-  assert.fail('Host did not initialize the bridge capability');
 }
 
-test('fresh Host initializes the shared capability before a real CLI bridge request', async (t) => {
+test('fresh Host initializes the shared capability before a real CLI bridge request', processTestOptions, async (t) => {
   const { directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);
   own(() => app.dispose());
   const server = createRouteServer(own, app.handler);
   const url = await listen(server);
-  await waitForCapability(provider);
+  await waitForCapability(provider, t.signal);
   const rejected = await fetch(`${url}/api/forge-iam/bridge/token`, { method: 'POST', headers: { authorization: 'Bearer invalid' } });
   assert.equal(rejected.status, 401);
   const cli = startCli(own, directory, url);
@@ -163,7 +164,7 @@ test('fresh Host initializes the shared capability before a real CLI bridge requ
   assert.equal(cli.stderr(), '');
 });
 
-test('Host and CLI retain an existing SQLite session after upgrade with legacy documents present', async (t) => {
+test('Host and CLI retain an existing SQLite session after upgrade with legacy documents present', processTestOptions, async (t) => {
   const { directory, provider: original, own } = await fixture(t);
   await original.close();
   const keyPath = join(`${directory}.keys`, 'keyring.json');
@@ -180,7 +181,7 @@ test('Host and CLI retain an existing SQLite session after upgrade with legacy d
   own(() => app.dispose());
   const server = createRouteServer(own, app.handler);
   const url = await listen(server);
-  await waitForCapability(provider);
+  await waitForCapability(provider, t.signal);
   const cli = startCli(own, directory, url);
   const result = await cli.closed;
   if (result.error) throw result.error;
@@ -193,13 +194,13 @@ test('Host and CLI retain an existing SQLite session after upgrade with legacy d
   }
 });
 
-test('Host and CLI share a custom store with a separate sibling key directory', async (t) => {
+test('Host and CLI share a custom store with a separate sibling key directory', processTestOptions, async (t) => {
   const { root, directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);
   own(() => app.dispose());
   const server = createRouteServer(own, app.handler);
   const url = await listen(server);
-  await waitForCapability(provider);
+  await waitForCapability(provider, t.signal);
   const home = join(root, 'cli-home');
   const dataHome = join(root, 'cli-data');
   const configHome = join(root, 'cli-config');
@@ -221,7 +222,7 @@ test('Host and CLI share a custom store with a separate sibling key directory', 
   }
 });
 
-test('Host and CLI reject a legacy SQLite keyring without changing either file', async (t) => {
+test('Host and CLI reject a legacy SQLite keyring without changing either file', processTestOptions, async (t) => {
   const { directory, provider: original, own } = await fixture(t);
   await original.close();
   await rename(join(`${directory}.keys`, 'keyring.json'), join(directory, 'keyring.json'));
@@ -294,12 +295,12 @@ test('Host rejects a same-kid key mismatch before writing bridge capability', as
   assert.deepEqual(await provider.readRecord('heluo-iam/session'), grant);
 });
 
-test('CLI waits through the same pending refresh and outputs only the rotated Host token', { timeout: 10_000 }, async (t) => {
+test('CLI waits through the same pending refresh and outputs only the rotated Host token', processTestOptions, async (t) => {
   const { directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);
   own(() => app.dispose());
   await app.service.hydrate();
-  await waitForCapability(provider);
+  await waitForCapability(provider, t.signal);
 
   const writer = createKeychainProvider(createCredentialStore({ directory }));
   own(() => writer.close());
@@ -346,12 +347,12 @@ test('CLI waits through the same pending refresh and outputs only the rotated Ho
   assert.equal(cli.stderr(), '');
 });
 
-test('identified V1 pending refresh returns the rotated token through real Host and CLI', { timeout: 10_000 }, async (t) => {
+test('identified V1 pending refresh returns the rotated token through real Host and CLI', processTestOptions, async (t) => {
   const { directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);
   own(() => app.dispose());
   await app.service.hydrate();
-  await waitForCapability(provider);
+  await waitForCapability(provider, t.signal);
 
   const writer = createKeychainProvider(createCredentialStore({ directory }));
   own(() => writer.close());
@@ -400,7 +401,7 @@ test('identified V1 pending refresh returns the rotated token through real Host 
   assert.equal(cli.stderr(), '');
 });
 
-for (const resource of ['https://gateway.corp.example', null]) test(`identified V1 Host refresh rejects changed identity after removing resource ${String(resource)}`, { timeout: 10_000 }, async (t) => {
+for (const resource of ['https://gateway.corp.example', null]) test(`identified V1 Host refresh rejects changed identity after removing resource ${String(resource)}`, processTestOptions, async (t) => {
   const { directory, provider, adapter, own } = await fixture(t);
   const initial = { ...grant.payload, resource, accessExpiresAt: '2020-01-01T00:00:00.000Z' };
 
@@ -427,7 +428,7 @@ for (const resource of ['https://gateway.corp.example', null]) test(`identified 
   });
   const url = await listen(server);
   await app.service.hydrate();
-  await waitForCapability(provider);
+  await waitForCapability(provider, t.signal);
   await provider.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: initial }));
   const cli = startCli(own, directory, url);
   const result = await cli.closed;
@@ -457,7 +458,7 @@ test('concurrent Host instances initialize one capability in the shared store', 
   assert.equal((await second.resolve(BRIDGE_REF)).value, values[0]);
 });
 
-test('separate Host processes converge after both observe an empty ref', { timeout: 10_000 }, async (t) => {
+test('separate Host processes converge after both observe an empty ref', processTestOptions, async (t) => {
   const { directory, provider, own } = await fixture(t);
   const credentialModule = import.meta.resolve('@heluo/forge-credentials-keychain');
   const serviceModule = new URL('../src/service.mjs', import.meta.url).href;

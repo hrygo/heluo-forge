@@ -8,6 +8,14 @@ import { createIamService } from '../src/service.mjs';
 import { GRANT_KEY } from '../src/store.mjs';
 import { confidentialHarness, signIn, hold } from './support/client-auth-service.mjs';
 
+const sqliteTestOptions = { timeout: 60_000 };
+
+function bindOidcRequestsToTest(t) {
+  // These scenarios assert SQLite state and handoff ordering. The loopback
+  // transport uses the test deadline; OIDC timeout behavior has separate tests.
+  t.mock.method(AbortSignal, 'timeout', () => t.signal);
+}
+
 for (const method of ['client_secret_basic', 'client_secret_post']) {
   test(`${method} cross-instance pending/complete shares one rotation with the whole authContext`, async (t) => {
     const gate = hold(); t.after(gate.release);
@@ -97,7 +105,8 @@ for (const point of ['claim-receipt', 'http', 'final-entry', 'final-receipt']) {
 }
 
 for (const rebound of [false, true]) {
-  test(`an unavailable pre-POST client secret read ${rebound ? 'stays pending across rebinding' : 'restores the same SQLite grant'}`, async (t) => {
+  test(`an unavailable pre-POST client secret read ${rebound ? 'stays pending across rebinding' : 'restores the same SQLite grant'}`, sqliteTestOptions, async (t) => {
+    bindOidcRequestsToTest(t);
     const directory = await mkdtemp(join(tmpdir(), 'forge-iam-unsent-auth-'));
     const backend = createCredentialStore({ directory });
     const credentials = createKeychainProvider(backend);
@@ -146,7 +155,8 @@ for (const rebound of [false, true]) {
 }
 
 for (const changedSource of [false, true]) {
-  test(`confidential refresh handoff ${changedSource ? 'retains pending when the source changed' : 'revokes only the confirmed rotated grant'}`, async (t) => {
+  test(`confidential refresh handoff ${changedSource ? 'retains pending when the source changed' : 'revokes only the confirmed rotated grant'}`, sqliteTestOptions, async (t) => {
+    bindOidcRequestsToTest(t);
     const directory = await mkdtemp(join(tmpdir(), 'forge-iam-confidential-handoff-'));
     const backend = createCredentialStore({ directory });
     const credentials = createKeychainProvider(backend);
@@ -176,7 +186,10 @@ for (const changedSource of [false, true]) {
     });
     await signIn(h);
     const refresh = h.service.getAccessToken().catch((error) => error);
-    await gate.entered;
+    await Promise.race([
+      gate.entered,
+      refresh.then(() => assert.fail('refresh settled before the handoff barrier')),
+    ]);
     const persistedPending = await credentials.readRecord(GRANT_KEY);
     assert.equal(persistedPending.payload.refreshOperation.state, 'pending');
     const signOut = h.service.signOut();
