@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.48.0 |
+| 版本 | V0.49.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -54,6 +54,8 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 [企业研发全流程能力面](plugins/forge-devops-lifecycle.md)（DESIGN-013）统一六阶段地图、形态判定、人机双面、工程追溯、观察指标及开放决策。工具字段与事件字段分别见[工程工具契约](../contracts/engineering-tools.md)、[观察事件契约](../contracts/metrics-events.md)；不新增安装包，不代表内网接口或受控写已准入。
 
 专用访问的完整决策比较及验收细化见[评审稿](../architecture/gateway-identity-review.md)，提供方问题见[网关新函](../collaboration/gateway-confirmation-letter.md)与[IAM 原函覆盖评估](../collaboration/iam-confirmation-letter.md#8-本轮需求覆盖评估与补充确认清单平台内部)。
+
+[企业产物发布与分享设计](enterprise-artifact-publishing.md)（CORP-DSH-DESIGN-021）定义通用 HTML 发布、企业 IM 分享、DSH 收件及实施取证。 [金鱼审查证据](../engineering/reviews/enterprise-artifact-publishing-egm.md)
 
 ### 2.2 实现与验证入口
 
