@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -13,7 +13,9 @@ import { createIamService } from '../src/service.mjs';
 import { refreshBaseId } from '../src/session-identity.mjs';
 import { createGrantStore, GATEWAY_RECORD_KEY, GATEWAY_REF, GRANT_KEY } from '../src/store.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
+import { hold } from './support/client-auth-service.mjs';
 
+const sqliteTestOptions = { timeout: 60_000 };
 const start = Date.parse('2030-01-01T00:00:00.000Z');
 const accessLifetimeMs = 300_000;
 const issuer = 'https://iam.corp.example';
@@ -50,6 +52,7 @@ async function startHost(t, initial = original, {
   const store = createGrantStore(credentials);
   const posts = [];
   const events = [];
+  const renewalLog = new EventEmitter();
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
   const service = createIamService({ ...config, ...liveEndpoints, refreshSkewSeconds }, {
     credentials,
@@ -61,7 +64,10 @@ async function startHost(t, initial = original, {
     getAtomicStoreBinding: (candidate) => candidate === activeCredentials ? atomicStoreBinding : null,
     getGatewayAtomicStore: (candidate) => candidate === credentials ? joint : undefined,
     verifyGatewayAtomicStore: (candidate, adapter) => candidate === credentials && adapter === joint,
-    logRenewal: (event, fields) => events.push({ event, ...fields }),
+    logRenewal(event, fields) {
+      events.push({ event, ...fields });
+      renewalLog.emit('entry');
+    },
     fetch: liveEndpoints ? undefined : async (url, init) => {
       if (url === config.jwksUri) {
         if (failFirstJwks) {
@@ -104,7 +110,10 @@ async function startHost(t, initial = original, {
   function setAtomicStoreBinding(binding) {
     atomicStoreBinding = binding;
   }
-  return { blocker, store, service, credentials, posts, events, handler, openPeerStore, replaceCredentials, setAtomicStoreBinding };
+  async function waitForRenewalLog(predicate) {
+    while (!predicate()) await once(renewalLog, 'entry', { signal: t.signal });
+  }
+  return { blocker, store, service, credentials, posts, events, handler, openPeerStore, replaceCredentials, setAtomicStoreBinding, waitForRenewalLog };
 }
 
 function scheduledRenewal(events) {
@@ -118,13 +127,10 @@ function fireRenewal(t, events) {
   t.mock.timers.tick(scheduled.dueAtMs - Date.now());
 }
 
-async function waitForView(service, predicate) {
-  const deadline = performance.now() + 2000;
-  do {
-    const view = service.getView();
+async function waitForView(t, service, predicate) {
+  for await (const view of service.watch(t.signal)) {
     if (predicate(view)) return view;
-    await setImmediate();
-  } while (performance.now() < deadline);
+  }
   assert.fail(`expected background state change, got ${service.getView().state}`);
 }
 
@@ -148,17 +154,17 @@ function assertUnavailable(service, view) {
   assert.equal(service.getPrincipal(), undefined);
 }
 
-test('scheduled renewal retries a real SQLite read timeout before sending any refresh', async (t) => {
-  const { blocker, store, service, posts, events } = await startHost(t);
+test('scheduled renewal retries a real SQLite read timeout before sending any refresh', sqliteTestOptions, async (t) => {
+  const { blocker, store, service, posts, events, waitForRenewalLog } = await startHost(t);
   blocker.exec('BEGIN EXCLUSIVE');
   fireRenewal(t, events);
-  const blocked = await waitForView(service, (view) => view.state !== 'ready');
+  const blocked = await waitForView(t, service, (view) => view.state !== 'ready');
   await assert.rejects(store.read(), { code: 'CRED_LOCK_TIMEOUT' });
   assert.deepEqual(posts, []);
   assertUnavailable(service, blocked);
 
   t.mock.timers.tick(1000);
-  await waitForView(service, () => events.filter((row) => row.event === 'store-sync' && row.reason === 'read-lock-timeout').length === 2);
+  await waitForRenewalLog(() => events.filter((row) => row.event === 'store-sync' && row.reason === 'read-lock-timeout').length === 2);
   assertUnavailable(service, service.getView());
 
   blocker.exec('COMMIT');
@@ -168,10 +174,10 @@ test('scheduled renewal retries a real SQLite read timeout before sending any re
   assertUnavailable(service, service.getView());
   assert.deepEqual(posts, []);
   t.mock.timers.tick(1);
-  await waitForView(service, (view) => view.state === 'ready');
+  await waitForView(t, service, (view) => view.state === 'ready');
   // The successful read re-arms the due renewal in a separate timer turn.
   t.mock.timers.tick(1);
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== original.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== original.accessExpiresAt);
   assert.deepEqual(posts, [original.refreshToken]);
   const renewed = (await store.read()).grant;
   assert.equal(renewed.sessionInstanceId, original.sessionInstanceId);
@@ -179,7 +185,7 @@ test('scheduled renewal retries a real SQLite read timeout before sending any re
   assert.equal(renewed.refreshOperation.state, 'complete');
 });
 
-test('panel reads honor a shared backoff and the Host recovers without another request', async (t) => {
+test('panel reads honor a shared backoff and the Host recovers without another request', sqliteTestOptions, async (t) => {
   const initial = { ...original, accessExpiresAt: new Date(start + 60_000).toISOString() };
   const { blocker, store, service, credentials, posts, events, handler } = await startHost(t, initial);
   const { dueAtMs } = scheduledRenewal(events);
@@ -212,7 +218,7 @@ test('panel reads honor a shared backoff and the Host recovers without another r
   assert.equal(otherReads, 0);
 
   t.mock.timers.tick(1000);
-  const restored = await waitForView(service, (view) => view.state === 'ready');
+  const restored = await waitForView(t, service, (view) => view.state === 'ready');
   assert.equal(sessionReads, readsBeforePolls + 1);
   assert.equal(restored.principal, initial.subject);
   assert.equal(restored.accessExpiresAt, initial.accessExpiresAt);
@@ -223,11 +229,11 @@ test('panel reads honor a shared backoff and the Host recovers without another r
   await setImmediate();
   assert.deepEqual(posts, []);
   t.mock.timers.tick(1);
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
   assert.deepEqual(posts, [initial.refreshToken]);
 });
 
-test('panel read recovery restores a due preflight retry after access expires', async (t) => {
+test('panel read recovery restores a due preflight retry after access expires', sqliteTestOptions, async (t) => {
   const initial = { ...original, accessExpiresAt: new Date(start + 2200).toISOString(),
     refreshExpiresAt: new Date(start + 3200).toISOString() };
   const { blocker, store, service, posts, events, handler } = await startHost(t, initial, { failFirstJwks: true });
@@ -244,13 +250,13 @@ test('panel read recovery restores a due preflight retry after access expires', 
   assert.deepEqual(posts, []);
 
   t.mock.timers.tick(1000);
-  assert.equal((await waitForView(service, (view) => view.state === 'expired')).renewal, 'available');
+  assert.equal((await waitForView(t, service, (view) => view.state === 'expired')).renewal, 'available');
   const recoveryRenewal = scheduledRenewal(events);
   assert.notEqual(recoveryRenewal.renewalId, preflightRetry.renewalId);
   assert.equal(recoveryRenewal.dueAtMs, preflightRetry.dueAtMs);
   assert.deepEqual(posts, []);
   fireRenewal(t, events);
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
   assert.ok(Date.now() < Date.parse(initial.refreshExpiresAt));
   assert.deepEqual(posts, [initial.refreshToken]);
   const renewed = (await store.read()).grant;
@@ -261,7 +267,7 @@ test('panel read recovery restores a due preflight retry after access expires', 
 
 for (const startsExpired of [true, false]) {
   const scenario = startsExpired ? 'access already expired when the timer fires' : 'the claim outlives access';
-  test(`a confirmed unsent renewal retries when ${scenario}`, async (t) => {
+  test(`a confirmed unsent renewal retries when ${scenario}`, sqliteTestOptions, async (t) => {
     const oidc = await startMockOidc();
     t.after(() => oidc.close());
     const posts = [];
@@ -279,34 +285,30 @@ for (const startsExpired of [true, false]) {
     t.after(() => { if (tokenEndpoint.listening) return new Promise((resolve) => tokenEndpoint.close(resolve)); });
     const initial = { ...original, accessExpiresAt: new Date(start + 3000).toISOString(),
       refreshExpiresAt: new Date(start + 3550).toISOString() };
-    const { credentials, events, service, store } = await startHost(t, initial, {
+    const { credentials, events, service, store, waitForRenewalLog } = await startHost(t, initial, {
       refreshSkewSeconds: startsExpired ? 0 : 1,
       liveEndpoints: { jwksUri: oidc.endpoints.jwksUri, tokenEndpoint: `http://127.0.0.1:${port}/token` },
     });
 
-    const releaseRestore = Promise.withResolvers();
-    t.after(releaseRestore.resolve);
+    const restore = hold();
+    t.after(restore.release);
     const modifyRecord = credentials.modifyRecord.bind(credentials);
-    let restoring = false;
     let writes = 0;
     t.mock.method(credentials, 'modifyRecord', async (...args) => {
-      if (++writes === 2) {
-        restoring = true;
-        await releaseRestore.promise;
-      }
+      if (++writes === 2) await restore.pause();
       return modifyRecord(...args);
     });
     const { renewalId } = scheduledRenewal(events);
     fireRenewal(t, events);
-    await waitForView(service, () => restoring);
+    await restore.entered;
     assert.equal((await store.read()).grant.refreshOperation.state, 'pending');
     if (!startsExpired) t.mock.timers.tick(1000);
     assert.equal(service.notifyView().state, 'expired');
     assert.equal(Date.parse(initial.refreshExpiresAt) - Date.now(), 550);
     const waiter = assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
-    releaseRestore.resolve();
+    restore.release();
     await waiter;
-    await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+    await waitForRenewalLog(() => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
     assert.equal(service.getView().state, 'expired');
     assert.deepEqual((await store.read()).grant, initial);
     assert.deepEqual(posts, []);
@@ -316,7 +318,7 @@ for (const startsExpired of [true, false]) {
     const retryAt = scheduledRenewal(events).dueAtMs;
     assert.ok(retryAt > Date.now() && retryAt < Date.parse(initial.refreshExpiresAt));
     fireRenewal(t, events);
-    await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+    await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
     assert.deepEqual(posts, [initial.refreshToken]);
     const renewed = (await store.read()).grant;
     assert.equal(renewed.sessionInstanceId, initial.sessionInstanceId);
@@ -325,7 +327,7 @@ for (const startsExpired of [true, false]) {
   });
 }
 
-test('a recovered grant renews before its refresh deadline while the gateway summary is stalled', async (t) => {
+test('a recovered grant renews before its refresh deadline while the gateway summary is stalled', sqliteTestOptions, async (t) => {
   const { blocker, store, service, credentials, posts, events, handler } = await startHost(t, shortRefresh, {
     refreshSkewSeconds: 3,
     getManagedModelRuntime: () => ({ getView: () => ({ managed: true, state: 'ready', models: [] }) }),
@@ -334,27 +336,27 @@ test('a recovered grant renews before its refresh deadline while the gateway sum
   assert.equal((await service.resolveGatewayConnection()).subject, shortRefresh.subject);
   assert.equal(service.getView().modelAccess.state, 'ready');
 
-  const releaseGateway = Promise.withResolvers();
-  t.after(releaseGateway.resolve);
+  const gatewayRead = hold();
+  t.after(gatewayRead.release);
   const readRecord = credentials.readRecord.bind(credentials);
   let holdingGateway = false;
   t.mock.method(credentials, 'readRecord', async (key) => {
     const record = await readRecord(key);
     if (key === GATEWAY_RECORD_KEY && !holdingGateway) {
       holdingGateway = true;
-      await releaseGateway.promise;
+      await gatewayRead.pause();
     }
     return record;
   });
 
   blocker.exec('BEGIN EXCLUSIVE');
   fireRenewal(t, events);
-  assertUnavailable(service, await waitForView(service, (view) => view.state !== 'ready'));
+  assertUnavailable(service, await waitForView(t, service, (view) => view.state !== 'ready'));
   blocker.exec('COMMIT');
   t.mock.timers.tick(1000);
-  await waitForView(service, () => holdingGateway);
+  await gatewayRead.entered;
   t.mock.timers.tick(1);
-  const view = await waitForView(service, (current) => current.state === 'ready' && current.accessExpiresAt !== shortRefresh.accessExpiresAt);
+  const view = await waitForView(t, service, (current) => current.state === 'ready' && current.accessExpiresAt !== shortRefresh.accessExpiresAt);
   assert.ok(Date.now() < Date.parse(shortRefresh.refreshExpiresAt));
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
   assert.equal(service.getSession().signedIn, true);
@@ -362,11 +364,7 @@ test('a recovered grant renews before its refresh deadline while the gateway sum
   assert.equal(service.getSession().accessExpiresAt, view.accessExpiresAt);
   assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
 
-  let panel;
-  let panelFailure;
-  void callRoute(handler, 'GET', 'view').then((response) => { panel = response; }, (error) => { panelFailure = error; });
-  await waitForView(service, () => panel !== undefined || panelFailure !== undefined);
-  if (panelFailure) throw panelFailure;
+  const panel = await callRoute(handler, 'GET', 'view');
   assert.equal(panel.statusCode, 200);
   assert.equal(panel.body.signedIn, service.getSession().signedIn);
   assert.equal(panel.body.state, service.getSession().status);
@@ -376,25 +374,25 @@ test('a recovered grant renews before its refresh deadline while the gateway sum
   // A cached gateway summary cannot authorize a mismatched stored value.
   await credentials.set(GATEWAY_REF, 'synthetic-different-key');
   await assert.rejects(service.resolveGatewayConnection(), { code: 'IAM_GATEWAY_CREDENTIAL_REQUIRED' });
-  releaseGateway.resolve();
-  await waitForView(service, (current) => current.gatewayCredential?.state === 'invalid');
+  gatewayRead.release();
+  await waitForView(t, service, (current) => current.gatewayCredential?.state === 'invalid');
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-test('a late gateway summary leaves a due renewal able to run before refresh expiry', async (t) => {
+test('a late gateway summary leaves a due renewal able to run before refresh expiry', sqliteTestOptions, async (t) => {
   const initial = { ...shortRefresh, accessExpiresAt: new Date(start + 5000).toISOString() };
   const { blocker, store, service, credentials, posts, events, handler } = await startHost(t, initial, { refreshSkewSeconds: 0 });
   const { dueAtMs } = scheduledRenewal(events);
   assert.equal(dueAtMs, Date.parse(initial.accessExpiresAt));
-  const releaseGateway = Promise.withResolvers();
-  t.after(releaseGateway.resolve);
+  const gatewayRead = hold();
+  t.after(gatewayRead.release);
   const readRecord = credentials.readRecord.bind(credentials);
   let holdingGateway = false;
   t.mock.method(credentials, 'readRecord', async (key) => {
     const record = await readRecord(key);
     if (key === GATEWAY_RECORD_KEY && !holdingGateway) {
       holdingGateway = true;
-      await releaseGateway.promise;
+      await gatewayRead.pause();
     }
     return record;
   });
@@ -404,16 +402,16 @@ test('a late gateway summary leaves a due renewal able to run before refresh exp
   assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
   blocker.exec('COMMIT');
   t.mock.timers.tick(1000);
-  await waitForView(service, () => holdingGateway);
+  await gatewayRead.entered;
   assert.deepEqual(posts, []);
 
   // Let the summary publish after access expiry, before dispatching due timers.
   t.mock.timers.setTime(dueAtMs + 100);
-  releaseGateway.resolve();
-  await waitForView(service, (view) => view.gatewayCredential?.state === 'unconfigured');
+  gatewayRead.release();
+  await waitForView(t, service, (view) => view.gatewayCredential?.state === 'unconfigured');
   const refreshExpiry = Date.parse(initial.refreshExpiresAt);
   t.mock.timers.tick(refreshExpiry - Date.now() - 1);
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
   assert.ok(Date.now() < refreshExpiry);
   assert.deepEqual(posts, [initial.refreshToken]);
   assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
@@ -422,7 +420,7 @@ test('a late gateway summary leaves a due renewal able to run before refresh exp
 for (const [replacementHasGrant, readAgain] of [[false, false], [true, false], [false, true], [true, true]]) {
   const replacementState = replacementHasGrant ? 'a newer adopted grant' : 'an empty provider';
   const scenario = readAgain ? 'after concurrent re-adoption' : 'after an ordinary account switch';
-  test(`a provider switch to ${replacementState} fences /view ${scenario}`, async (t) => {
+  test(`a provider switch to ${replacementState} fences /view ${scenario}`, sqliteTestOptions, async (t) => {
     const { credentials, store, service, handler, replaceCredentials, posts } = await startHost(t);
     const accountSwitch = {
       ...original, subject: 'synthetic-second-subject', sessionInstanceId: Buffer.alloc(32, 10).toString('base64url'),
@@ -473,7 +471,7 @@ for (const [replacementHasGrant, readAgain] of [[false, false], [true, false], [
   });
 }
 
-test('panel lock recovery keeps the renewal that became due during the read backoff', async (t) => {
+test('panel lock recovery keeps the renewal that became due during the read backoff', sqliteTestOptions, async (t) => {
   const { blocker, service, posts, events, handler } = await startHost(t, shortRefresh, { refreshSkewSeconds: 3 });
   const { dueAtMs } = scheduledRenewal(events);
   t.mock.timers.tick(dueAtMs - Date.now() - 1);
@@ -483,9 +481,9 @@ test('panel lock recovery keeps the renewal that became due during the read back
   assert.deepEqual(posts, []);
   blocker.exec('COMMIT');
   t.mock.timers.tick(999);
-  await waitForView(service, (view) => view.state === 'ready');
+  await waitForView(t, service, (view) => view.state === 'ready');
   t.mock.timers.tick(1);
-  await waitForView(service, (view) => view.accessExpiresAt !== shortRefresh.accessExpiresAt && view.state === 'ready');
+  await waitForView(t, service, (view) => view.accessExpiresAt !== shortRefresh.accessExpiresAt && view.state === 'ready');
   t.mock.timers.tick(Date.parse(shortRefresh.refreshExpiresAt) - Date.now());
   await setImmediate();
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
@@ -496,17 +494,17 @@ async function beginPanelRecoveryWhileTimerFailureIsHeld(t, initial = shortRefre
   const { blocker, service, credentials, events, handler } = host;
   const { renewalId, dueAtMs } = scheduledRenewal(events);
   const releaseTimeout = Promise.withResolvers();
+  const readFailed = Promise.withResolvers();
   t.after(releaseTimeout.resolve);
   const readRecord = credentials.readRecord.bind(credentials);
   let holdTimerRead = true;
-  let actualTimeout;
   t.mock.method(credentials, 'readRecord', async (key) => {
     if (key !== GRANT_KEY || !holdTimerRead) return readRecord(key);
     holdTimerRead = false;
     try {
       return await readRecord(key);
     } catch (error) {
-      actualTimeout = error;
+      readFailed.resolve(error);
       await releaseTimeout.promise;
       throw error;
     }
@@ -514,8 +512,7 @@ async function beginPanelRecoveryWhileTimerFailureIsHeld(t, initial = shortRefre
 
   blocker.exec('BEGIN EXCLUSIVE');
   fireRenewal(t, events);
-  await waitForView(service, () => actualTimeout !== undefined);
-  assert.equal(actualTimeout.code, 'CRED_LOCK_TIMEOUT');
+  assert.equal((await readFailed.promise).code, 'CRED_LOCK_TIMEOUT');
   assert.equal(Date.now(), dueAtMs);
   t.mock.timers.tick(800);
   assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
@@ -523,35 +520,35 @@ async function beginPanelRecoveryWhileTimerFailureIsHeld(t, initial = shortRefre
   return { ...host, renewalId, dueAtMs, releaseTimeout: releaseTimeout.resolve };
 }
 
-test('a delayed timer read timeout preserves the due renewal when panel recovery is still reading', async (t) => {
-  const { service, credentials, posts, events, renewalId, releaseTimeout } = await beginPanelRecoveryWhileTimerFailureIsHeld(t);
-  const releaseRead = Promise.withResolvers();
-  t.after(releaseRead.resolve);
+test('a delayed timer read timeout preserves the due renewal when panel recovery is still reading', sqliteTestOptions, async (t) => {
+  const { service, credentials, posts, events, renewalId, releaseTimeout, waitForRenewalLog } = await beginPanelRecoveryWhileTimerFailureIsHeld(t);
+  const recoveryRead = hold();
+  t.after(recoveryRead.release);
   const readRecord = credentials.readRecord.bind(credentials);
   let reading = false;
   t.mock.method(credentials, 'readRecord', async (key) => {
     const record = await readRecord(key);
     if (key === GRANT_KEY && !reading) {
       reading = true;
-      await releaseRead.promise;
+      await recoveryRead.pause();
     }
     return record;
   });
   t.mock.timers.tick(1000);
-  await waitForView(service, () => reading);
+  await recoveryRead.entered;
   releaseTimeout();
-  await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
-  releaseRead.resolve();
-  await waitForView(service, (view) => view.state === 'ready');
+  await waitForRenewalLog(() => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+  recoveryRead.release();
+  await waitForView(t, service, (view) => view.state === 'ready');
   t.mock.timers.tick(1);
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== shortRefresh.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== shortRefresh.accessExpiresAt);
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-test('a delayed timer read timeout keeps the newly armed renewal after panel recovery adopted the same grant', async (t) => {
-  const { store, service, posts, events, renewalId, releaseTimeout } = await beginPanelRecoveryWhileTimerFailureIsHeld(t);
+test('a delayed timer read timeout keeps the newly armed renewal after panel recovery adopted the same grant', sqliteTestOptions, async (t) => {
+  const { store, service, posts, events, renewalId, releaseTimeout, waitForRenewalLog } = await beginPanelRecoveryWhileTimerFailureIsHeld(t);
   t.mock.timers.tick(1000);
-  const restored = await waitForView(service, (view) => view.state === 'ready');
+  const restored = await waitForView(t, service, (view) => view.state === 'ready');
   assert.equal(restored.accessExpiresAt, shortRefresh.accessExpiresAt);
   assert.deepEqual((await store.read()).grant, shortRefresh);
   assert.deepEqual(posts, []);
@@ -561,14 +558,14 @@ test('a delayed timer read timeout keeps the newly armed renewal after panel rec
   t.mock.timers.tick(400);
   const publications = events.length;
   releaseTimeout();
-  await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+  await waitForRenewalLog(() => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
   assert.equal(service.getView().state, 'ready');
   assert.equal(service.getSession().signedIn, true);
   assert.equal(events.slice(publications).some((row) => row.event === 'session-state' && row.state === 'unreachable'), false);
   const dueAt = scheduledRenewal(events).dueAtMs;
   assert.ok(dueAt <= recoveredRenewal.dueAtMs, 'the old failure must not postpone renewal');
   t.mock.timers.tick(Math.max(1, dueAt - Date.now()));
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== shortRefresh.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== shortRefresh.accessExpiresAt);
   assert.ok(Date.now() < Date.parse(shortRefresh.refreshExpiresAt));
   t.mock.timers.tick(Date.parse(shortRefresh.refreshExpiresAt) - Date.now());
   await setImmediate();
@@ -591,7 +588,7 @@ async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0, host) {
     assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
   } else {
     fireRenewal(t, events);
-    assertUnavailable(service, await waitForView(service, (view) => view.state !== 'ready'));
+    assertUnavailable(service, await waitForView(t, service, (view) => view.state !== 'ready'));
   }
   blocker.exec('COMMIT');
 
@@ -599,7 +596,7 @@ async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0, host) {
   const peerStore = openPeerStore();
   await peerStore.write(pending);
   t.mock.timers.tick(1000);
-  const view = await waitForView(service, (current) => current.state === 'error');
+  const view = await waitForView(t, service, (current) => current.state === 'error');
   assert.equal(view.error, 'IAM_REAUTH_REQUIRED');
   assert.equal(service.getSession().signedIn, false);
   assert.deepEqual(host.posts, []);
@@ -614,7 +611,7 @@ async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0, host) {
   return { ...host, peerStore, pending, complete, originalDueAt };
 }
 
-test('a scheduled read retry observes a peer pending marker without replaying its refresh token', async (t) => {
+test('a scheduled read retry observes a peer pending marker without replaying its refresh token', sqliteTestOptions, async (t) => {
   const { service, store, posts, pending } = await observePeerPendingAfterReadTimeout(t);
   t.mock.timers.tick(1000);
   assert.equal((await service.syncFromStore()).error, 'IAM_REAUTH_REQUIRED');
@@ -622,14 +619,14 @@ test('a scheduled read retry observes a peer pending marker without replaying it
   assert.deepEqual(posts, []);
 });
 
-test('a matching peer receipt after lock recovery is adopted in the background', async (t) => {
+test('a matching peer receipt after lock recovery is adopted in the background', sqliteTestOptions, async (t) => {
   const { service, handler, peerStore, pending, complete, posts, events } = await observePeerPendingAfterReadTimeout(t);
   await peerStore.mutate((current) => {
     assert.deepEqual(current, pending);
     return complete;
   });
   t.mock.timers.tick(1000);
-  const view = await waitForView(service, (current) => current.state === 'ready');
+  const view = await waitForView(t, service, (current) => current.state === 'ready');
   assert.equal(view.accessExpiresAt, complete.accessExpiresAt);
   assert.equal(service.getSession().signedIn, true);
   const panel = await callRoute(handler, 'GET', 'view');
@@ -641,12 +638,12 @@ test('a matching peer receipt after lock recovery is adopted in the background',
 
 for (const beforeDueMs of [3000, 0]) {
   const scenario = beforeDueMs > 0 ? 'before its renewal is due' : 'after its renewal is due';
-  test(`a peer that restores the exact grant ${scenario} preserves the due renewal`, async (t) => {
+  test(`a peer that restores the exact grant ${scenario} preserves the due renewal`, sqliteTestOptions, async (t) => {
     const { service, store, peerStore, posts, events, originalDueAt } = await observePeerPendingAfterReadTimeout(t, beforeDueMs);
     assert.equal(originalDueAt, start + 150_000);
     await peerStore.write(original);
     t.mock.timers.tick(1000);
-    const view = await waitForView(service, (current) => current.state === 'ready');
+    const view = await waitForView(t, service, (current) => current.state === 'ready');
     assert.equal(view.accessExpiresAt, original.accessExpiresAt);
     assert.deepEqual((await store.read()).grant, original);
     const retryAt = scheduledRenewal(events).dueAtMs;
@@ -658,54 +655,50 @@ for (const beforeDueMs of [3000, 0]) {
     }
 
     t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
-    await waitForView(service, (current) => current.state === 'ready' && current.accessExpiresAt !== original.accessExpiresAt);
+    await waitForView(t, service, (current) => current.state === 'ready' && current.accessExpiresAt !== original.accessExpiresAt);
     assert.deepEqual(posts, [original.refreshToken]);
     assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
   });
 }
 
-test('a delayed timer read timeout preserves the due renewal during a peer pending observation', async (t) => {
-  const { dueAtMs, renewalId, releaseTimeout, service, store, events, openPeerStore, posts } =
+test('a delayed timer read timeout preserves the due renewal during a peer pending observation', sqliteTestOptions, async (t) => {
+  const { dueAtMs, renewalId, releaseTimeout, service, store, events, openPeerStore, posts, waitForRenewalLog } =
     await beginPanelRecoveryWhileTimerFailureIsHeld(t, original);
   const peerStore = openPeerStore();
   const pending = pendingPeerGrant(original);
   await peerStore.write(pending);
   t.mock.timers.tick(1000);
-  await waitForView(service, (view) => view.error === 'IAM_REAUTH_REQUIRED');
+  await waitForView(t, service, (view) => view.error === 'IAM_REAUTH_REQUIRED');
 
   releaseTimeout();
-  await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+  await waitForRenewalLog(() => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
   assert.deepEqual((await store.read()).grant, pending);
   assert.deepEqual(posts, []);
   await peerStore.write(original);
   t.mock.timers.tick(1000);
-  await waitForView(service, (view) => view.state === 'ready');
+  await waitForView(t, service, (view) => view.state === 'ready');
   const retryAt = scheduledRenewal(events).dueAtMs;
   assert.ok(retryAt >= dueAtMs && retryAt <= Date.now() + 30_000,
     `expected the due renewal within its normal backoff, got +${retryAt - Date.now()}ms`);
 
   t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== original.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== original.accessExpiresAt);
   assert.deepEqual(posts, [original.refreshToken]);
   assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
 });
 
 for (const state of ['ready', 'expired']) {
-  test(`a session restored by a peer with a short refresh window still renews from ${state} before expiry`, async (t) => {
+  test(`a session restored by a peer with a short refresh window still renews from ${state} before expiry`, sqliteTestOptions, async (t) => {
     const initial = state === 'ready' ? shortRefresh
       : { ...shortRefresh, accessExpiresAt: new Date(start + 4900).toISOString() };
     const host = await startHost(t, initial, { refreshSkewSeconds: 3 });
     const { credentials, service, store, events, posts } = host;
-    const releaseGateway = Promise.withResolvers();
-    t.after(releaseGateway.resolve);
+    const gatewayRead = hold();
+    t.after(gatewayRead.release);
     const readRecord = credentials.readRecord.bind(credentials);
-    let holdingGateway = false;
     t.mock.method(credentials, 'readRecord', async (key) => {
       const record = await readRecord(key);
-      if (key === GATEWAY_RECORD_KEY) {
-        holdingGateway = true;
-        await releaseGateway.promise;
-      }
+      if (key === GATEWAY_RECORD_KEY) await gatewayRead.pause();
       return record;
     });
 
@@ -714,8 +707,8 @@ for (const state of ['ready', 'expired']) {
     t.mock.timers.tick(expiry - 800 - Date.now());
     await peerStore.write(initial);
     t.mock.timers.tick(50);
-    await waitForView(service, (view) => view.state === state);
-    await waitForView(service, () => holdingGateway);
+    await waitForView(t, service, (view) => view.state === state);
+    await gatewayRead.entered;
     assert.equal(expiry - Date.now(), 750);
     assert.deepEqual((await store.read()).grant, initial);
     assert.deepEqual(posts, []);
@@ -723,13 +716,13 @@ for (const state of ['ready', 'expired']) {
     const retryAt = scheduledRenewal(events).dueAtMs;
     assert.ok(retryAt >= Date.now() && retryAt < expiry, 'expected a new renewal within the remaining refresh window');
     t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
-    await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+    await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
     assert.deepEqual(posts, [initial.refreshToken]);
     assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
   });
 }
 
-test('a peer-restored expired grant renews within a short refresh window without a prior timer', async (t) => {
+test('a peer-restored expired grant renews within a short refresh window without a prior timer', sqliteTestOptions, async (t) => {
   const initial = { ...original, accessExpiresAt: new Date(start + 1500).toISOString(),
     refreshExpiresAt: new Date(start + 3800).toISOString() };
   const pending = pendingPeerGrant(initial);
@@ -746,25 +739,25 @@ test('a peer-restored expired grant renews within a short refresh window without
   assert.equal((await service.syncFromStore()).state, 'expired');
   assert.deepEqual(posts, []);
   t.mock.timers.tick(refreshExpiry - Date.now() - 1);
-  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  await waitForView(t, service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
   assert.ok(Date.now() < refreshExpiry);
   assert.deepEqual(posts, [initial.refreshToken]);
   assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
 });
 
-test('an unmatched peer receipt after lock recovery cannot authorize the session', async (t) => {
-  const { service, peerStore, complete, posts, events } = await observePeerPendingAfterReadTimeout(t);
+test('an unmatched peer receipt after lock recovery cannot authorize the session', sqliteTestOptions, async (t) => {
+  const { service, peerStore, complete, posts, events, waitForRenewalLog } = await observePeerPendingAfterReadTimeout(t);
   await peerStore.write({
     ...complete, refreshOperation: { ...complete.refreshOperation, base: Buffer.alloc(32, 5).toString('base64url') },
   });
   t.mock.timers.tick(1000);
-  await waitForView(service, () => events.some((row) => row.event === 'store-sync' && row.reason === 'pending-result-unmatched'));
+  await waitForRenewalLog(() => events.some((row) => row.event === 'store-sync' && row.reason === 'pending-result-unmatched'));
   assert.equal(service.getView().error, 'IAM_REAUTH_REQUIRED');
   assert.equal(service.getSession().signedIn, false);
   assert.deepEqual(posts, []);
 });
 
-test('a peer receipt after the lock recovery observation window stays rejected', async (t) => {
+test('a peer receipt after the lock recovery observation window stays rejected', sqliteTestOptions, async (t) => {
   const { service, handler, peerStore, complete, posts } = await observePeerPendingAfterReadTimeout(t);
   t.mock.timers.tick(5000);
   await peerStore.write(complete);
@@ -776,12 +769,12 @@ test('a peer receipt after the lock recovery observation window stays rejected',
 });
 
 async function hitPendingReadLock(t, host, afterMs) {
-  const { blocker, service, store, pending, posts, events } = host;
+  const { blocker, service, store, pending, posts, events, waitForRenewalLog } = host;
   const lockTimeoutCount = () => events.filter((row) => row.event === 'store-sync' && row.reason === 'read-lock-timeout').length;
   const before = lockTimeoutCount();
   blocker.exec('BEGIN EXCLUSIVE');
   t.mock.timers.tick(afterMs);
-  await waitForView(service, () => lockTimeoutCount() > before);
+  await waitForRenewalLog(() => lockTimeoutCount() > before);
   assert.equal(service.getView().error, 'IAM_REAUTH_REQUIRED');
   assert.equal(service.getSession().signedIn, false);
   assert.deepEqual(posts, []);
@@ -789,17 +782,17 @@ async function hitPendingReadLock(t, host, afterMs) {
   assert.deepEqual((await store.read()).grant, pending);
 }
 
-test('a retry after a second SQLite read timeout still adopts a receipt in the original window', async (t) => {
+test('a retry after a second SQLite read timeout still adopts a receipt in the original window', sqliteTestOptions, async (t) => {
   const host = await observePeerPendingAfterReadTimeout(t);
   await hitPendingReadLock(t, host, 100);
   await host.peerStore.write(host.complete);
   t.mock.timers.tick(1000);
-  const view = await waitForView(host.service, (current) => current.state === 'ready');
+  const view = await waitForView(t, host.service, (current) => current.state === 'ready');
   assert.equal(view.accessExpiresAt, host.complete.accessExpiresAt);
   assert.deepEqual(host.posts, []);
 });
 
-test('a second SQLite read timeout does not extend the peer receipt window', async (t) => {
+test('a second SQLite read timeout does not extend the peer receipt window', sqliteTestOptions, async (t) => {
   const host = await observePeerPendingAfterReadTimeout(t);
   const deadline = Date.now() + 5000;
   await hitPendingReadLock(t, host, 4800);
@@ -812,27 +805,27 @@ test('a second SQLite read timeout does not extend the peer receipt window', asy
   assert.deepEqual(host.posts, []);
 });
 
-async function holdMatchingPeerReceipt(t, { service, credentials, peerStore, complete }) {
+async function holdMatchingPeerReceipt(t, { credentials, peerStore, complete }) {
   await peerStore.write(complete);
-  const releaseReceipt = Promise.withResolvers();
-  t.after(releaseReceipt.resolve);
+  const receiptRead = hold();
+  t.after(receiptRead.release);
   const readRecord = credentials.readRecord.bind(credentials);
   let holdingReceipt = false;
   t.mock.method(credentials, 'readRecord', async (key) => {
     const record = await readRecord(key);
     if (key === GRANT_KEY && record?.payload?.refreshOperation?.state === 'complete' && !holdingReceipt) {
       holdingReceipt = true;
-      await releaseReceipt.promise;
+      await receiptRead.pause();
     }
     return record;
   });
   t.mock.timers.tick(1000);
-  await waitForView(service, () => holdingReceipt);
-  return releaseReceipt.resolve;
+  await receiptRead.entered;
+  return receiptRead.release;
 }
 
 for (const [scenario, binding] of [['withdrawn', null], ['replaced', {}]]) {
-  test(`a matching peer receipt is fenced when same-provider atomic trust is ${scenario}`, async (t) => {
+  test(`a matching peer receipt is fenced when same-provider atomic trust is ${scenario}`, sqliteTestOptions, async (t) => {
     const host = await observePeerPendingAfterReadTimeout(t);
     const { service, store, complete, posts, handler, setAtomicStoreBinding } = host;
     const releaseReceipt = await holdMatchingPeerReceipt(t, host);
@@ -850,7 +843,7 @@ for (const [scenario, binding] of [['withdrawn', null], ['replaced', {}]]) {
   });
 }
 
-test('sign-out fences a matching peer receipt already read by lock recovery', async (t) => {
+test('sign-out fences a matching peer receipt already read by lock recovery', sqliteTestOptions, async (t) => {
   const host = await observePeerPendingAfterReadTimeout(t);
   const { service, store, posts } = host;
   const releaseReceipt = await holdMatchingPeerReceipt(t, host);
@@ -865,7 +858,7 @@ test('sign-out fences a matching peer receipt already read by lock recovery', as
   assert.deepEqual(posts, []);
 });
 
-test('dispose fences a matching peer receipt already read by lock recovery', async (t) => {
+test('dispose fences a matching peer receipt already read by lock recovery', sqliteTestOptions, async (t) => {
   const host = await observePeerPendingAfterReadTimeout(t);
   const { service, store, complete, posts } = host;
   const releaseReceipt = await holdMatchingPeerReceipt(t, host);
@@ -880,7 +873,7 @@ test('dispose fences a matching peer receipt already read by lock recovery', asy
   assert.deepEqual(posts, []);
 });
 
-test('a matching peer receipt from the previous SQLite provider cannot authorize the replacement', async (t) => {
+test('a matching peer receipt from the previous SQLite provider cannot authorize the replacement', sqliteTestOptions, async (t) => {
   const host = await observePeerPendingAfterReadTimeout(t);
   const { service, store, complete, posts } = host;
   const releaseReceipt = await holdMatchingPeerReceipt(t, host);
@@ -911,7 +904,7 @@ function expireRefreshAfterClaim(t, credentials, refreshExpiry) {
 }
 
 for (const cold of [false, true]) {
-  test(`refresh expiry after a durable claim prevents sending from ${cold ? 'a cold restored session' : 'an ordinary timer'}`, async (t) => {
+  test(`refresh expiry after a durable claim prevents sending from ${cold ? 'a cold restored session' : 'an ordinary timer'}`, sqliteTestOptions, async (t) => {
     const initial = { ...original,
       accessExpiresAt: new Date(start + (cold ? 1500 : 5000)).toISOString(),
       refreshExpiresAt: new Date(start + (cold ? 3800 : 6000)).toISOString(),
@@ -933,14 +926,14 @@ for (const cold of [false, true]) {
 
     expireRefreshAfterClaim(t, credentials, refreshExpiry);
     fireRenewal(t, events);
-    await waitForView(service, (view) => view.state === 'error' || Date.parse(view.accessExpiresAt) > refreshExpiry);
+    await waitForView(t, service, (view) => view.state === 'error' || Date.parse(view.accessExpiresAt) > refreshExpiry);
     assert.deepEqual(posts, []);
     assert.equal(service.getView().error, 'IAM_REAUTH_REQUIRED');
     assert.deepEqual((await store.read()).grant, initial);
   });
 }
 
-test('refresh expiry after a durable claim keeps the still-valid access grant', async (t) => {
+test('refresh expiry after a durable claim keeps the still-valid access grant', sqliteTestOptions, async (t) => {
   const { credentials, service, store, posts } = await startHost(t, shortRefresh);
   const refreshExpiry = Date.parse(shortRefresh.refreshExpiresAt);
   expireRefreshAfterClaim(t, credentials, refreshExpiry);
@@ -953,11 +946,11 @@ test('refresh expiry after a durable claim keeps the still-valid access grant', 
   assert.deepEqual((await store.read()).grant, shortRefresh);
 });
 
-test('sign-out during SQLite read backoff fences the deferred renewal', async (t) => {
+test('sign-out during SQLite read backoff fences the deferred renewal', sqliteTestOptions, async (t) => {
   const { blocker, store, service, posts, events } = await startHost(t);
   blocker.exec('BEGIN EXCLUSIVE');
   fireRenewal(t, events);
-  assertUnavailable(service, await waitForView(service, (view) => view.state !== 'ready'));
+  assertUnavailable(service, await waitForView(t, service, (view) => view.state !== 'ready'));
   blocker.exec('COMMIT');
 
   assert.equal((await service.signOut()).view.state, 'signed-out');
@@ -968,13 +961,13 @@ test('sign-out during SQLite read backoff fences the deferred renewal', async (t
   assert.deepEqual(posts, []);
 });
 
-test('explicit sign-in waits for the trusted store after repeated SQLite read timeouts', async (t) => {
-  const { blocker, store, service, posts, events, handler, setAtomicStoreBinding } = await startHost(t);
+test('explicit sign-in waits for the trusted store after repeated SQLite read timeouts', sqliteTestOptions, async (t) => {
+  const { blocker, store, service, posts, events, handler, setAtomicStoreBinding, waitForRenewalLog } = await startHost(t);
   const initial = service.getView();
   assert.equal(initial.state, 'ready');
   blocker.exec('BEGIN EXCLUSIVE');
   fireRenewal(t, events);
-  const blocked = await waitForView(service, (view) => view.error === 'IAM_CREDENTIALS_UNAVAILABLE');
+  const blocked = await waitForView(t, service, (view) => view.error === 'IAM_CREDENTIALS_UNAVAILABLE');
   assert.equal(blocked.canSignIn, true, 'the user can request a verified recovery');
   for (let i = 0; i < 2; i += 1) {
     const reply = await callRoute(handler, 'POST', 'sign-in');
@@ -982,7 +975,7 @@ test('explicit sign-in waits for the trusted store after repeated SQLite read ti
     assert.equal(reply.body.error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
     assertUnavailable(service, service.getView());
     t.mock.timers.tick(1000);
-    await waitForView(service, () => events.filter((event) => event.reason === 'read-lock-timeout').length >= i + 2);
+    await waitForRenewalLog(() => events.filter((event) => event.reason === 'read-lock-timeout').length >= i + 2);
   }
   assert.deepEqual(posts, []);
   blocker.exec('COMMIT');
@@ -1002,7 +995,7 @@ test('explicit sign-in waits for the trusted store after repeated SQLite read ti
   assert.deepEqual(posts, []);
 });
 
-test('explicit recovery shares a durable read after a persistent storage error', async (t) => {
+test('explicit recovery shares a durable read after a persistent storage error', sqliteTestOptions, async (t) => {
   const { credentials, service, handler, posts } = await startHost(t);
   const readRecord = credentials.readRecord.bind(credentials);
   const entered = Promise.withResolvers();
@@ -1042,11 +1035,11 @@ test('explicit recovery shares a durable read after a persistent storage error',
   assert.deepEqual(posts, []);
 });
 
-test('cancelling an explicit sign-in leaves the shared SQLite read able to recover', async (t) => {
+test('cancelling an explicit sign-in leaves the shared SQLite read able to recover', sqliteTestOptions, async (t) => {
   const { blocker, store, credentials, service, events, handler, posts } = await startHost(t);
   blocker.exec('BEGIN EXCLUSIVE');
   fireRenewal(t, events);
-  await waitForView(service, (view) => view.error === 'IAM_CREDENTIALS_UNAVAILABLE');
+  await waitForView(t, service, (view) => view.error === 'IAM_CREDENTIALS_UNAVAILABLE');
   blocker.exec('COMMIT');
   await store.clear();
 
