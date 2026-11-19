@@ -321,16 +321,13 @@ test('cancelling an attempt that never reached authenticating releases backgroun
   assert.equal(service.getView().state, 'signed-out');
 
   // The cancelled attempt still owns a pending discovery request. Background
-  // hydration must not skip its store read just because that attempt exists.
+  // hydration resolves Discovery before it reads the store, so release that
+  // request and then require the read to happen instead of being skipped.
   const readGate = pauseNextRead(credentials);
   const syncing = service.syncFromStore();
-  const first = await Promise.race([
-    syncing.then(() => 'hydration-finished', () => 'hydration-failed'),
-    readGate.entered.then(() => 'read-started'),
-  ]);
-  assert.equal(first, 'read-started');
-  readGate.release();
   released.resolve();
+  await readGate.entered;
+  readGate.release();
   await syncing.catch(() => {});
   assert.equal(await started, 'IAM_ATTEMPT_CANCELLED');
 });

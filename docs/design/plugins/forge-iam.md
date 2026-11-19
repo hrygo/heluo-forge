@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.5.0 |
+| 版本 | V3.5.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
@@ -339,7 +339,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 |---|---|---|
 | `getView()` | 无 | 同步返回当前 `IamView` 快照（不含敏感令牌） |
 | `watch(signal)` | `AbortSignal` | 异步迭代器，订阅视图快照与变更流通知 |
-| `hydrate()` / `syncFromStore()` | 无 | 异步从安全存储恢复会话状态及网关凭据元数据 |
+| `hydrate()` / `syncFromStore()` | 无 | 异步从安全存储恢复会话状态及网关凭据元数据；discovery-only 冷启动先解析 Discovery issuer，再读取并校验已保存记录 |
 | `startSignIn()` | 无 | 开启或复用活跃 Attempt，返回 `{ view, authorizationUrl }` |
 | `cancelSignIn()` | 无 | 取消当前 Attempt 并恢复前序状态 |
 | `handleCallback(rawUrl)` | `rawUrl: string` | 接收并处理回调 URL，执行状态校对、换票与验签落盘 |
@@ -593,7 +593,7 @@ flowchart TD
   B -->|否| C[状态: unconfigured]
   B -->|是| D{"存在 heluo-iam/session 记录?"}
   D -->|否| E[状态: signed-out]
-  D -->|是| P{"Issuer 上下文已知且匹配?"}
+  D -->|是| P{"Issuer 上下文可解析且匹配?"}
   P -->|否| Q[状态: error; 保留持久记录; 不提供令牌]
   P -->|是| F{"Access Token 是否未过期?"}
   F -->|是| G[恢复状态: ready; 不证明模型可用]
@@ -605,7 +605,7 @@ flowchart TD
   H -->|否| L[状态: expired; 引导重新登录]
 ```
 
-**发行者绑定规则**：系统启动时不主动发起网络请求探测端点。会话复用要求具备 `sessionInstanceId` 和已知匹配的 `issuer` 上下文；缺失时保留记录以供排查，但不恢复身份且不提供令牌。
+**发行者绑定规则**：显式 issuer 模式在启动时不发起网络请求探测端点。discovery-only 模式在恢复已保存会话前拉取一次 Discovery 文档解析 issuer；拉取失败时保留记录且不恢复身份，文档 issuer 与记录不匹配时同样保留记录、不恢复身份且不提供令牌。会话复用要求具备 `sessionInstanceId` 和已知匹配的 `issuer` 上下文；直接调用 `resolveToken()` 不补齐 issuer 上下文。
 
 ### 7.2 登录认证与数据流时序
 

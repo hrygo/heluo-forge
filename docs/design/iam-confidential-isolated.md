@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-016 |
 | 文档名称 | IAM 机密客户端隔离开发设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | 用户已批准完整 source/mock 设计；不开放真实来源与生产 |
 | 交付门禁 | 用户已批准 source/mock 设计；不开放真实来源与生产 |
 
@@ -59,7 +59,7 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ### 3.2 刷新与共享恢复
 
-- confidential 的 hydrate/sync/resolveToken 在采用 V2、返回未过期 AT、加入或采纳共享刷新前，都验证配置、当前 source 与非秘密 auth pin。public V1 保留旧严格 issuer 策略；两种格式双向不迁移。
+- confidential 的 hydrate/sync/resolveToken 在采用 V2、返回未过期 AT、加入或采纳共享刷新前，都验证配置、当前 source 与非秘密 auth pin。public V1 仍要求已知匹配的 issuer；discovery-only 冷启动可在 hydrate/sync 读取记录前解析 Discovery 文档取得该上下文，直接 resolveToken 不补齐。两种格式双向不迁移。
 - snapshot 准备在 grant 锁外。claim 与 final commit 仍用现有单记录协议；三处手列身份、完整 base、完成采纳及 callback discard 都纳入 authContext。
 - refresh 单飞归属不仅是 issuer/store，也包括当前认证 context 与来源作用域。不同 method/ref/revision 的等待者不能采用旧完成结果或接管 pending。
 - claim 后来源失效保留 pending，不重置、轮询重发或换方法。未知 POST 仍只有原协议允许的一次发送，不自动重放。
