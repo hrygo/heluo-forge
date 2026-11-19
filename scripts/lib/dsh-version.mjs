@@ -187,7 +187,7 @@ const CODE_EXT = /\.(?:mjs|cjs|js|ts|json|yml|yaml|sh|bash|zsh)$/;
 
 /**
  * 允许出现版本字面量的代码位置。
- * 清单不在此列：清单只放行 `engines.dsh` 里实际写的那个版本（见 MANIFEST_RE），
+ * 清单不在此列：清单按字段位置放行 engines.dsh 与基线一致的开发 SDK（见 MANIFEST_RE），
  * 免得整文件放行后 dependencies 里钉死的 DSH 版本溜过去。
  */
 const TEST_CODE = /\.(?:mjs|cjs|js|ts)$/;
@@ -199,22 +199,8 @@ export const CODE_ALLOWED = [
   { re: /^scripts\/lib\/dsh-version\.mjs$/, only: null },
 ];
 
-/** 包、服务与独立演示清单：只放行 engines.dsh 的值，不放行固定依赖。 */
+/** 包、服务与独立演示清单：按字段范围放行宿主下限和构建期 SDK。 */
 const MANIFEST_RE = /^(?:packages|services|demos)\/[^/]+\/package\.json$/;
-
-export function checkDevelopmentHosts(root = process.cwd(), baseline = readDshVersion(root)) {
-  const problems = [];
-  for (const file of walk(root, (rel) => MANIFEST_RE.test(rel), root)) {
-    const manifest = JSON.parse(readFileSync(file, 'utf8'));
-    const rel = relative(root, file).split(sep).join('/');
-    for (const [name, version] of Object.entries(manifest.devDependencies ?? {})) {
-      if (name.startsWith('@deepseek-ai/dsh-') && version !== baseline) {
-        problems.push(`${rel}: ${name} ${version} differs from ${DSH_VERSION_FILE} ${baseline}`);
-      }
-    }
-  }
-  return problems;
-}
 
 /**
  * 测试夹具里有意写死的版本字面量（模拟旧宿主或第三方包形状），登记原因后可放行，
@@ -286,15 +272,42 @@ export function checkReleaseDefaults(root = process.cwd(), baseline = readDshVer
   return problems;
 }
 
-function manifestEnginesTokens(abs) {
+function manifestVersionRanges(text, baseline) {
   try {
-    const manifest = JSON.parse(readFileSync(abs, 'utf8'));
-    const range = manifest?.engines?.dsh;
-    if (typeof range !== 'string') return new Set();
-    return new Set([...range.matchAll(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/g)].map((m) => m[0]));
+    JSON.parse(text);
   } catch {
-    return new Set();
+    return [];
   }
+  const tokens = [...text.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]:,]/g)];
+  const ranges = [];
+  let depth = 0;
+  let section = null;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token[0] === '{' || token[0] === '[') {
+      depth += 1;
+      continue;
+    }
+    if (token[0] === '}' || token[0] === ']') {
+      depth -= 1;
+      if (depth < 2) section = null;
+      continue;
+    }
+    if (!token[0].startsWith('"') || tokens[index + 1]?.[0] !== ':') continue;
+    const key = JSON.parse(token[0]);
+    if (depth === 1) {
+      section = (key === 'engines' || key === 'devDependencies') && tokens[index + 2]?.[0] === '{' ? key : null;
+      continue;
+    }
+    const valueToken = tokens[index + 2];
+    if (depth !== 2 || !section || !valueToken?.[0].startsWith('"')) continue;
+    const value = JSON.parse(valueToken[0]);
+    if ((section === 'engines' && key === 'dsh')
+      || (section === 'devDependencies' && key.startsWith('@deepseek-ai/dsh-') && value === baseline)) {
+      ranges.push({ start: valueToken.index, end: valueToken.index + valueToken[0].length });
+    }
+  }
+  return ranges;
 }
 
 /** 文档里"历史记录"的判据：编制依据/实测/探针口径，或行内带日期。 */
@@ -392,14 +405,12 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
     const allowed = CODE_ALLOWED.some((entry) =>
       entry.only ? entry.re.test(rel) && entry.only.test(rel) : entry.re.test(rel),
     );
-    const manifestTokens = MANIFEST_RE.test(rel) ? manifestEnginesTokens(abs) : null;
     const fixtureNote = TEST_FIXTURE_EXCEPTIONS[rel] ?? null;
     const lines = readLines(abs);
     if (!lines) continue;
-    let insideDevelopment = false;
+    const manifestRanges = MANIFEST_RE.test(rel) ? manifestVersionRanges(lines.join('\n'), baseline) : null;
+    let lineOffset = 0;
     lines.forEach((line, index) => {
-      if (/^\s*"devDependencies"\s*:\s*\{/.test(line)) insideDevelopment = true;
-      else if (/^\s*\}/.test(line)) insideDevelopment = false;
       for (const match of line.matchAll(SEMVER_IN_TEXT)) {
         if (!dshVersionInLine(match[0], line, baseline, { allowReleaseLine: true })) continue;
         let kind;
@@ -409,10 +420,12 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
         const releaseDefault =
           match[0] === baseline && RELEASE_DEFAULT_HOSTS.some((spot) => spot.file === rel);
         const exceptionReason = literalAllowed ? literalNote.reason : releaseDefault ? RELEASE_DEFAULT_REASON : null;
-        const developmentPin = insideDevelopment && manifestTokens && /"@deepseek-ai\/dsh-[^"\s]+"\s*:/.test(line) && match[0] === baseline;
         if (rel === 'pnpm-lock.yaml') kind = 'code-allowed';
-        else if (manifestTokens) kind = manifestTokens.has(match[0]) || developmentPin ? 'code-allowed' : 'code-forbidden';
-        else if (exceptionReason !== null) kind = 'code-exception';
+        else if (manifestRanges) {
+          const position = lineOffset + match.index;
+          kind = manifestRanges.some(range => range.start <= position && position + match[0].length <= range.end)
+            ? 'code-allowed' : 'code-forbidden';
+        } else if (exceptionReason !== null) kind = 'code-exception';
         else if (allowed) kind = fixtureNote ? 'fixture-exception' : 'code-allowed';
         else kind = 'code-forbidden';
         found.push({
@@ -424,6 +437,7 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
           text: line.trim().slice(0, 160),
         });
       }
+      lineOffset += line.length + 1;
     });
   }
   return found;
