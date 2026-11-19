@@ -9,10 +9,9 @@ function assertSourceCleanup() {
   assert.match(projectCss, /\.dssm-filter-actions\{[^}]*margin-left:auto/, "搜索旁按钮组对齐到工具栏最右侧");
   assert.match(projectCss, /\.dssm-filter-actions\{[^}]*display:flex[^}]*gap:8px;flex:none/, "搜索右侧图标按钮组间距稳定");
   assert.match(projectCss, /\.dssm-source\{[^}]*background:transparent/, "来源卡片背景透出页面底色");
-  assert.match(projectCss, /\.dssm-source-title\{[^}]*white-space:nowrap[^}]*flex:none/, "来源标题不因长路径折行");
-  assert.doesNotMatch(projectCss, /\.dssm-source-title\{[^}]*overflow-wrap:anywhere/, "来源标题不再任意折行");
+  assert.match(projectCss, /\.dssm-source-copy\{[^}]*flex-direction:column[^}]*min-width:0/, "来源名称与路径上下排布，不挤占其他列");
   assert.match(projectCss, /\.dssm-count\{[^}]*white-space:nowrap[^}]*flex:none/, "技能数量不因长路径折行");
-  assert.match(projectCss, /\.dssm-source-path\{[^}]*min-width:0[^}]*max-width:50%[^}]*text-overflow:ellipsis/, "全局和项目来源路径不超过右半边并省略");
+  assert.match(projectCss, /\.dssm-source-path\{[^}]*max-width:100%[^}]*min-width:0[^}]*text-overflow:ellipsis/, "路径在来源名称下方按列宽省略");
   assert.doesNotMatch(projectCss, /\.dssm-source-path\{max-width:320px\}/, "窄容器不再把路径放宽到 320px");
   assert.match(projectCss, /\.dssm-source-toggle\{[^}]*overflow:hidden/, "来源头裁切溢出的路径，避免盖住加号");
 }
@@ -177,9 +176,10 @@ try {
     assert.equal(action.props.variant, "outline", "工具栏图标按钮与技能行同为带框样式");
     assert.equal(action.props.className, "dssm-icon-action", "工具栏图标按钮复用技能行边框样式");
   }
-  const createAction = nodes(globalActions).find(node => node.props["aria-label"] === t("btn.add") || node.props["aria-label"] === t("btn.create"));
-  assert.equal(createAction.props.style.backgroundColor, undefined, "搜索旁的创建按钮不覆盖主题背景色");
-  assert.equal(createAction.props.style.color, undefined, "搜索旁的按钮不内联强调色");
+  const header = find(node => node.props.className === "dssm-head");
+  const createAction = nodes(header).find(node => node.props["aria-label"] === t("btn.add"));
+  assert.ok(createAction, "添加技能菜单移至页面标题右侧");
+  assert.equal(nodes(globalActions).some(node => node.props["aria-label"] === t("btn.add")), false, "搜索旁不再重复添加菜单");
   await tab("项目技能");
 
   // 默认只读选择首个可用登记项，不依赖当前会话，不扫其他项目。
@@ -197,7 +197,7 @@ try {
   assert.equal(find(node => node.props.className === "dssm-source-filter"), undefined);
   const filters = find(node => node.props.className === "dssm-filters");
   const controls = nodes(filters);
-  assert.deepEqual(controls.filter(node => [t("filter.status"), t("filter.workspace"), t("search")].includes(node.props["aria-label"])).map(node => node.props["aria-label"]), [t("filter.status"), t("filter.workspace"), t("search")]);
+  assert.deepEqual(controls.filter(node => [t("filter.status"), t("filter.workspace"), t("search")].includes(node.props["aria-label"])).map(node => node.props["aria-label"]), [t("search"), t("filter.status"), t("filter.workspace")]);
   const filterActions = nodes(filters).find(node => node.props.className === "dssm-filter-actions");
   assert.ok(filterActions, "项目技能的操作按钮与搜索同排");
   for (const action of nodes(filterActions).filter(node => node.props["aria-label"])) {
