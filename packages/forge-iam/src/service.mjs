@@ -150,7 +150,7 @@ export function createIamService(rawConfig, options = {}) {
     getSessionEpoch: () => sessionEpoch,
     getAuthEpoch: () => authEpoch,
     clearObservation: () => { observedPending = null; },
-    waitForPending: (store, credentials) => reconcile.waitForPending(store, credentials),
+    waitForPending: (store, credentials, sessionId) => reconcile.waitForPending(store, credentials, sessionId),
     deferRead: (attempt) => reconcile.deferRead(attempt),
     beginConsumption,
     adoptConsumption,

@@ -789,6 +789,62 @@ test('a matching peer receipt from the previous SQLite provider cannot authorize
   assert.deepEqual(posts, []);
 });
 
+function expireRefreshAfterClaim(t, credentials, refreshExpiry) {
+  const modifyRecord = credentials.modifyRecord.bind(credentials);
+  t.mock.method(credentials, 'modifyRecord', async (...args) => {
+    const result = await modifyRecord(...args);
+    if (args[0] === GRANT_KEY && result?.payload?.refreshOperation?.state === 'pending') {
+      assert.ok(Date.now() < refreshExpiry);
+      // The claim is durable, but the caller has yet to resume from the await.
+      t.mock.timers.setTime(refreshExpiry);
+    }
+    return result;
+  });
+}
+
+for (const cold of [false, true]) {
+  test(`refresh expiry after a durable claim prevents sending from ${cold ? 'a cold restored session' : 'an ordinary timer'}`, async (t) => {
+    const initial = { ...original,
+      accessExpiresAt: new Date(start + (cold ? 1500 : 5000)).toISOString(),
+      refreshExpiresAt: new Date(start + (cold ? 3800 : 6000)).toISOString(),
+    };
+    const pending = cold ? pendingPeerGrant(initial) : initial;
+    const { credentials, service, store, posts, events, openPeerStore } = await startHost(t, pending, {
+      hydratedState: cold ? 'error' : 'ready',
+      refreshSkewSeconds: 0,
+    });
+    const refreshExpiry = Date.parse(initial.refreshExpiresAt);
+    if (cold) {
+      t.mock.timers.tick(refreshExpiry - Date.now() - 600);
+      await openPeerStore().mutate((current) => {
+        assert.deepEqual(current, pending);
+        return initial;
+      });
+      assert.equal((await service.syncFromStore()).state, 'expired');
+    }
+
+    expireRefreshAfterClaim(t, credentials, refreshExpiry);
+    fireRenewal(t, events);
+    await waitForView(service, (view) => view.state === 'error' || Date.parse(view.accessExpiresAt) > refreshExpiry);
+    assert.deepEqual(posts, []);
+    assert.equal(service.getView().error, 'IAM_REAUTH_REQUIRED');
+    assert.deepEqual((await store.read()).grant, initial);
+  });
+}
+
+test('refresh expiry after a durable claim keeps the still-valid access grant', async (t) => {
+  const { credentials, service, store, posts } = await startHost(t, shortRefresh);
+  const refreshExpiry = Date.parse(shortRefresh.refreshExpiresAt);
+  expireRefreshAfterClaim(t, credentials, refreshExpiry);
+  t.mock.timers.setTime(refreshExpiry - 500);
+
+  assert.equal(await service.getAccessToken(), shortRefresh.accessToken);
+  assert.equal(service.getView().state, 'ready');
+  assert.equal(service.getView().renewal, 'unavailable');
+  assert.deepEqual(posts, []);
+  assert.deepEqual((await store.read()).grant, shortRefresh);
+});
+
 test('sign-out during SQLite read backoff fences the deferred renewal', async (t) => {
   const { blocker, store, service, posts, events } = await startHost(t);
   blocker.exec('BEGIN EXCLUSIVE');

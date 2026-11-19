@@ -16,7 +16,7 @@ const config = {
   redirectUri: 'http://127.0.0.1:4567/iam/callback',
 };
 
-async function openHosts(t) {
+async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fetchJwks } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'forge-iam-pending-binding-'));
   const backend = createCredentialStore({ directory });
   const peer = createCredentialStore({ directory });
@@ -28,7 +28,7 @@ async function openHosts(t) {
   const releaseReceipt = Promise.withResolvers();
   const posts = [];
   let trustBinding = {};
-  const service = createIamService(config, {
+  const service = createIamService({ ...config, refreshSkewSeconds }, {
     credentials,
     verifyAtomicStore: (candidate) => candidate === credentials && trustBinding !== null,
     getAtomicStoreBinding: (candidate) => candidate === credentials ? trustBinding : null,
@@ -36,6 +36,7 @@ async function openHosts(t) {
       if (event === 'session-state' && fields.code === 'IAM_REAUTH_REQUIRED') pendingObserved.resolve();
     },
     async fetch(url, init) {
+      if (url === config.jwksUri && fetchJwks) return fetchJwks();
       if (init?.method === 'POST') posts.push(url);
       throw new Error('pending receipt observation does not need network I/O');
     },
@@ -203,3 +204,42 @@ test('a token request keeps the original pending observation deadline after cold
   assert.deepEqual(observerWrites, []);
   assert.deepEqual(posts, []);
 });
+
+for (const late of [false, true]) {
+  test(`a request in preflight ${late ? 'rejects a receipt after' : 'can adopt a receipt within'} the panel observation window`, { timeout: 10_000 }, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const readingJwks = Promise.withResolvers();
+    const releaseJwks = Promise.withResolvers();
+    t.after(releaseJwks.resolve);
+    const host = await openHosts(t, {
+      refreshSkewSeconds: 600,
+      async fetchJwks() {
+        readingJwks.resolve();
+        await releaseJwks.promise;
+        return Response.json({ keys: [] });
+      },
+    });
+    const { service, writer, original, pending, complete, posts, observerWrites } = host;
+    await writer.write(original);
+    const result = service.getAccessToken();
+    void result.catch(() => {});
+    await readingJwks.promise;
+    await writer.write(pending);
+    assert.equal((await service.syncFromStore()).error, 'IAM_REAUTH_REQUIRED');
+
+    if (late) t.mock.timers.tick(REFRESH_TIMEOUT_MS + 1);
+    await writer.write(complete);
+    host.releaseReceipt();
+    releaseJwks.resolve();
+    if (late) {
+      await assert.rejects(result, { code: 'IAM_REAUTH_REQUIRED' });
+      assert.equal(service.getSession().signedIn, false);
+    } else {
+      assert.equal(await result, complete.accessToken);
+      assert.equal(service.getSession().signedIn, true);
+    }
+    assert.deepEqual((await writer.read()).grant, complete);
+    assert.deepEqual(posts, []);
+    assert.deepEqual(observerWrites, []);
+  });
+}

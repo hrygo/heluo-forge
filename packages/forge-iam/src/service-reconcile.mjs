@@ -63,9 +63,10 @@ export function createReconciler(env) {
       observation, grant: retry.grant, renewAt: retry.renewAt, polling: true }, Math.min(PENDING_POLL_MS, pendingTimeLeft(observation)));
   }
 
-  function waitForPending(store, credentials) {
+  function waitForPending(store, credentials, sessionId) {
     const observation = getObservation();
     if (!observation || ctx.state !== 'error' || ctx.error !== 'IAM_REAUTH_REQUIRED') return null;
+    if (sessionId && observation.identity.sessionInstanceId !== sessionId) return null;
     const canWait = observation.store === store && observation.credentials === credentials
       && observation.authEpoch === getAuthEpoch() && pendingTimeLeft(observation) > 0
       && provider.atomicBinding(store, credentials) === observation.atomicBinding;

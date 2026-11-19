@@ -61,7 +61,8 @@ export function createTokenResolver(env) {
   let refreshExchange = null;
   let modelRotation = null;
   let modelOutputRead = null;
-  let refusedSessionId = null;
+  // Keep each refusal for this Host so a later login cannot unblock an older read.
+  const refusedSessions = new Set();
   let lastBackgroundRefreshAt = 0;
   let backgroundRefreshBinding = null;
   let renewal = null;
@@ -69,15 +70,15 @@ export function createTokenResolver(env) {
   let lastBlockedReason;
 
   function refusePending(grant) {
-    refusedSessionId = grant.sessionInstanceId;
+    refusedSessions.add(grant.sessionInstanceId);
   }
 
   function confirmPending(grant) {
-    if (refusedSessionId === grant.sessionInstanceId) refusedSessionId = null;
+    refusedSessions.delete(grant.sessionInstanceId);
   }
 
   function pendingRefused(grant) {
-    return refusedSessionId !== null && grant?.sessionInstanceId === refusedSessionId;
+    return refusedSessions.has(grant?.sessionInstanceId);
   }
 
   function rememberBackgroundRefresh(at) {
@@ -564,11 +565,6 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     const pendingRefusal = reauthenticationRequired();
-    const assertNoPendingRefusal = (grant) => {
-      // Only a confirmed outcome can unblock this login. A different durable
-      // login can go through the usual context and client authentication checks.
-      if (pendingRefused(grant) || (!grant && ctx.state === 'error' && ctx.error === pendingRefusal.code)) throw pendingRefusal;
-    };
     if (refreshPromise) return useSharedRefresh();
     const observed = activeModelRotation();
     if (observed) return useObservedRotation(observed);
@@ -580,8 +576,7 @@ export function createTokenResolver(env) {
     if (expected && (targetStore !== expected.targetStore || targetCredentials !== expected.targetCredentials)) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
-    const observation = expected ? null : waitForPending(targetStore, targetCredentials);
-    if (observation) {
+    const usePendingObservation = async (observation) => {
       const result = await observation.flight;
       ctx.assertExclusive();
       if (!result) throw pendingRefusal;
@@ -594,7 +589,17 @@ export function createTokenResolver(env) {
       if (isAccessExpired(grant, now())) throw new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
       if (ctx.state !== 'ready') throw changedSession();
       return grant.accessToken;
-    }
+    };
+    const observationFor = (sessionId) => expected ? null : waitForPending(targetStore, targetCredentials, sessionId);
+    const useRefusedGrant = (grant) => {
+      // A read or preflight that began before the panel saw pending must
+      // follow its existing observation, with the same binding and deadline.
+      const observed = observationFor(grant.sessionInstanceId);
+      if (!observed) throw pendingRefusal;
+      return usePendingObservation(observed);
+    };
+    const observation = observationFor();
+    if (observation) return usePendingObservation(observation);
     const grantAtStart = ctx.lastGrant;
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
     let refreshing = false;
@@ -651,6 +656,7 @@ export function createTokenResolver(env) {
       }
       checkAlive();
       grants.assertGrantContext(grant, expectedIssuer);
+      if (!waitingForPending && pendingRefused(grant)) throw pendingRefusal;
       const expired = isAccessExpired(grant, now());
       if (grant.refreshOperation?.state === 'pending' || (expired && !(restored && isRefreshUsable(grant, now())))) return rejectSession();
       if (waitingForPending) confirmPending(grant);
@@ -691,6 +697,7 @@ export function createTokenResolver(env) {
       }
     };
     checkReadContext();
+    if (pendingRefused(record.grant)) return useRefusedGrant(record.grant);
     const readOriginal = !expected && record.ok && grantAtStart && isDeepStrictEqual(record.grant, grantAtStart);
     const checkLocalCompletion = () => {
       if (expected) return checkExpected(true);
@@ -746,7 +753,7 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     if (refreshPromise) return useSharedRefresh();
-    assertNoPendingRefusal(record.grant);
+    if (!record.grant && ctx.state === 'error' && ctx.error === pendingRefusal.code) throw pendingRefusal;
     refreshPromiseStore = targetStore;
     refreshPromiseCredentials = targetCredentials;
     refreshPromiseIssuer = expectedIssuer;
@@ -771,7 +778,7 @@ export function createTokenResolver(env) {
         stage = 'client-auth';
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
         checkAlive();
-        assertNoPendingRefusal(initial);
+        if (pendingRefused(initial)) return useRefusedGrant(initial);
         flightAuthentication.value = clientAuthDescriptor(authentication);
         const observed = activeModelRotation();
         if (observed) {
@@ -797,6 +804,7 @@ export function createTokenResolver(env) {
         const waitFor = async (pending) => {
           pendingBinding ??= provider.atomicBinding(targetStore, targetCredentials);
           checkAlive();
+          if (pendingRefused(pending)) return useRefusedGrant(pending);
           const observed = observePendingRotation(targetStore, targetCredentials, pending);
           if (observed) {
             const latest = await observed.result;
@@ -868,6 +876,7 @@ export function createTokenResolver(env) {
         advance('jwks');
         const keys = await grants.jwks(meta.jwksUri);
         checkAlive();
+        if (pendingRefused(initial)) return useRefusedGrant(initial);
         const operationId = randomToken(32);
         const operation = { version: 1, state: 'pending', id: operationId, base: refreshBaseId(initial, operationId) };
         refreshPromisePending = { store: targetStore, credentials: targetCredentials,
@@ -883,7 +892,7 @@ export function createTokenResolver(env) {
           claim = await targetStore.mutate((current) => {
             // A provider that rejects and invokes its callback later must not
             // create a pending write after this flight has been abandoned.
-            if (!claimGateOpen || claimCallbackUsed) return undefined;
+            if (!claimGateOpen || claimCallbackUsed || pendingRefused(initial)) return undefined;
             claimCallbackUsed = true;
             checkAlive();
             if (!current) return undefined;
@@ -906,8 +915,10 @@ export function createTokenResolver(env) {
         checkAlive();
         const claimedRecord = claim.record?.kind === 'grant' ? claim.record.payload : null;
         if (!claimed) {
+          if (pendingRefused(initial)) return useRefusedGrant(initial);
           const latest = await targetStore.read();
           checkAlive();
+          if (pendingRefused(initial)) return useRefusedGrant(initial);
           if (!latest.ok || !latest.grant) return rejectSession(undefined, 'claim-conflict');
           const decisionTime = now();
           if (isDeepStrictEqual(latest.grant, initial) && !isRefreshUsable(initial, decisionTime)
@@ -947,6 +958,30 @@ export function createTokenResolver(env) {
         authentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
         checkAlive();
         const pending = { ...claimedGrant, refreshOperation: operation };
+        const restoreUnsent = async (cause) => {
+          checkAlive();
+          let restored = false;
+          advance('restore', cause ? renewalErrorFields(cause) : { reason: 'refresh-unusable' });
+          const result = await targetStore.mutate((current) => {
+            checkAlive();
+            if (!isDeepStrictEqual(current, pending)) return undefined;
+            restored = true;
+            return claimedGrant;
+          }, { guard: () => { checkAlive(); return true; } });
+          checkAlive();
+          if (!restored || result.record?.kind !== 'grant' || !isDeepStrictEqual(result.record.payload, claimedGrant)) {
+            return rejectSession(undefined, 'commit-unconfirmed', cause);
+          }
+          if (cause) trace('refresh-retry', { reason: 'request-unsent', ...renewalErrorFields(cause) });
+          else if (isAccessExpired(claimedGrant, now())) return rejectSession(undefined, 'refresh-unusable');
+          return useGrant(claimedGrant, Boolean(cause));
+        };
+        const timeoutMs = Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS);
+        advance('token-endpoint', { timeoutMs });
+        checkAlive();
+        if (pendingRefused(initial)) throw pendingRefusal;
+        // The claim and client-auth recheck can outlast the remaining refresh window.
+        if (!isRefreshUsable(claimedGrant, now())) return await restoreUnsent();
         const exchange = { store: targetStore, credentials: targetCredentials, pending, signOut: false, complete: undefined };
         refreshExchange = exchange;
         const ownsSignOut = () => !ctx.disposed && isSigningOut() && auth + 1 === getAuthEpoch()
@@ -962,8 +997,6 @@ export function createTokenResolver(env) {
           if (!ownsSignOut()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         };
         let token;
-        const timeoutMs = Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS);
-        advance('token-endpoint', { timeoutMs });
         try {
           token = await refreshTokens({
             tokenEndpoint: meta.tokenEndpoint,
@@ -976,21 +1009,7 @@ export function createTokenResolver(env) {
           });
         } catch (cause) {
           if (!(cause instanceof OidcError) || cause.code !== 'IAM_UNREACHABLE' || cause.details.requestUnsent !== true) throw cause;
-          checkAlive();
-          let restored = false;
-          advance('restore', renewalErrorFields(cause));
-          const result = await targetStore.mutate((current) => {
-            checkAlive();
-            if (!isDeepStrictEqual(current, pending)) return undefined;
-            restored = true;
-            return claimedGrant;
-          }, { guard: () => { checkAlive(); return true; } });
-          checkAlive();
-          if (!restored || result.record?.kind !== 'grant' || !isDeepStrictEqual(result.record.payload, claimedGrant)) {
-            return rejectSession(undefined, 'commit-unconfirmed', cause);
-          }
-          trace('refresh-retry', { reason: 'request-unsent', ...renewalErrorFields(cause) });
-          return useGrant(claimedGrant, true);
+          return await restoreUnsent(cause);
         }
         advance('validate-response');
         checkResult();
@@ -1043,6 +1062,7 @@ export function createTokenResolver(env) {
           throw new IamError('IAM_DISPOSED', 'IAM session changed');
         }
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
+        if (!refreshWriteAttempted && !waitingForPending && pendingRefused(operationGrant)) return useRefusedGrant(operationGrant);
         // Revoked trust before a claim cannot have consumed the refresh token.
         // Retain the session until a newly bound trusted provider can resume it.
         if (!refreshWriteAttempted && cause?.code === 'IAM_ATOMIC_STORE_UNVERIFIED') {
