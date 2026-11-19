@@ -16,7 +16,7 @@
 
 ![河洛产品蓝图：个人工作环境、研发与个人助理、AIHUB 和 Nacos 能力生态、企业治理及外部系统](docs/assets/product-blueprint.svg)
 
-[查看高清蓝图](docs/assets/product-blueprint.svg) · [了解价值主张](#价值主张) · [了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
+[查看高清蓝图](docs/assets/product-blueprint.svg) · [阅读产品手册](docs/product-manual.md) · [了解价值主张](#价值主张) · [了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
 
 ---
 
