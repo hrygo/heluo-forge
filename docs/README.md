@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.48.0 |
+| 版本 | V1.49.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-18 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -99,6 +99,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | Issue 交付调整方案 | [Issue 交付单元与研发职责调整方案](requirements/issue-delivery-adjustment-proposal.md) | 2026-11-03 用户已最终确认交付模型与四项取舍；基线为唯一范围真源，本文记录决定、落实顺序与 Agent 验证事项；SDD 已于 2026-11-03 全量退役 |
 | 企业协作聊天方案 | [Agent 增强的企业聊天产品方案](requirements/enterprise-collaboration-chat-proposal.md) | 草案；单聊与群聊优先互通企业 IM，个人 Agent 提供私有总结；范围入基线与企业接口待确认 |
 | 云端专家智能体 PRD | [Forge 专家智能体产品需求文档](requirements/delegra-experts-prd.md) | 草案；在 DSH 中发现并 `@` 委派 Delegra 专家；范围、权限与接入待确认 |
+| 云端专家智能体接入 | [Forge 专家智能体接入方案](plans/2026-11-18-forge-experts-integration-proposal.md) | 草案，暂缓实施。建议通过 DSH 插件与 Delegra 受限员工 API 接入，范围及企业契约待确认 |
 | 员工个人记忆方案 | [员工智能助理个人记忆产品方案](requirements/employee-assistant-memory-proposal.md) | 草案；DSH 员工个人 bank、采集配置与管理员可见性；范围与接入待评审 |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
 | 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | SQLite 值级加密、旧存储保留与不可用时的 fail-closed 口径 |
