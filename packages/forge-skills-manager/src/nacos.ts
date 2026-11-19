@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { parseSkillDoc } from "./skill-document.js";
 import type { CatalogInstallation, UploadInput } from "./types.js";
 import { unzipSync } from "./zip.js";
+import { createPortablePathSet,isPortableFileSegment } from "./filesystem-paths.js";
 
 export interface NacosConfig {
   serverUrl: string;
@@ -162,16 +163,16 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
       if (!published) throw error("notFound", "技能版本已变更、下线或未发布，请刷新公共库", 404);
       const bytes = await request("/v3/admin/ai/skills/version/download", { namespaceId: cfg.namespace, skillName: selected.name, version: selected.version }, combined, auth, undefined, 10 << 20);
       const entries: NonNullable<UploadInput["entries"]> = [];
-      const seen = new Set<string>();
+      const seen = createPortablePathSet();
       let count = 0, total = 0;
       let files: Record<string, Uint8Array>;
       try {
         files = unzipSync(bytes, { filter(info) {
           const path = info.name.replace(/\/$/, "");
           const parts = path.split("/");
-          if (!path || path.length > 512 || parts.length > 64 || parts.some(p => !p || p === "." || p === ".." || /[\\:<>"|?*\x00-\x1f]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p))) throw 0;
-          if (++count > 1000 || info.originalSize > (32 << 20) || (total += info.originalSize) > (64 << 20) || seen.has(path.toLowerCase())) throw 0;
-          seen.add(path.toLowerCase()); return !info.name.endsWith("/");
+          if (!path || path.length > 512 || parts.length > 64 || parts.some(p => !isPortableFileSegment(p))) throw 0;
+          if (++count > 1000 || info.originalSize > (32 << 20) || (total += info.originalSize) > (64 << 20) || !seen.add(path)) throw 0;
+          return !info.name.endsWith("/");
         } });
       } catch (caught) {
         if (caught !== 0 && (!object(caught) || !Number.isInteger(caught.code) || Number(caught.code) < 0 || Number(caught.code) > 14)) throw caught;

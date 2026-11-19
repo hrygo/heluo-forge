@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.48.0 |
+| 版本 | V0.50.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组；本轮更新 Agent（代拟） |
@@ -61,6 +61,30 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 
 以下记录各模块的实现和验证边界；已有记录不证明 ADR-16 的目标令牌、归属一致、用途及单授权生命周期已经实现。
 
+**技能管理跨平台修复后的预览安装（2026-11-19，本机 Windows，Agent 代拟）**
+
+固定 Node 24.21.0 / pnpm 11.28.5；源提交 `80e5fb50c3a5eaa707f985a00142bcb12fbb6783` 加尚未提交的技能管理跨平台修改。独立包使用仓库 `buildBundle` 构建；企业预览在仓库外以既有已验证组合制品为基底，仅替换技能管理器全部随包资源，重打包保留其他插件文件字节及模式位。该预览重组器不属于仓库通用发布入口，不表示 Windows 企业标准打包的 IAM 执行位限制已解决。
+
+| 本机验证 | 结果与耗时 |
+|---|---|
+| 跨平台修复后的制品构建及独立校验 | 约 4.0 秒；单包及企业包独立校验通过，企业包 143 个文件；企业 `.tgz` SHA-256 为 `ebf21ff8c70127b19a29af2611556880ae15bd62e891c49bbf2d0d2be9443625` |
+| 测试 profile 离线更新 | 约 6.0 秒；安装文件与制品逐项一致，既有配置及技能、状态、会话和凭据存储指纹保持一致 |
+| 本机 DSH 0.2.2-rc.1 重启及 HTTP 冒烟 | 启动约 15.4 秒，冒烟约 3.7 秒；页面 200、匿名管理状态 401、认证管理状态 200；实际识别本机 Codex 4 个、Claude 8 个只读技能，以及本机 Java Nacos 的 3 个演示技能 |
+| 直接组合依赖可用性 | 本地模拟 IAM 与网关达到 ready/configured，模型列表及 token 读取通过；不代表企业真实身份或模型服务联调 |
+
+本机持续试用环境已更新到上述制品；后续 README 和受控文档补充不自动改变该制品摘要。未补验完整浏览器交互矩阵、macOS/Linux/国产目标实机和企业实际系统；本机 DSH 版本不同于 `.dsh-version` 的 `0.2.1-rc.3`，严格原生兼容仍未通过。下列较早记录中“未重启”“未更新预览”只描述各自取证时点，不表示当前安装状态。开发与构建步骤见[插件 README](../../packages/forge-skills-manager/README.md)，后续验收与凭据未决项见[设计 §6](plugins/forge-skills-manager.md#6-实施与验收)。
+
+**技能管理源码跨平台校验（2026-11-19，本机 Windows，Agent 代拟）**
+
+上传、企业 ZIP 与安装记录读取共用路径判定，回归覆盖 Windows 特殊文件名、NTFS 流路径拒绝、大小写及 Unicode 重名、正常资源保留和普通祖先 junction 拒绝。macOS 标准目录别名通过纯函数与合成文件系统响应验证，未在 macOS 或 Linux 实机运行；不据此宣称目标平台验收通过。上传与下载不还原执行位，脚本解释器调用约定见[技能管理器设计 §3](plugins/forge-skills-manager.md#3-配置与数据)。其他插件、公共检查器、CI 与锁文件未改。
+
+| 本地验证命令 | 结果与耗时 |
+|---|---|
+| `node --test --test-timeout=120000 packages/forge-skills-manager/test/*.test.mjs` | 138 项通过，约 123.2 秒；包括保留的本地/Nacos 回归和结构变异，外层统计不代表 Windows 受权限限制的内部文件软链分支全部执行 |
+| `node --test --test-timeout=120000 packages/forge-skills-manager/test/cross-platform-paths.test.mjs` | 最终别名匹配规则下 9 项通过，无跳过，约 0.75 秒 |
+| `node --run check:skills-manager` | SDK 基线、25 项生成物一致性及类型检查通过，约 7.1 秒 |
+| `node scripts/check-repo.mjs` | 约 2.2 秒；仅既有 Windows IAM `bin/heluo-forge.mjs` 执行位检查失败，未改公共规则或 IAM |
+
 **技能管理测试分层验证（2026-11-19，本机 Windows，Agent 代拟）**
 
 默认回归仅保留 Cordis 与 SkillRegistry 直接 SDK 开发依赖；原生 filesystem provider、scope 合并和 `skill.execute` 回归迁至插件 `compat/`，由 `test:compat <installed-dsh-dir>` 显式执行，移除未使用的 WebServer 导入。入口要求指定已安装宿主及所需 DSH SDK 与根基线一致，缺依赖或版本不符直接失败，不回落本包依赖，也不以跳过代替兼容结果。发布、宿主升级及技能发现、优先级或启停逻辑变更须单独执行兼容验证，规则见[技能管理器设计 §6](plugins/forge-skills-manager.md#6-实施与验收)。
@@ -75,7 +99,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | `pnpm --filter @heluo/forge-skills-manager test:compat <installed-dsh-dir>` | 本机已安装 DSH 与根基线不同，预检按设计拒绝，约 2.4 秒；原生兼容用例未执行，不记为兼容通过 |
 | `node scripts/check-repo.mjs`、`node scripts/dsh-version.mjs check` | 约 4 秒；版本检查通过，仓库检查仅有既有 Windows IAM 执行位错误，未修公共规则或其他插件 |
 
-实际工具链为 Node 24.21.0 / pnpm 11.28.5。全量 `check` 未重跑，现有预览未重启；真实宿主原生调用、浏览器完整布局、企业服务及目标平台仍需分别验证。以下接入核验是拆分前的历史记录，不代替上述当前默认回归结果。
+实际工具链为 Node 24.21.0 / pnpm 11.28.5。该次测试分层验证未重跑全量 `check`，也未重启当时的预览；后续安装证据见本节最新预览记录。真实宿主原生调用、浏览器完整布局、企业服务及目标平台仍需分别验证。以下接入核验是拆分前的历史记录，不代替上述当前默认回归结果。
 
 **技能管理接入范围核验（2026-11-19，本机 Windows，Agent 代拟，历史记录）**
 

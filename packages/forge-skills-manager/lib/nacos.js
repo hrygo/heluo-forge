@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseSkillDoc } from "./skill-document.js";
 import { unzipSync } from "./zip.js";
+import { createPortablePathSet, isPortableFileSegment } from "./filesystem-paths.js";
 class NacosError extends Error {
   code;
   statusCode;
@@ -168,16 +169,15 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
       if (!published) throw error("notFound", "\u6280\u80FD\u7248\u672C\u5DF2\u53D8\u66F4\u3001\u4E0B\u7EBF\u6216\u672A\u53D1\u5E03\uFF0C\u8BF7\u5237\u65B0\u516C\u5171\u5E93", 404);
       const bytes = await request("/v3/admin/ai/skills/version/download", { namespaceId: cfg.namespace, skillName: selected.name, version: selected.version }, combined, auth, void 0, 10 << 20);
       const entries = [];
-      const seen = /* @__PURE__ */ new Set();
+      const seen = createPortablePathSet();
       let count = 0, total = 0;
       let files;
       try {
         files = unzipSync(bytes, { filter(info) {
           const path = info.name.replace(/\/$/, "");
           const parts = path.split("/");
-          if (!path || path.length > 512 || parts.length > 64 || parts.some((p) => !p || p === "." || p === ".." || /[\\:<>"|?*\x00-\x1f]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p))) throw 0;
-          if (++count > 1e3 || info.originalSize > 32 << 20 || (total += info.originalSize) > 64 << 20 || seen.has(path.toLowerCase())) throw 0;
-          seen.add(path.toLowerCase());
+          if (!path || path.length > 512 || parts.length > 64 || parts.some((p) => !isPortableFileSegment(p))) throw 0;
+          if (++count > 1e3 || info.originalSize > 32 << 20 || (total += info.originalSize) > 64 << 20 || !seen.add(path)) throw 0;
           return !info.name.endsWith("/");
         } });
       } catch (caught) {

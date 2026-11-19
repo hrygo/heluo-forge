@@ -4,6 +4,7 @@ import { isEnterpriseSkillName, reservedSkillError } from "./skill-policy.js";
 import { writeFileAtomically } from "./file-writes.js";
 import { createManagerStateStore } from "./manager-state.js";
 import { isExpectedOperationError } from "./operation-errors.js";
+import { createPortablePathSet,isPortableFileSegment,isSafeAncestorDirectory } from "./filesystem-paths.js";
 import type { CodedError,CreateInput,Diagnostic,DiscoveredEntry,EntryLocation,ImportCandidate,ImportConflict,ImportFailure,ImportPending,ImportResult,Log,ManagerState,MutationOptions,OperationError,ParsedSkill,Policy,PolicyResult,RenameOptions,RepositoryDestination,RootInput,RootView,Scan,ScopeOptions,SkillEntry,SkillItem,SkillRoot,SkillView,UploadInput,ViewItem } from "./types.js";
 // dsh-skills-manager core —— 纯 Node 技能文件管理核心（仅 ZIP 解压使用 fflate，可独立单测）
 //
@@ -1356,7 +1357,7 @@ function writableRootDefinition(root: RootInput) {
 async function checkedUserRootAncestors(definition: SkillRoot): Promise<SkillRoot | OperationError> {
   for (let path = resolve(definition.path); ; path = dirname(path)) {
     const st = await lstatOrNull(path);
-    if (st && (!st.isDirectory() || st.isSymbolicLink()))
+    if (st && !(await isSafeAncestorDirectory(path, st)))
       return { ok: false, error: `技能目录不安全，拒绝写入: ${path}`, code: "error.root.unsafe", params: { path } };
     if (dirname(path) === path) break;
   }
@@ -3653,11 +3654,8 @@ function normalizeUploadPath(input: string) {
     parts.length > MAX_SOURCE_DEPTH ||
     parts.some(
       (part) =>
-        !part ||
-        part === "." ||
-        part === ".." ||
-        part.length > MAX_ENTRY_NAME_LENGTH ||
-        WINDOWS_DEVICE_NAME_RE.test(part),
+        !isPortableFileSegment(part) ||
+        part.length > MAX_ENTRY_NAME_LENGTH,
     )
   ) {
     throw codedError(`上传条目路径非法: ${raw}`, "error.upload.path", {
@@ -3722,17 +3720,15 @@ async function writeUploadedEntries(contentRoot: string, entries: UploadInput["e
       { limit: MAX_UPLOAD_ENTRIES },
     );
   let total = 0;
-  const seen = new Set();
+  const seen = createPortablePathSet();
   for (const entry of entries) {
     const normalized = normalizeUploadPath(entry && entry.path);
-    const key = normalized.path.toLowerCase();
-    if (seen.has(key))
+    if (!seen.add(normalized.path))
       throw codedError(
         `上传内容包含重复路径: ${normalized.path}`,
         "error.upload.duplicate",
         { path: normalized.path },
       );
-    seen.add(key);
     if (normalized.directory) continue;
     const bytes = decodeUploadBase64(
       entry && entry.data,
@@ -3766,10 +3762,13 @@ async function writeUploadedZip(contentRoot: string, encoded: string) {
   let count = 0;
   let total = 0;
   let files;
+  const seen = createPortablePathSet();
   try {
     files = unzipSync(archive, {
       filter(info) {
         const normalized = normalizeUploadPath(info.name);
+        if (!seen.add(normalized.path))
+          throw codedError(`上传内容包含重复路径: ${normalized.path}`, "error.upload.duplicate", { path: normalized.path });
         count += 1;
         if (count > MAX_UPLOAD_ENTRIES)
           throw codedError(
