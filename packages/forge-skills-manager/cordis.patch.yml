@@ -1,4 +1,4 @@
 - insert:
-    - id: skills-manager
+    - id: heluo-skills-manager
       name: '@heluo/forge-skills-manager'
       config: {}

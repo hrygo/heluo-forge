@@ -35,7 +35,7 @@
 ## 配置与替换
 
 ```yaml
-- id: skills-manager
+- id: heluo-skills-manager
   config:
     nacos:
       serverUrl: https://nacos.corp.example/nacos
@@ -50,7 +50,7 @@
 
 本地操作响应丢失时显示待确认，通过「核对操作结果」读取 Host 回执，确认前不重复提交。确认后重新读取当前状态；刷新失败会明确提示视图尚未更新。插件卸载停止排队任务和远端读取，已开始的本地事务与下一实例串行衔接。
 
-替换旧版时先备份 profile 配置，再停用并移除旧 `@michengai/dsh-skills-manager` 挂载，安装新包并检查同一个 `skills-manager` 行只出现一次。保留原 `$DSH_HOME/skills-manager` 数据、宿主全局与项目技能；不同时运行两个管理器。卸载本包不删除这些数据。本包在创建、导入与自身 provider 中拒绝 `enterprise-*` 个人候选；宿主原生 provider 的同名候选选择仍遵循宿主规则。
+替换旧版时先备份 profile 配置，再停用并移除旧 `@michengai/dsh-skills-manager` 挂载（其行 id 为 `skills-manager`），安装新包并检查旧 `skills-manager` 行已消失、`heluo-skills-manager` 行只出现一次；两个行 id 并存会让两个管理器同时挂载。保留原 `$DSH_HOME/skills-manager` 数据、宿主全局与项目技能；不同时运行两个管理器。卸载本包不删除这些数据。本包在创建、导入与自身 provider 中拒绝 `enterprise-*` 个人候选；宿主原生 provider 的同名候选选择仍遵循宿主规则。
 
 ## 构建与打包
 
@@ -168,7 +168,7 @@ npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false
 
 ### 3. 配置与启动
 
-在该 profile 的 `cordis.patch.yml` 合并本文「配置与替换」中的 `skills-manager` 行，保留其他配置；只有本机 Nacos 演示才将 `serverUrl` 改为 `http://127.0.0.1:8848/nacos` 并显式增加 `allowInsecureHttp: true`。没有 Nacos 时省略连接配置，预期发现页显示未配置。账号密码由私有启动器或当前终端注入，不写进 YAML；`.env` 必须先由启动器加载。替换现有 profile 前先备份，不覆盖原配置；最终合并结果中 `skills-manager` 只能出现一次。
+在该 profile 的 `cordis.patch.yml` 合并本文「配置与替换」中的 `heluo-skills-manager` 行，保留其他配置；只有本机 Nacos 演示才将 `serverUrl` 改为 `http://127.0.0.1:8848/nacos` 并显式增加 `allowInsecureHttp: true`。没有 Nacos 时省略连接配置，预期发现页显示未配置。账号密码由私有启动器或当前终端注入，不写进 YAML；`.env` 必须先由启动器加载。替换现有 profile 前先备份，不覆盖原配置；最终合并结果中 `heluo-skills-manager` 只能出现一次。
 
 需要手动注入时，在启动 DSH 的同一终端输入只读测试账号；密码采用隐藏输入，避免将明文直接写入命令历史。
 

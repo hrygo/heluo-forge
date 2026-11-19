@@ -175,7 +175,7 @@ test('the base bundle mounts universal account, keychain, policy, brand, and ski
       ['heluo-policy', '@heluo/forge-policy'],
       ['heluo-iam', '@heluo/forge-iam'],
       ['heluo-brand', '@heluo/forge-brand'],
-      ['skills-manager', '@heluo/forge-skills-manager'],
+      ['heluo-skills-manager', '@heluo/forge-heluo-skills-manager'],
     ],
     '通用底座只装凭据、策略、IAM、品牌令牌与技能管理，不含任何研发行',
   );

@@ -2009,7 +2009,7 @@ function defaultManagerState(): ManagerState {
     disabledSkills[root.key] = [];
     enabledSkills[root.key] = [];
   }
-  return { version: 1, sources, disabledSkills, enabledSkills, entryLocation: "settings", sidebarEntry: false, categories: Object.create(null), categoryMembers: Object.create(null), categoryOrder: Object.create(null), customNotes: Object.create(null) };
+  return { version: 1, sources, disabledSkills, enabledSkills, entryLocation: "both", sidebarEntry: true, categories: Object.create(null), categoryMembers: Object.create(null), categoryOrder: Object.create(null), customNotes: Object.create(null) };
 }
 
 function validStateSkillName(name: unknown): name is string {

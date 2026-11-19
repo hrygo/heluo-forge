@@ -158,7 +158,7 @@ async function activateInstalled(label, host) {
     const engineeringIdsAll = engineeringPatch.inserted.map((row) => row.id);
     const sharedIds = baseIds.filter((id) => engineeringIdsAll.includes(id));
     const engineeringOnlyIds = ['heluo-engineering-ui', 'heluo-issue-delivery-skill', 'forge-devops', 'heluo-gitee'];
-    const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam', 'heluo-brand', 'skills-manager'];
+    const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam', 'heluo-brand', 'heluo-skills-manager'];
     record(
       `${label}-layers-are-disjoint`,
       baseIds.length === 4
