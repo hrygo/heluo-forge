@@ -34,6 +34,7 @@ import { createExtTokensService, createCredentialBroker } from './service-ext-to
  *   fetch?: typeof fetch,
  *   now?: () => number,
  *   monotonic?: () => number,
+ *   logRenewal?: (event: string, fields?: Record<string, unknown>) => void,
  * }} [options]
  */
 export function createIamService(rawConfig, options = {}) {
@@ -49,6 +50,9 @@ export function createIamService(rawConfig, options = {}) {
   // Wall-clock jumps (sleep/wake) are diagnosed against this clock.
   const monotonic = options.monotonic ?? (() => performance.now());
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  const logRenewal = typeof options.logRenewal === 'function' ? (event, fields) => {
+    try { options.logRenewal(event, fields); } catch { /* diagnostics cannot change the session */ }
+  } : undefined;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
   const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
 
@@ -71,6 +75,7 @@ export function createIamService(rawConfig, options = {}) {
     options,
     configured,
     now,
+    logRenewal,
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
     scheduleReconcile: () => selection.schedule(),
@@ -140,10 +145,12 @@ export function createIamService(rawConfig, options = {}) {
     now,
     monotonic,
     fetchImpl,
+    logRenewal,
     isSigningOut: () => signout.signingOut,
     getSessionEpoch: () => sessionEpoch,
     getAuthEpoch: () => authEpoch,
     clearObservation: () => { observedPending = null; },
+    deferRead: (attempt) => reconcile.deferRead(attempt),
     beginConsumption,
     adoptConsumption,
   });
@@ -176,6 +183,7 @@ export function createIamService(rawConfig, options = {}) {
     token,
     now,
     configured,
+    logRenewal,
     hasSignInAttempt: () => Boolean(signInPromise),
     isSigningOut: () => signout.signingOut,
     getAuthEpoch: () => authEpoch,
@@ -185,7 +193,7 @@ export function createIamService(rawConfig, options = {}) {
     bumpPublications: () => ++syncPublications,
     beginConsumption,
     adoptConsumption,
-    resolveToken: () => service.resolveToken(),
+    resolveToken: () => service.resolveToken(undefined, 'reconcile'),
   });
 
   // Sign-in/out attempt state: the attempt object is the only owner of its
@@ -433,7 +441,8 @@ clearGatewayCredential: gateway.clearCredential,
       consumptionWitness?.dispose();
       if (ctx.disposed) return;
       ctx.disposed = true;
-      token.cancelRenewal();
+      token.cancelRenewal('disposed');
+      reconcile.cancelReadRetry();
       selection.clearQueue();
       sessionEpoch += 1;
       authEpoch += 1;

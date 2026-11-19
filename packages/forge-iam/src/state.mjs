@@ -112,7 +112,8 @@ export function createView(state, details = {}) {
   return {
     state,
     configured: details.configured !== false,
-    signedIn: isSignedIn(state),
+    // Storage recovery still needs a durable grant before publishing sign-in.
+    signedIn: isSignedIn(state) && !(state === 'unreachable' && details.error === 'IAM_CREDENTIALS_UNAVAILABLE'),
     canSignOut: isSignedIn(state) || state === 'expired',
     canSignIn: details.configured !== false && (details.exclusive ?? 'ok') === 'ok' && canSignIn(state),
     missing: details.missing ?? [],

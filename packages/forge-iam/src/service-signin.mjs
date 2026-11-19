@@ -48,6 +48,9 @@ export function createSignIn(env) {
       });
     }
     if (isSigningOut()) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+    if (ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') {
+      throw new IamError(ctx.error, safeMessage(ctx.error));
+    }
     const targetStore = provider.ensure();
     const credentials = provider.storeCredentials;
     if (attempt && (attempt.targetStore !== targetStore || attempt.credentials !== credentials)) {
@@ -414,6 +417,7 @@ export function createSignIn(env) {
   }
 
   async function cancelSignIn() {
+    if (ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') return ctx.view();
     invalidateConsumption();
     if (ctx.disposed) return ctx.view();
     bumpAuthEpoch();
