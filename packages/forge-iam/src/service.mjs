@@ -255,13 +255,14 @@ export function createIamService(rawConfig, options = {}) {
   const credentialRegistry = createCredentialRegistry();
   // 装配点只拿端口：provider 就绪时序与「换绑后不读旧 store」都由 service-store 负责。
   const extTokenStore = createExtTokenStore(provider.credentialsPort());
+  const canUseExtensionCredentials = () => ctx.state === 'ready' && !signout.signingOut && !token.hasObservedRotation();
   const extTokens = createExtTokensService({
     registry: credentialRegistry,
     store: extTokenStore,
-    getCurrentSubject: () => (ctx.state === 'ready' ? (ctx.lastGrant?.subject ?? null) : null),
+    getCurrentSubject: () => (canUseExtensionCredentials() ? (ctx.lastGrant?.subject ?? null) : null),
     // 会话快照：登出/换账号会同时改 state、epoch 与最后一次 grant，因此解析令牌
     // 前后各取一次就能发现「读存储期间用户已登出」——缓存里的 ready 不足以证明。
-    getSessionRef: () => (ctx.state === 'ready' && ctx.lastGrant
+    getSessionRef: () => (canUseExtensionCredentials() && ctx.lastGrant
       ? {
         subject: ctx.lastGrant.subject,
         epoch: `${authEpoch}:${sessionEpoch}:${ctx.lastGrant.sessionInstanceId ?? ''}:${ctx.lastGrant.version ?? ''}`,
@@ -280,6 +281,7 @@ export function createIamService(rawConfig, options = {}) {
       return ctx.view();
     },
     getModelAccessEpoch() { return `${authEpoch}:${sessionEpoch}:${selection.generation}`; },
+    getModelAuthorizationEpoch() { return `${authEpoch}:${sessionEpoch}:${ctx.lastGrant?.sessionInstanceId ?? ''}`; },
 
     /**
      * Identity and freshness only. Never a token, verifier or ID token: this is

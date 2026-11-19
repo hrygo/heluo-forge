@@ -36,7 +36,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `gatewayResource` | 空 | 可选的授权/令牌请求 resource 与 grant 上下文约束；不证明已实现网关目标授权。 |
 | `gatewayConsoleUrl` | 空 | 网关控制台引导链接，不参与鉴权。 |
 | `defaultProvider` / `defaultModel` | `enterprise` / 空 | 只读编排的观察目标；`defaultModel` 为空时该编排不注册模型注入、不取 SDK。受管目录也可将其作为首跑启用的优先项；不会自动写入宿主默认模型。 |
-| `refreshSkewSeconds` | `60` | 前台预刷新窗口。后台续期在可用寿命（访问令牌与已知刷新令牌中较早的到期时间）的中点触发；可用寿命短于 4 分钟时按该提前量续期，剩余时间不足时以一半为上界。`0` 通常不提前；若已知刷新令牌先于或同时到期，仍预留 1 秒。 |
+| `refreshSkewSeconds` | `60` | 前台预刷新窗口。后台续期以访问令牌与已知刷新令牌中较早的到期时间为准，目标提前量为 10 分钟。剩余时间短于 4 分钟时采用此配置，配置为 `0` 且刷新令牌先于或同时到期时按 1 秒计算。后台提前量以排程时剩余时间的一半为上限。 |
 | `attemptTimeoutSeconds` | `300` | 登录尝试时限。 |
 | `httpTimeoutMs` | `10000` | 协议请求超时参数；刷新与退出撤销请求取该值和 5000ms 的较小值，不是整个操作总时限。 |
 | `logoutMode` | `local` | `local` 尽力撤销并本地退出；`rp` 还可生成浏览器登出 URL，不保证单授权或全局 SSO 生命周期闭环。 |

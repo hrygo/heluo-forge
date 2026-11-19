@@ -43,6 +43,9 @@ export function createSignOut(env) {
       signingOut = false;
       signOutPromise = null;
     });
+    // Fence local consumers while refresh handoff and remote revocation are
+    // still running. The published result comes from signOutOnce.
+    if (ctx.lastGrant) ctx.notify();
     return signOutPromise;
   }
 

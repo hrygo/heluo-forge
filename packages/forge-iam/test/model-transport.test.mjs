@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createManagedModelRuntime } from '../src/managed-models.mjs';
 import { createModelFailureLogger } from '../src/model-failure-log.mjs';
+import { modelFetchOptions, modelPreconnectFault, trackModelAttempt } from '../src/model-transport.mjs';
 import { createGrantStore } from '../src/store.mjs';
 import { seedGateway } from './support/atomic-gateway.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
@@ -15,6 +16,21 @@ import { createIamService } from './support/trusted-service.mjs';
 
 const route = { provider: 'enterprise', model: 'synthetic-model' };
 const request = { ...route, messages: [{ role: 'user', content: 'sensitive-test-prompt' }] };
+
+const socketError = (code, syscall) => Object.assign(new Error('synthetic socket failure'), { code, syscall });
+const fetchError = cause => new TypeError('fetch failed', { cause });
+
+function failFirstFetch(t, cause) {
+  const directFetch = globalThis.fetch;
+  let first = true;
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    if (first) {
+      first = false;
+      throw fetchError(cause);
+    }
+    return directFetch(input, init);
+  });
+}
 
 async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}) {
   let posts = 0;
@@ -25,8 +41,8 @@ async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}
     req.resume();
     req.on('end', () => {
       if (mode === 'reset') return res.destroy();
-      if (mode === 'http-error') {
-        res.writeHead(503, { 'Retry-After': '2', 'X-Test-Private': 'sensitive-test-header' });
+      if (mode === 'http-error' || mode === 'rate-limited') {
+        res.writeHead(mode === 'http-error' ? 503 : 429, { 'Retry-After': '2', 'X-Test-Private': 'sensitive-test-header' });
         return res.end('sensitive-test-response');
       }
       if (mode === 'unauthorized') {
@@ -82,6 +98,7 @@ async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}
         if (mode === 'after-output') { yield failure('TRANSPORT'); return; }
         yield { type: 'finish', reason: { kind: 'stop' } };
       } catch (cause) {
+        if (mode === 'throw-fetch-error') throw cause;
         if (mode === 'recovered' && attempts === 1) await open(port);
         if (mode === 'cancelled') cancel.abort();
         if (mode === 'signed-out') { view.state = 'signed-out'; view.principal = null; }
@@ -243,10 +260,84 @@ test('retries once only after a verified refusal to connect, with fresh credenti
   assert.deepEqual(rows[0].transport, { phase: 'before-send', fault: 'ECONNREFUSED', output: false, retrying: true });
 });
 
+test('retries DNS and connect failures only when the original POST could not have been sent', async t => {
+  for (const [name, mode, cause, fault] of [
+    ['temporary DNS failure', 'sdk-error', socketError('EAI_AGAIN', 'getaddrinfo'), 'EAI_AGAIN'],
+    ['TCP connect timeout', 'sdk-error', socketError('ETIMEDOUT', 'connect'), 'ETIMEDOUT'],
+    ['Undici connect timeout', 'sdk-error', socketError('UND_ERR_CONNECT_TIMEOUT'), 'UND_ERR_CONNECT_TIMEOUT'],
+    ['all addresses failed to connect', 'throw-fetch-error', new AggregateError([
+      socketError('ETIMEDOUT', 'connect'),
+      socketError('ECONNREFUSED', 'connect'),
+    ]), 'ETIMEDOUT'],
+  ]) {
+    await t.test(name, async t => {
+      failFirstFetch(t, cause);
+      const result = await fixture(t, mode);
+      assert.equal(result.attempts, 2);
+      assert.equal(result.posts, 1);
+      assert.equal(result.credentialReads, 2);
+      assert.deepEqual(result.chunks, [
+        { type: 'text-delta', text: 'ok' },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ]);
+      assert.deepEqual(JSON.parse(readFileSync(result.log, 'utf8')).transport,
+        { phase: 'before-send', fault, output: false, retrying: true });
+    });
+  }
+});
+
+test('requires specific DNS and connect evidence for each failure', async t => {
+  for (const [name, cause, fault] of [
+    ['permanent DNS failure', socketError('ENOTFOUND', 'getaddrinfo'), 'ENOTFOUND'],
+    ['DNS phase missing', socketError('EAI_AGAIN'), 'EAI_AGAIN'],
+    ['read timeout', socketError('ETIMEDOUT', 'read'), 'ETIMEDOUT'],
+    ['an address has unknown delivery', new AggregateError([
+      socketError('ECONNREFUSED', 'connect'),
+      socketError('UND_ERR_SOCKET'),
+    ]), undefined],
+    ['no address failures in the aggregate', new AggregateError([]), undefined],
+  ]) {
+    await t.test(name, async t => {
+      failFirstFetch(t, cause);
+      const result = await fixture(t, 'sdk-error');
+      assert.equal(result.attempts, 1);
+      assert.equal(result.posts, 0);
+      assert.equal(result.chunks.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+      const { transport } = JSON.parse(readFileSync(result.log, 'utf8'));
+      assert.equal(transport.phase, 'unknown');
+      assert.equal(transport.fault, fault);
+      assert.equal(transport.retrying, false);
+    });
+  }
+});
+
+test('cannot prove a pre-send failure on a caller-supplied transport or a different endpoint', async t => {
+  const baseURL = 'https://gateway.example/v1';
+  const endpoint = `${baseURL}/chat/completions`;
+  const cause = fetchError(socketError('ECONNREFUSED', 'connect'));
+  const rejectFetch = async () => { throw cause; };
+  t.mock.method(globalThis, 'fetch', rejectFetch);
+  for (const [input, init, options] of [
+    [endpoint, { method: 'POST' }, { fetch: rejectFetch }],
+    [endpoint, { method: 'POST', dispatcher: {} }, {}],
+    [new Request(endpoint, { method: 'POST' }), {}, {}],
+    [`${baseURL}/other`, { method: 'POST' }, {}],
+  ]) {
+    const attempt = { calls: 0, check() {} };
+    async function* dispatch() {
+      await modelFetchOptions(options, baseURL).fetch(input, init);
+    }
+    await assert.rejects(trackModelAttempt(dispatch, attempt).next(), TypeError);
+    assert.equal(attempt.calls, 1);
+    assert.equal(modelPreconnectFault(attempt), undefined);
+  }
+});
+
 test('does not replay ambiguous delivery, HTTP failure, output or cancellation', async t => {
   for (const [mode, phase, extras] of [
     ['reset', 'unknown', { fault: 'UND_ERR_SOCKET' }],
     ['http-error', 'response', { status: 503, retryAfterMs: 2000 }],
+    ['rate-limited', 'response', { status: 429, retryAfterMs: 2000 }],
     ['unauthorized', 'response', { status: 401 }],
     ['redirect', 'response', { status: 307 }],
     ['after-output', 'response', { status: 200, output: true }],

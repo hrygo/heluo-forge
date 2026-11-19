@@ -170,22 +170,16 @@ export function renewalSkewMillis(grant, skewSeconds = 60, now = Date.now()) {
   return skewSeconds === 0 && refreshFirst ? 1000 : skewSeconds * 1000;
 }
 
-// Renewing just before expiry leaves the sliding refresh window with only the
-// configured skew as cover, so a suspension or network gap longer than the skew
-// ends renewal for good (see the IAM baseline: 7200 s access over a 7300 s
-// sliding refresh token leaves 160 s). For lifetimes long enough for that cover
-// to matter, the renewer targets the halfway point instead. Shorter lifetimes
-// keep the configured lead: doubling the rotation rate there buys seconds only.
-export const HALF_LIFE_RENEWAL_MIN_REMAINING_MS = 240_000;
+const BACKGROUND_RENEWAL_LEAD_MS = 600_000;
+const SHORT_RENEWAL_WINDOW_MS = 240_000;
 
 /** How early the background renewer fires, given the earlier usable deadline. */
 export function renewalLeadMillis(grant, deadline, now = Date.now(), skewSeconds = 60) {
   const remaining = deadline - now;
-  const configured = renewalSkewMillis(grant, skewSeconds, now);
-  if (!Number.isFinite(remaining) || remaining < HALF_LIFE_RENEWAL_MIN_REMAINING_MS) {
-    return Math.min(configured, Math.floor(remaining / 2));
-  }
-  return Math.floor(remaining / 2);
+  const lead = Number.isFinite(remaining) && remaining >= SHORT_RENEWAL_WINDOW_MS
+    ? BACKGROUND_RENEWAL_LEAD_MS
+    : renewalSkewMillis(grant, skewSeconds, now);
+  return Math.min(lead, Math.floor(remaining / 2));
 }
 
 export function shouldRefresh(grant, now = Date.now(), skewSeconds = 60) {

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.3.2 |
+| 版本 | V3.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -41,8 +41,9 @@
 
 1. **预注册 public 客户端**：企业采用 `authMode=public`、`clientAuthMethod=none` 和预注册 `client_id`，通过 PKCE S256 保护授权码；不要求共享 `client_secret`。用户确认支持 public，企业服务端对 public / S256 的真实行为仍须联调；
 2. **令牌生命周期与轮换**：
-   - 访问令牌（Access Token）由企业 IAM 统一签发（设计基线有效周期 7200 秒），在可用寿命的中点触发锁外静默刷新（寿命短于 4 分钟时按 60 秒提前量），使滑动刷新窗口保留约一小时余量；刷新成功后旧访问令牌即时作废；
-   - 刷新令牌（Refresh Token）遵循滑动续期机制（有效期 7300 秒，无绝对上限），旧刷新令牌在轮换后即时作废；
+   - 企业 IAM 签发访问令牌（Access Token），有效期设计基线为 7200 秒。刷新成功后旧访问令牌即时作废。
+   - 刷新令牌（Refresh Token）的滑动有效期设计基线为 7300 秒，无绝对上限。轮换成功后旧刷新令牌即时作废。
+   - Host 默认在两种令牌中较早的已知到期点前 10 分钟启动后台续期，短有效期适用提前量上限。调度规则与适用条件见[后台续期时机与恢复余量](#731-后台续期时机与恢复余量)。
 3. **撤销与退出语义闭环**：
    - 访问令牌通过专用端点 `GET /idp/oauth2/revokeToken?access_token=...` 实现单令牌实时幂等撤销；
    - 刷新令牌服务端不开放撤销接口，依赖服务端自然失效（7300 秒）；
@@ -144,7 +145,7 @@ flowchart TB
     subgraph Domain_Session["会话与生命周期域"]
       direction LR
       F_FSM["多态会话状态机<br/>(unconfigured/signed-out/ready...)"]
-      F_Refresh["锁外原子刷新协议<br/>(提前 60s 触发 / 5s 请求硬上限)"]
+      F_Refresh["锁外原子刷新协议<br/>(后台默认提前 10 分钟 / 5s 请求硬上限)"]
       F_AntiReplay["并发刷新防重放<br/>(Pending/Complete 双阶段 / 互斥等待)"]
       F_SignOut["显式登出与会话撤销<br/>(按令牌撤销 / 逻辑墓碑覆盖)"]
     end
@@ -206,7 +207,7 @@ flowchart TB
 | **1. 用户交互与触达层** | 用户端功能触达 | 3 步首启向导、企业账号与模型双面板、全局状态横幅、安全脱敏诊断导出 | 统一规范开箱体验，提供一站式账号管理、Key 录入与安全退出入口；诊断信息严格白名单脱敏 |
 | | 前端调度护栏 | 同页共享 SSE、2 秒回退轮询、代际并发防重护栏 | 同步客户端与 Host 状态；各组件基于代际废弃过时响应，不承诺跨组件或跨进程即时一致 |
 | **2. 核心业务功能层** | 企业身份认证域 | 标准 OIDC 握手、PKCE S256 动态防御、ID Token 验签核验、企业主体规范解析 | 落地企业统一认证，强制 S256 防御授权码拦截攻击；严格基于 JWKS 验签提取员工 Principal |
-| | 会话与生命周期域 | 多态会话状态机、锁外原子刷新协议、并发刷新防重放、显式登出与会话撤销 | 管控完整会话生命周期；提前 60 秒静默刷新，双阶段 Pending/Complete 协议防止并发击穿；按规范撤销访问令牌 |
+| | 会话与生命周期域 | 多态会话状态机、锁外原子刷新协议、并发刷新防重放、显式登出与会话撤销 | 后台提前续期留出故障恢复时间。原子 `pending` / `complete` 协议防止并发换票。退出时按规范撤销访问令牌 |
 | | 企业独占管控域 | 官方账号排他阻断、公网旁路封禁、组合失效自愈防御 | 落实 O3 企业独占登录原则；启动时强校验官方服务残留，发现违规立即 Fail-Closed 阻断 |
 | | 模型就绪协调域 | 模型准入纯逻辑门禁、宿主默认模型只读观察、就绪态跨模块透传 | 提供纯函数模型前提准入判定；保留宿主默认模型，由用户选择可用模型 |
 | **3. 凭据安全与数据层** | 双模式凭据存储隔离 | 身份凭据存储区（Session）、网关凭据独立存储区（Static Key）、网关元数据专区 | 身份令牌与网关凭据分区存储、互不覆盖：登出与刷新不清除长效凭据，凭据重置不影响 IAM 登录。路线 B 下令牌仅由 Host 传输层按需读取用于请求头组装，不新增视图字段 |
@@ -319,7 +320,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `gatewayConsoleUrl` | string | 空 | 否 | UAG 网关个人访问凭证控制台链接，仅用于界面指引 |
 | `defaultProvider` | string | `enterprise` | 否 | 企业模型提供方标识 |
 | `defaultModel` | string | 空 | 否 | 企业模型目录的首选项与只读观察目标；不写宿主默认模型 |
-| `refreshSkewSeconds` | number | 60 | 否 | 前台预刷新窗口（秒）。后台续期按可用寿命半程触发；可用寿命短于 4 分钟时沿用该提前量 |
+| `refreshSkewSeconds` | number | 60 | 否 | 前台按需取票的预刷新窗口（秒）。后台剩余有效期短于 4 分钟时使用该提前量，最长为剩余时间的一半。完整规则见[后台续期时机与恢复余量](#731-后台续期时机与恢复余量) |
 | `attemptTimeoutSeconds` | number | 300 | 否 | 单次登录 Attempt 超时时间（秒） |
 | `httpTimeoutMs` | number | 10000 | 否 | HTTP 请求默认超时上限（毫秒）；刷新与撤销请求设 5000ms 硬上限 |
 | `logoutMode` | string | `local` | 否 | 登出模式：`local`（撤销本机访问令牌 + 本地清理）或 `rp`（跳转全局登出） |
@@ -695,6 +696,24 @@ flowchart TD
 
 并发请求通过 Promise 共享换票结果；等待者设置 5 秒截止，超时不自动抢占，旧 Refresh Token 一旦使用即失效，杜绝重试风暴。
 
+#### 7.3.1 后台续期时机与恢复余量
+
+会话可续期且访问令牌仍有效时，Host 取访问令牌与已知刷新令牌中较早的到期时间排程。距截止至少 4 分钟时，目标提前量为 10 分钟。距截止短于 4 分钟时采用 `refreshSkewSeconds`。两种情况下提前量均以排程时剩余时间的一半为上限。配置为 `0` 且已知刷新令牌先到期或同时到期时，按 1 秒计算提前量，再应用同一上限。
+
+默认提前 10 分钟以终端持续运行、网络稳定为部署前提，为 IAM 短时故障留出恢复时间。半程策略给停机或断网后的换票留出约一小时余量。按两种令牌同刻签发、有效期分别为 7200 秒和 7300 秒的设计基线，以下余量从计划启动续期时算起。 [issue #317](https://github.com/hrygo/heluo-forge/issues/317) · [IAM 回函 C9、C10、D3](../../collaboration/iam-access-confirmation.md#8-刷新与重用)
+
+| 后台续期策略 | 签发后计划启动 | 距原访问令牌到期 | 距刷新令牌到期 |
+|---|---:|---:|---:|
+| 半程续期 | 60 分钟 | 60 分钟 | 61 分 40 秒 |
+| 到期前 10 分钟（默认） | 110 分钟 | 10 分钟 | 11 分 40 秒 |
+| 到期前 60 秒 | 119 分钟 | 1 分钟 | 2 分 40 秒 |
+
+访问令牌列给出未发生换票或撤销时的名义余量。在途模型流遇到同一会话的轮换时，须在原授权截止前确认轮换回执，单次等待上限为 5 秒。退出和已观察到的撤权立即收回本机准入。刷新令牌列给出 Host 从断网或休眠恢复后仍可换票的名义余量。实际余量受恢复和换票耗时约束，滑动窗口耗尽后须重新登录。 [流中授权边界](#816-流中授权边界)
+
+按设计基线，持续在线的单会话每天约轮换 13 次，半程策略下约为 24 次。真实 IAM 返回的期限、设备唤醒与断网恢复，以及网关已受理的 SSE 流跨轮换的表现，由企业环境联调核验。
+
+OAuth 安全最佳实践规定公共客户端刷新令牌的重放防护，并建议授权服务器设置空闲过期。微软 MSAL 的桌面指引采用优先取缓存、临期静默刷新。AWS SDK 的临时凭据示例为后台预取单独设置提前量。设计参考核验于 2026-11-18。 [RFC 9700 §4.14.2](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14.2) · [Microsoft MSAL](https://learn.microsoft.com/en-us/entra/msal/dotnet/acquiring-tokens/acquire-token-silently) · [AWS SDK](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credential-caching.html)
+
 ### 7.4 会话退出与令牌撤销
 
 ```text
@@ -859,7 +878,7 @@ flowchart TD
 
 ### 8.1 网关失败分类与换网关适配
 
-企业模型调用的失败归类与具体网关实现解耦：分类只读取调用失败对象上的证据，不依赖某一厂商的错误词汇。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用同一失败入口 `failureCode()`：先按 `USER_CODE_BY_INTERNAL` 把插件内部的 `IAM_*`／`CRED_*` 码换成已登记用户码，再交给 `classifyFailure()` 归类网关证据。
+企业模型调用根据失败对象与受控传输提供的证据归类。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用 `failureCode()`。该入口先用 `USER_CODE_BY_INTERNAL` 将插件内部的 `IAM_*`／`CRED_*` 码映射为已登记用户码，再交给 `classifyFailure()` 归类网关证据。
 
 #### 本地调用诊断
 
@@ -869,7 +888,7 @@ flowchart TD
 
 目录同步期间的适配器初始化异常使用 `adapter-initialization` 阶段和固定分类码记录，排除异常原文、堆栈和模型标识。目录状态反映 `/models` 的同步结果。适配器更新失败时，当前绑定下已装配且配置仍匹配的模型继续通过鉴权提供推理。
 
-推理失败诊断可附带 `transport`，包括派发阶段、白名单网络错误、HTTP 状态、经范围校验的 `Retry-After` 毫秒值、是否已有输出和是否计划重试。`before-send` 只在已确认原始连接拒绝时记录，`response` 表示已收到 HTTP 响应，其余无确定派发证据的传输失败记录为 `unknown`。只保留这些派生字段，日志排除 URL、原始响应头和响应正文。
+推理失败诊断可附带 `transport`，包括派发阶段、白名单网络错误、HTTP 状态、经范围校验的 `Retry-After` 毫秒值、是否已有输出和是否计划重试。`before-send` 表示已确认原始 POST 未发送，`response` 表示已收到 HTTP 响应，证据不足时记为 `unknown`。多个候选地址全部在建连时失败时，诊断只保留首个可识别的错误码。日志排除 URL、原始响应头和响应正文。
 
 #### 8.1.1 分类顺序
 
@@ -879,7 +898,7 @@ flowchart TD
 | 2 | 模型层错误码 | `QUOTA`、`RATE_LIMIT`、`FreeUsageLimitError`、`RateLimitError` | 查 `LAYER_CODES` |
 | 3 | 响应体词表 | OpenAI `error.code`／`error.type`、RFC 9457 `type`（取末段）、路由冷却码（`model_cooldown`） | 查 `BODY_CODES` |
 | 4 | HTTP 状态码 | `status`、`statusCode`、`response.status`、`cause.*` | 401/403/429/4xx/5xx 分别归类 |
-| 5 | socket 错误码 | `ECONNREFUSED`、`ENOTFOUND`、`ETIMEDOUT` 等 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
+| 5 | socket 错误码 | 失败对象中的网络错误，或受控适配器确认的发送前连接错误 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
 | 6 | 兜底 | 以上均无 | `ENTERPRISE_GATEWAY_CALL_FAILED` |
 
 模型层与附件层的本地码先于状态码判定：`UNSUPPORTED_CONTENT`、`IMAGE_OFFLOAD_REQUIRED` 与全部 `ATTACHMENT_*` 归入 `ENTERPRISE_REQUEST_UNSUPPORTED`。它们表示请求未能在发出前组装完成，而不是网关给出了答复，因此不得借状态码或响应体改判为网关问题。
@@ -887,6 +906,8 @@ flowchart TD
 插件内部码在进入上述层级之前先做一次映射：`USER_CODE_BY_INTERNAL` 覆盖 `ERROR_STATUS` 中全部 `IAM_*` 与 `CRED_*` 码，把“哪个模块失败”换成“用户该做什么”。未映射的内部码不允许落到第 6 层——`gateway-failure.test.mjs` 逐码断言这一点。`IAM_GATEWAY_BINDING_CHANGED` 是内部码（`ERROR_STATUS` 409），只映射为 `IAM_MODEL_CONTEXT_CHANGED`，不直接呈现给用户。
 
 响应体来源按 `responseBody`、`data`、`body`、`cause.responseBody` 依次尝试，并兼容模型层把响应体前缀进错误消息的形态（`429: {"code":…}`）。解析失败或超过 8 KiB 时放弃解析，不影响后续层级。
+
+企业推理 POST 的 HTTP 401 在进入 SDK 前核验最多 8 KiB 响应体，保留明确的 `credential_revoked` 决定。普通 401 继续沿用原有失败分类。
 
 #### 8.1.2 用户可见码表
 
@@ -908,6 +929,7 @@ flowchart TD
 | `ENTERPRISE_GATEWAY_REQUEST_REJECTED` | 其余 4xx、`context_length_exceeded`、`INVALID_REQUEST` | 502 | 网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。 |
 | `ENTERPRISE_GATEWAY_UNAVAILABLE` | 5xx、`NETWORK`、`TIMEOUT`、`OVERLOADED`、socket 错误 | 502 | 暂时无法连接企业模型，请稍后重试。 |
 | `ENTERPRISE_IAM_UNAVAILABLE` | `IAM_UNREACHABLE`、`IAM_HTTP_ERROR`（认证服务未接受请求即失败） | 503 | 企业认证服务暂不可达，请稍后重试。 |
+| `ENTERPRISE_IAM_RENEWAL_UNCONFIRMED` | 同一会话的续期结果或发送前授权核验未在截止前确认 | 503 | 企业账号续期未确认，请检查登录状态后重试。 |
 | `ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE` | `CRED_KEY_UNAVAILABLE`、`CRED_DECRYPT_FAILED`、`IAM_CREDENTIALS_UNAVAILABLE`、联合存储未核验或写入未知 | 503 | 凭据安全存储暂不可用，请检查系统密钥环或联系管理员。 |
 | `ENTERPRISE_GATEWAY_CALL_FAILED` | 无可识别证据的失败；已登记的 `IAM_*`／`CRED_*` 码不落此码 | 502 | 本次请求未完成，请重试；持续失败请联系管理员。 |
 
@@ -937,13 +959,21 @@ flowchart TD
 
 目录同步的后台退避只覆盖 `ENTERPRISE_GATEWAY_UNAVAILABLE` 与 `ENTERPRISE_GATEWAY_RATE_LIMIT`；`QUOTA_EXHAUSTED` 与 `CALL_FAILED` 不参与自动重试，避免在额度耗尽或原因未知时反复撞击网关。
 
-模型调用的绑定恢复与建连恢复共用一次重试预算。绑定变化由 `IAM_GATEWAY_BINDING_CHANGED` 触发，目录重建走现有单飞，等待上限 5 秒。受控适配器通过逐请求 SDK `fetch` 回调确认首个原始推理 POST 在 `connect` 阶段被 `ECONNREFUSED` 拒绝时，可等待 200 毫秒并重试一次。推理传输保留原始网关绑定，关闭自动跟随重定向和 SDK 自动重试。两类恢复都在重新派发前校验取消状态、授权会话和可用模型。已输出分片、派发状态不明、普通 `503`、限流、鉴权失败及用户取消禁止触发建连重试。网关已受理的请求由原流完成或报告失败，真实企业网关的计费与流恢复仍需专项验证。
+模型调用的绑定恢复与连接恢复共用一次自动重试预算。绑定变化由 `IAM_GATEWAY_BINDING_CHANGED` 触发，目录重建共享一次进行中的操作，等待上限 5 秒。两类恢复都在重新派发前复核取消状态、授权会话与模型准入。
+
+连接恢复仅接受受控适配器对绑定网关发起的一次原始推理 POST。受控适配器关闭 SDK 自动重试与自动跟随重定向，只有使用 Node 内置 `fetch`、直接提供地址、无逐请求自定义传输且未收到 HTTP 响应的调用可以确认未发送。允许的失败证据包括 `getaddrinfo` 阶段的 `EAI_AGAIN`、`connect` 阶段的 `ECONNREFUSED` 或 `ETIMEDOUT`，以及 Undici 的 `UND_ERR_CONNECT_TIMEOUT`。Node 的多地址连接失败只有在每项均通过上述判据时才可恢复。满足判据时随机等待 200–400 毫秒再尝试，等待期间可取消。[Node 网络连接文档](https://nodejs.org/docs/latest-v24.x/api/net.html)、[Undici 错误说明](https://undici.nodejs.org/api/Errors)、[AWS 退避与抖动实践](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)（核验于 2026-11-18）。
+
+收到 HTTP 响应、已有输出或派发状态不明时，原调用继续输出或报告失败。普通 `429` 和 `503` 回执的 `Retry-After` 用于诊断。网关拒绝后的自动重试以可核验的未受理且无副作用语义，或覆盖推理与计费的端到端幂等契约为前提，并遵守响应提供的退避提示和总等待预算。鉴权、撤权、额度耗尽和取消直接沿用各自的终止路径。真实网关的受理、计费及流恢复待联调。[网关目标契约](../../contracts/gateway-contract.md#412-阶段能力矩阵)、[RFC 9110 重试语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)、[RFC 9110 Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)（核验于 2026-11-18）。
 
 同地址换 Key 不是绑定变化：`baseURL` 与主体不变时直接采用新 Key 并更新本地快照，不重建适配器。绑定快照只由这两个字段构成，`generation` 仅是 Key 的写入版本。
 
 #### 8.1.6 流中授权边界
 
-同一授权会话在后台续期读凭据期间自然从 `ready` 变为 `expired` 时，已经开始的续期继续使用原凭据存储、单飞和原子轮换检查。准备或发送新模型请求时，如果访问令牌已到期且会话仍可续期，运行时有界等待 IAM 单飞续期，成功后复核授权会话实例、有效访问令牌、Key 归属和模型准入。等待者取消或超时不会取消其他请求正在共享的续期。同主体重新登录产生新的授权会话实例，旧调用不得使用新会话。
+同一授权会话在后台续期读凭据期间自然从 `ready` 变为 `expired` 时，已经开始的续期继续使用原凭据存储、单飞和原子轮换检查。准备或发送新模型请求时，如果访问令牌已到期且会话仍可续期，运行时有界等待 IAM 单飞续期，成功后复核授权会话实例、有效访问令牌、Key 归属和模型准入。
+
+访问令牌仍有效时，宿主仅在可信存储中的 `pending` 与已采用授权的完整基线相符时保留该会话。拥有续期的 Host 共享原换票结果，其他 Host 只读等待同一操作的回执。网关已受理的流在输出时协同读取会话记录，发现该操作后暂停向下游交付分片，包括工具调用。回执在原授权截止前核验通过且等待未满五秒时，原 HTTP 流继续。新模型请求在同一个五秒预算内等待回执并重新核对会话、有效令牌、网关凭据和模型，仅派发一次。确认换票成功时采用新令牌。原记录仅在原子回读证明请求未发出并已恢复时可再次采用。
+
+等待者取消或超时不取消其他请求正在共享的续期。退出开始后立即撤销本机模型准入，观察到当前网关凭据已撤销时立即中止相关模型调用。同主体重新登录产生新的授权会话实例，旧调用不得使用新会话。
 
 回答开始前由 `refusal()` 判定：账号状态、凭据配置、上下文代际（`version`）、后端可用性与模型门禁任一不符即拒绝，`prepareCall` 与 `stream` 之间发生代际变化时先按当前后端重新准备一次，仅当重新准备失败才报 `IAM_MODEL_CONTEXT_CHANGED`。回答进行中改用 `authorizationRefusal()`，只检查销毁、账号与凭据可用性、凭证吊销与主体一致；模型选择、Key 轮换与上下文代际变化不再中止已经开始的回答。中止的边界是授权身份（主体与凭据状态），不是凭据的写入代次：同地址换 Key 只触发目录重建，已开始的回答保留其传输。主体变化按 `IAM_LOGIN_REQUIRED` 处理，且不会重新准备：重试只在同一主体内发生，不把调用转到另一个人名下。
 
@@ -1015,6 +1045,8 @@ flowchart TD
 - 两进程均成功取得轮换后的新 Token，旧 Token 在服务端完成消费；
 - 刷新响应超时时，已提交的 pending 标记有效阻止二次重放。
 
+`packages/forge-iam/test/model-transport-sqlite.test.mjs` 使用真实 SQLite、环回 HTTP 与合成 IAM，验证 7200 秒访问令牌在到期前 10 分钟触发单、双 Host 续期。覆盖原 HTTP 流暂停与继续、新请求一次派发、双 Host 同时达到续期点只换票一次、超时与迟到回执、退出和已观测网关凭据撤销。
+
 ### 10.5 插件生命周期与禁用实测
 
 在宿主进程探针 `iam-absent-and-disabled-fail-closed`（DSH `0.2.1-rc.2`）中实测：
@@ -1064,7 +1096,7 @@ flowchart TD
 | 10 | 撤销实现改造联调：`GET ?access_token=` 撤销端点企业环境验证 | 平台组 + IAM | 验证服务端撤销回执、错误码及脱敏一致性 |
 | 11 | 刷新令牌不可撤销的用户端文案与审计字段呈现规范 | 平台组 | 保证界面与审计如实呈现“访问令牌已撤销 / 刷新令牌自然过期” |
 | 12 | 机密模式 secret 轮换（仅未来另行选用时） | 平台组 + IAM | 当前 public 基线不依赖；如恢复机密模式，另行设计并核验 |
-| 13 | 刷新令牌滑动窗口的真实时长确认（当前按设计基线 7300 秒） | IAM 团队 | 客户端已按半程续期保留余量，并如实呈现不可续期状态。窗口外（如整夜或多日休眠）要求重新登录属**预期失败语义**，不作为外部依赖或延期诉求 |
+| 13 | 企业 IAM 实际访问令牌与滑动刷新令牌有效期，以及是否返回 `refresh_expires_in` | IAM 团队 + 平台组 | G2 核验真实签发响应与休眠、断网恢复。调整提前量时按[后台续期时机与恢复余量](#731-后台续期时机与恢复余量)复核恢复目标 |
 | 14 | UserInfo 工号与姓名标准声明字段最终口径对齐 | IAM 团队 | 统一账户页展示名与审计主体显示名 |
 | 15 | 回调前缀匹配的边界：合法前缀限定为 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均被拒。大小写、尾斜杠与非数字端口未验 | IAM 团队 | 用真实 IAM 补负面用例，确认非法写法的拒绝形态 |
 

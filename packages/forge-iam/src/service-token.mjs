@@ -14,6 +14,28 @@ function completedRotationOf(previous, current) {
     && marker.base === refreshBaseId(previous, marker.id);
 }
 
+function refreshOutcome(pending, current) {
+  const operation = pending.refreshOperation;
+  const marker = current?.refreshOperation;
+  if (!current || !isDeepStrictEqual(grantIdentity(pending), grantIdentity(current))) return null;
+  if (marker?.state !== 'pending' && refreshBaseId(current, operation.id) === operation.base) return 'restored';
+  if (marker?.version !== operation.version || marker.id !== operation.id || marker.base !== operation.base) return null;
+  if (marker.state === 'pending') return isDeepStrictEqual(pending, current) ? 'pending' : null;
+  return marker.state === 'complete' && current.refreshToken !== pending.refreshToken ? 'complete' : null;
+}
+
+const unconfirmedRenewal = () => new IamError('IAM_RENEWAL_UNCONFIRMED', safeMessage('IAM_RENEWAL_UNCONFIRMED'));
+const changedSession = () => new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
+
+function raceCancellation(promise, signal) {
+  if (!signal) return promise;
+  const onAbort = Promise.withResolvers();
+  const abort = () => onAbort.reject(signal.reason);
+  if (signal.aborted) abort();
+  else signal.addEventListener('abort', abort, { once: true });
+  return Promise.race([promise, onAbort.promise]).finally(() => signal.removeEventListener('abort', abort));
+}
+
 /**
  * The single-flight refresh: one promise per provider, and every caller that
  * arrives while it runs joins it instead of minting a second token.
@@ -35,6 +57,8 @@ export function createTokenResolver(env) {
   let refreshPromiseAuthentication = null;
   let refreshPromisePending = null;
   let refreshExchange = null;
+  let modelRotation = null;
+  let modelOutputRead = null;
   let lastBackgroundRefreshAt = 0;
   let backgroundRefreshBinding = null;
   let renewal = null;
@@ -98,6 +122,145 @@ export function createTokenResolver(env) {
       && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials
       && provider.atomicVerified(targetCredentials)
       && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
+  }
+
+  function activeModelRotation() {
+    return modelRotation?.ownsGrant() ? modelRotation : null;
+  }
+
+  function readModelOutputGrant(store, credentials, original) {
+    if (modelOutputRead?.store === store && modelOutputRead.credentials === credentials
+      && modelOutputRead.original === original) return modelOutputRead.result;
+    const controller = new AbortController();
+    const deadline = monotonic() + REFRESH_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(unconfirmedRenewal()), REFRESH_TIMEOUT_MS);
+    timer.unref?.();
+    const read = { store, credentials, original, result: null };
+    modelOutputRead = read;
+    read.result = raceCancellation(Promise.resolve().then(() => store.read()), controller.signal).then(record => {
+      if (monotonic() >= deadline) throw unconfirmedRenewal();
+      return record;
+    }).finally(() => {
+      clearTimeout(timer);
+      if (modelOutputRead === read) modelOutputRead = null;
+    });
+    return read.result;
+  }
+
+  // A verified pending marker can suspend use of an adopted session without
+  // forgetting its identity. One observer per Host follows the exact operation.
+  function observePendingRotation(store, credentials, pending) {
+    const original = ctx.lastGrant;
+    const existing = activeModelRotation();
+    if (existing) return existing.store === store && existing.credentials === credentials
+      && isDeepStrictEqual(existing.pending, pending) ? existing : null;
+    const marker = pending.refreshOperation;
+    if (!original || ctx.state !== 'ready' || isAccessExpired(original, now())
+      || grants.ownerOf(original) !== store || marker?.state !== 'pending'
+      || !sameGrantIgnoringRefreshMarker(original, pending) || marker.base !== refreshBaseId(original, marker.id)) return null;
+    const auth = getAuthEpoch();
+    const session = getSessionEpoch();
+    const bindingCurrent = () => !ctx.disposed && !isSigningOut() && ctx.exclusive.ok
+      && getAuthEpoch() === auth && getSessionEpoch() === session && ['ready', 'expired'].includes(ctx.state)
+      && provider.store === store && provider.storeCredentials === credentials;
+    const ownsGrant = () => bindingCurrent() && isDeepStrictEqual(ctx.lastGrant, original);
+    if (!trustedProvider(store, credentials) || !ownsGrant()) return null;
+
+    const ownFlight = ownedPendingFlight(store, credentials, pending);
+    const issuer = ctx.knownIssuer();
+    const deadline = monotonic() + REFRESH_TIMEOUT_MS;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const timeout = setTimeout(() => controller.abort(unconfirmedRenewal()), REFRESH_TIMEOUT_MS);
+    timeout.unref?.();
+    const compatibleGrant = () => {
+      if (!bindingCurrent()) return false;
+      if (ownsGrant()) return true;
+      const outcome = refreshOutcome(pending, ctx.lastGrant);
+      return outcome === 'complete' || outcome === 'restored';
+    };
+    const onView = () => {
+      if (!compatibleGrant()) controller.abort(changedSession());
+    };
+    const check = () => {
+      signal.throwIfAborted();
+      if (!compatibleGrant()) throw changedSession();
+      if (monotonic() >= deadline) throw unconfirmedRenewal();
+      ctx.assertExclusive();
+      provider.assertAtomic(store, credentials);
+      if (!compatibleGrant()) throw changedSession();
+      if (monotonic() >= deadline) throw unconfirmedRenewal();
+    };
+    const read = async () => {
+      let record;
+      try { record = await raceCancellation(store.read(), signal); }
+      catch (cause) {
+        check();
+        const code = credentialReadError(cause);
+        throw new IamError(code, safeMessage(code));
+      }
+      check();
+      if (!record.ok) throw new IamError('IAM_INVALID_GRANT', safeMessage('IAM_INVALID_GRANT'));
+      if (!record.grant || !isDeepStrictEqual(grantIdentity(pending), grantIdentity(record.grant))) throw changedSession();
+      grants.assertGrantContext(record.grant, issuer);
+      return record.grant;
+    };
+    const confirm = async () => {
+      check();
+      if (ownFlight) {
+        // The owner must acknowledge its write itself. Reading ahead could
+        // publish before a failed write acknowledgement invalidates the owner.
+        await raceCancellation(ownFlight, signal);
+        check();
+        const latest = ctx.lastGrant;
+        const outcome = refreshOutcome(pending, latest);
+        if (outcome === 'complete' || outcome === 'restored') return latest;
+        throw unconfirmedRenewal();
+      }
+      while (true) {
+        let poll;
+        try {
+          await raceCancellation(new Promise(resolve => { poll = setTimeout(resolve, 50); }), signal);
+        } finally { clearTimeout(poll); }
+        check();
+        const latest = await read();
+        const outcome = refreshOutcome(pending, latest);
+        if (outcome === 'pending') continue;
+        if (!outcome || isAccessExpired(latest, now())) throw unconfirmedRenewal();
+        const authentication = config.authMode === 'confidential'
+          ? await raceCancellation(grants.prepareAuthentication(issuer, store, credentials, { grant: latest, guard: check }), signal)
+          : undefined;
+        if (authentication && !isDeepStrictEqual(latest, await read())) throw unconfirmedRenewal();
+        check();
+        assertClientAuthCurrent(authentication);
+        if (ownsGrant()) {
+          const consumption = beginConsumption(issuer, store, credentials);
+          publishGrant(latest, store, authentication, consumption, { restored: outcome === 'restored' });
+          if (outcome === 'restored') scheduleRenewal({ retry: true });
+        } else if (!isDeepStrictEqual(ctx.lastGrant, latest)) throw changedSession();
+        return latest;
+      }
+    };
+    const observation = { store, credentials, pending, ownsGrant, deadline, result: null };
+    modelRotation = observation;
+    ctx.addListener(onView);
+    observation.result = Promise.resolve().then(confirm).catch(cause => {
+      if (modelRotation === observation && ownsGrant()) {
+        const code = cause instanceof IamError ? cause.code : credentialReadError(cause);
+        ctx.lastGrant = null;
+        ctx.state = code === 'IAM_NOT_SIGNED_IN' ? 'signed-out' : 'error';
+        ctx.error = ctx.state === 'error' ? code : null;
+        ctx.notify();
+      }
+      throw cause;
+    }).finally(() => {
+      clearTimeout(timeout);
+      ctx.removeListener(onView);
+      if (modelRotation === observation) modelRotation = null;
+    });
+    // Background observation also runs with no model caller attached.
+    void observation.result.catch(() => {});
+    return observation;
   }
 
   // The deadline a scheduled timer compares against: the refresh token's own
@@ -240,6 +403,14 @@ export function createTokenResolver(env) {
     };
     checkExpected();
     const expectedIssuer = ctx.knownIssuer();
+    const useObservedRotation = async (observation) => {
+      const latest = await observation.result;
+      if (!trustedProvider(observation.store, observation.credentials)) throw changedSession();
+      checkExpected(true);
+      if (ctx.disposed || isSigningOut() || ctx.state !== 'ready' || !isDeepStrictEqual(ctx.lastGrant, latest)
+        || isAccessExpired(latest, now())) throw changedSession();
+      return latest.accessToken;
+    };
     const useSharedRefresh = async (checkBefore = true) => {
       if (checkBefore && (!expectedIssuer || refreshPromiseIssuer !== expectedIssuer)) {
         throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
@@ -300,6 +471,8 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     if (refreshPromise) return useSharedRefresh();
+    const observed = activeModelRotation();
+    if (observed) return useObservedRotation(observed);
     const epoch = getSessionEpoch();
     const auth = getAuthEpoch();
     const targetStore = provider.require();
@@ -451,15 +624,19 @@ export function createTokenResolver(env) {
         operationGrant = record.grant;
         grants.assertGrantContext(record.grant, expectedIssuer);
         const initial = record.grant;
-        // The host's own timer renews at half of the lifetime, earlier than the
-        // foreground early-refresh window, so that pass may refresh ahead of the
-        // window. A rotation adopted from another Host is already fresh and must
-        // be taken as-is; every other check still runs.
+        // The background timer may renew before the on-demand window opens.
+        // Take a completed rotation from another Host through the usual checks.
         const forcedRenewal = expected?.renewalDue === true
           && initial.refreshToken === expected.refreshToken;
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
         checkAlive();
         flightAuthentication.value = clientAuthDescriptor(authentication);
+        const observed = activeModelRotation();
+        if (observed) {
+          if (observed.store !== targetStore || observed.credentials !== targetCredentials
+            || !sameGrantIgnoringRefreshMarker(initial, observed.pending)) throw staleSession;
+          return await useObservedRotation(observed);
+        }
         const decisionTime = now();
         if (initial.refreshOperation?.state !== 'pending'
           && (completedExpected || (!forcedRenewal && !shouldRefresh(initial, decisionTime, config.refreshSkewSeconds))
@@ -473,6 +650,13 @@ export function createTokenResolver(env) {
         // Wait only for the observed operation; a timeout is never a lease or
         // permission to resend. Polling never holds the provider lock.
         const waitFor = async (pending) => {
+          const observed = observePendingRotation(targetStore, targetCredentials, pending);
+          if (observed) {
+            const latest = await observed.result;
+            checkAlive();
+            if (ctx.state !== 'ready' || !isDeepStrictEqual(ctx.lastGrant, latest)) throw staleSession;
+            return latest.accessToken;
+          }
           // A pending rotation may already have consumed the refresh token.
           // Remove only the view belonging to this operation while awaiting it.
           checkAlive();
@@ -485,9 +669,6 @@ export function createTokenResolver(env) {
             ctx.error = 'IAM_REAUTH_REQUIRED';
             ctx.notify();
           }
-          const operation = pending.refreshOperation;
-          const identity = grantIdentity(pending);
-          const originalRefresh = pending.refreshToken;
           const deadline = performance.now() + REFRESH_TIMEOUT_MS;
           const remaining = () => deadline - performance.now();
           while (remaining() > 0) {
@@ -511,17 +692,12 @@ export function createTokenResolver(env) {
             checkAlive();
             if (latest === timeout || remaining() <= 0 || !latest.ok || !latest.grant) return rejectSession();
             grants.assertGrantContext(latest.grant, expectedIssuer);
-            const marker = latest.grant.refreshOperation;
-            const latestIdentity = grantIdentity(latest.grant);
             // The observed base binds the entire pre-claim record. A
             // participating owner restores it only after proving no send.
-            if (marker?.state !== 'pending' && isDeepStrictEqual(identity, latestIdentity)
-              && refreshBaseId(latest.grant, operation.id) === operation.base) return useGrant(latest.grant, true);
-            if (!marker || marker.version !== operation.version || marker.id !== operation.id || marker.base !== operation.base
-              || !isDeepStrictEqual(identity, latestIdentity)) return rejectSession();
-            if (marker.state === 'pending' && latest.grant.refreshToken === originalRefresh) continue;
-            if (marker.state !== 'complete' || latest.grant.refreshToken === originalRefresh
-              || isAccessExpired(latest.grant, now()) || remaining() <= 0) return rejectSession();
+            const outcome = refreshOutcome(pending, latest.grant);
+            if (outcome === 'restored') return useGrant(latest.grant, true);
+            if (outcome === 'pending') continue;
+            if (outcome !== 'complete' || isAccessExpired(latest.grant, now()) || remaining() <= 0) return rejectSession();
             checkAlive();
             if (remaining() <= 0) return rejectSession();
             return useGrant(latest.grant);
@@ -601,6 +777,7 @@ export function createTokenResolver(env) {
         // A resolved provider call and its returned record are both required;
         // an exception or ambiguous result can never authorize the POST.
         if (!isDeepStrictEqual(claimedRecord, { ...claimedGrant, refreshOperation: operation })) return rejectSession();
+        observePendingRotation(targetStore, targetCredentials, claimedRecord);
         // Re-read the original pin for this POST, outside the provider lock.
         authentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
         checkAlive();
@@ -682,6 +859,7 @@ export function createTokenResolver(env) {
         return useGrant(next);
       } catch (cause) {
         if (cause === unsent || cause === staleSession) throw cause;
+        if (cause?.code === 'IAM_RENEWAL_UNCONFIRMED') throw cause;
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
         // Revoked trust before a claim cannot have consumed the refresh token.
@@ -787,54 +965,107 @@ export function createTokenResolver(env) {
       }
     };
 
-    async function consumeModelGrant(consume, { signal, rotationOnly = false, beforeExpiry = false } = {}) {
-      const check = () => { signal?.throwIfAborted(); assertCurrent(); };
-      for (let read = 0; read < 2; read += 1) {
+    async function consumeModelGrant(consume, { signal, rotationOnly = false, beforeExpiry = false, confirmBinding } = {}) {
+      let wait;
+      let confirmed;
+      const check = () => {
+        (wait?.signal ?? signal)?.throwIfAborted();
+        if (wait && monotonic() >= wait.deadline) throw unconfirmedRenewal();
+        assertCurrent();
+      };
+      const awaitRotation = async (result, deadline = monotonic() + REFRESH_TIMEOUT_MS) => {
+        if (wait) throw unconfirmedRenewal();
+        const timeout = new AbortController();
+        const timer = setTimeout(() => timeout.abort(unconfirmedRenewal()), Math.max(0, deadline - monotonic()));
+        timer.unref?.();
+        wait = { deadline, timer, signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal };
+        confirmed = await raceCancellation(result, wait.signal);
         check();
-        const local = ctx.lastGrant;
-        const claim = refreshPromisePending;
-        let record;
-        try { record = await targetStore.read(); }
-        catch (cause) {
-          check();
-          const code = credentialReadError(cause);
-          throw new IamError(code, safeMessage(code));
-        }
+        if (!confirmed || !isDeepStrictEqual(ctx.lastGrant, confirmed)) throw changedSession();
+        if (confirmBinding) await raceCancellation(confirmBinding(), wait.signal);
         check();
-        const latest = record.grant;
-        const issuer = ctx.knownIssuer();
-        if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) {
-          throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
-        }
-        grants.assertGrantContext(latest, issuer);
-        const authentication = config.authMode === 'confidential'
-          ? await grants.prepareAuthentication(issuer, targetStore, targetCredentials, { grant: latest, guard: check })
-          : undefined;
-        check();
-        assertClientAuthCurrent(authentication);
-        if (!isDeepStrictEqual(local, ctx.lastGrant) || claim !== refreshPromisePending) continue;
-        if (beforeExpiry && isAccessExpired(local, now())) return false;
-        if (latest.refreshOperation?.state === 'pending') {
-          // A local owner may still publish success before the current lease
-          // expires. A foreign pending record has no confirmed outcome here.
-          if (rotationOnly && ownedPendingFlight(targetStore, targetCredentials, latest)) return false;
-          throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
-        }
-        if (rotationOnly && !completedRotationOf(local, latest)) return false;
-        if (isAccessExpired(latest, now()) || (claim?.store === targetStore && claim.grant.refreshToken === latest.refreshToken)) break;
-        if (!isDeepStrictEqual(local, latest)) {
-          if (rotationOnly) provider.assertAtomic(targetStore, targetCredentials);
+      };
+      try {
+        let rereads = 0;
+        while (rereads < 2) {
           check();
-          if (beforeExpiry && (isAccessExpired(local, now()) || isAccessExpired(latest, now()))) return false;
-          const consumption = beginConsumption(issuer, targetStore, targetCredentials);
-          publishGrant(latest, targetStore, authentication, consumption);
+          const observation = activeModelRotation();
+          if (observation) {
+            if (rotationOnly) return false;
+            await awaitRotation(observation.result, observation.deadline);
+          }
+          const local = ctx.lastGrant;
+          const claim = refreshPromisePending;
+          let record;
+          try { record = await raceCancellation(targetStore.read(), wait?.signal ?? signal); }
+          catch (cause) {
+            check();
+            const code = credentialReadError(cause);
+            throw new IamError(code, safeMessage(code));
+          }
           check();
-          if (!isDeepStrictEqual(ctx.lastGrant, latest) || claim !== refreshPromisePending) continue;
+          const latest = record.grant;
+          const issuer = ctx.knownIssuer();
+          if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) {
+            throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
+          }
+          grants.assertGrantContext(latest, issuer);
+          const authentication = config.authMode === 'confidential'
+            ? await raceCancellation(grants.prepareAuthentication(issuer, targetStore, targetCredentials, { grant: latest, guard: check }), wait?.signal ?? signal)
+            : undefined;
+          check();
+          assertClientAuthCurrent(authentication);
+          if (!isDeepStrictEqual(local, ctx.lastGrant) || claim !== refreshPromisePending) {
+            rereads += 1;
+            continue;
+          }
+          if (beforeExpiry && isAccessExpired(local, now())) return false;
+          const observedDuringRead = activeModelRotation();
+          if (observedDuringRead) {
+            if (rotationOnly) return false;
+            await awaitRotation(observedDuringRead.result, observedDuringRead.deadline);
+            continue;
+          }
+          if (latest.refreshOperation?.state === 'pending') {
+            const rotation = observePendingRotation(targetStore, targetCredentials, latest);
+            if (rotationOnly && (rotation || ownedPendingFlight(targetStore, targetCredentials, latest))) return false;
+            if (!rotation) throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+            await awaitRotation(rotation.result, rotation.deadline);
+            continue;
+          }
+          if (confirmed) {
+            if (!isDeepStrictEqual(confirmed, latest)) throw unconfirmedRenewal();
+            provider.assertAtomic(targetStore, targetCredentials);
+            check();
+          }
+          if (rotationOnly && !completedRotationOf(local, latest)) return false;
+          if (isAccessExpired(latest, now())) break;
+          if (claim?.store === targetStore && claim.grant.refreshToken === latest.refreshToken) {
+            // The owner may still be committing its claim. Wait without using
+            // the previous token or starting a new refresh.
+            if (rotationOnly) return false;
+            await awaitRotation(refreshPromise.then(() => ctx.lastGrant));
+            continue;
+          }
+          if (!isDeepStrictEqual(local, latest)) {
+            if (rotationOnly) provider.assertAtomic(targetStore, targetCredentials);
+            check();
+            if (beforeExpiry && (isAccessExpired(local, now()) || isAccessExpired(latest, now()))) return false;
+            const consumption = beginConsumption(issuer, targetStore, targetCredentials);
+            publishGrant(latest, targetStore, authentication, consumption);
+            check();
+            if (!isDeepStrictEqual(ctx.lastGrant, latest) || claim !== refreshPromisePending) {
+              rereads += 1;
+              continue;
+            }
+          }
+          return consume(latest);
         }
-        return consume(latest);
+        if (rotationOnly) return false;
+        throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+      } finally {
+        clearTimeout(wait?.timer);
       }
-      if (rotationOnly) return false;
-      throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
     }
 
     return Object.freeze({
@@ -845,6 +1076,42 @@ export function createTokenResolver(env) {
         // This is only the SDK's header snapshot. The transport must read and
         // authorize the durable grant again before it can use the network.
         return ctx.lastGrant.accessToken;
+      },
+      async waitForModelOutput(signal) {
+        signal.throwIfAborted();
+        assertCurrent();
+        let observation = activeModelRotation();
+        if (!observation) {
+          const original = ctx.lastGrant;
+          let record;
+          try { record = await raceCancellation(readModelOutputGrant(targetStore, targetCredentials, original), signal); }
+          catch (cause) {
+            signal.throwIfAborted();
+            assertCurrent();
+            if (cause?.code === 'IAM_RENEWAL_UNCONFIRMED') throw cause;
+            const code = credentialReadError(cause);
+            throw new IamError(code, safeMessage(code));
+          }
+          signal.throwIfAborted();
+          assertCurrent();
+          const latest = record.grant;
+          if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) throw changedSession();
+          observation = activeModelRotation();
+          if (!observation && latest.refreshOperation?.state === 'pending') {
+            observation = observePendingRotation(targetStore, targetCredentials, latest);
+            if (!observation) {
+              // Another read may have published this exact receipt while the
+              // output read was still returning its previous snapshot.
+              const outcome = refreshOutcome(latest, ctx.lastGrant);
+              if (outcome !== 'complete' && outcome !== 'restored') throw unconfirmedRenewal();
+            }
+          }
+        }
+        if (!observation) return;
+        const confirmed = await raceCancellation(observation.result, signal);
+        signal.throwIfAborted();
+        assertCurrent();
+        if (activeModelRotation() || !isDeepStrictEqual(ctx.lastGrant, confirmed)) throw unconfirmedRenewal();
       },
       waitForCompletedRotation(signal, recheckDelay) {
         const previous = ctx.lastGrant;
@@ -884,9 +1151,9 @@ export function createTokenResolver(env) {
           onView();
         });
       },
-      withDispatchAccessToken(dispatch) {
+      withDispatchAccessToken(dispatch, signal, confirmBinding) {
         // Use the durable version at the last local point before send.
-        return consumeModelGrant(latest => dispatch(latest.accessToken));
+        return consumeModelGrant(latest => dispatch(latest.accessToken), { signal, confirmBinding });
       },
       adoptCommittedRotation(signal) {
         return consumeModelGrant(() => true, { signal, rotationOnly: true, beforeExpiry: true });
@@ -913,6 +1180,8 @@ export function createTokenResolver(env) {
     scheduleRenewal,
     cancelRenewal,
     ownedPendingFlight,
+    observePendingRotation,
+    hasObservedRotation: () => Boolean(activeModelRotation()),
     takeRefreshForSignOut,
     get inFlight() { return refreshPromise; },
     get lastBackgroundRefreshAt() { return currentBackgroundRefreshAt(); },
