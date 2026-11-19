@@ -28,7 +28,7 @@
 
 本地操作响应丢失时显示待确认，通过「核对操作结果」读取 Host 回执，确认前不重复提交。确认后重新读取当前状态；刷新失败会明确提示视图尚未更新。插件卸载停止排队任务和远端读取，已开始的本地事务与下一实例串行衔接。
 
-替换旧版时先备份 profile 配置，再停用并移除旧 `@michengai/dsh-skills-manager` 挂载，安装新包并检查同一个 `skills-manager` 行只出现一次。保留原 `$DSH_HOME/skills-manager` 数据、宿主全局与项目技能；不同时运行两个管理器。卸载本包不删除这些数据。正式 `enterprise-*` 流程技能保留给企业 provider，本包拒绝同名个人副本覆盖。
+替换旧版时先备份 profile 配置，再停用并移除旧 `@michengai/dsh-skills-manager` 挂载，安装新包并检查同一个 `skills-manager` 行只出现一次。保留原 `$DSH_HOME/skills-manager` 数据、宿主全局与项目技能；不同时运行两个管理器。卸载本包不删除这些数据。本包在创建、导入与自身 provider 中拒绝 `enterprise-*` 个人候选；宿主原生 provider 的同名候选选择仍遵循宿主规则。
 
 ## 开发
 

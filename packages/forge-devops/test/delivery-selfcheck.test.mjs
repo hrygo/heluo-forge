@@ -410,7 +410,7 @@ test('产物落盘：kind 枚举、front matter 六字段定序、路径逃逸�
   for (const kind of ['context', 'clarify', 'plan', 'review', 'report']) {
     assert.ok(kinds.includes(kind), `产物 kind 缺 ${kind}（§4.4）`);
   }
-  const root = path.resolve(path.sep, 'tmp', 'forge-devops-selfcheck');
+  const root = path.join(path.sep, 'tmp', 'forge-devops-selfcheck');
   const file = artifactPath({ repoRoot: root, changeId: 'ARD123456', kind: 'report' });
   assert.ok(file.startsWith(root), `产物必须落在目标仓库内：${file}`);
   assert.ok(file.split(path.sep).join('/').endsWith('.dsh-devops/ARD123456/report.md'), `产物路径不符：${file}`);

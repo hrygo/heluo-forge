@@ -202,16 +202,18 @@ export const CODE_ALLOWED = [
 /** 包、服务与独立演示清单：只放行 engines.dsh 的值，不放行固定依赖。 */
 const MANIFEST_RE = /^(?:packages|services|demos)\/[^/]+\/package\.json$/;
 
-// Development-only SDK pins for the migrated plugin follow the root baseline.
-// Runtime packages remain self-contained; resolved transitive versions belong to the lockfile.
-export const SKILLS_DEV_MANIFEST = 'packages/forge-skills-manager/package.json';
-export function checkSkillsDevelopmentHosts(root = process.cwd(), baseline = readDshVersion(root)) {
-  const file = join(root, SKILLS_DEV_MANIFEST);
-  if (!existsSync(file)) return [];
-  const manifest = JSON.parse(readFileSync(file, 'utf8'));
-  return Object.entries(manifest.devDependencies ?? {})
-    .filter(([name, version]) => name.startsWith('@deepseek-ai/dsh-') && version !== baseline)
-    .map(([name, version]) => `${SKILLS_DEV_MANIFEST}: ${name} ${version} differs from ${DSH_VERSION_FILE} ${baseline}`);
+export function checkDevelopmentHosts(root = process.cwd(), baseline = readDshVersion(root)) {
+  const problems = [];
+  for (const file of walk(root, (rel) => MANIFEST_RE.test(rel), root)) {
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    const rel = relative(root, file).split(sep).join('/');
+    for (const [name, version] of Object.entries(manifest.devDependencies ?? {})) {
+      if (name.startsWith('@deepseek-ai/dsh-') && version !== baseline) {
+        problems.push(`${rel}: ${name} ${version} differs from ${DSH_VERSION_FILE} ${baseline}`);
+      }
+    }
+  }
+  return problems;
 }
 
 /**
@@ -407,8 +409,8 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
         const releaseDefault =
           match[0] === baseline && RELEASE_DEFAULT_HOSTS.some((spot) => spot.file === rel);
         const exceptionReason = literalAllowed ? literalNote.reason : releaseDefault ? RELEASE_DEFAULT_REASON : null;
-        const developmentPin = insideDevelopment && rel === SKILLS_DEV_MANIFEST && /"@deepseek-ai\/dsh-[^"\s]+"\s*:/.test(line) && match[0] === baseline;
-        if (rel === 'pnpm-lock.yaml') kind = 'code-allowed'; // Generated lock graph; validated by frozen installation.
+        const developmentPin = insideDevelopment && manifestTokens && /"@deepseek-ai\/dsh-[^"\s]+"\s*:/.test(line) && match[0] === baseline;
+        if (rel === 'pnpm-lock.yaml') kind = 'code-allowed';
         else if (manifestTokens) kind = manifestTokens.has(match[0]) || developmentPin ? 'code-allowed' : 'code-forbidden';
         else if (exceptionReason !== null) kind = 'code-exception';
         else if (allowed) kind = fixtureNote ? 'fixture-exception' : 'code-allowed';

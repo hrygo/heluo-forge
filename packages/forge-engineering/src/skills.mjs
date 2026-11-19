@@ -331,8 +331,7 @@ export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterpr
  * @param {{skills: object}} ctx host context providing `skills`
  * @param {{selection: object, namePrefix?: string, invocation?: object, root?: string}} input
  */
-export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix = 'enterprise', invocation, root, rank = BUNDLED_SKILL_RANK } = {}) {
-  if (!Number.isFinite(rank)) throw new EnterpriseSkillError('skill rank must be finite', 'ENTERPRISE_SKILL_RANK_INVALID');
+export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix = 'enterprise', invocation, root } = {}) {
   const skills = ctx?.skills;
   if (skills === undefined || typeof skills.registerProvider !== 'function') {
     throw new EnterpriseSkillError('host has no skills provider entry for enterprise skills', 'ENTERPRISE_PROVIDER_UNAVAILABLE');
@@ -354,10 +353,10 @@ export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix
     whenToUse: `当任务涉及 ${clause.appliesTo.map((target) => target.system).join('、') || '企业规范'} 时按需加载；由用户显式触发`,
     provider: providerName,
     // 宿主 `validateCandidate` 的硬要求：source 非空字符串、rank 有限数、provider 与注册名一致。
-    // Generic bundled clauses use BUNDLED_SKILL_RANK. The trusted enterprise
-    // workflow explicitly supplies a lower rank to precede personal copies.
+    // 这份 Skill 随包分发，用 `bundled` + 宿主 `BUNDLED_SKILL_RANK`（600）；rank 写 0 会
+    // 让它和运行时注册的 Skill 抢同一个优先级槽，发现顺序就不再由宿主策略决定。
     source: 'bundled',
-    rank,
+    rank: BUNDLED_SKILL_RANK,
     invocation: policy,
     locator: { clause: clause.id },
     ...(hasRoot && typeof clause.bodyPath === 'string'
@@ -409,14 +408,14 @@ export function preActionConstraints({ selection, action }) {
  * @param {{skills: object}} ctx host context providing `skills`
  * @param {{root?: string, pack?: object, systems?: Array, budgetTokens?: number, namePrefix?: string, invocation?: object}} input
  */
-export function assembleEnterpriseSkills(ctx, { root, pack, systems = [], budgetTokens, namePrefix = 'enterprise', invocation, rank } = {}) {
+export function assembleEnterpriseSkills(ctx, { root, pack, systems = [], budgetTokens, namePrefix = 'enterprise', invocation } = {}) {
   const loaded = pack ?? loadClausePack({ root });
   const selection = selectClauses({ pack: loaded, systems, budgetTokens });
   // Prefer the probe-verified lazy provider path; direct registration (eager
   // body) is the fallback for hosts without a provider entry. Either way the
   // discovery face carries summaries only.
   const registration = typeof ctx?.skills?.registerProvider === 'function'
-    ? registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix, invocation, root: loaded.root, rank })
+    ? registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix, invocation, root: loaded.root })
     : registerEnterpriseSkills(ctx, { selection, namePrefix, invocation, root: loaded.root });
   const bodies = new Map(selection.selected.map((clause) => [clause.id, clause.body]));
   return Object.freeze({
