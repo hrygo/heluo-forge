@@ -4,15 +4,15 @@
 
 - 公版 `.tgz` 已下载；SHA-256 来自发布页或另一条可信渠道，不采用制品同目录的 `SHA256SUMS`。
 - 使用与公版配套的制作工具链；工具检查其 IAM 校验模块与公版内的运行时一致，只允许 LF / CRLF 换行差异。
-- 打包人员能提供：企业 IAM issuer、client_id、Discovery 或显式授权/token/JWKS 端点、访问令牌撤销端点、网关 baseURL 和 provider、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
+- 打包人员能提供：企业 IAM Discovery URL（优先），或显式 issuer 与授权/token/JWKS 端点、client_id、访问令牌撤销端点、网关 baseURL 和 provider、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
 - 输出目录在仓库之外，且不存在或为空；磁盘空间足够。
 - 企业交付采用公开客户端 + PKCE S256，不使用 `client_secret`。企业 IAM 支持该方式；真实登录、刷新与回调仍须在企业环境验证。制作器不接收 secret 或个人 Key。
 
 ## 2. 问答（逐项确认）
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
-2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。issuer 是交付包的信任锚：Discovery 文档里的 `issuer` 必须与之逐字符相同，结尾斜杠或大小写不同都按不一致拒绝，工具不会采用文档自称的 issuer。
-3. Discovery URL：优先由管理员提供，常见形式为 `issuer + /.well-known/openid-configuration`，不自行推定实际地址。maker 请求后精确检查 `issuer`，并检查 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；未显式指定时也校验发现的撤销、登出和用户信息端点格式。回显只给 `checked` 与匹配到的字段名，不含端点原值。无 Discovery 时显式提供 issuer、三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
+2. IAM issuer：只在不用 Discovery、改用显式端点时必填；`https://` 绝对地址，不带 query/fragment，企业内网只有 http 时先说明明文风险并取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。配置 Discovery URL 时不要提供 issuer：issuer 以文档声明为准，制作器拒绝两者并存。
+3. Discovery URL：优先由管理员提供，不自行推定实际地址。maker 请求后检查文档声明了合法 `issuer`，并检查 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；未显式指定时也校验发现的撤销、登出和用户信息端点格式。Discovery 模式不把文档 issuer 与另一份配置比对，也不再要求单独的 issuer。回显只给 `checked` 与匹配到的字段名，不含端点原值。无 Discovery 时显式提供 issuer 与三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
 5. 网关 baseURL 和 provider：地址用于 `managedModels.baseURL`，按网关实际路径填写；provider 使用准确的模型路由标识。http 同上需显式确认。
 6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`（不接受 `localhost` 或 `[::1]`）。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。

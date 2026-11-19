@@ -14,7 +14,7 @@ const config = {
 };
 const key = `uag-${'a'.repeat(32)}`;
 
-async function fixture(t, { trusted = false, gatewayTrusted = false, pin, grant = {}, discoveredIssuer = issuerA, fetchOther } = {}) {
+async function fixture(t, { trusted = false, gatewayTrusted = false, pin, grant = {}, discoveredIssuer = issuerA, fetchOther, discoveryFails = false } = {}) {
   let instant = clock;
   let discoveryGate = null;
   const credentials = new MemoryCredentials();
@@ -38,6 +38,7 @@ async function fixture(t, { trusted = false, gatewayTrusted = false, pin, grant 
     fetch: async (url, init = {}) => {
       requests.push({ url: String(url), method: init.method ?? 'GET' });
       if (String(url) === config.discoveryUrl) {
+        if (discoveryFails) throw new Error('synthetic discovery failure');
         const gate = discoveryGate;
         discoveryGate = null;
         if (gate) {
@@ -70,37 +71,96 @@ function assertNoIdentity(service) {
   assert.equal(view.principal, null);
 }
 
+test('concurrent cold syncs share one discovery resolution', async (t) => {
+  const f = await fixture(t);
+  const gate = f.pauseDiscovery(issuerA);
+  const first = f.service.syncFromStore();
+  const second = f.service.syncFromStore();
+  await gate.entered;
+  gate.release();
+  await Promise.all([first, second]);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.service.getView().state, 'ready');
+  assert.equal(f.service.getView().principal, 'synthetic-subject');
+  assert.equal(f.mutations(), 0);
+});
+
+test('a failed cold discovery attempt is not repeated by later syncs in the same process', async (t) => {
+  const f = await fixture(t, { discoveryFails: true });
+  await f.credentials.deleteRecord(GRANT_KEY);
+  await f.service.syncFromStore();
+  await f.service.syncFromStore();
+  assert.equal(f.service.getView().state, 'signed-out');
+  assert.equal(f.requests.length, 1);
+});
+
+test('a failed cold discovery attempt fails closed and preserves a saved grant', async (t) => {
+  const f = await fixture(t, { discoveryFails: true });
+  await f.service.hydrate();
+  assertNoIdentity(f.service);
+  assert.equal(f.service.getView().error, 'IAM_GRANT_CONTEXT_MISMATCH');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.mutations(), 0);
+  assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
+});
+
 for (const trusted of [false, true]) {
-  for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
-    test(`cold discovery-only ${operation} refuses V1 without issuer context, atomicTrusted=${trusted}`, async (t) => {
+  test(`cold discovery-only resolveToken refuses V1 without issuer context, atomicTrusted=${trusted}`, async (t) => {
+    const f = await fixture(t, { trusted });
+    await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
+    assertNoIdentity(f.service);
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.mutations(), 0);
+    assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
+  });
+  for (const operation of ['hydrate', 'syncFromStore']) {
+    test(`cold discovery-only ${operation} resolves the document issuer before restoring V1, atomicTrusted=${trusted}`, async (t) => {
       const f = await fixture(t, { trusted });
-      if (operation === 'resolveToken') {
-        await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
-      } else await f.service[operation]();
+      await f.service[operation]();
+      assert.equal(f.requests.length, 1);
+      assert.equal(f.requests[0].url, config.discoveryUrl);
+      const view = f.service.getView();
+      assert.equal(view.state, 'ready');
+      assert.equal(view.principal, 'synthetic-subject');
+      assert.equal(f.mutations(), 0);
+      assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
+    });
+  }
+  test(`cold discovery-only hydrate refuses V1 when the document declares another issuer, atomicTrusted=${trusted}`, async (t) => {
+    const f = await fixture(t, { trusted, discoveredIssuer: issuerB });
+    await f.service.hydrate();
+    assertNoIdentity(f.service);
+    assert.equal(f.service.getView().error, 'IAM_GRANT_CONTEXT_MISMATCH');
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.mutations(), 0);
+    assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
+  });
+  test(`cold discovery-only hydrate resolves the issuer but leaves a pending rotation unbound, atomicTrusted=${trusted}`, async (t) => {
+    const f = await fixture(t, { trusted, grant: {
+      accessExpiresAt: new Date(clock - 60000).toISOString(),
+      refreshOperation: { version: 1, state: 'pending', id: 'a'.repeat(42) + 'A', base: 'b'.repeat(42) + 'A' },
+    } });
+    await f.service.hydrate();
+    assertNoIdentity(f.service);
+    assert.equal(f.service.getView().error, 'IAM_REAUTH_REQUIRED');
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.mutations(), 0);
+    assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
+  });
+  for (const state of ['expired', 'pending']) {
+    test(`cold discovery-only ${state} resolveToken cannot trigger refresh or claim, atomicTrusted=${trusted}`, async (t) => {
+      const f = await fixture(t, { trusted, grant: {
+        accessExpiresAt: new Date(clock - 60000).toISOString(),
+        ...(state === 'pending' ? { refreshOperation: {
+          version: 1, state: 'pending', id: 'a'.repeat(42) + 'A', base: 'b'.repeat(42) + 'A',
+        } } : {}),
+      } });
+      await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
       assertNoIdentity(f.service);
       assert.equal(f.requests.length, 0);
       assert.equal(f.mutations(), 0);
       assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
     });
-  }
-  for (const state of ['expired', 'pending']) {
-    for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
-      test(`cold discovery-only ${state} ${operation} cannot trigger refresh or claim, atomicTrusted=${trusted}`, async (t) => {
-        const f = await fixture(t, { trusted, grant: {
-          accessExpiresAt: new Date(clock - 60000).toISOString(),
-          ...(state === 'pending' ? { refreshOperation: {
-            version: 1, state: 'pending', id: 'a'.repeat(42) + 'A', base: 'b'.repeat(42) + 'A',
-          } } : {}),
-        } });
-        if (operation === 'resolveToken') {
-          await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
-        } else await f.service[operation]();
-        assertNoIdentity(f.service);
-        assert.equal(f.requests.length, 0);
-        assert.equal(f.mutations(), 0);
-        assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
-      });
-    }
   }
   test(`gateway save cannot adopt an unbound V1 subject, atomicTrusted=${trusted}`, async (t) => {
     const f = await fixture(t, { trusted, gatewayTrusted: true });
@@ -219,7 +279,7 @@ async function beginLateDiscovery(f, issuer) {
 
 for (const operation of ['syncFromStore', 'saveGatewayCredential', 'resolveToken']) {
   for (const contextAtStart of ['unknown', 'issuer-a']) {
-    test(`${operation} fixes its ${contextAtStart} context before awaiting a grant read`, async (t) => {
+    test(`${operation} freezes its ${contextAtStart} context before awaiting a grant read`, async (t) => {
       const f = await fixture(t, { trusted: true, gatewayTrusted: operation === 'saveGatewayCredential' });
       if (contextAtStart === 'issuer-a') {
         await f.service.startSignIn();
@@ -235,11 +295,19 @@ for (const operation of ['syncFromStore', 'saveGatewayCredential', 'resolveToken
       readGate.release();
       const result = await pending;
       if (contextAtStart === 'unknown') {
-        if (operation === 'syncFromStore') assertNoIdentity(f.service);
-        else assert.equal(result.error, 'IAM_GRANT_CONTEXT_MISMATCH');
-        assert.equal(await f.credentials.resolve(GATEWAY_REF), undefined);
-        // A new operation may use the metadata now known to this instance.
-        assert.equal(await f.service.resolveToken() === 'synthetic-access', true);
+        if (operation === 'syncFromStore') {
+          // The cold start owns the context: it resolves Discovery before the
+          // grant read, so the later publication of the same issuer cannot
+          // change the outcome.
+          assert.equal(f.service.getView().state, 'ready');
+          assert.equal(f.service.getView().principal, 'synthetic-subject');
+          assert.equal(await f.service.resolveToken() === 'synthetic-access', true);
+        } else {
+          assert.equal(result.error, 'IAM_GRANT_CONTEXT_MISMATCH');
+          assert.equal(await f.credentials.resolve(GATEWAY_REF), undefined);
+          // A new operation may use the metadata now known to this instance.
+          assert.equal(await f.service.resolveToken() === 'synthetic-access', true);
+        }
       } else {
         assert.equal(result.error, undefined);
         if (operation === 'saveGatewayCredential') {
@@ -252,7 +320,7 @@ for (const operation of ['syncFromStore', 'saveGatewayCredential', 'resolveToken
         await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
       }
       assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
-      assert.equal(f.requests.length, contextAtStart === 'unknown' ? 1 : 2);
+      assert.equal(f.requests.length, contextAtStart === 'issuer-a' || operation === 'syncFromStore' ? 2 : 1);
     });
   }
 }

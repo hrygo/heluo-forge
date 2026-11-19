@@ -409,7 +409,6 @@ test('confidential authentication fails closed until the secret source exists', 
 test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
   const entries = (extra = []) => parseEnvConfig([
     'HELUO_IAM_AUTH_MODE=public',
-    'HELUO_IAM_ISSUER=http://iam.corp.example/esc-sso/oidc',
     'HELUO_IAM_DISCOVERY_URL=http://iam.corp.example/esc-sso/oidc/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=DSH',
     'HELUO_IAM_SCOPES=openid profile offline_access',
@@ -424,14 +423,15 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
     (error) => error.code === 'CONFIG_INVALID' && /HELUO_IAM_ALLOW_INSECURE_HTTP=true/u.test(error.message),
   );
   const config = buildConfig(entries(['HELUO_IAM_ALLOW_INSECURE_HTTP=true']));
-  assert.equal(config.iam.issuer, 'http://iam.corp.example/esc-sso/oidc');
+  assert.equal(config.iam.discoveryUrl, 'http://iam.corp.example/esc-sso/oidc/.well-known/openid-configuration');
+  assert.equal('issuer' in config.iam, false, 'discovery mode must not emit a pinned issuer');
   assert.equal(config.iam.managedModels.baseURL, 'http://gateway.corp.example:9080/aig-coding/v1');
   assert.equal(config.iam.allowInsecureHttp, true);
   const built = buildPrivateTarball({ entries: readBundleEntries(publicTarball(), { withContent: true }), version: '0.2.0', config, baseSha256: 'a'.repeat(64) });
   assert.doesNotMatch(built.patch, /allowInsecureHttp/u, 'the packaging-only opt-in must not be represented as a runtime guard');
 });
 
-test('issuer without discovery or explicit endpoints is rejected at package time', () => {
+test('discovery is sufficient for login; an issuer without endpoints is incomplete', () => {
   const entries = parseEnvConfig([
     'HELUO_IAM_AUTH_MODE=public',
     'HELUO_IAM_ISSUER=https://iam.corp.example',
@@ -443,11 +443,12 @@ test('issuer without discovery or explicit endpoints is rejected at package time
   );
   const complete = parseEnvConfig([
     'HELUO_IAM_AUTH_MODE=public',
-    'HELUO_IAM_ISSUER=https://iam.corp.example',
     'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=test-client',
   ].join('\n'));
-  assert.equal(buildConfig(complete).iam.discoveryUrl, 'https://iam.corp.example/.well-known/openid-configuration');
+  const config = buildConfig(complete);
+  assert.equal(config.iam.discoveryUrl, 'https://iam.corp.example/.well-known/openid-configuration');
+  assert.equal('issuer' in config.iam, false);
 });
 
 test('the credentials row carries no adapter config: the platform store is the default', () => {

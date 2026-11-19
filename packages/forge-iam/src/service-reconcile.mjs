@@ -19,6 +19,11 @@ export function createReconciler(env) {
     configured, hasSignInAttempt, isSigningOut, getAuthEpoch, getObservation, setObservation,
     getPublications, bumpPublications, beginConsumption, adoptConsumption, resolveToken,
   } = env;
+  // A discovery-only process resolves the document issuer at most once. The
+  // shared promise also makes concurrent cold syncs wait for the same fetch
+  // instead of asserting an empty context; a failed attempt stays failed for
+  // this process, so background syncs do not become probes.
+  let issuerResolution = null;
 
   async function syncFromStore() {
     if (ctx.disposed || isSigningOut()) return ctx.view();
@@ -33,7 +38,7 @@ export function createReconciler(env) {
       setObservation(null);
       return ctx.view();
     }
-    const expectedIssuer = ctx.knownIssuer();
+    let expectedIssuer = ctx.knownIssuer();
     const syncEpoch = getAuthEpoch();
     let publication = getPublications();
     let expectedGrant = ctx.lastGrant;
@@ -57,6 +62,18 @@ export function createReconciler(env) {
         ctx.notify();
       }
     };
+    if (!expectedIssuer) {
+      if (!issuerResolution) {
+        // Resolve it before reading the saved grant; otherwise every restart
+        // rejects a valid session as a context mismatch. A failed fetch leaves
+        // the issuer empty, so the assertion below still fails closed for a
+        // saved grant.
+        issuerResolution = grants.metadata().catch(() => {});
+      }
+      await issuerResolution;
+      expectedIssuer = ctx.knownIssuer();
+      if (!isActive()) return ctx.view();
+    }
     const targetStore = provider.ensure();
     if (!isActive()) return ctx.view();
     if (!targetStore || (observation && targetStore !== observation.store)) {

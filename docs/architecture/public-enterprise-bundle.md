@@ -73,14 +73,14 @@ flowchart LR
 |---|---|---|
 | 基础制品 | 公版来源、版本及可核对摘要；选定路径所需官方宿主及目标架构 | 文件、来源、架构或版本不匹配时停止 |
 | 输出信息 | 企业包版本、输出目录、目标能力 | 必填项缺失或目标文件已存在时停止 |
-| IAM 企业配置 | 可信 `issuer`、`clientId`、发现或显式端点、回调路径、端口及地址族；`authMode=public`、`clientAuthMethod=none` | 缺失必填字段或 issuer 不一致时停止；不要求也不写入共享 secret |
+| IAM 企业配置 | 企业 `clientId`、OIDC Discovery 地址（优先，`issuer` 由文档提供）或显式端点模式下的 `issuer` 与授权/token/JWKS 端点、回调路径、端口及地址族；`authMode=public`、`clientAuthMethod=none` | 缺失必填字段、同时在 Discovery URL 之外再固定 `issuer`，或显式端点模式缺少 `issuer` 时停止；不要求也不写入共享 secret |
 | 网关企业配置 | 企业网关地址及所启用能力需要的默认配置 | 能力启用而配置缺失时停止 |
 | 其他企业配置 | 企业统一且与个人无关的已启用能力配置 | 按能力检查，未启用能力不强加字段 |
 | 个人数据 | 个人 Key、账号、token、密码 | 不作为企业配置或私版输入 |
 
 真实企业配置保存在仓库根目录被 Git 忽略且未跟踪的 `.env` 中，可由制作人员复用；独立工具链没有 Git 仓库时，配置文件保存在不受版本管理的位置。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。密钥、个人凭据与令牌不作为配置输入。制作器复用 IAM 运行时配置校验，并核对配套工具链与公版内校验模块；除 LF / CRLF 换行外存在差异时拒绝制作。Discovery 预检的结果与错误不回显企业地址；预览和回执仍包含本地路径，分享前须脱敏。静态校验不证明企业登录、网关或撤销协议可用。
 
-OIDC Discovery 的 `issuer`、可信 issuer 和 ID Token 的 `iss` 必须精确一致；生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。企业接入采用 public 与 PKCE S256；厂商历史回函曾给出不同口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
+使用 OIDC Discovery 时私版不固定 `issuer`：运行时采用 Discovery 文档声明的 `issuer`，并以 ID Token 的 `iss` 与其精确比对；制作器校验文档包含合法 issuer 及授权、token、JWKS 端点。显式端点模式不使用 Discovery，必须在私版中提供 `issuer`。同一份配置同时给出 `discoveryUrl` 与 `issuer` 会被制作器拒绝：企业环境已验证，两者不一致时固定 issuer 会使登录无法跳转，Discovery 已是该模式的唯一 issuer 来源。运行时在冷启动恢复已保存会话前解析该文档；文档不可达或声明的 issuer 与记录不一致时不恢复身份并保留记录，需重新启动或重新登录后重试。生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。企业接入采用 public 与 PKCE S256；厂商历史回函曾给出不同口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
 
 Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。`release-delivery` 从权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；secret 和完整 `.env` 不进入交付物。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。该开关只约束制作器检查，运行时不能依靠它阻止 HTTP。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用）。随后以本次交付版本为准收敛：profile 内没有企业插件时只执行一次 `dsh plugin add`；已装版本与交付版本不同时先 `dsh plugin remove` 卸载旧版本，成功后再 `dsh plugin add`；已装版本与交付版本相同则不再写入。卸载失败即停止，不执行安装、也不留下半程状态。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。包含企业配置的暂存文件与私版插件置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
 
@@ -104,7 +104,7 @@ Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点�
 
 官方 DSH 由可核验渠道获取，记录版本、来源、目标架构和摘要。企业插件包继续通过私有 npm / AIHUB 或内部文件交付；公开 Release 不代为提供官方宿主。
 
-企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 收集企业字段并引导脱敏确认。配置 Discovery 时制作器检查 HTTP 200、issuer 精确一致以及 `authorization_endpoint`/`token_endpoint`/`jwks_uri`，未显式指定时也校验发现的撤销、登出和用户信息端点格式；只提供显式端点或使用 `--skip-discovery-check` 时，Discovery 未核验。预检不请求撤销端点，也不验证其协议兼容性。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
+企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 收集企业字段并引导脱敏确认。配置 Discovery 时制作器检查 HTTP 200、文档声明的合法 `issuer` 以及 `authorization_endpoint`/`token_endpoint`/`jwks_uri`，未显式指定时也校验发现的撤销、登出和用户信息端点格式；只提供显式端点或使用 `--skip-discovery-check` 时，Discovery 未核验。预检不请求撤销端点，也不验证其协议兼容性。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
 
 miniceM 对比并选择以下两条候选：
 
@@ -200,7 +200,7 @@ public 模式不免除 IAM grant、个人 Key 存储和模型 / 工具消费的�
 | 事项 | 责任与处理 |
 |---|---|
 | 两条低成本宿主集成候选 | miniceM 比较用户步骤、平台可用性、许可、数据保留及实现 / 运维成本，选择并记录 |
-| public、S256、可信 issuer 与回调 | 企业 IAM 与目标环境联调；保留历史回函冲突，不以 mock 宣称通过 |
+| public、S256、Discovery 或显式 issuer 与回调 | 企业 IAM 与目标环境联调；保留历史回函冲突，不以 mock 宣称通过 |
 | 各架构官方宿主及企业再分发许可 | 按实际版本、来源、架构、签名状态和上游许可核验；不假定所有平台有官方预编译发行物 |
 | 本项目公开插件及工具许可 | 公开 Release 前明确下载、使用与再分发范围 |
 | 平台凭据与运行依赖 | #182 负责后端逐目标取证，#123 负责端到端和安装生命周期；未取证不开放相关能力 |

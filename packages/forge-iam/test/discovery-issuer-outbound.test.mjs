@@ -87,6 +87,22 @@ function discoveryLoaded(f) {
   return f.requests.some((request) => request.url === config.discoveryUrl && request.method === 'GET');
 }
 
+test('a discovery-only cold start restores a saved grant after resolving the document issuer', async (t) => {
+  const f = await fixture(t, issuerA);
+  await f.store.write({ ...f.initial.payload, accessExpiresAt: '2026-01-01T01:30:00.000Z' });
+  await f.service.hydrate();
+  const view = f.service.getView();
+  assert.deepEqual({
+    discoveryLoaded: discoveryLoaded(f),
+    tokenPosts: posts(f, issuerA, 'token').length,
+    state: view.state,
+    error: view.error,
+    subject: view.signedIn ? f.service.getSession().principal.subject : null,
+  }, {
+    discoveryLoaded: true, tokenPosts: 0, state: 'ready', error: null, subject: 'synthetic-user',
+  });
+});
+
 test('discovery-only refresh rejects issuer B before claiming or sending issuer A refresh token', async (t) => {
   const f = await fixture(t, issuerB);
   await f.service.startSignIn();

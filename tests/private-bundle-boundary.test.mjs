@@ -523,7 +523,6 @@ test('--json records a discovery check that actually ran', async (t) => {
   const { base } = await discoveryServer(t);
   const input = makerInput(t);
   const configPath = writeConfig(input.root, [
-    `HELUO_IAM_ISSUER=${base}`,
     `HELUO_IAM_DISCOVERY_URL=${base}/.well-known/openid-configuration`,
     'HELUO_IAM_ALLOW_INSECURE_HTTP=true',
     'HELUO_IAM_CLIENT_ID=forge-console',
