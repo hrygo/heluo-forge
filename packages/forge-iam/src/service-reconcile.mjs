@@ -63,7 +63,7 @@ export function createReconciler(env) {
       observation, grant: retry.grant, renewAt: retry.renewAt, polling: true }, Math.min(PENDING_POLL_MS, pendingTimeLeft(observation)));
   }
 
-  function waitForPending(store, credentials, sessionId) {
+  function pendingObservationFor(store, credentials, sessionId) {
     const observation = getObservation();
     if (!observation || ctx.state !== 'error' || ctx.error !== 'IAM_REAUTH_REQUIRED') return null;
     if (sessionId && observation.identity.sessionInstanceId !== sessionId) return null;
@@ -75,17 +75,41 @@ export function createReconciler(env) {
       setObservation(null);
       return null;
     }
-    // Token readers share the reconciler's existing observation and deadline.
-    observation.flight ??= Promise.resolve().then(async () => {
-      while (getObservation() === observation && pendingTimeLeft(observation) > 0) {
-        await syncFromStore();
+    return {
+      atomicBinding: observation.atomicBinding,
+      async readReplacement() {
+        // A new request can discover a different login before joining the old
+        // observation. The read remains bounded by the original deadline.
         const remaining = pendingTimeLeft(observation);
-        if (getObservation() !== observation || remaining <= 0) break;
-        await new Promise(resolve => setTimeout(resolve, Math.min(PENDING_POLL_MS, remaining)));
-      }
-      return observation.result;
-    });
-    return observation;
+        if (remaining <= 0) return null;
+        let timer;
+        try {
+          const record = await Promise.race([
+            store.read(),
+            new Promise(resolve => { timer = setTimeout(resolve, remaining, null); }),
+          ]);
+          if (pendingTimeLeft(observation) > 0 && record?.ok && record.grant
+            && record.grant.sessionInstanceId !== observation.identity.sessionInstanceId) return record;
+        } catch {
+          // The shared observation owns store errors and their retry policy.
+        } finally {
+          clearTimeout(timer);
+        }
+        return null;
+      },
+      wait() {
+        observation.flight ??= Promise.resolve().then(async () => {
+          while (getObservation() === observation && pendingTimeLeft(observation) > 0) {
+            await syncFromStore();
+            const remaining = pendingTimeLeft(observation);
+            if (getObservation() !== observation || remaining <= 0) break;
+            await new Promise(resolve => setTimeout(resolve, Math.min(PENDING_POLL_MS, remaining)));
+          }
+          return observation.result;
+        });
+        return observation.flight;
+      },
+    };
   }
 
   // All callers share one deferred read. Only a fresh durable read can restore
@@ -447,5 +471,5 @@ export function createReconciler(env) {
     return ctx.view();
   }
 
-  return { syncFromStore, hydrate, deferRead, cancelReadRetry, waitForPending };
+  return { syncFromStore, hydrate, deferRead, cancelReadRetry, pendingObservationFor };
 }

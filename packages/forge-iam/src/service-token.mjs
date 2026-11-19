@@ -49,7 +49,7 @@ function raceCancellation(promise, signal) {
 export function createTokenResolver(env) {
   const {
     config, ctx, provider, grants, now, monotonic = () => performance.now(), fetchImpl, isSigningOut,
-    getSessionEpoch, getAuthEpoch, clearObservation, waitForPending, beginConsumption, adoptConsumption, logRenewal, deferRead,
+    getSessionEpoch, getAuthEpoch, clearObservation, pendingObservationFor, beginConsumption, adoptConsumption, logRenewal, deferRead,
   } = env;
 
   let refreshPromise = null;
@@ -577,7 +577,7 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     const usePendingObservation = async (observation) => {
-      const result = await observation.flight;
+      const result = await observation.wait();
       ctx.assertExclusive();
       if (!result) throw pendingRefusal;
       assertClientAuthCurrent(result.authentication);
@@ -590,7 +590,7 @@ export function createTokenResolver(env) {
       if (ctx.state !== 'ready') throw changedSession();
       return grant.accessToken;
     };
-    const observationFor = (sessionId) => expected ? null : waitForPending(targetStore, targetCredentials, sessionId);
+    const observationFor = (sessionId) => expected ? null : pendingObservationFor(targetStore, targetCredentials, sessionId);
     const useRefusedGrant = (grant) => {
       // A read or preflight that began before the panel saw pending must
       // follow its existing observation, with the same binding and deadline.
@@ -598,9 +598,10 @@ export function createTokenResolver(env) {
       if (!observed) throw pendingRefusal;
       return usePendingObservation(observed);
     };
-    const observation = observationFor();
-    if (observation) return usePendingObservation(observation);
     const grantAtStart = ctx.lastGrant;
+    const observation = observationFor();
+    const replacementRecord = observation && await observation.readReplacement();
+    if (observation && !replacementRecord) return usePendingObservation(observation);
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
     let refreshing = false;
     let refreshWriteAttempted = false;
@@ -610,6 +611,9 @@ export function createTokenResolver(env) {
     let operationGrant = null;
     const staleSession = new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
     let authentication;
+    const checkReplacement = () => {
+      if (replacementRecord && ctx.lastGrant !== grantAtStart && !isDeepStrictEqual(ctx.lastGrant, replacementRecord.grant)) throw staleSession;
+    };
     const alive = () => !ctx.disposed && !isSigningOut() && epoch === getSessionEpoch()
       && auth === getAuthEpoch() && ctx.state !== 'authenticating';
     const checkLifecycle = () => {
@@ -620,6 +624,7 @@ export function createTokenResolver(env) {
           throw reauthenticationRequired();
         }
       } else if (refreshing) provider.assertAtomic(targetStore, targetCredentials);
+      checkReplacement();
     };
     const checkAlive = () => { checkLifecycle(); assertClientAuthCurrent(authentication); };
     const rejectSession = (code = 'IAM_REAUTH_REQUIRED', reason = 'rejected', cause) => {
@@ -667,9 +672,9 @@ export function createTokenResolver(env) {
       return grant.accessToken;
     };
     // Do not make signOut wait for an unrelated, possibly stalled initial read.
-    let record;
+    let record = replacementRecord;
     try {
-      record = await targetStore.read();
+      record ??= await targetStore.read();
     } catch (cause) {
       if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
       const unchanged = provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
@@ -695,6 +700,7 @@ export function createTokenResolver(env) {
       if (currentStore !== targetStore || provider.storeCredentials !== targetCredentials) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
+      checkReplacement();
     };
     checkReadContext();
     if (pendingRefused(record.grant)) return useRefusedGrant(record.grant);

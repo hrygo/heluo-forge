@@ -49,11 +49,9 @@ async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fe
     await rm(directory, { recursive: true, force: true });
   });
   const readRecord = credentials.readRecord.bind(credentials);
-  let held = false;
   t.mock.method(credentials, 'readRecord', async (key) => {
     const record = await readRecord(key);
-    if (!held && key === GRANT_KEY && record?.payload?.refreshOperation?.state === 'complete') {
-      held = true;
+    if (key === GRANT_KEY && record?.payload?.refreshOperation?.state === 'complete') {
       readingReceipt.resolve();
       await releaseReceipt.promise;
     }
@@ -150,33 +148,37 @@ test('concurrent token requests recover a peer receipt after cold hydration obse
   assert.deepEqual(posts, []);
 });
 
-test('a cold observer accepts a distinct peer login after rejecting the old receipt', { timeout: 10_000 }, async (t) => {
-  const host = await openHosts(t);
-  const { service, writer, original, pending, complete, posts, observerWrites } = host;
-  await writer.write(pending);
-  assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
+for (const replaceTrust of [false, true]) {
+  test(`a cold observer accepts a distinct peer login ${replaceTrust ? 'after rejecting a rebound receipt' : 'during the original observation window'}`, { timeout: 10_000 }, async (t) => {
+    const host = await openHosts(t);
+    const { service, writer, original, pending, complete, posts, observerWrites } = host;
+    await writer.write(pending);
+    assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
 
-  host.replaceTrust();
-  host.releaseReceipt();
-  await writer.write(complete);
-  await assert.rejects(() => service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
-  assert.equal(service.getSession().signedIn, false);
+    if (replaceTrust) {
+      host.replaceTrust();
+      host.releaseReceipt();
+      await writer.write(complete);
+      await assert.rejects(() => service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+      assert.equal(service.getSession().signedIn, false);
+    }
 
-  const replacement = {
-    ...original,
-    sessionInstanceId: Buffer.alloc(32, 11).toString('base64url'),
-    obtainedAt: new Date().toISOString(),
-    accessToken: 'synthetic-new-login-access',
-    refreshToken: 'synthetic-new-login-refresh',
-  };
-  await writer.write(replacement);
+    const replacement = {
+      ...original,
+      sessionInstanceId: Buffer.alloc(32, 11).toString('base64url'),
+      obtainedAt: new Date().toISOString(),
+      accessToken: 'synthetic-new-login-access',
+      refreshToken: 'synthetic-new-login-refresh',
+    };
+    await writer.write(replacement);
 
-  assert.equal(await service.getAccessToken(), replacement.accessToken);
-  assert.equal(service.getView().state, 'ready');
-  assert.deepEqual((await writer.read()).grant, replacement);
-  assert.deepEqual(observerWrites, []);
-  assert.deepEqual(posts, []);
-});
+    assert.equal(await service.getAccessToken(), replacement.accessToken);
+    assert.equal(service.getView().state, 'ready');
+    assert.deepEqual((await writer.read()).grant, replacement);
+    assert.deepEqual(observerWrites, []);
+    assert.deepEqual(posts, []);
+  });
+}
 
 test('a token request keeps the original pending observation deadline after cold hydration', { timeout: 10_000 }, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
@@ -205,8 +207,13 @@ test('a token request keeps the original pending observation deadline after cold
   assert.deepEqual(posts, []);
 });
 
-for (const late of [false, true]) {
-  test(`a request in preflight ${late ? 'rejects a receipt after' : 'can adopt a receipt within'} the panel observation window`, { timeout: 10_000 }, async (t) => {
+const preflightOutcomes = [
+  ['within', 'adopts a receipt within the panel observation window'],
+  ['late', 'rejects a receipt after the panel observation window'],
+  ['replacement', 'keeps its original login when another Host signs in'],
+];
+for (const [outcome, description] of preflightOutcomes) {
+  test(`a request in preflight ${description}`, { timeout: 10_000 }, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     const readingJwks = Promise.withResolvers();
     const releaseJwks = Promise.withResolvers();
@@ -227,18 +234,27 @@ for (const late of [false, true]) {
     await writer.write(pending);
     assert.equal((await service.syncFromStore()).error, 'IAM_REAUTH_REQUIRED');
 
-    if (late) t.mock.timers.tick(REFRESH_TIMEOUT_MS + 1);
-    await writer.write(complete);
+    if (outcome === 'late') t.mock.timers.tick(REFRESH_TIMEOUT_MS + 1);
+    const saved = outcome === 'replacement' ? {
+      ...original,
+      sessionInstanceId: Buffer.alloc(32, 12).toString('base64url'),
+      accessToken: 'synthetic-peer-login-access',
+      refreshToken: 'synthetic-peer-login-refresh',
+      accessExpiresAt: new Date(Date.now() + 700_000).toISOString(),
+      refreshExpiresAt: new Date(Date.now() + 760_000).toISOString(),
+    } : complete;
+    await writer.write(saved);
     host.releaseReceipt();
     releaseJwks.resolve();
-    if (late) {
-      await assert.rejects(result, { code: 'IAM_REAUTH_REQUIRED' });
-      assert.equal(service.getSession().signedIn, false);
-    } else {
+    if (outcome === 'within') {
       assert.equal(await result, complete.accessToken);
       assert.equal(service.getSession().signedIn, true);
+    } else {
+      await assert.rejects(result, { code: 'IAM_REAUTH_REQUIRED' });
+      assert.equal(service.getSession().signedIn, false);
     }
-    assert.deepEqual((await writer.read()).grant, complete);
+    if (outcome === 'replacement') assert.equal(await service.getAccessToken(), saved.accessToken);
+    assert.deepEqual((await writer.read()).grant, saved);
     assert.deepEqual(posts, []);
     assert.deepEqual(observerWrites, []);
   });
