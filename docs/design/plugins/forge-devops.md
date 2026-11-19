@@ -6,16 +6,16 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-009 |
 | 文档名称 | DevOps 接入详细设计 |
-| 版本 | V0.8.0 |
+| 版本 | V0.10.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | G1 |
-| 模块状态 | 可用（四个工具：只读 runner（`change.read` / `change.list`）、上下文卡、受控写回（`change update`）、产物落盘（含 clarify/plan 机检）；写回默认关闭，企业 dop CLI 未联调，见设计索引 §2.2） |
+| 模块状态 | 可用（四个工具：只读 runner（`change.read` / `change.list`）、上下文卡、受控写回（`change update`）、产物落盘（含 clarify/plan 机检）；新会话编辑器提供变更选择器（只读清单 + 模板插入）；写回默认关闭，企业 dop CLI 未联调，见设计索引 §2.2） |
 
 > 编制依据：2026-10-20 依据两点事实——DevOps 平台已提供 CLI 工具；架构 P7 要求复用企业既有资产。据此本设计以 CLI 为接入形态，不新建 MCP 服务端。**未核验**：CLI 在银河麒麟 aarch64 上的可用性、是否支持环境变量注入凭据、是否提供结构化输出。三项均由 DevOps 团队补充确认，写入 §12，不阻塞设计其余部分。
 >
@@ -24,6 +24,9 @@
 > 2026-11-03 用户确认 D 方案（typed read runner）：只读面从「按能力切 4 个工具」改为「1 个枚举动作的 runner + 上下文卡 + 产物落盘」，删除恒 `denied` 的澄清写工具；`clarify` / `plan` 产物改由纯函数机检后生成正文。[dop 1.0.4 Windows 规格](../../contracts/dop-cli-spec.md)记录清单状态参数为 `--state`；其他版本与双平台产物仍须核验。
 >
 > 2026-11-06（r15）补设置页两件事：①本包新增「企业研发」分区（`client.js`，id `devops-readiness`、order 29），汇总企业身份/公共参数/本机配置/DevOps/Gitee/业务写权限六行，只做本机可见性汇总，固定声明"不代表业务授权"；②保存回执区分"已保存；运行时已应用"与"已保存；未应用"，`saveCliConfig` 在写成功后重建读面并回 `applied`，端点原样透传。既有 `devops` 分区（id `devops`、order 60）只加页脚来源行与三行回执，字段面、请求契约与 id/order 均不变。**仍未核验**：`heluo-r15-uat` 独立 profile 的装入与回滚（计划与证据核对见 `scripts/uat-profile.mjs`）。
+>
+> 2026-11-18（r19）新增会话起始变更选择器：新会话工具栏行（`conversation.hero.options`）注册 `devops.change-picker`，打开面板时才 `GET /api/forge-devops/changes`（复用 `change.list` 的同一读链路与策略门禁），选中后按当前模板插入当前编辑器草稿位点（r20 起模板可在设置页改写，未配置时用内置默认值）。只读清单不代表业务授权；插入不自动发送。
+> 2026-11-19（r20）提示词模板改为**维护者配置**：新增补丁层配置键 `promptTemplate`（默认值为结构化编排指令），由只读端点 `GET /api/forge-devops/prompt` 下发给选择器；页面不提供编辑入口（终端用户自配容易漏掉验收与提问步骤），非法配置在装配期拒绝激活。
 >
 > 关联文档：[总体架构 §7.3](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md) REQ-12、[策略与审计](forge-policy.md)。
 
@@ -142,6 +145,62 @@ Windows `dop` 1.0.4 实测接受 `--api-endpoint` 但仍向默认端点发送请
 
 服务端契约：`GET /api/forge-devops/cli` 的快照增 `plugin:{name,version}` 与 `editable:['dopBin','timeoutMs']`；`POST /api/forge-devops/cli` 成功体为 `{ok:true, snapshot, applied?}`——`applied` 有才带、原样透传。`saveCliConfig` 写成功后重算读面，只有运行时合并态里真的出现新值才回 `applied:{ok:true}`；清除最后一个入口回 `applied:{ok:true, active:false}`；运行面被宿主注入时回 `applied:{ok:false, reason:'CLI_APPLY_UNVERIFIED'}`；重建抛错或读面立不起来则 `degradeFaces()` 并回 `applied:{ok:false, reason:'CLI_REBUILD_FAILED'}`（"已保存"这个结论不变）。「检查」只走 `?refresh=1` 重新发现配置并重建读面，不执行 CLI、不请求企业端点；检查与刷新共用单调请求代次，更早发起的回包不能覆盖更晚建立的读面。
 
+### 5.3 会话起始变更选择（r19）
+
+新会话编辑框上方的工具栏行由宿主按 `WorkspaceChip → conversation.hero.workspace → conversation.hero.agentPreset → conversation.hero.options` 渲染。本包在 `conversation.hero.options`（`kind:list`、scope `session`）注册 `id:'devops.change-picker'`、`order:-10`。该槽容器是 `margin-left:auto` 的右对齐 flex 盒，而 `conversation.hero.agentPreset` 是 `single` 槽（已被官方占满），工具栏行上没有第二个贴边座位；因此组件不移动、不包裹宿主节点，只用 `position:relative` 向左平移，位移取「容器左缘 − 模式选择器右缘 − 2px」，视觉上与工作区、模式选择器同排紧邻，箭头复用宿主同一条 chevron 路径。位移测量在挂载、首帧后一拍、`resize`、行与容器的 `ResizeObserver`、行上子节点增删的 `MutationObserver` 上重算（官方模式选择器与「基于 main / 新建工作树」都是后挂的，首帧右缘并不成立）。槽位注入面包含会话输入口 `inputActions`，选择只把文本写进当前编辑器，不提交、不发送。
+
+端点：`GET /api/forge-devops/changes`。它与 `/cli` 共用前缀 `/api/forge-devops`，以更长的前缀独立注册（宿主按最长前缀匹配），既有 `/cli` 的契约与状态码矩阵不变。
+
+| 事项 | 契约 |
+|---|---|
+| 读取链路 | 复用 `service.read({action:'change.list', target:'@me'})`：同一策略门禁、同一只读适配器、同一原因词表，不新增第二条读路径 |
+| 成功体 | `{ok:true, items:[{id,summary}], count, total, truncated, observed_at}`；`id` 为平台变更号，`summary` 为概要；最多 100 条（`CHANGES_MAX_ITEMS`），超出计入 `truncated` |
+| 失败体 | 与 `/cli` 同一错误信封 `{ok:false, code, message, detail?}`；`message` 由服务端按原因词写死，不回显异常文本，不携带命令行路径 |
+| 状态码 | `NO_READER` / `PICKER_UNAVAILABLE` → 503；`POLICY_DENIED` → 403；`COMMAND_FAILED` / `COMMAND_TIMEOUT` / `MALFORMED_RESULT` / `NO_STRUCTURED_STATUS` / `MISSING_SOURCE_REVISION` → 502；其他 → 500 |
+| 方法 | 只有 GET/HEAD 返回清单；其他方法 405 并带 `allow: GET`；响应统一 `cache-control:no-store`、`nosniff`、不设 CORS 头 |
+| 缓存 | 服务端不缓存；客户端只在面板打开期间保留一份内存快照，重新打开或点「刷新」重取，不写 localStorage / sessionStorage / cookie |
+
+选择行为（`client.js`）：
+
+- 打开面板才发请求，同一时刻只允许一个在飞请求；失败显示类别文案，面板头部常驻「刷新」，入口本身不隐藏（失败可见）。
+- 选中一项后调用 `inputActions.setDraft(prompt)` **整体替换**当前草稿（并触发 `persistDraft`）；连续切换多个变更时编辑器里只保留最后一次的模板，不首尾相接。`inputActions` 没有草稿读取面（`captureInsertion` 只给光标位点，拿不到全段长度），构造不出覆盖全段的 `insertText` span，所以整段写入只能走 `setDraft`；宿主抛错（正在发送 / 装配已卸载）时就地报错，不重试、不改草稿。缺 `setDraft` 的宿主退回位点插入（两次重取 span），保证能力不整体失效。位点写入被拒（草稿已变更或编辑器被锁）时重取一次 span，仍失败就地报错，不以覆盖草稿兜底；宿主抛错（正在发送 / 装配已卸载）同样报错不重试。
+- 模板：内置默认值与 r19 口径逐字一致（结构化的「读变更 → 建 issue → issue-delivery → 工作区交付 → 建 PR」指令），由维护者在补丁层配置（见 §5.4）；填充时只把 `{code}` 替换为所选变更号（`split/join`，变更号里的 `$&` 之类保持字面）。模板不随语言切换，面板文案走 `devops` 命名空间。
+- 替换不会自动发送：用户仍可编辑、追加或再选一次整体覆盖。
+- 贴靠只读宿主几何：组件只调 `getBoundingClientRect` 与观察器，不读写宿主状态、不复制节点，也不依赖宿主的哈希类名；宿主的 `display:contents` 槽位壳（零盒）在测量时被跳过，模式选择器右缘通过下钻壳的首个有盒元素取得。
+
+模板实测（同日、同 profile）：补丁层写入 `config.promptTemplate` 后，`GET /api/forge-devops/prompt` 返回 `source: config` 与该正文；改回默认值后返回 `source: config` 的结构化默认正文；未配置时 `source: default`。`POST` 等写方法一律 405 + `allow: GET`。页面选中变更后写入的是配置值，说明「维护者配置 → 选择器使用」闭环成立；设置页不存在该分区的编辑入口。
+
+实测（2026-11-19，隔离 profile `heluo-r15-uat`、`dsh 0.2.1-rc.5`，未触碰日常 `desktop` profile）：工具栏行渲染「工作区 → 模式 → 变更 ▾」，选择器与模式选择器右缘相距 2px、箭头为宿主同款 chevron、文案加粗，切换工作区后位置自动重算；点开读到 `dop change list` 的 12 条「变更号 + 概要」，连续选中两条后编辑器里只剩后一条的模板（整体替换、不叠加），且不发送；端点 `GET` 返回 200（`cache-control:no-store`、`nosniff`、无 CORS 头），`POST` 返回 405 + `allow: GET`。官方「基于 main / 新建工作树」同场的相邻布局未在该 profile 复现（未装官方面板）。
+
+边界：清单是「当前登录人可见的变更」，不是授权凭据；可见范围、平台权限与写能力仍由企业侧判定；本能力只读，不写平台。
+
+### 5.4 提示词模板（r20）
+
+模板是「选中一条变更后写进编辑器」的那段文字。它是**项目维护者**的口径配置，不是终端用户的偏好：用户自己改容易漏掉「缺验收标准先问我」「不以 `#` 开头」这类关键约束，反而制造风险。因此**页面不提供编辑入口**，改模板的唯一方式是编辑 profile 补丁层本插件条目的 `config.promptTemplate`，改完重载 profile 生效；不写就用内置默认值。
+
+| 事项 | 契约 |
+|---|---|
+| 配置键 | `promptTemplate`，字符串，写在本插件补丁层同一行 `config:` 里；未配置即内置默认模板 |
+| 校验 | 装配期只校验**类型**（非字符串则 `ConfigStandard` 报 issue 并拒绝激活）；内容规则（非空、含 `{code}`、≤4000 字、CRLF 归一为 LF、剪首尾空白）在使用时判定：不合法则**回落内置默认模板**并在下发体带 `warning` 说明原因——维护者写错一个模板不该让整包停止工作 |
+| 下发 | `GET /api/forge-devops/prompt` → `{ok:true, template, source:'config'\|'default', placeholder:'{code}'}`，配置内容不合法时另带 `warning`；`source` 说明模板来自配置还是内置默认值 |
+| 方法 | 只支持 GET/HEAD；其他方法 405 + `allow: GET`，错误文案直接指向「编辑 profile 补丁层的 config.promptTemplate」 |
+| 响应头 | 与 `/cli` 同口径：`cache-control:no-store`、`nosniff`、不设 CORS 头 |
+| 装配 | 端点只读 `config`，不依赖 `configEditor`：没有写面也能工作，也不需要文件锁、回读比对与冲突码 |
+| 客户端 | 选择器打开面板时取一次模板（取不到回落内置默认值，不阻塞清单），选中时按模板填充变更号 |
+
+维护者示例（profile 补丁层）：
+
+```yaml
+- id: forge-devops
+  name: "@heluo/forge-devops"
+  config:
+    promptTemplate: |
+      变更 {code}：先读变更详情，提炼需求与验收标准；
+      缺验收标准时列缺口问我，不要编造。
+```
+
+边界：`{code}` 是唯一占位符，其余字符原样保留（变更号里的 `$&` 之类不会触发替换）；模板是提示层约束，不含凭据、不改工具授权，真正的门禁仍在策略与检查器。
+
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
@@ -199,6 +258,8 @@ flowchart TD
 | 契约 | 枚举动作、每动作参数 schema、写回 confirm/绑定/回读三态、`body`/`data` 互斥、clarify/plan 机检 | `node --test` |
 | 集成 | 未授权、超时、非 JSON 三类 | 本地仿 CLI |
 | 设置页（r15） | 两个分区的 id/order（容器在场时合并为 `heluo.engineering.tab` 一个条目，`order` 10，容器塌陷时回退到两个独立分区）与两段式挂载、九种状态词、六行互不推导、`?refresh=1` 只由检查触发、保存/应用/检查三行互不覆盖、`applied` 透传与 `CLI_REBUILD_FAILED` 降级 | `node --test "packages/forge-devops/test/*.test.mjs"`（`client-shape.test.mjs`、`save-applied.test.mjs`）、`node scripts/check-client-module.mjs packages/forge-devops/client.js`、`node --test tests/ui-contract.test.mjs` |
+| 提示词模板（r20） | 默认正文与产品口径逐字一致、两端字面量一致、`{code}` 校验与 CRLF/trim 归一、非法配置回落默认值、端点只读（POST/PUT/DELETE→405 + `allow: GET`）、响应头与错误体口径、客户端不存在编辑入口 | `node --test packages/forge-devops/test/prompt-template.test.mjs packages/forge-devops/test/prompt-api.test.mjs` |
+| 会话起始选择器（r19） | 注册槽位/id/order 与 `locale`、`inject` 面、端点路径与「只读 GET」、失败体复用、prompt 模板逐字一致、插入走 `captureInsertion` + `insertText` 且失败不回写 `setDraft`、清单投影（去空/去重/上限） | `node --test packages/forge-devops/test/changes-api.test.mjs packages/forge-devops/test/client-picker.test.mjs packages/forge-devops/test/client-shape.test.mjs` |
 | 端到端 | 双端各完成一次只读查询 | 手工 |
 
 离线用例还覆盖：两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 透传、归一失败只记 `normalize_error`、clarify 零选项与 plan 缺验证方式被拒且不落盘。

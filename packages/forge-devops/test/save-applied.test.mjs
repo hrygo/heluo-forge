@@ -173,20 +173,22 @@ test('同源端点：GET 快照带 plugin/editable，POST 原样透传 applied',
   try {
     const target = path.join(dir, EXE);
     await withEnv({ PATH: tempDir(), Path: tempDir() }, async () => {
-      let route = null;
+      const routes = [];
       const webServer = {
         register: (options) => {
-          route = options;
+          routes.push(options);
           return () => {
-            route = null;
+            routes.length = 0;
           };
         },
       };
       const fake = editor();
       const { service } = mount({ webServer, configEditor: fake });
+      // r19 起同一装配挂两条前缀：`/cli`（配置）与 `/changes`（变更清单）。
+      const route = routes.find((entry) => entry.path === CLI_API_PREFIX);
       assert.ok(route, 'webServer 在就必须挂上配置端点');
-      assert.equal(route.path, CLI_API_PREFIX);
       assert.equal(route.kind, 'prefix');
+      assert.ok(routes.some((entry) => entry.path === '/api/forge-devops/changes'), '变更清单端点同时挂上');
 
       // GET：页面页脚需要的两件事都在快照里，不用自己猜。
       const getRes = fakeRes();

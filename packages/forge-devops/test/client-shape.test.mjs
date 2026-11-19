@@ -82,18 +82,29 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
   assert.equal(typeof CLIENT.definition.factory, 'function');
   assert.deepEqual(Object.keys(CLIENT.module).sort(), [
     'CandidateList',
+    'ChangePicker',
     'CliEntryField',
+    'DEFAULT_PROMPT_TEMPLATE',
     'DevopsCredentialItem',
     'DevopsEngineeringTab',
     'DevopsSection',
     'ReadinessSection',
     'StatusLine',
     'apply',
+    'buildChangePrompt',
+    'fetchChangeList',
+    'fetchPromptTemplate',
+    'anchorHolder',
+    'elementBox',
+    'hostEdgeRight',
     'inject',
+    'insertPrompt',
+    'PICKER_CHEVRON_PATH',
+    'pickerRowShift',
   ].sort());
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale'], 'inject 缺一项宿主就不装配客户端半');
   assert.equal(typeof CLIENT.module.apply, 'function');
-  for (const name of ['DevopsSection', 'ReadinessSection', 'DevopsEngineeringTab', 'DevopsCredentialItem', 'CliEntryField', 'StatusLine', 'CandidateList']) {
+  for (const name of ['DevopsSection', 'ReadinessSection', 'DevopsEngineeringTab', 'DevopsCredentialItem', 'CliEntryField', 'StatusLine', 'CandidateList', 'ChangePicker', 'buildChangePrompt', 'insertPrompt', 'fetchChangeList', 'fetchPromptTemplate', 'pickerRowShift', 'elementBox', 'hostEdgeRight', 'anchorHolder']) {
     assert.equal(typeof CLIENT.module[name], 'function', `${name} 必须是可渲染的组件函数`);
   }
   // 段控件随「事实来源」一起下线：导出面不允许留一个没人能填的控件（页面收窄到三键）。
@@ -188,7 +199,7 @@ function applyToFakeCtx(module, options) {
 const APPLIED = applyToFakeCtx(CLIENT.module);
 
 test('挂在 settings.section/devops（order 60，label 走 i18n 键）', () => {
-  assert.equal(APPLIED.slots.length, 2, 'r15 起本 client 承载两个分区：企业 DevOps 与企业研发');
+  assert.equal(APPLIED.slots.length, 2, 'r15 起本 client 承载两个分区：企业 DevOps、企业研发');
   const devopsSlot = APPLIED.slots.find((slot) => slot.meta.id === 'devops');
   assert.ok(devopsSlot, '必须注册 id=devops 的分区');
   const { meta, component } = devopsSlot;
@@ -254,7 +265,7 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   const [{ namespace, dictionaries }] = APPLIED.locales;
   assert.equal(namespace, 'devops');
   assert.deepEqual(Object.keys(dictionaries).sort(), ['en', 'zh']);
-  assert.equal(APPLIED.effects.length, 4, '四条 effect：字典、样式、容器子槽位、settings.section');
+  assert.equal(APPLIED.effects.length, 5, '五条 effect：字典、样式、容器子槽位、settings.section、变更选择器');
   for (const effect of APPLIED.effects) {
     assert.equal(typeof effect.label, 'string', '每条 effect 都要有可读标签（宿主 hook 列表里能定位）');
   }
@@ -368,7 +379,7 @@ test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 �
     );
   }
   const registers = SOURCE.match(/ctx\.slots\.register\(/gu) ?? [];
-  assert.equal(registers.length, 3, '三次注册：容器条目 + 两个独立分区');
+  assert.equal(registers.length, 4, '四次注册：容器条目 + 两个独立分区 + 新会话变更选择器');
 });
 
 /* ------------------------------------------------------------------------- *
@@ -385,7 +396,7 @@ test('端点：GET+POST /api/forge-devops/cli，刷新参只在 GET 上', () => 
     // r18：启动自检是 `/cli/selfcheck`（`SELFCHECK_ENDPOINT = `${CLI_ENDPOINT}/selfcheck``），
     // 它同样派生自同一个端点常量；页面不得为它另写一份路径字面量。
     assert.ok(
-      /CLI_ENDPOINT/u.test(url) || url === 'SELFCHECK_ENDPOINT' || url === 'url',
+      /CLI_ENDPOINT/u.test(url) || url === 'SELFCHECK_ENDPOINT' || url === 'CHANGES_ENDPOINT' || url === 'url',
       `所有请求都必须基于端点常量，实际：${url}`,
     );
     assert.ok(!url.includes('http://') && !url.includes('https://'), '只允许同源相对路径，不得外连');

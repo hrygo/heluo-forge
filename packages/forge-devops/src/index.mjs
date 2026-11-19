@@ -37,9 +37,12 @@ import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
 import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS, deriveSourceType } from './cli-config.mjs';
-import { createCliAccess } from './cli-access.mjs';
+import { DEFAULT_ENTRY_ID, createCliAccess } from './cli-access.mjs';
 import { buildReadiness } from './readiness.mjs';
 import { CLI_API_PREFIX, createCliApi, toNodeRoute } from './http.mjs';
+import { CHANGES_READ_TARGET, CHANGES_ROUTE_PATH, createChangesApi, toChangesRoute } from './changes-api.mjs';
+import { PROMPT_ROUTE_PATH, createPromptApi, toPromptRoute } from './prompt-api.mjs';
+import { PROMPT_FIELD, promptTemplateOf, validatePromptTemplate } from './prompt-template.mjs';
 import { createSelfCheckRunner, describeSelfCheck } from './selfcheck.mjs';
 import { ConfigStandard } from './runtime-config.mjs';
 import { DEVOPS_CREDENTIAL_DESCRIPTOR, registerDevopsCredential } from './credential-descriptor.mjs';
@@ -197,7 +200,7 @@ export function validateConfig(input = {}) {
     throw new DevopsReadError(READ_REASONS.MALFORMED_RESULT, 'devops 配置必须是对象');
   }
   const unknown = Object.keys(input).filter(
-    (key) => !(key in DEFAULT_CONFIG) && !RUNTIME_CONFIG_KEYS.includes(key),
+    (key) => !(key in DEFAULT_CONFIG) && !RUNTIME_CONFIG_KEYS.includes(key) && key !== PROMPT_FIELD,
   );
   if (unknown.length > 0) {
     throw new DevopsReadError(READ_REASONS.MALFORMED_RESULT, `未知配置项：${unknown.join(', ')}`, { unknown });
@@ -466,23 +469,45 @@ export function apply(ctx, rawConfig = {}) {
     save: (options) => service.saveCliConfig(options),
   });
   const cliRoute = toNodeRoute(cliApi);
+  // 会话起始变更选择器（r19）读的是**同一条只读链路**：同一策略门禁、同一适配器、同一原因词表。
+  const changesApi = createChangesApi({
+    list: () => service.read({ action: 'change.list', target: CHANGES_READ_TARGET }),
+  });
+  const changesRoute = toChangesRoute(changesApi);
+  // 会话起始选择器的提示词模板（r20）：只从补丁层 `config.promptTemplate` 读取，页面不提供写入口。
+  // 维护者改 YAML 后重载 profile 生效；非法值在装配期就被 schema 拦下，不会流到这里。
+  const promptRoute = toPromptRoute(createPromptApi({
+    resolve: () => {
+      const effective = promptTemplateOf(config);
+      // 配置写了但不合法（缺占位符/超长）：用默认值兜底，同时把原因交给页面与 curl。
+      const raw = config?.[PROMPT_FIELD];
+      const checked = typeof raw === 'string' && raw !== '' ? validatePromptTemplate(raw) : null;
+      return checked !== null && checked.ok !== true ? { ...effective, warning: checked.message } : effective;
+    },
+  }));
   let routeState = 'no-webserver';
   let disposeRoute = null;
   const mountCliRoute = (scope) => {
     if (disposeRoute !== null) return;
     const server = (scope ?? ctx)?.get?.('webServer') ?? null;
     if (server === null || server === undefined || typeof server.register !== 'function') return;
+    const registered = [];
     try {
-      const off = server.register({
-        kind: 'prefix',
-        path: CLI_API_PREFIX,
-        handler: cliRoute,
-        description: 'forge-devops 命令行配置（只读快照 / 保存）',
-      });
-      disposeRoute = typeof off === 'function' ? off : () => {};
+      for (const route of [
+        { path: CLI_API_PREFIX, handler: cliRoute, description: 'forge-devops 命令行配置（只读快照 / 保存）' },
+        { path: CHANGES_ROUTE_PATH, handler: changesRoute, description: 'forge-devops 变更清单（只读选择器）' },
+        { path: PROMPT_ROUTE_PATH, handler: promptRoute, description: 'forge-devops 变更提示词模板（只读下发）' },
+      ]) {
+        const off = server.register({ kind: 'prefix', ...route });
+        registered.push(typeof off === 'function' ? off : () => {});
+      }
+      disposeRoute = () => {
+        for (const off of registered) off();
+      };
       routeState = 'registered';
     } catch {
-      // 前缀冲突（别的插件已占了同一段）不抛：状态可见地记成 conflict，页面显示"端点不可用"。
+      // 两笔注册不是事务：后一笔失败时把前一笔撤掉；冲突本身不抛（状态可见，页面显示"端点不可用"）。
+      for (const off of registered) off();
       routeState = 'conflict';
     }
   };

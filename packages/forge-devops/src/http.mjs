@@ -53,7 +53,7 @@ const CODES = Object.freeze({
 });
 
 /** 响应头：统一 no-store + nosniff，**不设** `access-control-*`。 */
-const BASE_HEADERS = Object.freeze({
+export const BASE_HEADERS = Object.freeze({
   'cache-control': 'no-store',
   'content-type': 'application/json; charset=utf-8',
   'x-content-type-options': 'nosniff',
@@ -71,12 +71,12 @@ const isPlainObject = (value) => value !== null && typeof value === 'object' && 
 const headersOf = (extra = null) => (extra === null ? BASE_HEADERS : { ...BASE_HEADERS, ...extra });
 
 /** 成功响应：`body` 由适配器序列化（用例可以直接 `deepEqual(body, snapshot)`）。 */
-function ok(body, extraHeaders = null) {
+export function ok(body, extraHeaders = null) {
   return { status: 200, headers: headersOf(extraHeaders), body };
 }
 
 /** 统一错误体 `{ ok:false, code, message, errors?, detail? }`——页面据此选文案，别再拼字符串。 */
-function fail(status, code, message, errors = null, extraHeaders = null, detail = null) {
+export function fail(status, code, message, errors = null, extraHeaders = null, detail = null) {
   const body = { ok: false, code, message };
   if (isPlainObject(errors) && Object.keys(errors).length > 0) body.errors = { ...errors };
   if (isPlainObject(detail) && Object.keys(detail).length > 0) body.detail = { ...detail };
@@ -97,7 +97,7 @@ function failureDetailOf(error, refresh) {
 }
 
 /** 去掉尾斜杠：`/api/forge-devops/cli/` 与 exact 注册等价。 */
-function normalizeRoutePath(value) {
+export function normalizeRoutePath(value) {
   if (typeof value !== 'string' || value === '') return '/';
   return value.length > 1 && value.endsWith('/') ? value.slice(0, -1) : value;
 }
@@ -109,7 +109,7 @@ function normalizeRoutePath(value) {
  * @param {string} rawUrl `req.url`
  * @returns {{ pathname: string, params: URLSearchParams }}
  */
-function splitRequestUrl(rawUrl) {
+export function splitRequestUrl(rawUrl) {
   const text = typeof rawUrl === 'string' && rawUrl !== '' ? rawUrl : '/';
   const hashAt = text.indexOf('#');
   const withoutHash = hashAt === -1 ? text : text.slice(0, hashAt);
@@ -120,7 +120,7 @@ function splitRequestUrl(rawUrl) {
 }
 
 /** 大小写不敏感的取头（Node 的 `req.headers` 是小写，用例里常写成驼峰或 Map）。 */
-function headerValue(headers, name) {
+export function headerValue(headers, name) {
   if (headers === null || headers === undefined) return undefined;
   if (typeof headers.get === 'function') {
     const hit = headers.get(name);
@@ -166,7 +166,7 @@ function refreshFlag(query) {
 }
 
 /** 请求体 → 对象。非对象 / 非法 JSON / 超限都返回 `{ ok:false }`（由调用方给 400）。 */
-function parseBody(rawBody) {
+export function parseBody(rawBody) {
   if (isPlainObject(rawBody)) return { ok: true, value: rawBody };
   let text = null;
   if (typeof rawBody === 'string') text = rawBody;
@@ -329,7 +329,7 @@ export function createCliApi(options = {}) {
 }
 
 /** 收集 Node 请求体（有上限）。返回 `{ text, tooLarge }`；非流对象退化为空体。 */
-async function readRequestBody(req) {
+export async function readRequestBody(req) {
   if (isPlainObject(req) && (typeof req.body === 'string' || Buffer.isBuffer(req.body) || isPlainObject(req.body))) {
     return { text: req.body, tooLarge: false };
   }
@@ -348,7 +348,7 @@ async function readRequestBody(req) {
 }
 
 /** 把 `{ status, headers, body }` 写回 Node 响应；响应已断开就静默（绝不写日志，AC-10）。 */
-function writeResponse(res, result) {
+export function writeResponse(res, result) {
   if (res === null || res === undefined) return;
   const headers = isPlainObject(result?.headers) ? result.headers : BASE_HEADERS;
   const payload = JSON.stringify(result?.body ?? null);

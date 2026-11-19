@@ -1,3 +1,5 @@
+import { PROMPT_FIELD } from './prompt-template.mjs';
+
 /**
  * `@heluo/forge-devops` 运行时配置（T1，AC-22 / §5.4）。
  *
@@ -323,8 +325,19 @@ function validateConfigObject(input) {
   const value = {};
   for (const key of Object.keys(candidate)) {
     if (RETIRED_KEYS.includes(key)) continue;
+    if (key === PROMPT_FIELD) continue;
     if (!Object.prototype.hasOwnProperty.call(ENV_KEYS, key)) {
       issues.push({ message: `未知配置项：${key}`, path: [key] });
+    }
+  }
+  // 会话起始选择器的提示词模板（r20）：不是环境变量键，只校验类型。
+  // 内容问题（缺占位符、超长）不拒绝激活——维护者拼错一个模板不该让整包不工作；
+  // 这类问题在下发端点回落内置默认值并带 `warning`，用 `curl` 就能看见原因。
+  if (Object.prototype.hasOwnProperty.call(candidate, PROMPT_FIELD)) {
+    if (typeof candidate[PROMPT_FIELD] !== 'string') {
+      issues.push({ message: '模板必须是一段文本', path: [PROMPT_FIELD] });
+    } else {
+      value[PROMPT_FIELD] = candidate[PROMPT_FIELD];
     }
   }
   for (const field of Object.keys(ENV_KEYS)) {
