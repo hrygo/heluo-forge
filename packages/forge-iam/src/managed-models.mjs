@@ -1031,12 +1031,25 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 
   /** Bounded back-off for transient gateway failures; any context change cancels it. */
   function scheduleRetry(code, retryAfterMs) {
-    if (!RETRYABLE.has(code) || retryAttempt >= retryDelays.length || retryTimer) return;
+    if (!RETRYABLE.has(code) || retryAttempt >= retryDelays.length) return;
+    const asked = Number.isFinite(retryAfterMs) ? retryAfterMs : undefined;
+    let reusedBudget = false;
+    if (retryTimer) {
+      // A pending retry must not fire earlier than the latest response allows:
+      // a manual refresh may learn of a longer wait after a short one was
+      // scheduled. Without a new hint the existing plan stands.
+      if (asked === undefined) return;
+      if (asked > MAX_CATALOG_RETRY_AFTER_MS) { cancelRetry(); return; }
+      const remaining = Math.max(0, (retryAt ?? 0) - Date.now());
+      if (asked <= remaining) return;
+      cancelRetry();
+      reusedBudget = true;
+    }
     // A wait longer than the ceiling is not shortened silently: the failure
     // stays visible instead of parking the recovery for minutes.
-    if (Number.isFinite(retryAfterMs) && retryAfterMs > MAX_CATALOG_RETRY_AFTER_MS) return;
-    const delay = Number.isFinite(retryAfterMs) ? retryAfterMs : retryDelays[retryAttempt];
-    retryAttempt += 1;
+    if (asked !== undefined && asked > MAX_CATALOG_RETRY_AFTER_MS) return;
+    const delay = asked ?? retryDelays[retryAttempt];
+    if (!reusedBudget) retryAttempt += 1;
     const mine = version;
     retryAt = Date.now() + delay;
     retryTimer = setTimeout(() => {
