@@ -38,6 +38,14 @@ const iamReadTestPaths = [
   'packages/forge-iam/test/bridge-real-provider.test.mjs',
   'packages/forge-iam/test/gateway-save-confirmation.test.mjs',
   'packages/forge-iam/test/gateway-sqlite-regression.test.mjs',
+  'packages/forge-iam/test/session-read-lock-recovery.test.mjs',
+  'packages/forge-iam/test/pending-binding-sqlite.test.mjs',
+  'packages/forge-iam/test/session-renewal-log.test.mjs',
+  'packages/forge-iam/test/renewal-resume.test.mjs',
+  'packages/forge-iam/test/client-auth-refresh.test.mjs',
+  'packages/forge-iam/test/callback-port.test.mjs',
+  'packages/forge-iam/test/signout-sqlite-crash.test.mjs',
+  'packages/forge-iam/test/userinfo.test.mjs',
 ];
 
 const platformEnvironment = new Map([
@@ -480,6 +488,30 @@ const executionMutations = [
   ['gateway SQLite regression test removed',
     workflow.replace(' packages/forge-iam/test/gateway-sqlite-regression.test.mjs', ''),
     /native-linux-x64: IAM read paths and CLI tests must run unconditionally/u],
+  ['SQLite session recovery test removed',
+    workflow.replace(' packages/forge-iam/test/session-read-lock-recovery.test.mjs', ''),
+    /native-win32-x64: IAM read paths and CLI tests must run unconditionally/u],
+  ['SQLite pending trust binding test removed',
+    workflow.replace(' packages/forge-iam/test/pending-binding-sqlite.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
+  ['cross-process renewal log test removed',
+    workflow.replace(' packages/forge-iam/test/session-renewal-log.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
+  ['resume timer test removed',
+    workflow.replace(' packages/forge-iam/test/renewal-resume.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
+  ['client authentication refresh test removed',
+    workflow.replace(' packages/forge-iam/test/client-auth-refresh.test.mjs', ''),
+    /native-win32-x64: IAM read paths and CLI tests must run unconditionally/u],
+  ['native callback test removed',
+    workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
+  ['sign-out crash recovery test removed',
+    workflow.replace(' packages/forge-iam/test/signout-sqlite-crash.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
+  ['UserInfo polling regression test removed',
+    workflow.replace(' packages/forge-iam/test/userinfo.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
   ['IAM read paths moved to a comment',
     workflow.replace('node --test packages/forge-iam/test/read-paths-matrix.test.mjs ', 'node --test ')
       .replace('        run: node --test packages/forge-iam/test/cli-session.test.mjs', '        # packages/forge-iam/test/read-paths-matrix.test.mjs\n        run: node --test packages/forge-iam/test/cli-session.test.mjs'),
@@ -515,9 +547,9 @@ const windowsSuiteError = /sensitive-scan: Windows scan and callback tests must 
 const windowsLinkError = /sensitive-scan: Windows suite needs workspace links before the tests/u;
 const windowsExecutionMutations = [
   ['plugin patch layers removed', workflow.replace(' tests/plugin-patch-layers.test.mjs', '')],
-  ['callback removed', workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', '')],
-  ['callback moved to a comment', workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', '')
-    .replace('        run: node --test tests/sensitive-scan.test.mjs', '        # packages/forge-iam/test/callback-port.test.mjs\n        run: node --test tests/sensitive-scan.test.mjs')],
+  ['callback removed', replaceJob(workflow, 'sensitive-scan', (job) => job.replace(' packages/forge-iam/test/callback-port.test.mjs', ''))],
+  ['callback moved to a comment', replaceJob(workflow, 'sensitive-scan', (job) => job.replace(' packages/forge-iam/test/callback-port.test.mjs', '')
+    .replace('        run: node --test tests/sensitive-scan.test.mjs', '        # packages/forge-iam/test/callback-port.test.mjs\n        run: node --test tests/sensitive-scan.test.mjs'))],
   ['scan test moved to a comment', workflow.replace(' tests/sensitive-scan-team.test.mjs', '')
     .replace('        run: node --test tests/sensitive-scan.test.mjs', '        # tests/sensitive-scan-team.test.mjs\n        run: node --test tests/sensitive-scan.test.mjs')],
   ['suite echoed', workflow.replace('run: node --test tests/sensitive-scan.test.mjs', 'run: echo node --test tests/sensitive-scan.test.mjs')],

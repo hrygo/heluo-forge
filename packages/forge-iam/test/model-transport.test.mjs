@@ -45,9 +45,9 @@ async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}
         res.writeHead(mode === 'http-error' ? 503 : 429, { 'Retry-After': '2', 'X-Test-Private': 'sensitive-test-header' });
         return res.end('sensitive-test-response');
       }
-      if (mode === 'unauthorized') {
-        res.writeHead(401);
-        return res.end();
+      if (mode === 'unauthorized' || mode === 'invalid-iam-token') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(mode === 'invalid-iam-token' ? JSON.stringify({ error: { code: 'invalid_iam_token' } }) : undefined);
       }
       if (mode === 'redirect' && req.url !== '/other') {
         res.writeHead(307, { Location: '/other' });
@@ -89,7 +89,11 @@ async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}
         if (beforeFetch) await beforeFetch();
         const response = await (options.fetch ?? fetch)(`${model.baseUrl}/chat/completions`, init);
         responseStatus = response.status;
-        if (!response.ok) { yield { type: 'usage' }; yield failure('SERVER'); return; }
+        if (!response.ok) {
+          yield { type: 'usage' };
+          yield failure(mode === 'invalid-iam-token' ? 'AUTH' : 'SERVER');
+          return;
+        }
         yield { type: 'text-delta', text: await response.text() };
         if (afterFirstDelta) {
           afterFirstDelta();
@@ -127,10 +131,12 @@ async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}
       async resolveGatewayConnection() { reads++; return { baseURL, key: 'sensitive-test-key', subject: view.principal }; },
       async getAccessToken() { return accessToken; },
       captureModelSession() {
+        if (mode === 'missing-session') return null;
         const captured = login;
         const assertCurrent = () => {
           if (login !== captured) throw Object.assign(new Error('Session changed'), { code: 'IAM_NOT_SIGNED_IN' });
         };
+        if (mode === 'missing-dispatch-access') return { assertCurrent };
         return { assertCurrent, withDispatchAccessToken(dispatch) { assertCurrent(); return dispatch(accessToken); } };
       },
     },
@@ -145,14 +151,16 @@ async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}
   await runtime.ready;
   const readsBeforeCall = reads;
   const call = { ...request, signal: cancel.signal, sessionId: 'sensitive-test-session' };
-  const prepared = await adapter.prepareCall(route.provider, route.model, call.signal);
-  const chunks = await Array.fromAsync(guard(call, next => prepared.stream(next)));
+  const stream = mode === 'missing-session'
+    ? adapter.stream
+    : (await adapter.prepareCall(route.provider, route.model, call.signal)).stream;
+  const chunks = await Array.fromAsync(guard(call, stream));
   return { chunks, attempts, posts, received, sdkToken, responseStatus, credentialReads: reads - readsBeforeCall, log, runtime };
 }
 
 test('uses the rotated IAM token when it changes after the SDK creates the request headers', async t => {
   const result = await fixture(t, 'rotate-before-fetch');
-  assert.equal(result.sdkToken, 'sensitive-test-token');
+  assert.equal(result.sdkToken, null);
   assert.deepEqual(result.received, [
     { method: 'POST', url: '/v1/chat/completions', iamToken: 'sensitive-test-rotated-token' },
   ]);
@@ -216,7 +224,7 @@ test('an accepted stream uses the dispatch grant deadline after another Host rot
       assert.equal(rotated.accessExpiresAt, new Date(now + 345_000).toISOString());
       assert.equal(oidc.counts.token, 1);
       assert.equal(oidc.counts.refresh, 1);
-      assert.equal(result.sdkToken, originalToken);
+      assert.equal(result.sdkToken, null);
       assert.notEqual(rotated.accessToken, originalToken);
       assert.deepEqual(result.received, [
         { method: 'POST', url: '/v1/chat/completions', iamToken: rotated.accessToken },
@@ -240,9 +248,29 @@ test('an accepted stream uses the dispatch grant deadline after another Host rot
 
 test('sends no POST when the same principal replaces the login after the SDK creates the request headers', async t => {
   const result = await fixture(t, 'replace-before-fetch');
-  assert.equal(result.sdkToken, 'sensitive-test-token');
+  assert.equal(result.sdkToken, null);
   assert.equal(result.posts, 0);
   assert.equal(result.chunks.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+});
+
+test('native calls with session capture require a session and its dispatch context', async t => {
+  for (const mode of ['missing-session', 'missing-dispatch-access']) {
+    await t.test(mode, async t => {
+      const result = await fixture(t, mode);
+      assert.equal(result.posts, 0);
+      assert.equal(result.chunks.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+    });
+  }
+});
+
+test('a gateway rejection of the IAM token requires login and sends exactly one model request', async t => {
+  const result = await fixture(t, 'invalid-iam-token');
+  assert.equal(result.responseStatus, 401);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.posts, 1);
+  assert.equal(result.chunks.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED');
+  assert.deepEqual(JSON.parse(readFileSync(result.log, 'utf8')).transport,
+    { phase: 'response', status: 401, output: false, retrying: false });
 });
 
 test('retries once only after a verified refusal to connect, with fresh credential checks', async t => {
@@ -317,18 +345,18 @@ test('cannot prove a pre-send failure on a caller-supplied transport or a differ
   const cause = fetchError(socketError('ECONNREFUSED', 'connect'));
   const rejectFetch = async () => { throw cause; };
   t.mock.method(globalThis, 'fetch', rejectFetch);
-  for (const [input, init, options] of [
-    [endpoint, { method: 'POST' }, { fetch: rejectFetch }],
-    [endpoint, { method: 'POST', dispatcher: {} }, {}],
-    [new Request(endpoint, { method: 'POST' }), {}, {}],
-    [`${baseURL}/other`, { method: 'POST' }, {}],
+  for (const [input, init, options, expected] of [
+    [endpoint, { method: 'POST' }, { fetch: rejectFetch }, TypeError],
+    [endpoint, { method: 'POST', dispatcher: {} }, {}, TypeError],
+    [new Request(endpoint, { method: 'POST' }), {}, {}, TypeError],
+    [`${baseURL}/other`, { method: 'POST' }, {}, { code: 'IAM_MODEL_CONTEXT_CHANGED' }],
   ]) {
     const attempt = { calls: 0, check() {} };
     async function* dispatch() {
-      await modelFetchOptions(options, baseURL).fetch(input, init);
+      await modelFetchOptions(options, baseURL, () => 'synthetic-iam-token').fetch(input, init);
     }
-    await assert.rejects(trackModelAttempt(dispatch, attempt).next(), TypeError);
-    assert.equal(attempt.calls, 1);
+    await assert.rejects(trackModelAttempt(dispatch, attempt).next(), expected);
+    assert.equal(attempt.calls, expected === TypeError ? 1 : 0);
     assert.equal(modelPreconnectFault(attempt), undefined);
   }
 });

@@ -23,6 +23,7 @@ export const CONFIG_FIELDS = [
   'tokenEndpoint',
   'jwksUri',
   'revocationEndpoint',
+  'revocationMode',
   'endSessionEndpoint',
   'userInfoEndpoint',
   'clientId',
@@ -71,6 +72,7 @@ const DEFAULTS = {
   tokenEndpoint: '',
   jwksUri: '',
   revocationEndpoint: '',
+  revocationMode: 'access_token_query',
   endSessionEndpoint: '',
   userInfoEndpoint: '',
   clientId: '',
@@ -257,6 +259,14 @@ export function validateConfig(input) {
     value[key] = raw;
   }
 
+  if (source.revocationMode !== undefined && source.revocationMode !== null) {
+    if (!['access_token_query', 'rfc7009'].includes(source.revocationMode)) {
+      issues.push(issue('revocationMode', 'revocationMode must be access_token_query or rfc7009'));
+    } else {
+      value.revocationMode = source.revocationMode;
+    }
+  }
+
   if (source.logoutMode !== undefined && source.logoutMode !== null) {
     if (source.logoutMode !== 'local' && source.logoutMode !== 'rp') {
       issues.push(issue('logoutMode', 'logoutMode must be local or rp'));
@@ -273,8 +283,8 @@ export function validateConfig(input) {
     }
   }
 
-  if (value.logoutMode === 'rp' && !value.endSessionEndpoint) {
-    issues.push(issue('endSessionEndpoint', 'RP-initiated logout requires endSessionEndpoint'));
+  if (value.logoutMode === 'rp' && !value.endSessionEndpoint && !value.discoveryUrl) {
+    issues.push(issue('endSessionEndpoint', 'RP-initiated logout requires endSessionEndpoint or discoveryUrl'));
   }
 
   const managed = validateManagedModels(source.managedModels);

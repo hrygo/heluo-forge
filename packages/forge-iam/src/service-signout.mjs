@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { BRIDGE_REF } from './bridge.mjs';
-import { revokeAccessToken } from './oidc.mjs';
+import { assertClientAuthCurrent } from './client-auth.mjs';
+import { parseHttpUrl } from './http-url.mjs';
+import { revokeSessionToken } from './oidc.mjs';
 import { grantIdentity, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
 
 const BRIDGE_RECORD = 'heluo-iam/bridge-capability';
@@ -19,19 +21,35 @@ const BRIDGE_SCOPE = Object.freeze({ recordKey: BRIDGE_RECORD, ref: BRIDGE_REF }
  */
 export function createSignOut(env) {
   const {
-    config, ctx, provider, grants, gateway, token, now, fetchImpl, getBridgeAtomicStore, verifyBridgeAtomicStore,
+    config, ctx, provider, grants, gateway, token, fetchImpl, getBridgeAtomicStore, verifyBridgeAtomicStore,
     bumpAuthEpoch, clearObservation, clearAttempt, invalidateConsumption,
   } = env;
 
   let signOutPromise = null;
   let signingOut = false;
+  // Retain a token-free target across unconfirmed attempts even after the view
+  // stops showing the adopted grant. A new local adoption can replace it.
+  let logoutTarget = null;
   let bridgePromise = null;
   let bridgeProvider = null;
+
+  function rememberPendingSignOut(store, identity) {
+    const adopted = ctx.lastGrant;
+    // Preserve the original login before the observer drops its token snapshot.
+    // A cold observer can use the identity from that same validated pending read.
+    if (adopted) {
+      store = grants.ownerOf(adopted);
+      identity = grantIdentity(adopted);
+    } else if (logoutTarget) return;
+    if (identity) logoutTarget = { store, identity: structuredClone(identity), pendingOnly: true };
+  }
 
   async function signOut() {
     invalidateConsumption();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     if (signOutPromise) return signOutPromise;
+    const adopted = ctx.lastGrant;
+    if (adopted) logoutTarget = { store: grants.ownerOf(adopted), identity: structuredClone(grantIdentity(adopted)) };
     const ownedRefresh = token.takeRefreshForSignOut();
     signingOut = true;
     bumpAuthEpoch();
@@ -65,6 +83,19 @@ export function createSignOut(env) {
         ...(remote?.code ? { revocationError: remote.code } : {}) };
     };
     let expectedIssuer = ctx.knownIssuer();
+    const targetStore = provider.ensure();
+    const targetCredentials = provider.storeCredentials;
+    const storeBinding = provider.atomicBinding(targetStore, targetCredentials);
+    checkDisposed();
+    if (!storeBinding) return unknownSignOut();
+    const assertCurrent = () => {
+      checkDisposed();
+      if (provider.atomicBinding(targetStore, targetCredentials) !== storeBinding) {
+        throw new IamError('IAM_ATOMIC_STORE_UNVERIFIED', safeMessage('IAM_ATOMIC_STORE_UNVERIFIED'));
+      }
+      checkDisposed();
+      return true;
+    };
     const refresh = token.inFlight;
     if (refresh) {
       let timer;
@@ -73,51 +104,28 @@ export function createSignOut(env) {
         new Promise(resolve => { timer = setTimeout(() => resolve(false), REFRESH_TIMEOUT_MS); }),
       ]).finally(() => clearTimeout(timer));
       if (!settled) return unknownSignOut();
+      try { assertCurrent(); } catch { return unknownSignOut(); }
     }
+    const snapshot = await targetStore.readSignOutSnapshot().catch(() => ({ ok: false }));
     checkDisposed();
-    let grant = null;
-    const targetStore = provider.ensure();
-    const targetCredentials = provider.storeCredentials;
-    checkDisposed();
-    try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-    if (targetStore) {
-      const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
-      if (!record.ok) return unknownSignOut();
-      try {
-        // Do not let a provider mutate nested fields of the captured snapshot.
-        grant = structuredClone(record.grant);
-        // Explicit logout may establish issuer context through discovery below;
-        // its initial client/resource check must not trust the grant's issuer.
-        grants.assertGrantBinding(grant);
-        if (config.issuer) grants.assertGrantContext(grant, expectedIssuer);
-      } catch { return unknownSignOut(); }
-    }
-    checkDisposed();
-    try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-    checkDisposed();
+    if (!snapshot.ok) return unknownSignOut();
+    let { record, grant } = snapshot;
+    try {
+      assertCurrent();
+      if (logoutTarget && (targetStore !== logoutTarget.store
+        || (grant && (!isDeepStrictEqual(grantIdentity(grant), logoutTarget.identity)
+          || (logoutTarget.pendingOnly && !grant.signOutOperation))))) return unknownSignOut();
+      // Discovery can establish the issuer below. Client and resource checks
+      // must not use the stored issuer as evidence.
+      grants.assertGrantBinding(grant);
+      if (expectedIssuer) grants.assertGrantContext(grant, expectedIssuer);
+    } catch { return unknownSignOut(); }
     const handoff = ownedRefresh?.(targetStore, targetCredentials);
     // Waiting for our flight must not retarget logout to a concurrently
     // installed login, even when the subject is identical.
     if (ownedRefresh && (!handoff || !(isDeepStrictEqual(grant, handoff.pending)
       || isDeepStrictEqual(grant, handoff.complete)))) return unknownSignOut();
-    ctx.lastGrant = null;
-    let revocation = 'skipped';
-    let revocationError = null;
-    let meta = grants.metadataCache;
-    let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
-    if (grant && config.discoveryUrl && (!revocationEndpoint || !config.issuer)) {
-      try {
-        meta = await grants.metadata();
-        revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
-      } catch {
-        // An explicit endpoint cannot authenticate an otherwise unbound issuer.
-        if (!config.issuer) return unknownSignOut();
-        revocationEndpoint = undefined;
-      }
-    }
-    expectedIssuer = meta?.issuer || expectedIssuer;
-    try { grants.assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
-    checkDisposed();
+    const confirmedRefresh = handoff?.complete ? handoff : undefined;
     // A locally authenticated session must not clear a grant that another
     // process replaced; the check needs no client secret.
     if (ctx.sessionAuthentication && grant
@@ -125,41 +133,112 @@ export function createSignOut(env) {
         || !isDeepStrictEqual(ctx.sessionAuthentication.identity, grantIdentity(grant)))) {
       return unknownSignOut();
     }
-    // D1 (2026-11-04): revoke the local access token with a GET that carries
-    // the token itself and no client authentication. A missing client secret
-    // must not stop sign-out, and the refresh token cannot be revoked here.
+    // Remember the local snapshot so a failed lookup cannot retarget a retry.
+    // This identity comparison does not establish issuer trust for any effect.
+    if (grant && !logoutTarget) {
+      logoutTarget = { store: targetStore, identity: structuredClone(grantIdentity(grant)) };
+    }
+    ctx.lastGrant = null;
+    let revocation = 'skipped';
+    let revocationError = null;
+    const revocationMode = config.revocationMode ?? 'access_token_query';
+    let endpoint = parseHttpUrl(config.revocationEndpoint);
+    if (config.revocationEndpoint && !endpoint) return unknownSignOut();
+    const localContext = { mode: revocationMode, endpoint: endpoint?.href ?? null, resource: config.gatewayResource || null };
+    let discoveryIntent;
+    let revocationContext = localContext;
+    if (grant && config.discoveryUrl && (!endpoint || !config.issuer)) {
+      const url = parseHttpUrl(config.discoveryUrl);
+      if (!url) return unknownSignOut();
+      const source = { url: url.href, issuer: config.issuer || null, configuredEndpoint: localContext.endpoint };
+      discoveryIntent = { ...localContext, discovery: { ...source, stage: 'intent' } };
+      // Optional discovery may fail without affecting an otherwise usable
+      // grant. Fence it first when its issuer is already independently known.
+      // A cold discovery-only Host must establish the issuer before any write.
+      if (expectedIssuer && !grant.signOutOperation) {
+        const fenced = await targetStore.fenceSignOut(grant, confirmedRefresh,
+          { expectedRecord: record, revocationContext: discoveryIntent, guard: assertCurrent });
+        checkDisposed();
+        if (!fenced.ok || !fenced.pending) return unknownSignOut();
+        record = fenced.pending;
+        grant = record.payload;
+      }
+      try {
+        assertCurrent();
+        const meta = await grants.metadata({ optional: 'revocationEndpoint' });
+        expectedIssuer = meta.issuer;
+        endpoint = parseHttpUrl(meta.revocationEndpoint);
+        if (meta.revocationEndpoint && !endpoint) return unknownSignOut();
+        revocationContext = { ...localContext, endpoint: endpoint?.href ?? null, discovery: { ...source, stage: 'pinned' } };
+      } catch {
+        // Discovery failure cannot establish an issuer or endpoint absence.
+        return unknownSignOut();
+      }
+    }
+    try { grants.assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
+    checkDisposed();
+    const revocable = Boolean(grant && endpoint && (revocationMode === 'rfc7009' || (handoff?.complete ?? grant).accessToken));
+    const operation = grant?.signOutOperation;
+    // Legacy markers predate protocol/endpoint pinning. Their only supported
+    // retry uses a configured, same-origin D1 endpoint for the verified issuer.
+    const allowLegacyRecovery = Boolean(operation && revocable && revocationMode === 'access_token_query'
+      && endpoint.href === localContext.endpoint
+      && endpoint.origin === parseHttpUrl(expectedIssuer)?.origin
+      && (grant.resource || '') === (config.gatewayResource || ''));
+    if (operation && !targetStore.canResumeSignOut(grant, revocationContext, allowLegacyRecovery)
+      && !targetStore.canResumeSignOut(grant, discoveryIntent)) {
+      return unknownSignOut();
+    }
+
+    let authentication;
+    const guard = () => {
+      if (authentication) {
+        assertCurrent();
+        assertClientAuthCurrent(authentication);
+      }
+      return assertCurrent();
+    };
+    try {
+      assertCurrent();
+      if (revocable && revocationMode === 'rfc7009' && config.authMode === 'confidential') {
+        // Client authentication can also be unavailable. Pin before reading
+        // it, and verify that exact record again after the lock-free lookup.
+        const pinned = await targetStore.fenceSignOut(grant, confirmedRefresh,
+          { expectedRecord: record, revocationContext, discoveryIntent, guard: assertCurrent });
+        if (!pinned.ok || !pinned.pending) return unknownSignOut();
+        record = pinned.pending;
+        grant = record.payload;
+        authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant, guard: assertCurrent });
+      }
+      guard();
+    } catch { return unknownSignOut(); }
     const revokeCurrent = async (current) => {
-      checkDisposed();
-      provider.assertAtomic(targetStore, targetCredentials);
-      checkDisposed();
+      guard();
       grants.assertGrantContext(current, expectedIssuer);
       grant = current;
-      if (revocationEndpoint && current?.accessToken) {
-        const outcome = await revokeAccessToken({
-          revocationEndpoint,
+      if (revocable) {
+        const outcome = await revokeSessionToken({
+          revocationMode,
+          revocationEndpoint: endpoint.href,
           accessToken: current.accessToken,
+          refreshToken: current.refreshToken,
+          clientId: config.clientId,
+          clientAuthentication: authentication,
           fetchImpl,
           timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
         });
         revocation = outcome.state;
         if (outcome.code) revocationError = outcome.code;
         // A failed or unconfirmed remote operation cannot authorize the local
-        // completion; the durable pending grant prevents replay after restart.
+        // completion; the pending grant stays fenced for explicit retry.
         if (outcome.state !== 'ok') throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', 'revocation was not confirmed');
       }
+      guard();
     };
-    try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+    const cleared = await targetStore.signOutSnapshot(grant, revokeCurrent, confirmedRefresh,
+      { expectedRecord: record, revocationContext, discoveryIntent, allowLegacyRecovery, guard });
     checkDisposed();
-    const cleared = targetStore
-      ? await targetStore.signOutSnapshot(grant, async (current) => {
-        await revokeCurrent(current);
-        checkDisposed();
-        provider.assertAtomic(targetStore, targetCredentials);
-        checkDisposed();
-      }, handoff?.complete ? handoff : undefined)
-      : { ok: false };
-    checkDisposed();
-    try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+    try { assertCurrent(); } catch { return unknownSignOut(); }
     if (!cleared.ok || !['cleared', 'absent'].includes(cleared.decision)) {
       return unknownSignOut(revocation === 'failed' || revocation === 'unknown'
         ? { state: revocation, code: revocationError } : undefined);
@@ -169,27 +248,33 @@ export function createSignOut(env) {
     // claiming it matches the (now absent) session.
     await gateway.load({ force: true });
     checkDisposed();
-    try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+    try { assertCurrent(); } catch { return unknownSignOut(); }
     checkDisposed();
     let logoutUrl = null;
     if (config.logoutMode === 'rp' && grant?.idToken) {
       try {
-        const meta = grants.metadataCache ?? await grants.metadata();
-        const endSessionEndpoint = meta.endSessionEndpoint ?? config.endSessionEndpoint;
+        const logoutMetadata = config.endSessionEndpoint ? null : await grants.metadata({ optional: 'endSessionEndpoint' });
+        grants.assertGrantContext(grant, logoutMetadata?.issuer ?? expectedIssuer);
+        const endSessionEndpoint = config.endSessionEndpoint || logoutMetadata?.endSessionEndpoint;
         if (endSessionEndpoint) {
-          const url = new URL(endSessionEndpoint);
-          url.searchParams.set('client_id', config.clientId);
-          if (grant?.idToken) url.searchParams.set('id_token_hint', grant.idToken);
-          if (config.postLogoutRedirectUri) url.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
-          logoutUrl = url.href;
+          // Optional Discovery can outlive a new login in another Host.
+          const current = await targetStore.read();
+          if (current.ok && current.grant === null) {
+            const url = new URL(endSessionEndpoint);
+            url.searchParams.set('client_id', config.clientId);
+            url.searchParams.set('id_token_hint', grant.idToken);
+            if (config.postLogoutRedirectUri) url.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
+            logoutUrl = url.href;
+          }
         }
       } catch {
         logoutUrl = null;
       }
     }
     checkDisposed();
-    try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+    try { assertCurrent(); } catch { return unknownSignOut(); }
     checkDisposed();
+    logoutTarget = null;
     ctx.sessionAuthentication = null;
     grants.clearProfile();
     // Three states stay distinct: confirmed, rejected, and unconfirmed.
@@ -290,7 +375,7 @@ export function createSignOut(env) {
   }
   return {
     signOut,
-    signOutOnce,
+    rememberPendingSignOut,
     bridgeCapability,
     get inFlight() { return signOutPromise; },
     get signingOut() { return signingOut; },

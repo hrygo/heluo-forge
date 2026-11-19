@@ -274,12 +274,13 @@ test('RP-initiated logout builds the documented URL when the provider advertises
   assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'sign-out must replace the grant with a tombstone');
 });
 
-test('unconfirmed revocation retains pending and its safe diagnostic without replay', async (t) => {
+test('unconfirmed revocation stays pending and only explicit sign-out can retry it', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
   const { impl, calls } = scriptedFetch({ '/revoke': { status: 503, body: { error: 'temporarily_unavailable' } } });
   const service = createIamService(configFor(mock, { logoutMode: 'local' }), { credentials, fetch: impl });
+  t.after(() => service.dispose());
 
   const { location } = await authorize(service);
   await service.handleCallback(location);
@@ -292,8 +293,16 @@ test('unconfirmed revocation retains pending and its safe diagnostic without rep
   const pending = structuredClone(grantRecord(credentials));
   assert.equal(pending.signOutOperation.state, 'pending');
   await assert.rejects(service.resolveToken());
-  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-  assert.equal(calls.filter((url) => url.includes('/revoke')).length, 1);
+  await service.syncFromStore();
+  const revocations = () => calls.filter((value) => new URL(value).pathname === '/revoke');
+  assert.equal(revocations().length, 1);
+  const retry = await service.signOut();
+  assert.equal(retry.revocation, 'unknown');
+  assert.equal(retry.revocationError, 'IAM_REVOKE_HTTP_503');
+  assert.equal(retry.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  const requests = revocations();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0] === requests[1], true);
   assert.deepEqual(grantRecord(credentials), pending);
 });
 

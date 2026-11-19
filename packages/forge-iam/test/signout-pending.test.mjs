@@ -97,6 +97,7 @@ async function startLocalRefresh(t, tokenResponse) {
   const entered = deferred();
   const release = deferred();
   const requests = [];
+  const renewalEvents = [];
   const fetch = async (url, init) => {
     const target = new URL(url);
     if (target.pathname === '/jwks') return Response.json({ keys: [] });
@@ -112,7 +113,9 @@ async function startLocalRefresh(t, tokenResponse) {
     }
     throw new Error('unexpected mock request');
   };
-  const service = createIamService(config, { credentials, fetch });
+  const service = createIamService(config, { credentials, fetch,
+    logRenewal: (event, fields) => renewalEvents.push({ event, ...fields }),
+  });
   t.after(() => { release.resolve(); return service.dispose(); });
   const refresh = service.getAccessToken();
   await Promise.race([
@@ -121,18 +124,18 @@ async function startLocalRefresh(t, tokenResponse) {
   ]);
   const pending = await credentials.readRecord(GRANT_KEY);
   assert.equal(pending.payload.refreshOperation.state, 'pending');
-  return { credentials, grant, pending, release, requests, service, refresh };
+  return { credentials, grant, pending, release, requests, service, refresh, renewalEvents };
 }
 
 test('same-Host sign-out revokes the confirmed refresh without publishing its token', { timeout: 5000 }, async (t) => {
-  const { credentials, grant, release, requests, service, refresh } = await startLocalRefresh(t, () =>
+  const { credentials, grant, release, requests, service, refresh, renewalEvents } = await startLocalRefresh(t, () =>
     Response.json({ access_token: 'synthetic-new-access', refresh_token: 'synthetic-new-refresh', token_type: 'Bearer', expires_in: 1800 }));
   const controller = new AbortController();
   t.after(() => controller.abort());
   const views = service.watch(controller.signal);
   await views.next();
   const signingOut = service.signOut();
-  const blockedGetter = assert.rejects(refresh);
+  const blockedGetter = assert.rejects(refresh, { code: 'IAM_DISPOSED' });
   release.resolve();
   const [result] = await Promise.all([signingOut, blockedGetter]);
 
@@ -155,6 +158,10 @@ test('same-Host sign-out revokes the confirmed refresh without publishing its to
     kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' },
   });
   assert.equal(requests.length, 2);
+  const handoffs = renewalEvents.filter(({ event }) => event === 'refresh-handed-off');
+  assert.equal(handoffs.length, 1);
+  assert.equal(renewalEvents.some(({ event, renewalId }) => event === 'refresh-failed' && renewalId === handoffs[0].renewalId), false);
+  assert.doesNotMatch(JSON.stringify(renewalEvents), /synthetic-new-(?:access|refresh)/);
 });
 
 test('same-Host sign-out cannot consume the result or revoke a replacement login during refresh', { timeout: 5000 }, async (t) => {

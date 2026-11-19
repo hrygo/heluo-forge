@@ -1,6 +1,10 @@
+import { isDeepStrictEqual } from 'node:util';
+import { assertClientAuthCurrent } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
-import { isAccessExpired, isRefreshUsable } from './record.mjs';
+import { isAccessExpired } from './record.mjs';
+import { grantIdentity, safeMessage } from './service-helpers.mjs';
+import { StoreError } from './store.mjs';
 
 /**
  * Account-scoped model-selection storage and single-flight Host observation.
@@ -11,7 +15,7 @@ import { isAccessExpired, isRefreshUsable } from './record.mjs';
  * discard a grant or write the Host default model.
  */
 export function createModelSelection(env) {
-  const { config, options, ctx, provider, grants, now, getAuthEpoch, isSigningOut, getLoadGateway, resolveToken } = env;
+  const { config, options, ctx, provider, grants, now, getAuthEpoch, isSigningOut, getLoadGateway } = env;
 
   let flight = null;
   let queued = false;
@@ -24,8 +28,7 @@ export function createModelSelection(env) {
     const record = await target.read().catch(() => null);
     if (!record?.ok || !record.grant?.subject) return null;
     try { grants.assertGrantContext(record.grant, ctx.knownIssuer()); } catch { return null; }
-    const expires = Date.parse(record.grant.accessExpiresAt);
-    return { subject: record.grant.subject, credentials, expired: !Number.isFinite(expires) || expires <= now() };
+    return { subject: record.grant.subject, credentials };
   }
 
   function services() {
@@ -123,6 +126,10 @@ export function createModelSelection(env) {
     if (!target || provider.storeCredentials !== current.credentials) {
       return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     }
+    return readStoredSelection(target, current.subject);
+  }
+
+  async function readStoredSelection(target, subject) {
     const record = await target.read();
     if (!record.ok) {
       const code = record.error?.code;
@@ -132,17 +139,17 @@ export function createModelSelection(env) {
       // and be fine, so answering "nothing stored" would let the next save
       // replace choices this session never saw.
       if (code === 'IAM_MODEL_SELECTION_FOREIGN' || code === 'IAM_MODEL_SELECTION_INVALID') {
-        return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
+        return { subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
       }
       throw new IamError('IAM_MODEL_SELECTION_UNREADABLE', '模型设置暂时无法读取，请稍后重试。');
     }
-    if (!record.selection || record.selection.subject !== current.subject) {
+    if (!record.selection || record.selection.subject !== subject) {
       // Nothing stored for this subject (or the record belongs to someone else):
       // the caller decides the first-run default.
-      return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
+      return { subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     }
     return {
-      subject: current.subject,
+      subject,
       saved: true,
       models: record.selection.models,
       defaultModelId: record.selection.defaultModelId,
@@ -151,26 +158,103 @@ export function createModelSelection(env) {
     };
   }
 
-  /** Persist the enabled set. Never a token channel: only model ids and overrides. */
-  async function saveSelection({ models, defaultModelId, manual } = {}) {
+  function captureSettings(signedOutCode = 'IAM_LOGIN_REQUIRED') {
     ctx.assertExclusive();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-    let current = await owner();
-    if (current?.expired && ctx.lastGrant && isRefreshUsable(ctx.lastGrant, now())) {
-      try {
-        await resolveToken();
-        current = await owner();
-      } catch {
-        // keep expired status if refresh fails
+    const grant = ctx.lastGrant;
+    if (!grant || isSigningOut()) throw new IamError(signedOutCode, '企业账号状态已变化，请重新登录。');
+    const epoch = getAuthEpoch();
+    const target = grants.ownerOf(grant);
+    const credentials = provider.storeCredentials;
+    const selectionStore = provider.modelSelectionStore;
+    const identity = grantIdentity(grant);
+    const atomicBinding = provider.atomicBinding(target, credentials);
+    const changed = () => new IamError('IAM_MODEL_CONTEXT_CHANGED', '企业账号状态已变化，请重新登录。');
+    const unavailable = () => new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法读取企业会话。');
+    const assertBinding = () => {
+      const active = () => !ctx.disposed && !isSigningOut() && getAuthEpoch() === epoch
+        && ['ready', 'expired'].includes(ctx.state) && ctx.lastGrant
+        && isDeepStrictEqual(grantIdentity(ctx.lastGrant), identity)
+        && grants.ownerOf(ctx.lastGrant) === target;
+      ctx.assertExclusive();
+      if (!active()) throw changed();
+      if (!target || provider.ensure() !== target || provider.storeCredentials !== credentials
+        || provider.modelSelectionStore !== selectionStore
+        || provider.atomicBinding(target, credentials) !== atomicBinding) throw unavailable();
+      if (!active()) throw changed();
+      return true;
+    };
+
+    let authentication;
+    function assertCurrent() {
+      assertBinding();
+      assertClientAuthCurrent(authentication);
+    }
+
+    async function readCurrent(allowExpired = false) {
+      assertCurrent();
+      let record;
+      try { record = await target.read(); }
+      catch (cause) {
+        assertCurrent();
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'), { cause: cause?.code });
       }
+      assertCurrent();
+      const latest = record.grant;
+      if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) throw changed();
+      grants.assertGrantContext(latest, ctx.knownIssuer());
+      if (latest.refreshOperation?.state === 'pending') {
+        throw new IamError('IAM_RENEWAL_UNCONFIRMED', safeMessage('IAM_RENEWAL_UNCONFIRMED'));
+      }
+      if (!allowExpired && isAccessExpired(latest, now())) {
+        throw new IamError(signedOutCode, '企业账号已过期，请重新登录。');
+      }
+      return latest;
     }
-    if (!current || current.expired) throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
-    const target = provider.ensure() ? provider.modelSelectionStore : null;
-    if (!target || provider.storeCredentials !== current.credentials) {
-      throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法写入模型设置。');
+
+    async function verify({ allowExpired = false } = {}) {
+      const latest = await readCurrent(allowExpired);
+      if (config.authMode === 'confidential' && !authentication) {
+        authentication = await grants.prepareAuthentication(ctx.knownIssuer(), target, credentials, {
+          grant: latest, guard: assertBinding,
+        });
+      }
+      assertCurrent();
     }
-    const saved = await target.save({ subject: current.subject, models, defaultModelId, manual });
-    return saved.selection;
+
+    return Object.freeze({
+      assertCurrent,
+      verify,
+      async readSelection() {
+        assertCurrent();
+        const saved = await readStoredSelection(selectionStore, identity.subject);
+        await verify();
+        return saved;
+      },
+      async saveSelection({ models, defaultModelId, manual } = {}) {
+        assertCurrent();
+        if (!atomicBinding) throw new IamError('IAM_ATOMIC_STORE_UNVERIFIED', safeMessage('IAM_ATOMIC_STORE_UNVERIFIED'));
+        if (config.authMode === 'confidential' && !authentication) await verify();
+        // The verified backend serializes all writers to this database. Read
+        // the original session after acquiring that lock, without nesting a
+        // write or holding the lock over client-auth material lookup.
+        const guard = async () => {
+          try {
+            await readCurrent();
+          } catch (cause) {
+            if (cause instanceof IamError) throw new StoreError(cause.code, cause.message);
+            throw cause;
+          }
+        };
+        try {
+          const saved = await selectionStore.save({ subject: identity.subject, models, defaultModelId, manual }, { guard });
+          return saved.selection;
+        } catch (cause) {
+          if (cause instanceof StoreError) throw new IamError(cause.code, cause.message);
+          throw cause;
+        }
+      },
+    });
   }
 
   return {
@@ -181,7 +265,7 @@ export function createModelSelection(env) {
     owner,
     services,
     readSelection,
-    saveSelection,
+    captureSettings,
     schedule,
     reconcile,
   };

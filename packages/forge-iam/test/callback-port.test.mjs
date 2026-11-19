@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer as createNetServer, connect as netConnect } from 'node:net';
 import { request as httpRequest } from 'node:http';
+import { EventEmitter } from 'node:events';
 import { apply } from '../src/index.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { createIamService } from './support/trusted-service.mjs';
@@ -12,6 +13,9 @@ import {
   createCallbackManager, createCallbackRequestHandler, isLoopbackAddress, loopbackOrigin,
   rejectNonLoopbackPeer, startCallbackListener,
 } from '../src/callback-listener.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -56,27 +60,30 @@ function send(port, { method = 'GET', path = '/', headers = {} } = {}) {
 const refused = (error) => ['ECONNREFUSED', 'ECONNRESET', 'EPIPE'].includes(error.code);
 
 /** A service whose callback listener is owned by a manager, as apply() wires it. */
-function loopbackService(config, { managerOptions = {} } = {}) {
+function loopbackService(config, { managerOptions = {}, fetchImpl } = {}) {
   let manager;
   const service = createIamService(config, {
     credentials: new MemoryCredentials(),
+    fetch: fetchImpl,
     // Deliberately a different origin: the loopback listener must win.
     getOrigin: () => 'http://127.0.0.1:9',
-    openCallback: () => manager.ensure(),
-    closeCallback: () => manager.release(),
+    openCallback: (owner) => manager.ensure(owner),
+    closeCallback: (owner, responseDone) => manager.release(owner, responseDone),
     getCallbackOrigin: () => manager.origin,
+  });
+  const handler = createIamRoutes(service, {
+    callbackPath: config.redirectPath,
+    getOrigin: () => manager.origin,
   });
   manager = createCallbackManager({
     port: config.callbackPort,
     address: config.callbackAddress,
     path: config.redirectPath,
-    handler: createIamRoutes(service, {
-      callbackPath: config.redirectPath,
-      getOrigin: () => manager.origin,
-    }),
+    handler,
+    responseTimeoutMs: config.httpTimeoutMs,
     ...managerOptions,
   });
-  return { service, manager };
+  return { service, manager, handler };
 }
 
 test('callbackPort: 0 binds an OS-assigned loopback port for the attempt', async (t) => {
@@ -492,10 +499,10 @@ test('callback listener: closing before the bind settles cannot hang a waiter', 
 });
 
 test('callback listener: loopback peer detection', () => {
-  for (const address of ['127.0.0.1', '127.8.9.10', '::1', '::ffff:127.0.0.1']) {
+  for (const address of ['127.0.0.1', '127.8.9.10', '::1', '::ffff:127.0.0.1', '::FFFF:127.255.0.7', '::ffff:7f0a:1', '0:0:0:0:0:0:0:1']) {
     assert.equal(isLoopbackAddress(address), true, address);
   }
-  for (const address of ['203.0.113.8', '::ffff:203.0.113.8', '198.51.100.2', '', undefined]) {
+  for (const address of ['203.0.113.8', '::ffff:203.0.113.8', '198.51.100.2', '127.256.9.10', '127.01.0.0', '::1%en0', '::ffff::ffff:127.0.0.1', '', undefined]) {
     assert.equal(isLoopbackAddress(address), false, String(address));
   }
 });
@@ -718,4 +725,187 @@ test('plugin: a loopback callback leaves the host web server with only the API',
   assert.equal(ctx.routes[0].path, '/api/forge-iam');
   await ctx.unload();
   assert.equal(ctx.routes.length, 0);
+});
+
+test('callback listener stays available after non-terminal responses', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const checked = validateConfig(configFor(mock, { callbackPort: 0 }));
+  const { service, manager } = loopbackService(checked.value);
+  t.after(() => manager.close());
+
+  const started = await service.startSignIn();
+  const origin = new URL(manager.origin);
+  const authorized = await fetch(started.authorizationUrl, { redirect: 'manual' });
+  const target = new URL(authorized.headers.get('location'));
+  const sendCallback = (path) => send(Number(origin.port), { path, headers: { host: origin.host } });
+  const incomplete = await sendCallback(target.pathname);
+  assert.equal(incomplete.status, 400);
+  assert.equal(manager.origin, origin.origin);
+  assert.equal(service.getView().state, 'authenticating');
+  const completed = await sendCallback(`${target.pathname}${target.search}`);
+  assert.equal(completed.status, 200);
+  await assert.rejects(() => sendCallback(target.pathname), refused);
+});
+
+test('an old listener release leaves its replacement bound', async (t) => {
+  const manager = createCallbackManager({ path: '/iam/callback', handler: (_req, res) => res.end('ok') });
+  t.after(() => manager.close());
+  const first = {};
+  const replacement = {};
+  await manager.ensure(first);
+  await manager.release(first);
+  const rebound = new URL(await manager.ensure(replacement));
+  await manager.release(first);
+  assert.equal(manager.origin, rebound.origin);
+  assert.equal((await send(Number(rebound.port), { path: '/iam/callback', headers: { host: rebound.host } })).status, 200);
+});
+
+test('an authorization denial sends the terminal response before releasing the listener', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const { value } = validateConfig(configFor(mock, { callbackPort: 0 }));
+  const { service, manager } = loopbackService(value);
+  t.after(() => manager.close());
+
+  const { authorizationUrl } = await service.startSignIn();
+  const authorization = new URL(authorizationUrl);
+  const target = new URL(authorization.searchParams.get('redirect_uri'));
+  target.searchParams.set('state', authorization.searchParams.get('state'));
+  target.searchParams.set('error', 'access_denied');
+  const sendCallback = () => send(Number(target.port), { path: target.pathname + target.search, headers: { host: target.host } });
+  const denied = await sendCallback();
+  assert.equal(denied.status, 400);
+  assert.match(denied.body, /登录失败/);
+  assert.equal(service.getView().state, 'error');
+  await assert.rejects(sendCallback, refused);
+});
+
+test('a late callback response cannot release a replacement sign-in listener', async (t) => {
+  const mock = await startMockOidc();
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(() => { release.resolve(); return mock.close(); });
+  const { value } = validateConfig(configFor(mock, { callbackPort: 0 }));
+  const { service, manager, handler } = loopbackService(value, {
+    async fetchImpl(url, init) {
+      const result = await fetch(url, init);
+      if (url === mock.endpoints.tokenEndpoint) {
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    },
+  });
+  t.after(() => manager.close());
+  const first = await service.startSignIn();
+  const authorized = await fetch(first.authorizationUrl, { redirect: 'manual' });
+  const target = new URL(authorized.headers.get('location'));
+  const response = Object.assign(new EventEmitter(), { setHeader() {}, end() {} });
+  const old = handler({
+    method: 'GET',
+    url: target.pathname + target.search,
+    headers: { host: target.host },
+  }, response);
+  await entered.promise;
+  await service.cancelSignIn();
+  const replacement = await service.startSignIn();
+  const replacementTarget = new URL(new URL(replacement.authorizationUrl).searchParams.get('redirect_uri'));
+  release.resolve();
+  await old;
+  response.emit('finish');
+  await Promise.resolve();
+
+  assert.equal(manager.origin, replacementTarget.origin);
+  assert.equal(service.getView().state, 'authenticating');
+  const secondAuthorization = await fetch(replacement.authorizationUrl, { redirect: 'manual' });
+  const accepted = new URL(secondAuthorization.headers.get('location'));
+  const completed = await send(Number(accepted.port), { path: accepted.pathname + accepted.search, headers: { host: accepted.host } });
+  assert.equal(completed.status, 200);
+});
+
+test('attempt timer expiry preserves a slow terminal callback response', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const mock = await startMockOidc();
+  const entered = Promise.withResolvers();
+  const finishExchange = Promise.withResolvers();
+  t.after(() => { finishExchange.resolve(); return mock.close(); });
+  const { value } = validateConfig(configFor(mock, { callbackPort: 0, attemptTimeoutSeconds: 1 }));
+  const { service, manager } = loopbackService(value, {
+    async fetchImpl(url, init) {
+      const response = await fetch(url, init);
+      if (url === mock.endpoints.tokenEndpoint) {
+        entered.resolve();
+        await finishExchange.promise;
+      }
+      return response;
+    },
+  });
+  t.after(() => manager.close());
+
+  const started = await service.startSignIn();
+  const authorized = await fetch(started.authorizationUrl, { redirect: 'manual' });
+  const target = new URL(authorized.headers.get('location'));
+  const sendCallback = () => send(Number(target.port), { path: target.pathname + target.search, headers: { host: target.host } });
+  const callback = sendCallback().catch((error) => error);
+  await entered.promise;
+  t.mock.timers.tick(1000);
+  assert.equal(service.getView().error, 'IAM_ATTEMPT_EXPIRED');
+  await new Promise(setImmediate);
+  t.mock.timers.tick(1100);
+  await new Promise(setImmediate);
+  finishExchange.resolve();
+
+  const reply = await callback;
+  assert.equal(reply.status, 410);
+  assert.match(reply.body, /登录失败/);
+  assert.equal((await service.getSession()).signedIn, false);
+  await assert.rejects(sendCallback, refused);
+});
+
+test('a deferred response cannot hold a successor bind or plugin teardown', async (t) => {
+  const { start } = stubListener({});
+  const manager = createCallbackManager({ path: '/iam/callback', handler: () => {}, startListener: start });
+  const stalled = Promise.withResolvers();
+  t.after(() => { stalled.resolve(); return manager.close(); });
+  const first = {};
+  await manager.ensure(first);
+  const oldRelease = manager.release(first, stalled.promise);
+
+  const replacement = await Promise.race([
+    manager.ensure({}),
+    new Promise((resolve) => setImmediate(resolve, null)),
+  ]);
+  assert.ok(replacement, 'a stalled old response must not block a replacement');
+  stalled.resolve();
+  await oldRelease;
+  assert.equal(manager.origin, replacement);
+
+  const response = Promise.withResolvers();
+  const lateRelease = manager.release(undefined, response.promise);
+  const closed = await Promise.race([
+    manager.close().then(() => true),
+    new Promise((resolve) => setImmediate(resolve, false)),
+  ]);
+  response.resolve();
+  await lateRelease;
+  assert.equal(closed, true, 'a stalled response must not block teardown');
+});
+
+test('a terminal response that never finishes releases its listener after the HTTP budget', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { start } = stubListener({});
+  const manager = createCallbackManager({
+    path: '/iam/callback', handler: () => {}, startListener: start, responseTimeoutMs: 5000,
+  });
+  t.after(() => manager.close());
+  const owner = {};
+  await manager.ensure(owner);
+  const release = manager.release(owner, new Promise(() => {}));
+  t.mock.timers.tick(4999);
+  await new Promise(setImmediate);
+  assert.ok(manager.origin);
+  t.mock.timers.tick(1);
+  await release;
+  assert.equal(manager.origin, undefined);
 });

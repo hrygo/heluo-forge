@@ -75,7 +75,7 @@ test('service-model-selection: 四个返回点均给出 manual 与 manualTruncat
     disposed: false,
     state: 'ready',
     exclusive: { ok: true },
-    lastGrant: { subject: 'u-1', accessExpiresAt: new Date(Date.now() + 60_000).toISOString() },
+    lastGrant: { subject: 'u-1', accessToken: 'synthetic-access', accessExpiresAt: new Date(Date.now() + 60_000).toISOString() },
     knownIssuer: () => 'https://iam.corp.example',
     assertExclusive() {},
   };
@@ -87,9 +87,10 @@ test('service-model-selection: 四个返回点均给出 manual 与 manualTruncat
     storeCredentials: creds,
     gatewayEpoch: 1,
     ensure: () => (targetPresent ? sessionTarget : null),
+    atomicBinding: () => creds,
     get modelSelectionStore() { return store; },
   };
-  const grants = { assertGrantContext() {}, ownerOf: () => sessionTarget };
+  const grants = { assertGrantContext() {}, ownerOf: () => sessionTarget, async prepareAuthentication() {} };
   const ms = createModelSelection({
     config: { defaultModel: '', defaultProvider: 'enterprise' },
     options: {},
@@ -100,7 +101,6 @@ test('service-model-selection: 四个返回点均给出 manual 与 manualTruncat
     getAuthEpoch: () => 1,
     isSigningOut: () => false,
     getLoadGateway: async () => ({ state: 'configured', matchesAccount: true }),
-    resolveToken: async () => 'tok',
   });
 
   // 1) owner() null
@@ -116,7 +116,7 @@ test('service-model-selection: 四个返回点均给出 manual 与 manualTruncat
   assert.deepEqual(await ms.readSelection(), { subject: 'u-1', saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 });
 
   // 4) saved & read back
-  await ms.saveSelection({ models: { 'm-a': {} }, defaultModelId: 'm-a', manual: [{ id: 'm-a' }] });
+  await ms.captureSettings().saveSelection({ models: { 'm-a': {} }, defaultModelId: 'm-a', manual: [{ id: 'm-a' }] });
   const loaded = await ms.readSelection();
   assert.equal(loaded.saved, true);
   assert.deepEqual(loaded.manual, [{ id: 'm-a' }]);
@@ -505,7 +505,6 @@ function makeModelSelectionService({ creds, store = createModelSelectionStore(cr
     getAuthEpoch: () => 1,
     isSigningOut: () => false,
     getLoadGateway: async () => ({ state: 'configured', matchesAccount: true }),
-    resolveToken: async () => 'tok',
   });
   return { ms, ctx, store };
 }

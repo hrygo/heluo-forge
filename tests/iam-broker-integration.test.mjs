@@ -12,6 +12,7 @@ import { createCredentialRegistry } from '../packages/forge-iam/src/credential-r
 import { createExtTokenStore } from '../packages/forge-iam/src/ext-token-store.mjs';
 import { createCredentialBroker, createExtTokensService } from '../packages/forge-iam/src/service-ext-tokens.mjs';
 import { MemoryCredentials } from '../packages/forge-iam/test/support/memory-credentials.mjs';
+import { isolateHostDiagnostics } from '../packages/forge-iam/test/support/isolated-host-diagnostics.mjs';
 import {
   DEVOPS_CREDENTIAL_DESCRIPTOR,
   createDevopsResolveChildEnv,
@@ -23,6 +24,8 @@ import {
   createGiteeResolveChildEnv,
   registerGiteeCredential,
 } from '../packages/forge-gitee/src/credential-descriptor.mjs';
+
+isolateHostDiagnostics();
 
 function harness(subject = 'E1001') {
   const credentials = new MemoryCredentials();

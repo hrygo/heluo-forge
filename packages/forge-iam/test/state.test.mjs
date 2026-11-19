@@ -69,3 +69,16 @@ test('view never carries tokens or verifiers', () => {
   assert.equal('refreshToken' in view, false);
   assert.equal('idToken' in view, false);
 });
+test('the view offers sign-out retry for an unconfirmed prior exit', () => {
+  for (const error of ['IAM_REVOCATION_UNKNOWN', 'IAM_CREDENTIALS_CLEAR_FAILED']) {
+    const view = createView('error', { error });
+    assert.equal(view.canSignOut, true, error);
+    assert.equal(view.signedIn, false, error);
+    assert.equal(createView('error', { error, configured: false }).canSignOut, false);
+    assert.equal(createView('error', { error, exclusive: 'exclusive-violation' }).canSignOut, false);
+    assert.equal(createView('signed-out', { error }).canSignOut, false);
+  }
+  for (const error of ['IAM_REAUTH_REQUIRED', 'IAM_RENEWAL_UNCONFIRMED', 'IAM_GRANT_INVALID']) {
+    assert.equal(createView('error', { error }).canSignOut, false, error);
+  }
+});

@@ -418,3 +418,76 @@ test('metadata discovery accepts remote HTTP while rejecting non-HTTP endpoint s
   await assert.rejects(() => loadMetadata({ discoveryUrl: 'ftp://iam.corp.example/discovery' }),
     (error) => error.code === 'IAM_CONFIG_INVALID');
 });
+test('missing optional endpoints are discovered only when requested and bound to the configured issuer', async () => {
+  const issuer = 'https://iam.example';
+  const config = {
+    issuer,
+    discoveryUrl: issuer + '/discovery',
+    authorizationEndpoint: issuer + '/authorize',
+    tokenEndpoint: issuer + '/token',
+    jwksUri: issuer + '/jwks',
+    revocationEndpoint: issuer + '/revoke',
+  };
+  let requests = 0;
+  let discoveryIssuer = issuer;
+  const fetchImpl = async () => {
+    requests++;
+    return Response.json({
+      issuer: discoveryIssuer,
+      token_endpoint: issuer + '/other-token',
+      revocation_endpoint: issuer + '/other-revoke',
+      userinfo_endpoint: issuer + '/userinfo',
+      end_session_endpoint: issuer + '/logout',
+    });
+  };
+
+  assert.equal((await loadMetadata(config, { fetchImpl })).userInfoEndpoint, undefined);
+  assert.equal((await loadMetadata(config, { fetchImpl, optional: 'revocationEndpoint' })).revocationEndpoint, config.revocationEndpoint);
+  assert.equal(requests, 0);
+
+  const meta = await loadMetadata(config, { fetchImpl, optional: 'userInfoEndpoint' });
+  assert.equal(requests, 1);
+  assert.equal(meta.userInfoEndpoint, issuer + '/userinfo');
+  assert.equal(meta.endSessionEndpoint, issuer + '/logout');
+  assert.equal(meta.tokenEndpoint, config.tokenEndpoint);
+  assert.equal(meta.revocationEndpoint, config.revocationEndpoint);
+
+  for (const untrustedIssuer of [undefined, 'https://other.example']) {
+    discoveryIssuer = untrustedIssuer;
+    await assert.rejects(() => loadMetadata(config, { fetchImpl, optional: 'userInfoEndpoint' }),
+      { code: 'IAM_DISCOVERY_ISSUER_MISMATCH' });
+  }
+});
+
+test('core and UserInfo Discovery preserve the distinction between malformed and omitted revoke metadata', async () => {
+  const issuer = 'https://iam.example';
+  const config = { issuer, discoveryUrl: issuer + '/discovery', authorizationEndpoint: issuer + '/authorize',
+    tokenEndpoint: issuer + '/token', jwksUri: issuer + '/jwks' };
+  const document = {
+    issuer, userinfo_endpoint: issuer + '/userinfo',
+    authorization_endpoint: config.authorizationEndpoint, token_endpoint: config.tokenEndpoint, jwks_uri: config.jwksUri,
+  };
+  const optional = 'userInfoEndpoint';
+  for (const malformed of [null, false, 0, '']) {
+    const fetchImpl = async () => Response.json({ ...document, revocation_endpoint: malformed });
+    const core = await loadMetadata({ discoveryUrl: config.discoveryUrl }, { fetchImpl });
+    const profile = await loadMetadata(config, { fetchImpl, optional });
+    assert.equal(core.issuer, issuer);
+    assert.equal(profile.userInfoEndpoint, document.userinfo_endpoint);
+    assert.equal(core.invalidRevocationEndpoint, true);
+    assert.equal(profile.invalidRevocationEndpoint, true);
+  }
+  for (const malformed of [{}, ['https://iam.example/revoke'], 'ftp://iam.example/revoke']) {
+    const fetchImpl = async () => Response.json({ ...document, revocation_endpoint: malformed });
+    await assert.rejects(() => loadMetadata(config, { fetchImpl, optional }), { code: 'IAM_CONFIG_INVALID' });
+  }
+  const omitted = await loadMetadata(config, { optional, fetchImpl: async () => Response.json(document) });
+  assert.equal(omitted.revocationEndpoint, undefined);
+  assert.equal(omitted.invalidRevocationEndpoint, undefined);
+  const explicit = await loadMetadata({ ...config, revocationEndpoint: issuer + '/revoke' }, {
+    optional, fetchImpl: async () => Response.json({ ...document, revocation_endpoint: null }),
+  });
+  assert.equal(explicit.revocationEndpoint, issuer + '/revoke');
+  assert.equal(explicit.invalidRevocationEndpoint, undefined);
+  assert.equal(explicit.userInfoEndpoint, issuer + '/userinfo');
+});

@@ -194,8 +194,11 @@ test('the attempt records the verifier it will check the callback against', () =
   }
   // A second attempt replaces the first only through clearAttempt, which also
   // cancels its timer.
-  assert.match(signin, /function clearAttempt\(\)/);
-  assert.match(signin, /clearTimeout\(attempt\.timer\)/);
+  const clearAttempt = signin.match(/function clearAttempt\([^)]*\) \{([\s\S]*?)\n  \}/)?.[1] ?? '';
+  assert.match(clearAttempt, /const current = attempt;/);
+  assert.match(clearAttempt, /attempt = null;/);
+  assert.match(clearAttempt, /clearTimeout\(current\.timer\)/);
+  assert.match(clearAttempt, /closeCallback\?\.\(current\.listenerOwner, responseDone\)/);
 });
 
 // U11b: sign-out is one registered flight; its flag is read elsewhere by port.

@@ -114,7 +114,6 @@ export function createIamService(rawConfig, options = {}) {
     getAuthEpoch: () => authEpoch,
     isSigningOut: () => signout.signingOut,
     getLoadGateway: () => (opts) => gateway.load(opts),
-    resolveToken: () => token.resolveToken(),
   });
 
   // Gateway credential reads: created after selection because its change hook
@@ -133,6 +132,9 @@ export function createIamService(rawConfig, options = {}) {
     bumpGeneration: () => { selection.generation += 1; },
     getManagedModelRuntime: () => options.getManagedModelRuntime?.(),
     logGatewayStage: options.logGatewayStage,
+    syncSession: () => reconcile.syncFromStore(),
+    pendingObservationFor: (store, credentials) => reconcile.pendingObservationFor(store, credentials),
+    captureModelSession: () => token.captureModelSession(),
   });
 
   // Token refresh: the flight records its own provider, so it is created after
@@ -150,6 +152,8 @@ export function createIamService(rawConfig, options = {}) {
     getSessionEpoch: () => sessionEpoch,
     getAuthEpoch: () => authEpoch,
     clearObservation: () => { observedPending = null; },
+    rememberPendingSignOut: (store, identity) => signout.rememberPendingSignOut(store, identity),
+    pendingObservationFor: (store, credentials, sessionId) => reconcile.pendingObservationFor(store, credentials, sessionId),
     deferRead: (attempt) => reconcile.deferRead(attempt),
     beginConsumption,
     adoptConsumption,
@@ -182,6 +186,7 @@ export function createIamService(rawConfig, options = {}) {
     gateway,
     token,
     now,
+    monotonic,
     configured,
     logRenewal,
     hasSignInAttempt: () => Boolean(signInPromise),
@@ -189,6 +194,7 @@ export function createIamService(rawConfig, options = {}) {
     getAuthEpoch: () => authEpoch,
     getObservation: () => observedPending,
     setObservation: (next) => { observedPending = next; },
+    rememberPendingSignOut: signout.rememberPendingSignOut,
     getPublications: () => syncPublications,
     bumpPublications: () => ++syncPublications,
     beginConsumption,
@@ -210,6 +216,7 @@ export function createIamService(rawConfig, options = {}) {
     fetchImpl,
     openCallback: options.openCallback,
     closeCallback: options.closeCallback,
+    recoverCredentialStore: reconcile.recoverCredentialStore,
     isSigningOut: () => signout.signingOut,
     getAuthEpoch: () => authEpoch,
     bumpAuthEpoch: () => { authEpoch += 1; },
@@ -289,6 +296,7 @@ export function createIamService(rawConfig, options = {}) {
       return ctx.view();
     },
     getModelAccessEpoch() { return `${authEpoch}:${sessionEpoch}:${selection.generation}`; },
+    getModelSessionIdentity() { return `${sessionEpoch}:${ctx.lastGrant?.sessionInstanceId ?? ''}`; },
     getModelAuthorizationEpoch() { return `${authEpoch}:${sessionEpoch}:${ctx.lastGrant?.sessionInstanceId ?? ''}`; },
 
     /**
@@ -321,18 +329,18 @@ export function createIamService(rawConfig, options = {}) {
     /** Host-only request credential; never exposed by management routes or IamView. */
     async resolveGatewayCredential() { return (await service.resolveGatewayConnection()).key; },
 
-refreshGatewayModels: gateway.refreshModels,
+    refreshGatewayModels: gateway.refreshModels,
 
     async updateModelOptions(nextOptions) {
       const runtime = options.getManagedModelRuntime?.();
       if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-      return runtime.updateModelOptions(nextOptions);
+      return gateway.withModelSettings((settings) => runtime.updateModelOptions(nextOptions, settings));
     },
 
     async updateManualModel(payload) {
       const runtime = options.getManagedModelRuntime?.();
       if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-      return runtime.updateManualModel(payload);
+      return gateway.withModelSettings((settings) => runtime.updateManualModel(payload, settings));
     },
 
     getModelOptions() {
@@ -343,7 +351,13 @@ refreshGatewayModels: gateway.refreshModels,
     readModelSelection: selection.readSelection,
 
     /** Persist the enabled set. Never a token channel: only model ids and overrides. */
-    saveModelSelection: selection.saveSelection,
+    saveModelSelection(input) {
+      return gateway.withModelSettings((settings) => settings.saveSelection(input),
+        { readGateway: false, signedOutCode: 'IAM_NOT_SIGNED_IN' });
+    },
+
+    // The runtime also refreshes the catalogue outside management requests.
+    captureModelSettings: selection.captureSettings,
 
 resolveGatewayConnection: gateway.resolveConnection,
 
@@ -368,7 +382,6 @@ clearGatewayCredential: gateway.clearCredential,
 
     /** Sign-out owns its flight and cleanup order. */
     signOut: signout.signOut,
-    _signOutOnce: signout.signOutOnce,
     bridgeCapability: signout.bridgeCapability,
 
     /** Sign-in attempt and its callback live in service-signin.mjs. */
@@ -376,8 +389,6 @@ clearGatewayCredential: gateway.clearCredential,
     _startSignInOnce: signin.signInOnce,
     handleCallback: signin.handleCallback,
     cancelSignIn: signin.cancelSignIn,
-    /** Route-owned drain: call after the callback response has been written. */
-    releaseCallback: options.closeCallback,
 
 
 

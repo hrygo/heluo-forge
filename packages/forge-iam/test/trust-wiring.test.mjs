@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { apply } from '../src/index.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const config = {
   issuer: 'https://iam.example',

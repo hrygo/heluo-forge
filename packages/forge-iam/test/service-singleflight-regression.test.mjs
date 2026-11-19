@@ -61,13 +61,14 @@ for (const shouldFail of [false, true]) {
     const release = deferred();
     const original = credentials.modifyRecord.bind(credentials);
     let writes = 0;
+    let failCommit = shouldFail;
     credentials.modifyRecord = async (key, mutate) => original(key, async (current) => {
       const next = await mutate(current);
       if (next?.payload?.type === 'heluo-iam-session-tombstone') {
         writes += 1;
         entered.resolve();
         await release.promise;
-        if (shouldFail) throw new Error('synthetic commit failure');
+        if (failCommit) throw new Error('synthetic commit failure');
       }
       return next;
     });
@@ -83,14 +84,15 @@ for (const shouldFail of [false, true]) {
     assert.equal(writes, 1);
     assert.equal(a.view.error, shouldFail ? 'IAM_CREDENTIALS_CLEAR_FAILED' : null);
     if (shouldFail) {
-      credentials.modifyRecord = original;
       const pending = await credentials.readRecord('heluo-iam/session');
       assert.equal(pending.payload.signOutOperation.state, 'pending');
       await assert.rejects(service.resolveToken());
+      failCommit = false;
       const retry = await service.signOut();
-      assert.equal(retry.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-      assert.equal(writes, 1);
-      assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
+      assert.equal(retry.view.error, null);
+      assert.equal(retry.revocation, 'skipped');
+      assert.equal(writes, 2);
+      assert.equal((await credentials.readRecord('heluo-iam/session')).payload.type, 'heluo-iam-session-tombstone');
     }
   });
 }

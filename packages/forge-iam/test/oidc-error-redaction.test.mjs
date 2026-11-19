@@ -150,3 +150,34 @@ test('exact invalid_grant retains the existing IAM callback classification witho
   assert.equal(JSON.stringify(service.getView()).includes(sentinel), false);
   assert.equal(credentials.records.size, 0);
 });
+test('only an explicitly proven native preconnect failure marks a token POST unsent', async (t) => {
+  const dns = { code: 'EAI_AGAIN', syscall: 'getaddrinfo' };
+  const noRoute = { code: 'ENETUNREACH', syscall: 'connect' };
+  const ambiguous = { code: 'ECONNRESET', syscall: 'read' };
+  const cases = [
+    [dns, true],
+    [{ code: 'ETIMEDOUT', syscall: 'connect' }, true],
+    [{ code: 'UND_ERR_CONNECT_TIMEOUT' }, true],
+    [new AggregateError([noRoute, dns]), true],
+    [new AggregateError([noRoute, ambiguous]), false],
+    [new AggregateError([]), false],
+    [{ code: 'ETIMEDOUT', syscall: 'read' }, false],
+    [{ code: 'ENOTFOUND' }, false],
+    [ambiguous, false],
+  ];
+  let code;
+  t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('fetch failed', { cause: code }); });
+  for (const [cause, unsent] of cases) {
+    code = cause;
+    await assert.rejects(() => fetchJson(endpoint, { method: 'POST' }), (error) => {
+      assert.equal(error.code, 'IAM_UNREACHABLE');
+      assert.equal(error.details.requestUnsent === true, unsent);
+      assertNoPrivateOutput(error);
+      return true;
+    });
+  }
+  code = dns;
+  await assert.rejects(() => fetchJson(endpoint, {
+    method: 'POST', fetchImpl: async () => { throw new TypeError('fetch failed', { cause: code }); },
+  }), (error) => error.code === 'IAM_UNREACHABLE' && !error.details.requestUnsent);
+});

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { createView } from '../src/state.mjs';
 
 const ready = { state: 'ready', configured: true, signedIn: true, canSignIn: false, canSignOut: true, principal: 'synthetic-user', error: null };
 const failed = { state: 'error', configured: true, signedIn: false, canSignIn: true, canSignOut: false, principal: null, error: 'IAM_CREDENTIALS_CLEAR_FAILED' };
@@ -205,8 +206,8 @@ test('a failed remote revocation remains visible after local sign-out', async (t
   t.after(() => panel.close());
   await panel.findButton(panel.render(), '退出').props.onClick();
   const text = panel.text(panel.render());
-  assert.match(text, /已在此设备退出：服务器拒绝了访问令牌撤销/);
-  assert.equal(text.split('已在此设备退出：服务器拒绝了访问令牌撤销').length - 1, 1);
+  assert.match(text, /已在此设备退出。服务器拒绝撤销令牌/);
+  assert.equal(text.split('已在此设备退出。服务器拒绝撤销令牌').length - 1, 1);
   assert.doesNotMatch(text, /synthetic-user/);
 });
 
@@ -248,3 +249,41 @@ for (const outcome of ['503', '503-no-view', '403', 'network', 'success']) {
     assert.equal(panel.findButton(tree, '退出'), undefined);
   });
 }
+
+test('the account panel retries an unconfirmed sign-out on explicit user action', async (t) => {
+  let posts = 0;
+  const unconfirmed = createView('error', { error: 'IAM_CREDENTIALS_CLEAR_FAILED' });
+  const panel = await mountPanel(async (url, init) => {
+    if (url === '/api/forge-iam/view') return Response.json(ready);
+    assert.equal(url, '/api/forge-iam/sign-out');
+    assert.equal(init.method, 'POST');
+    if (++posts === 1) {
+      return Response.json({ view: unconfirmed, revocation: 'unknown', error: { code: unconfirmed.error } }, { status: 503 });
+    }
+    return Response.json({ view: signedOut, logoutUrl: null, revocation: 'ok' });
+  });
+  t.after(() => panel.close());
+  await panel.findButton(panel.render(), '退出').props.onClick();
+  assert.equal(posts, 1, 'no background sign-out retry');
+  const retry = panel.findButton(panel.render(), '重试退出');
+  assert.ok(retry);
+  await retry.props.onClick();
+  assert.equal(posts, 2);
+  assert.equal(panel.findButton(panel.render(), '重试退出'), undefined);
+  const text = panel.text(panel.render());
+  assert.match(text, /服务器已确认令牌撤销/);
+  assert.doesNotMatch(text, /访问令牌|刷新令牌/);
+});
+
+test('a cold pending sign-out offers retry and reports an unconfirmed outcome', async (t) => {
+  const pending = createView('error', { error: 'IAM_REVOCATION_UNKNOWN' });
+  const panel = await mountPanel(async (url) => {
+    assert.equal(url, '/api/forge-iam/view');
+    return Response.json(pending);
+  });
+  t.after(() => panel.close());
+  const tree = panel.render();
+  assert.ok(panel.findButton(tree, '重试退出'));
+  assert.match(panel.text(tree), /令牌撤销结果尚未确认/);
+  assert.doesNotMatch(panel.text(tree), /已在此设备退出/);
+});

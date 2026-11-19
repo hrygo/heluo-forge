@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { IamError } from './errors.mjs';
-import { gatewayResponseRevoked } from './gateway-failure.mjs';
+import { gatewayResponseAuthFailure } from './gateway-failure.mjs';
 
 const scope = new AsyncLocalStorage();
 const transportFaults = new Set([
@@ -33,20 +33,14 @@ function isConnectFailure(error) {
   }
 }
 
-export function resolveModelAccessToken(fallback) {
-  const attempt = scope.getStore();
-  return attempt?.currentAccessToken ? attempt.currentAccessToken() : fallback();
-}
-
 function retryAfterMillis(value) {
   if (!value) return undefined;
   const millis = /^\d{1,6}$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
   return Number.isInteger(millis) && millis >= 0 && millis <= maxRetryAfterMs ? millis : undefined;
 }
 
-export function modelFetchOptions(options, baseURL) {
+export function modelFetchOptions(options, baseURL, resolveIamToken) {
   const attempt = scope.getStore();
-  if (!attempt) return options;
   const directFetch = options?.fetch === undefined;
   const fetcher = options?.fetch ?? globalThis.fetch;
   const endpoint = `${baseURL.replace(/\/$/, '')}/chat/completions`;
@@ -54,49 +48,57 @@ export function modelFetchOptions(options, baseURL) {
     ...options,
     maxRetries: 0,
     async fetch(input, init) {
-      attempt.check();
-      const url = input instanceof Request ? input.url : String(input);
-      const method = init?.method ?? (input instanceof Request ? input.method : null);
-      const bound = url === endpoint && method === 'POST';
-      // Observe one direct bound POST. A followed redirect can have accepted
-      // the first request before a later connection is refused.
+      const requestInput = input instanceof Request;
+      const url = requestInput ? input.url : String(input);
+      const method = init?.method ?? (requestInput ? input.method : null);
+      const signal = init?.signal ?? (requestInput ? input.signal : undefined);
       const send = async (token) => {
-        attempt.check();
-        const request = { ...init, redirect: 'manual' };
-        if (token !== undefined) {
-          request.headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-          request.headers.set('X-IAM-Token', token);
-          request.headers.set('X-Consumer-Type', 'personal');
+        attempt?.check();
+        signal?.throwIfAborted();
+        if (typeof token !== 'string' || !token.trim()) {
+          throw new IamError('IAM_LOGIN_REQUIRED', 'Model IAM access token is unavailable');
         }
+        const headers = new Headers(init?.headers ?? (requestInput ? input.headers : undefined));
+        headers.set('X-IAM-Token', token);
+        headers.set('X-Consumer-Type', 'personal');
+        // Following a redirect could disclose the credentials or send a second
+        // request after the gateway accepted the first one.
+        const request = { ...init, headers, redirect: 'manual' };
+        if (!attempt) return fetcher(input, request);
         attempt.calls++;
         attempt.failedBeforeSend = false;
         try {
           const response = await fetcher(input, request);
           attempt.status = response.status;
           attempt.retryAfterMs = retryAfterMillis(response.headers.get('retry-after'));
-          if (bound && response.ok) attempt.accept?.();
-          if (bound && response.status === 401 && attempt.revoke && await gatewayResponseRevoked(response)) attempt.revoke();
+          if (response.ok) attempt.accept?.();
+          if (response.status === 401) {
+            attempt.authFailure = await gatewayResponseAuthFailure(response);
+            if (attempt.authFailure === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED') attempt.revoke?.();
+          }
           return response;
         } catch (cause) {
           const socket = cause?.cause ?? cause;
           const connectErrors = socket instanceof AggregateError ? socket.errors : [socket];
           // A Request can carry a dispatcher even when init does not supply one.
-          attempt.failedBeforeSend = directFetch && bound && !(input instanceof Request)
-            && request.dispatcher === undefined && !request.signal?.aborted
+          attempt.failedBeforeSend = directFetch && !requestInput
+            && request.dispatcher === undefined && !signal?.aborted
             && Array.isArray(connectErrors) && connectErrors.length > 0 && connectErrors.every(isConnectFailure);
           const fault = (attempt.failedBeforeSend ? connectErrors[0] : socket)?.code;
           attempt.fault = transportFaults.has(fault) ? fault : undefined;
           throw cause;
         }
       };
-      if (!attempt.withDispatchAccessToken) return send();
-      if (!bound) throw new IamError('IAM_MODEL_CONTEXT_CHANGED', 'Model transport binding changed');
       try {
-        return await attempt.withDispatchAccessToken(send);
+        attempt?.check();
+        signal?.throwIfAborted();
+        if (url !== endpoint || method !== 'POST') throw new IamError('IAM_MODEL_CONTEXT_CHANGED', 'Model transport binding changed');
+        if (attempt?.withDispatchAccessToken) return await attempt.withDispatchAccessToken(send);
+        return await send(await resolveIamToken?.());
       } catch (cause) {
         // SDKs may wrap this failure. Preserve a verified local refusal before
         // the first network call, without reclassifying a transport error.
-        if (!attempt.calls) attempt.refuse(cause);
+        if (attempt?.calls === 0) attempt.refuse?.(cause);
         throw cause;
       }
     },

@@ -5,6 +5,9 @@ import { createIamService } from './support/trusted-service.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { createGrantStore } from '../src/store.mjs';
 import { createAtomicGatewayFixture, seedGateway } from './support/atomic-gateway.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const configured = {
   issuer: 'https://iam.corp.example',

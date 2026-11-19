@@ -22,6 +22,7 @@ export function createServiceStore({ options }) {
   // Bumped whenever the credentials provider changes, so an in-flight read from
   // the previous provider cannot repopulate the summary after revocation.
   let gatewayEpoch = 0;
+  let samplingAtomicBinding = false;
 
   function ensure() {
     let credentials;
@@ -87,6 +88,35 @@ export function createServiceStore({ options }) {
       if (value && typeof value.then === 'function') Promise.resolve(value).catch(() => {});
       return value === true;
     } catch { return false; }
+  }
+
+  function atomicBindingToken(credentials) {
+    const getBinding = options.getAtomicStoreBinding;
+    const binding = getBinding === undefined ? options.verifyAtomicStore : getBinding.call(options, credentials);
+    if (binding === null || (typeof binding !== 'object' && typeof binding !== 'function')) return null;
+    if (typeof binding.then === 'function') {
+      Promise.resolve(binding).catch(() => {});
+      return null;
+    }
+    return binding;
+  }
+
+  function atomicBinding(target, credentials) {
+    if (!target || !credentials || samplingAtomicBinding) return null;
+    samplingAtomicBinding = true;
+    try {
+      const matches = () => ensure() === target && storeCredentials === credentials;
+      if (!matches()) return null;
+      const binding = atomicBindingToken(credentials);
+      // The verifier may synchronously reenter the Host and replace either scope.
+      if (binding === null || !atomicVerified(credentials) || !matches() || atomicBindingToken(credentials) !== binding) return null;
+      return store === target && storeCredentials === credentials ? binding : null;
+    } catch {
+      // A failing binding getter offers no synchronous trust evidence.
+      return null;
+    } finally {
+      samplingAtomicBinding = false;
+    }
   }
 
   function assertAtomic(target, credentials) {
@@ -176,6 +206,7 @@ export function createServiceStore({ options }) {
     ensure,
     require,
     atomicVerified,
+    atomicBinding,
     assertAtomic,
   };
 }

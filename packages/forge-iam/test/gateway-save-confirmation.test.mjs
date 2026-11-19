@@ -7,6 +7,9 @@ import { createServiceGateway } from '../src/service-gateway.mjs';
 import { createIamService } from '../src/service.mjs';
 import { createGatewayCredentialStore, createGrantStore, GATEWAY_RECORD_KEY, GRANT_KEY } from '../src/store.mjs';
 import { createAtomicGatewayFixture, seedGateway } from './support/atomic-gateway.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const now = Date.parse('2030-01-01T00:00:00.000Z');
 const config = {

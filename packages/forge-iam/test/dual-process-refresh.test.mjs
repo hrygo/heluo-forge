@@ -468,11 +468,11 @@ test('poll recovery rejects changed identity, unchanged rotation, expiry and tim
     await credentials.modifyRecord(RECORD_KEY, () => complete);
     assert.notEqual((await observer.syncFromStore()).state, 'ready', `${name} must invalidate observation`);
   }
-  let clock = Date.now();
+  let elapsed = 0;
   await credentials.modifyRecord(RECORD_KEY, () => pending);
-  const timed = createIamService(config, { credentials, now: () => clock });
+  const timed = createIamService(config, { credentials, monotonic: () => elapsed });
   assert.equal((await timed.hydrate()).state, 'error');
-  clock += 5000;
+  elapsed += 5000;
   await credentials.modifyRecord(RECORD_KEY, () => complete);
   assert.notEqual((await timed.syncFromStore()).state, 'ready', 'expired observation cannot recover');
 });

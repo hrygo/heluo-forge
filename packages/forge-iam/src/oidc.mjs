@@ -245,7 +245,21 @@ function requireString(value, name) {
   return value;
 }
 
-export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, clientAuthentication } = {}) {
+function provenPreconnectFailure(cause) {
+  if (cause instanceof AggregateError) {
+    return cause.errors.length > 0 && cause.errors.every(preconnectSocketError);
+  }
+  return preconnectSocketError(cause);
+}
+
+function preconnectSocketError(cause) {
+  if (cause?.code === 'UND_ERR_CONNECT_TIMEOUT') return true;
+  if (cause?.syscall === 'getaddrinfo') return ['ENOTFOUND', 'EAI_AGAIN'].includes(cause.code);
+  return cause?.syscall === 'connect'
+    && ['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ETIMEDOUT'].includes(cause.code);
+}
+
+export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, expectedStatus, clientAuthentication } = {}) {
   if (typeof fetchImpl !== 'function') throw new OidcError('IAM_HTTP_UNAVAILABLE', 'fetch is unavailable');
   const timeout = AbortSignal.timeout(timeoutMs);
   const signals = [timeout];
@@ -265,27 +279,34 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
   } catch (cause) {
     // Native fetch failed while opening the connection. An injected fetcher
     // can catch and rethrow a later failure, so its cause cannot prove delivery.
-    const refused = method === 'POST' && fetchImpl === globalThis.fetch
-      && cause?.cause?.code === 'ECONNREFUSED' && cause.cause.syscall === 'connect';
+    const unsent = method === 'POST' && fetchImpl === globalThis.fetch
+      && !signal?.aborted && !timeout.aborted && provenPreconnectFailure(cause?.cause);
     throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable', {
-      ...(refused ? { requestUnsent: true } : {}),
+      ...(unsent ? { requestUnsent: true } : {}),
       ...(timeout.aborted ? { timedOut: true } : {}),
     });
   }
   if (!response.ok) {
     let oauthError;
+    let timedOut = false;
     try {
       const payload = await response.json();
       const candidate = payload?.error;
       // Copy only exact standard codes, never provider text that may echo credentials.
       if (OAUTH_ERROR_CODES.includes(candidate)) oauthError = candidate;
     } catch {
-      // Non-JSON error bodies are intentionally not surfaced.
+      // Record a body timeout without including the contents of the error body.
+      timedOut = timeout.aborted;
     }
     throw new OidcError('IAM_HTTP_ERROR', `IAM endpoint returned ${response.status}`, {
       status: response.status,
       ...(oauthError ? { oauthError } : {}),
+      ...(timedOut ? { timedOut: true } : {}),
     });
+  }
+  if (expectedStatus !== undefined && response.status !== expectedStatus) {
+    void response.body?.cancel().catch(() => {});
+    throw new OidcError('IAM_REVOKE_UNCONFIRMED', 'IAM revocation returned an unexpected success status');
   }
   if (response.status === 204) return null;
   if (ignoreBody) {
@@ -306,21 +327,22 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
  * Resolve discovery metadata, letting explicit config fields win over the
  * document. The issuer is required because ID-token validation must bind it.
  */
-export async function loadMetadata(config, { fetchImpl, timeoutMs, signal } = {}) {
+export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, optional } = {}) {
   let document = {};
   // Discovery is a fallback for missing explicit fields. When every endpoint and
   // the issuer are configured, a discovery fetch must not gate sign-in: a broken
   // or unreachable well-known URL would otherwise break a fully explicit config.
+  const needsOptional = Boolean(optional && !config[optional]);
   const needsDiscovery = Boolean(config.discoveryUrl)
-    && (!config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
+    && (needsOptional || !config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
   if (needsDiscovery) {
     const discoveryUrl = assertHttpEndpoint(config.discoveryUrl, 'discoveryUrl');
     document = await fetchJson(discoveryUrl, { fetchImpl, timeoutMs, signal });
-    if (document === null || typeof document !== 'object') {
+    if (document === null || typeof document !== 'object' || Array.isArray(document)) {
       throw new OidcError('IAM_DISCOVERY_INVALID', 'discovery document must be an object');
     }
     if (document.issuer !== undefined) requireString(document.issuer, 'issuer');
-    if (config.issuer && document.issuer && config.issuer !== document.issuer) {
+    if (config.issuer && (needsOptional || document.issuer) && config.issuer !== document.issuer) {
       throw new OidcError('IAM_DISCOVERY_ISSUER_MISMATCH', 'discovery issuer does not match configured issuer');
     }
   }
@@ -328,9 +350,9 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal } = {}
   const authorizationEndpoint = config.authorizationEndpoint || document.authorization_endpoint;
   const tokenEndpoint = config.tokenEndpoint || document.token_endpoint;
   const jwksUri = config.jwksUri || document.jwks_uri;
-  const revocationEndpoint = config.revocationEndpoint || document.revocation_endpoint;
-  const endSessionEndpoint = config.endSessionEndpoint || document.end_session_endpoint;
-  const userInfoEndpoint = config.userInfoEndpoint || document.userinfo_endpoint;
+  const revocationEndpoint = config.revocationEndpoint || (document.issuer ? document.revocation_endpoint : undefined);
+  const endSessionEndpoint = config.endSessionEndpoint || (document.issuer && document.end_session_endpoint);
+  const userInfoEndpoint = config.userInfoEndpoint || (document.issuer && document.userinfo_endpoint);
 
   requireString(issuer, 'issuer');
   requireString(authorizationEndpoint, 'authorizationEndpoint');
@@ -356,6 +378,8 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal } = {}
     tokenEndpoint: tokenUrl.href,
     jwksUri: jwksUrl.href,
     revocationEndpoint: revokeUrl?.href,
+    // Core and UserInfo reads still use valid fields from the same document.
+    ...(revocationEndpoint !== undefined && !revokeUrl ? { invalidRevocationEndpoint: true } : {}),
     endSessionEndpoint: logoutUrl?.href,
     userInfoEndpoint: userInfoUrl?.href,
   };
@@ -399,10 +423,10 @@ function normalizeTokenResponse(payload) {
   };
 }
 
-async function postForm(endpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody = false }) {
+async function postForm(endpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody = false, expectedStatus }) {
   const request = buildClientAuthRequest(clientId, form, clientAuthentication);
   return fetchJson(endpoint, {
-    fetchImpl, timeoutMs, signal, clientAuthentication, ignoreBody,
+    fetchImpl, timeoutMs, signal, clientAuthentication, ignoreBody, expectedStatus,
     method: 'POST',
     headers: ignoreBody ? request.headers : { ...request.headers, accept: 'application/json' },
     body: request.body,
@@ -425,7 +449,57 @@ export async function refreshTokens({ tokenEndpoint, refreshToken, clientId, res
 
 export async function revokeToken({ revocationEndpoint, token, tokenTypeHint = 'refresh_token', clientId, fetchImpl, timeoutMs, signal, clientAuthentication }) {
   const form = new URLSearchParams({ token, token_type_hint: tokenTypeHint });
-  return postForm(revocationEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody: true });
+  return postForm(revocationEndpoint, form, {
+    clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody: true, expectedStatus: 200,
+  });
+}
+
+function revokeHttpOutcome(status) {
+  return {
+    state: status >= 500 || status === 408 || status === 429 ? 'unknown' : 'failed',
+    code: `IAM_REVOKE_HTTP_${status}`,
+  };
+}
+
+export async function revokeSessionToken({
+  revocationMode = 'access_token_query', revocationEndpoint, accessToken, refreshToken,
+  clientId, clientAuthentication, fetchImpl, timeoutMs = 5000, signal,
+}) {
+  const endpoint = parseHttpUrl(revocationEndpoint);
+  if (!endpoint) return { state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' };
+  if (revocationMode !== 'access_token_query' && revocationMode !== 'rfc7009') {
+    return { state: 'failed', code: 'IAM_CONFIG_INVALID' };
+  }
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const boundSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  if (boundSignal.aborted) return { state: 'unknown', code: 'IAM_REVOKE_CANCELLED' };
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(boundSignal.reason);
+    boundSignal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    const transport = { revocationEndpoint: endpoint.href, fetchImpl, timeoutMs, signal: boundSignal };
+    if (revocationMode === 'access_token_query') {
+      return await Promise.race([aborted, revokeAccessToken({ ...transport, accessToken })]);
+    }
+    const token = refreshToken || accessToken;
+    if (!token) return { state: 'failed', code: 'IAM_REVOKE_TOKEN_MISSING' };
+    await Promise.race([aborted, revokeToken({
+      ...transport, token, tokenTypeHint: refreshToken ? 'refresh_token' : 'access_token',
+      clientId, clientAuthentication,
+    })]);
+    return { state: 'ok' };
+  } catch (error) {
+    if (boundSignal.aborted) {
+      return { state: 'unknown', code: timeout.aborted ? 'IAM_REVOKE_TIMEOUT' : 'IAM_REVOKE_CANCELLED' };
+    }
+    if (error?.code === 'IAM_HTTP_ERROR') return revokeHttpOutcome(error.details.status);
+    if (error?.code === 'IAM_REVOKE_UNCONFIRMED') return { state: 'unknown', code: error.code };
+    return { state: 'unknown', code: 'IAM_REVOKE_UNREACHABLE' };
+  } finally {
+    boundSignal.removeEventListener('abort', onAbort);
+  }
 }
 
 /**
@@ -465,10 +539,7 @@ export async function revokeAccessToken({ revocationEndpoint, accessToken, fetch
   let payload = null;
   try { payload = await response.json(); } catch { payload = null; }
   if (!response.ok) {
-    return {
-      state: response.status >= 500 || response.status === 429 ? 'unknown' : 'failed',
-      code: `IAM_REVOKE_HTTP_${response.status}`,
-    };
+    return revokeHttpOutcome(response.status);
   }
   if (payload?.result === true) return { state: 'ok' };
   if (payload?.result === false) {

@@ -210,7 +210,7 @@ test('login and refresh ID tokens bind at_hash to their corresponding access tok
   wrongHash = true;
   await assert.rejects(badLogin.handleCallback(badCallback.location), { code: 'IAM_ID_TOKEN_AT_HASH' });
   assert.equal(await badCredentials.readRecord('heluo-iam/session'), undefined);
-  assert.equal(mock.counts.revoke, 1, 'a rejected ID token revokes only its issued refresh token once');
+  assert.equal(mock.counts.revoke, 1, 'a rejected ID token revokes only its issued access token once');
   assert.equal(mock.revoked.size, 1);
 
   wrongHash = false;
@@ -637,7 +637,7 @@ for (const interruption of ['cancel-and-relogin', 'expire']) {
       code: interruption === 'expire' ? 'IAM_ATTEMPT_EXPIRED' : 'IAM_ATTEMPT_CANCELLED',
     });
     await waiting;
-    const issuedForOldAttempt = [...mock.refreshTokens.keys()][0];
+    const issuedForOldAttempt = 'access-1';
     let expected;
     if (interruption === 'expire') {
       clock += 31000;
@@ -650,9 +650,9 @@ for (const interruption of ['cancel-and-relogin', 'expire']) {
     }
     release();
     await rejected;
-    assert.equal(mock.counts.revoke, 1, 'an interrupted callback must attempt to revoke its own issued refresh token');
+    assert.equal(mock.counts.revoke, 1, 'an interrupted callback must attempt to revoke its own issued access token');
     assert.equal(mock.revoked.has(issuedForOldAttempt), true);
-    if (expected) assert.equal(mock.revoked.has(expected.payload.refreshToken), false);
+    if (expected) assert.equal(mock.revoked.has(expected.payload.accessToken), false);
     assert.deepEqual(await credentials.readRecord('heluo-iam/session'), expected);
     assert.equal(credentials.writes, interruption === 'expire' ? 0 : 1);
     assert.equal(service.getView().state, interruption === 'expire' ? 'error' : 'ready');
@@ -952,8 +952,10 @@ test('signOut reports an unconfirmed revocation instead of claiming success', as
   assert.deepEqual(await createGrantStore(credentials).read(), { ok: false, reason: 'sign-out-pending' });
   await assert.rejects(service.resolveToken());
   assert.notEqual((await service.syncFromStore()).state, 'ready');
-  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-  assert.equal(revocations, 1);
+  const retried = await service.signOut();
+  assert.equal(retried.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(retried.revocation, 'unknown');
+  assert.equal(revocations, 2);
   assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
 });
 
@@ -1178,8 +1180,10 @@ test('a rejected access-token revocation stays failed and never echoes a token',
   const pending = await credentials.readRecord('heluo-iam/session');
   assert.equal(pending.payload.signOutOperation.state, 'pending');
   await assert.rejects(service.resolveToken());
-  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-  assert.equal(mock.counts.revokeAccess, 1);
+  const retried = await service.signOut();
+  assert.equal(retried.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(retried.revocation, 'failed');
+  assert.equal(mock.counts.revokeAccess, 2);
   assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes(grant.accessToken), false);
@@ -1208,9 +1212,53 @@ test('a revocation timeout stays unconfirmed instead of claiming success', async
   const pending = await credentials.readRecord('heluo-iam/session');
   assert.equal(pending.payload.signOutOperation.state, 'pending');
   await assert.rejects(service.resolveToken());
-  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-  assert.equal(revocations, 1);
+  const retried = await service.signOut();
+  assert.equal(retried.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(retried.revocation, 'unknown');
+  assert.equal(revocations, 2);
   assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
   assert.equal(mock.counts.revokeAccess, 0);
   assert.equal(mock.counts.revokePost, 0);
 });
+
+for (const outcome of ['ok', 'rejected', 'unconfirmed', 'discovery-unavailable']) {
+  test(`failed callback uses enterprise access-token revocation with ${outcome} server behavior`, async (t) => {
+    const mock = await startMockOidc();
+    t.after(() => mock.close());
+    mock.control.revokeAccessMode = outcome;
+    const credentials = new MemoryCredentials();
+    const discover = outcome === 'ok' || outcome === 'discovery-unavailable';
+    const config = discover
+      ? configFor(mock, { revocationEndpoint: undefined, discoveryUrl: `${mock.issuer}/.well-known/openid-configuration` })
+      : configFor(mock);
+    let discoveryRequests = 0;
+    const service = createIamService(config, {
+      credentials,
+      async fetch(url, init) {
+        if (String(url) === config.discoveryUrl) {
+          discoveryRequests += 1;
+          if (outcome === 'discovery-unavailable') return new Response(null, { status: 503 });
+        }
+        const response = await fetch(url, init);
+        if (url !== mock.endpoints.tokenEndpoint || !response.ok) return response;
+        const tokens = await response.json();
+        delete tokens.id_token;
+        return Response.json(tokens);
+      },
+    });
+    t.after(() => service.dispose());
+    const { location } = await authorize(service);
+    assert.equal(discoveryRequests, 0, 'initial sign-in has explicit core metadata');
+    await assert.rejects(service.handleCallback(location), { code: 'IAM_ID_TOKEN_INVALID' });
+    assert.equal((await createGrantStore(credentials).read()).grant, null);
+    const endpointAvailable = outcome !== 'discovery-unavailable';
+    assert.equal(discoveryRequests, discover ? 1 : 0);
+    assert.equal(mock.counts.revokeAccess, endpointAvailable ? 1 : 0);
+    assert.equal(mock.counts.revokePost, 0);
+    if (endpointAvailable) {
+      assert.equal(mock.lastRevokeAccess.set.token, 'access-1');
+      assert.equal(mock.lastRevokeAccess.set.authorization, null);
+    }
+    assert.equal(mock.revoked.has('access-1'), outcome === 'ok');
+  });
+}

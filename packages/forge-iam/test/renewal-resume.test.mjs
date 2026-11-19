@@ -75,3 +75,26 @@ test('a wall clock that merely drifts does not force a renewal', { timeout: 20_0
   await delay(150);
   assert.equal(oidc.counts.refresh, 0, 'a running host must keep its scheduled renewal');
 });
+test('cancel sign-in re-arms a session aged past access expiry after a clock jump', { timeout: 20_000 }, async (t) => {
+  const { oidc, credentials, clock } = await seed();
+  const service = createIamService({
+    ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback',
+  }, {
+    credentials,
+    now: () => clock.wall,
+    monotonic: () => clock.monotonic,
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+
+  assert.equal((await service.hydrate()).state, 'ready');
+  clock.wall += 120_000;
+  await service.cancelSignIn();
+  service.notifyView();
+
+  const deadline = Date.now() + 1_500;
+  while (oidc.counts.refresh === 0 && Date.now() < deadline) await delay(10);
+  assert.equal(oidc.counts.refresh, 1);
+  while (service.getView().state !== 'ready' && Date.now() < deadline) await delay(10);
+  assert.equal(service.getView().state, 'ready');
+});

@@ -307,12 +307,15 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `authMode` | string | `public` | 否 | 认证模式；支持 `public` 与 `confidential` |
 | `clientAuthMethod` | string | `none` | 否 | 客户端认证方法；`public` 必须为 `none`，`confidential` 支持 `client_secret_basic` / `post` |
 | `clientSecretRef` | string | 空 | 条件 | 机密客户端逻辑选择器，必须精确对应受信任来源；当前只用于隔离 synthetic source |
-| `discoveryUrl` | string | 空 | 条件 | OIDC Discovery 地址；与显式端点配置二选一 |
+| `discoveryUrl` | string | 空 | 条件 | OIDC Discovery 地址。核心配置齐备时仅在需要补齐可选端点时查询，并核对 issuer |
 | `issuer` | string | 空 | 条件 | 显式配置时必填，作为发行者 Pin 用于 ID Token 校验 |
 | `authorizationEndpoint` | string | 空 | 条件 | 显式授权请求端点 |
 | `tokenEndpoint` | string | 空 | 条件 | 显式换票请求端点 |
 | `jwksUri` | string | 空 | 条件 | 显式公钥集地址，用于验签算法核验 |
-| `revocationEndpoint` | string | 空 | 否 | 访问令牌撤销端点（`GET /idp/oauth2/revokeToken?access_token=...`） |
+| `revocationEndpoint` | string | 空 | 否 | 令牌撤销端点。缺失时使用匹配 issuer 的发现文档值 |
+| `revocationMode` | string | `access_token_query` | 否 | 回调清理和退出共用的撤销协议。`access_token_query` 使用企业访问令牌撤销 GET，`rfc7009` 使用 OAuth 表单 POST |
+| `endSessionEndpoint` | string | 空 | 条件 | RP 退出端点。启用 RP 时由显式配置或匹配 issuer 的发现文档提供 |
+| `userInfoEndpoint` | string | 空 | 否 | 有身份字段映射时读取的 UserInfo 端点。缺失时按需发现 |
 | `scopes` | string[] | `['openid', 'profile', 'offline_access']` | 是 | 申请授权范围，必须显式包含 `openid` |
 | `redirectPath` | string | `/iam/callback` | 否 | 本机 Loopback 回调绝对路径 |
 | `callbackPort` | number | 空 | 否 | 省略时沿用宿主 Origin（开发/兼容）；`0` 由系统分配回环端口；1024–65535 固定该端口 |
@@ -324,7 +327,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `refreshSkewSeconds` | number | 60 | 否 | 前台按需取票的预刷新窗口（秒）。后台剩余有效期短于 4 分钟时使用该提前量，最长为剩余时间的一半。完整规则见[后台续期时机与恢复余量](#731-后台续期时机与恢复余量) |
 | `attemptTimeoutSeconds` | number | 300 | 否 | 单次登录 Attempt 超时时间（秒） |
 | `httpTimeoutMs` | number | 10000 | 否 | HTTP 请求默认超时上限（毫秒）；刷新与撤销请求设 5000ms 硬上限 |
-| `logoutMode` | string | `local` | 否 | 登出模式：`local`（撤销本机访问令牌 + 本地清理）或 `rp`（跳转全局登出） |
+| `logoutMode` | string | `local` | 否 | `local` 完成本地退出与已配置的撤销。`rp` 还可生成全局登出地址 |
 | `requireExclusive` | boolean | `true` | 否 | 排他性强断言开关；检测到官方服务残留时阻断就绪 |
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
@@ -485,7 +488,7 @@ export interface IamView {
 
 - **本地即时生效**：`signOut()` 触发时立即自增代际 `authEpoch` 并注销在途尝试，同一进程内的后续读取与刷新即刻失败；「立即」只覆盖本进程。
 - **跨进程收敛不是即时阻断**：登出进程向共享存储写入会话墓碑标记；其他并行进程在**下一次同步点**读到墓碑后清除会话。同步点是 `hydrate()`、`GET /api/forge-iam/view`（`src/routes.mjs` 的 view 分支）与观察者的 2 秒轮询（`src/iam-view-observer.mjs`）。`resolveToken()`（`src/service-token.mjs`）只读进程内会话状态，不逐次回读共享存储，因此系统不承诺「其他进程下次取令牌即被阻断」；需要跨进程即时撤权的场景必须另有机制，本系统不提供。
-- **远端撤销有边界**：退出时尽力撤销当前访问令牌，结果三态如实报告（`ok` / `failed` / `unknown`）。当前实现经 `GET <revocationEndpoint>?access_token=…` 提交（RFC 7009 建议 `POST`，改为 `POST` 需目标平台支持后另行变更）。`failed`／`unknown`（含超时、5xx、缺少 issuer 绑定上下文）时，其他进程持有的旧访问令牌可能**持续有效至 `accessExpiresAt`**；刷新令牌不随退出撤销，按服务端策略自然过期；撤销成功也不代表下游服务端本地缓存中的会话立即失效。
+- 远端撤销报告 `ok`、`failed` 或 `unknown`。企业默认按 D1 撤销访问令牌，刷新令牌依赖服务端自然过期。配置 `rfc7009` 时优先撤销刷新令牌，接受 HTTP 200 回执。撤销失败或未知时，其他进程持有的旧访问令牌可能持续有效至 `accessExpiresAt`。下游缓存的失效时机由相应服务决定。
 - **未受信凭据来源不写墓碑**：provider 非受信时不写持久墓碑、不发起远端撤销，只清理运行时状态，并如实报告 `IAM_CREDENTIALS_CLEAR_FAILED` 或撤销状态 `unknown`。
 - **视图不是撤权屏障**：`getView()`／`getPrincipal()` 只读缓存快照，不构成即时撤权保证，安全判据不得以其作为「已阻断」的证据。
 
@@ -721,15 +724,15 @@ OAuth 安全最佳实践规定公共客户端刷新令牌的重放防护，并�
 用户点击退出
   └── 1. 取消本实例在途 Attempt，并使本地会话代际失效
   └── 2. 核验受信存储、发行者及 Grant 快照，在同记录锁内写入 signOutOperation pending
-  └── 3. 锁外以 GET ?access_token=… 撤销当前访问令牌，记录 ok/failed/unknown
+  └── 3. 按需发现可选撤销端点并条件绑定该端点，准备客户端认证，在锁外撤销令牌
   └── 4. 撤销确认后重取锁并核对 pending，再写入无敏感信息的逻辑墓碑；未配置撤销端点时可本地完成，结果为 skipped
   └── 5. 仅本地清理确认后切换至 signed-out；显式配置 logoutMode=rp 时才生成全局登出 URL
       撤销失败、未知或提交不确定时保留 pending / 原记录，清除本实例内存会话，报告 error 和未知或失败，不重发旧令牌
 ```
 
-- **单令牌撤销语义**：采用 `GET /idp/oauth2/revokeToken?access_token=...`，令牌自证、幂等且实时生效；服务端刷新令牌不提供撤销接口，依赖自然过期（7300 秒）；
-- **本机信任边界**：撤销不再要求 client secret，任何能写凭据存储的本机进程都可以清会话并撤销访问令牌。这是 D1 的既定取舍：退出不是提权操作，但不能再把“需要 secret”当作退出路径的防护；
-- **数据留存底线**：退出确认完成时写会话墓碑；远端撤销失败或结果未知不冒称已清除。退出默认保留已配置的 `ENTERPRISE_STATIC_KEY`，避免频繁重新录入。
+- 企业 D1 使用 `GET /idp/oauth2/revokeToken?access_token=...`，凭访问令牌完成幂等撤销。显式 RFC 7009 路径使用原授权绑定的客户端认证，以表单 POST 优先撤销刷新令牌。
+- 退出 pending 沿用原记录格式。需要可选 Discovery 时，先绑定已核验的原授权、发现来源、撤销协议和资源，再条件绑定解析出的规范化端点。调用方可显式重试，重试核验同一持久记录及当前存储信任。面板同步和普通令牌读取发现退出 pending 后拒绝取用，按原登录和存储记录保留重试归属。未绑定撤销上下文的旧标记只支持通过显式配置且与已核验 issuer 同源的 D1 端点重试。
+- 退出确认完成时写会话墓碑，保留已配置的 `ENTERPRISE_STATIC_KEY`。RP 登出链接仅在退出后回读仍无登录时返回。可选端点发现失败、存储不可读或已发生新登录时，仍保留已经确认的本地退出结果。
 
 ### 7.5 模型门禁纯判定与只读编排
 
@@ -1124,7 +1127,7 @@ flowchart TD
 
 网关已接受的推理流在授权期限临近时共享本 Host 的有界持久复核。只有在旧期限内核验到同一登录、同一受信存储且基线匹配的已提交轮换，才能更新本地流式截止时间。复核只读取持久授权，继续使用原 HTTP 连接。无有效后继、未决轮换、会话替换、退出或迟到读取均不能延长原流；当前用户退出仍立即取消本机流。
 
-目录同步只更新元数据。IAM 和网关凭据归属校验通过后，宿主先从本机记录恢复已启用的手动模型和同一账号、同一网关下已缓存的启用模型，再请求 `GET ${baseURL}/models`。恢复只装配内存中的适配器。目录请求在途、返回错误或响应非法时，已恢复的模型仍可发起推理。所有推理请求继续校验 IAM、凭据归属、启用集及网关推理权限，已知凭据撤销、账号切换和会话失效会阻断调用。
+目录同步只更新元数据。已准入的目录请求和模型设置保存均复核同一持久登录与存储绑定。访问令牌到期时，可等待该登录已在途的续期，在匹配的持久回执确认后继续。SQLite 写入取得凭据库的逻辑写锁后再次检查该登录。IAM 和网关凭据归属校验通过后，宿主先从本机记录恢复已启用的手动模型和同一账号、同一网关下已缓存的启用模型，再请求 `GET ${baseURL}/models`。恢复只装配内存中的适配器。目录请求在途、返回错误或响应非法时，已恢复的模型仍可发起推理。所有推理请求继续校验 IAM、凭据归属、启用集及网关推理权限，已知凭据撤销、账号切换和会话失效会阻断调用。
 
 目录错误在设置页按目录接口提示。有最近一次成功目录时，以 `modelAccess.stale` 和 `syncedAt` 标注缓存；连接故障、超时或限流等可重试错误继续退避，`retryAt` 记录下一次重试。目录取消记 `ENTERPRISE_MODEL_SYNC_CANCELLED`，下一次同步使用当前会话的取消信号。成功目录替换缓存，包括成功返回空列表。身份或网关变化及显式退出会清空宿主缓存。浏览器端缓存按 `principal + 网关地址` 分键，退出和账号切换时删除旧缓存。窗口重新可见或获得焦点时触发一次受 30 秒节流的目录重同步。
 

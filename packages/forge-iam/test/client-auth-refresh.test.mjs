@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createCredentialStore, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { createIamService } from '../src/service.mjs';
 import { GRANT_KEY } from '../src/store.mjs';
 import { confidentialHarness, signIn, hold } from './support/client-auth-service.mjs';
@@ -89,6 +93,108 @@ for (const point of ['claim-receipt', 'http', 'final-entry', 'final-receipt']) {
     assert.equal(h.mock.counts.refresh, point === 'claim-receipt' ? 0 : 1);
     assert.equal(h.mock.counts.revoke, 0);
     assert.equal(h.service.getView().signedIn, false);
+  });
+}
+
+for (const rebound of [false, true]) {
+  test(`an unavailable pre-POST client secret read ${rebound ? 'stays pending across rebinding' : 'restores the same SQLite grant'}`, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'forge-iam-unsent-auth-'));
+    const backend = createCredentialStore({ directory });
+    const credentials = createKeychainProvider(backend);
+    let binding = {};
+    const h = await confidentialHarness(t, 'client_secret_basic', {
+      credentials,
+      config: { refreshSkewSeconds: 7200 },
+      getAtomicStoreBinding: (candidate) => candidate === credentials ? binding : null,
+    });
+    t.after(async () => {
+      await backend.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    await signIn(h);
+    const before = await h.record();
+    const modify = credentials.modifyRecord.bind(credentials);
+    let first = true;
+    t.mock.method(credentials, 'modifyRecord', async (...args) => {
+      const result = await modify(...args);
+      if (first && args[0] === GRANT_KEY) {
+        first = false;
+        h.fixture.setReadBarrier(() => {
+          h.fixture.setReadBarrier(null);
+          if (rebound) binding = {};
+          throw new Error('synthetic client secret source read unavailable');
+        });
+      }
+      return result;
+    });
+    if (rebound) {
+      await assert.rejects(h.service.resolveToken());
+      assert.equal((await h.record()).refreshOperation.state, 'pending');
+      assert.equal(h.service.getView().signedIn, false);
+    } else {
+      assert.equal(await h.service.resolveToken(), before.accessToken);
+      assert.deepEqual(await h.record(), before);
+      assert.equal(h.service.getView().state, 'ready');
+    }
+    assert.equal(h.mock.counts.refresh, 0);
+    if (!rebound) {
+      assert.notEqual(await h.service.resolveToken(), before.accessToken);
+      assert.equal((await h.record()).refreshOperation.state, 'complete');
+      assert.equal(h.mock.counts.refresh, 1);
+    }
+  });
+}
+
+for (const changedSource of [false, true]) {
+  test(`confidential refresh handoff ${changedSource ? 'retains pending when the source changed' : 'revokes only the confirmed rotated grant'}`, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'forge-iam-confidential-handoff-'));
+    const backend = createCredentialStore({ directory });
+    const credentials = createKeychainProvider(backend);
+    const gate = hold();
+    t.after(gate.release);
+    let rotatedToken;
+    const revokeRequests = [];
+    const h = await confidentialHarness(t, 'client_secret_basic', {
+      credentials,
+      config: { revocationMode: 'rfc7009', refreshSkewSeconds: 7200 },
+      async fetch(url, init) {
+        const response = await fetch(url, init);
+        const form = new URLSearchParams(init?.body);
+        if (form.get('grant_type') === 'refresh_token') {
+          rotatedToken = (await response.clone().json()).refresh_token;
+          await gate.pause();
+        }
+        if (new URL(url).pathname === '/revoke') {
+          revokeRequests.push({ method: init.method, token: form.get('token'), hint: form.get('token_type_hint') });
+        }
+        return response;
+      },
+    });
+    t.after(async () => {
+      await backend.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    await signIn(h);
+    const refresh = h.service.getAccessToken().catch((error) => error);
+    await gate.entered;
+    const persistedPending = await credentials.readRecord(GRANT_KEY);
+    assert.equal(persistedPending.payload.refreshOperation.state, 'pending');
+    const signOut = h.service.signOut();
+    if (changedSource) h.fixture.replace();
+    gate.release();
+    assert.equal((await refresh).code, 'IAM_DISPOSED');
+    const result = await signOut;
+    assert.equal(h.mock.counts.refresh, 1);
+    if (changedSource) {
+      assert.equal(result.revocation, 'unknown');
+      assert.deepEqual(revokeRequests, []);
+      assert.deepEqual(await credentials.readRecord(GRANT_KEY), persistedPending);
+    } else {
+      assert.equal(result.revocation, 'ok');
+      assert.equal(result.view.state, 'signed-out');
+      assert.deepEqual(revokeRequests, [{ method: 'POST', token: rotatedToken, hint: 'refresh_token' }]);
+      assert.equal((await credentials.readRecord(GRANT_KEY)).payload.type, 'heluo-iam-session-tombstone');
+    }
   });
 }
 

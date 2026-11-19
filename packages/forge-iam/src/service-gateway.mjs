@@ -5,7 +5,7 @@ import { IamError } from './errors.mjs';
 import { normalizeGatewayBaseURL } from './model-options.mjs';
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
 import { StoreError } from './store.mjs';
-import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
+import { addSeconds, grantIdentity, nowIso, safeMessage } from './service-helpers.mjs';
 
 const GATEWAY_RELOAD_MS = 5000;
 const GATEWAY_CONFIRM_TIMEOUT_MS = 10000;
@@ -21,9 +21,11 @@ const GATEWAY_CONFIRM_TIMEOUT_MS = 10000;
 export function createServiceGateway(env) {
   const {
     config, ctx, provider, grants, now, selection,
-    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage,
+    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage, syncSession, pendingObservationFor, captureModelSession,
   } = env;
   let cancelConfirmation = null;
+  let summaryRead = null;
+  let sessionSummaryRead = null;
 
   async function read(targetGatewayStore, targetStore, isCurrent) {
     if (!isCurrent()) return null;
@@ -61,7 +63,7 @@ export function createServiceGateway(env) {
     };
   }
 
-  async function load({ force = false } = {}) {
+  async function load({ force = false, sessionRefresh = false } = {}) {
     if (ctx.disposed) return null;
     // Cache hits and singleflight reuse must belong to the live provider too.
     const targetStore = provider.ensure();
@@ -69,34 +71,51 @@ export function createServiceGateway(env) {
     // Panel polling shares the session's storage backoff. Its recovery read
     // reloads this summary against the newly adopted grant.
     if (!force && ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') return provider.gatewaySummary;
+    if (!force && sessionSummaryRead && provider.gatewayLoading === sessionSummaryRead) return provider.gatewaySummary;
     if (!force && provider.gatewayLoadedAt > 0 && now() - provider.gatewayLoadedAt < GATEWAY_RELOAD_MS) return provider.gatewaySummary;
     if (provider.gatewayLoading) return provider.gatewayLoading;
     const targetGatewayStore = provider.gatewayStore;
     const targetCredentials = provider.storeCredentials;
     const epoch = provider.gatewayEpoch;
     const isCurrent = () => {
-      if (ctx.disposed || epoch !== provider.gatewayEpoch) return false;
+      if (ctx.disposed || epoch !== provider.gatewayEpoch || provider.gatewayLoading !== request) return false;
       const current = provider.ensure();
-      return !ctx.disposed && epoch === provider.gatewayEpoch && current === targetStore
+      return !ctx.disposed && epoch === provider.gatewayEpoch && provider.gatewayLoading === request && current === targetStore
         && provider.gatewayStore === targetGatewayStore && provider.storeCredentials === targetCredentials;
     };
-    const request = read(targetGatewayStore, targetStore, isCurrent)
+    const request = Promise.resolve().then(() => read(targetGatewayStore, targetStore, isCurrent))
       .then((summary) => {
         if (!isCurrent()) return null;
         const changed = !isDeepStrictEqual(provider.gatewaySummary, summary);
         provider.gatewaySummary = summary;
         provider.gatewayLoadedAt = now();
         // Own forced reads do not feed back into another observation.
-        if (changed && !selection.inFlight) selection.schedule();
+        if (changed && sessionRefresh) ctx.notify();
+        else if (changed && !selection.inFlight) selection.schedule();
         return summary;
       })
       .catch(() => {
         if (isCurrent()) { provider.gatewaySummary = null; provider.gatewayLoadedAt = 0; }
         return null;
       })
-      .finally(() => { if (provider.gatewayLoading === request) provider.gatewayLoading = null; });
+      .finally(() => {
+        if (provider.gatewayLoading === request) provider.gatewayLoading = null;
+        if (summaryRead === request) summaryRead = null;
+        if (sessionSummaryRead === request) sessionSummaryRead = null;
+      });
     provider.gatewayLoading = request;
+    summaryRead = request;
+    if (sessionRefresh) sessionSummaryRead = request;
     return request;
+  }
+
+  function refreshSessionSummary() {
+    // The restored session can renew while this independent display read runs.
+    // Retire older summary reads and let any credential mutation confirm itself.
+    provider.gatewaySummary = null;
+    provider.gatewayLoadedAt = 0;
+    if (provider.gatewayLoading === summaryRead) provider.gatewayLoading = null;
+    return Promise.resolve().then(() => load({ force: true, sessionRefresh: true })).catch(() => null);
   }
 
   function invalidateGatewayReads({ clearSummary = false } = {}) {
@@ -256,10 +275,63 @@ export function createServiceGateway(env) {
       throw error;
     }
   }
+  async function withModelSettings(use, { readGateway = true, signedOutCode = 'IAM_LOGIN_REQUIRED' } = {}) {
+    const epoch = getAuthEpoch();
+    const assertActive = () => {
+      ctx.assertExclusive();
+      if (ctx.disposed || isSigningOut() || getAuthEpoch() !== epoch) {
+        throw new IamError('IAM_MODEL_CONTEXT_CHANGED', '企业账号状态已变化，请重新登录。');
+      }
+    };
+    assertActive();
+    const cold = !ctx.lastGrant;
+    if (cold) {
+      const pendingAtStart = pendingObservationFor(provider.store, provider.storeCredentials);
+      if (!pendingAtStart) await syncSession();
+      assertActive();
+      const targetStore = provider.store;
+      const credentials = provider.storeCredentials;
+      const pending = pendingAtStart ?? pendingObservationFor(targetStore, credentials);
+      if (pending) {
+        // A cold caller may join only this operation's receipt. General token
+        // resolution can adopt a distinct login while the receipt is pending.
+        const receipt = await pending.wait();
+        assertActive();
+        assertClientAuthCurrent(receipt?.authentication);
+        if (!receipt || provider.atomicBinding(targetStore, credentials) !== pending.atomicBinding
+          || !ctx.lastGrant || !isDeepStrictEqual(grantIdentity(ctx.lastGrant), grantIdentity(receipt.grant))) {
+          throw new IamError('IAM_RENEWAL_UNCONFIRMED', safeMessage('IAM_RENEWAL_UNCONFIRMED'));
+        }
+      }
+    }
+    const settings = selection.captureSettings(signedOutCode);
+    const expired = isAccessExpired(ctx.lastGrant, now());
+    const modelSession = expired ? captureModelSession() : null;
+    try {
+      await settings.verify({ allowExpired: expired });
+    } catch (error) {
+      // Only the bound renewal may wait for a pending rotation. Settings
+      // reads, writes and gateway dispatch still require a confirmed grant.
+      if (!expired || !(error instanceof IamError) || error.code !== 'IAM_RENEWAL_UNCONFIRMED') throw error;
+    }
+    if (expired) {
+      settings.assertCurrent();
+      if (isAccessExpired(ctx.lastGrant, now())) {
+        await modelSession.renew({ expiredCode: signedOutCode });
+      }
+      await settings.verify();
+    }
+    if (readGateway) await (sessionSummaryRead ?? load({ force: cold }));
+    settings.assertCurrent();
+    const result = await use(settings);
+    await settings.verify();
+    return result;
+  }
+
   async function refreshModels() {
     const runtime = getManagedModelRuntime?.();
     if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-    return runtime.refresh();
+    return withModelSettings((settings) => runtime.refresh(settings));
   }
 
   async function resolveConnection() {
@@ -448,6 +520,6 @@ export function createServiceGateway(env) {
   }
 
   return {
-    read, load, refreshModels, resolveConnection, saveCredential, clearCredential,
+    read, load, refreshSessionSummary, withModelSettings, refreshModels, resolveConnection, saveCredential, clearCredential,
   };
 }

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { IamError } from '../src/errors.mjs';
 import { applyModelOptions, buildThinkingLevelMap, createManagedModelRuntime, createNativeGatewayAdapter, validateManagedModels } from '../src/managed-models.mjs';
 import { createModelFailureLogger } from '../src/model-failure-log.mjs';
 
@@ -14,6 +16,7 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
   };
   const listeners = new Set();
   let selection = overrides.selection ?? null;
+  let authGeneration = 0;
   let selectionGeneration = 0;
   let sessionGeneration = 0;
   const iam = {
@@ -25,10 +28,15 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
     },
     async saveModelSelection(next) {
       selectionGeneration += 1;
-      selection = { models: structuredClone(next.models ?? {}), defaultModelId: next.defaultModelId ?? null };
+      selection = {
+        models: structuredClone(next.models ?? {}), defaultModelId: next.defaultModelId ?? null,
+        ...(next.manual?.length ? { manual: structuredClone(next.manual) } : {}),
+      };
       return { subject: 'person-a', ...structuredClone(selection) };
     },
-    getModelAccessEpoch: () => `${sessionGeneration}:${selectionGeneration}`,
+    getModelAccessEpoch: () => `${authGeneration}:${sessionGeneration}:${selectionGeneration}`,
+    getModelAuthorizationEpoch: () => `${authGeneration}:${sessionGeneration}:synthetic-login-${sessionGeneration}`,
+    getModelSessionIdentity: () => `${sessionGeneration}:synthetic-login-${sessionGeneration}`,
     async resolveGatewayConnection() {
       return { baseURL: gatewayBaseURL, key: connectionKey ?? 'synthetic-only', generation: 'one', subject: view.principal };
     },
@@ -79,6 +87,7 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
   return {
     iam, runtime, events, get adapter() { return adapter; }, get guard() { return guard; }, get calls() { return calls; }, get credential() { return credential; },
     get selection() { return selection; }, get selectionWrites() { return selectionGeneration; },
+    cancelSignIn() { authGeneration++; },
     change(next, { newSession = false } = {}) {
       if (newSession) sessionGeneration++;
       view = { ...view, ...next };
@@ -453,6 +462,43 @@ test('same-session token renewal preserves a prepared gateway call while updatin
   assert.equal(f.calls, 1);
 });
 
+test('cancelling sign-in without a pending attempt keeps the installed models available', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  f.iam.captureModelSession = () => {
+    const epoch = f.iam.getModelAuthorizationEpoch();
+    return { assertCurrent() {
+      if (f.iam.getModelAuthorizationEpoch() !== epoch) throw new IamError('IAM_NOT_SIGNED_IN', 'synthetic session changed');
+    } };
+  };
+  const previous = await f.adapter.prepareCall(options.provider, options.model);
+  f.cancelSignIn();
+
+  assert.deepEqual((await f.adapter.listModels('enterprise')).map(model => model.id), ['enterprise-chat']);
+  assert.equal(f.runtime.getView().state, 'ready');
+  const refused = await chunks(previous.stream(options));
+  assert.equal(refused.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+  assert.equal((await chunks(f.adapter.stream(options))).at(-1).reason.kind, 'stop');
+  assert.equal(f.calls, 1);
+});
+
+test('a later manual edit preserves a confirmed save when publication fails', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  const settings = {
+    assertCurrent() {},
+    readSelection: () => f.iam.readModelSelection(),
+    saveSelection: next => f.iam.saveModelSelection(next),
+    async verify() { throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', 'synthetic transient verification failure'); },
+  };
+  await assert.rejects(f.runtime.updateManualModel({ action: 'add', id: 'manual-first' }, settings), { code: 'IAM_CREDENTIALS_UNAVAILABLE' });
+  assert.deepEqual(f.selection.manual.map(({ id }) => id), ['manual-first']);
+  assert.deepEqual(f.runtime.getView().models.map(({ id }) => id), ['enterprise-chat']);
+
+  const next = await f.runtime.updateManualModel({ action: 'add', id: 'manual-second' });
+  assert.equal(next.persisted, true);
+  assert.deepEqual(f.selection.manual.map(({ id }) => id), ['manual-first', 'manual-second']);
+  assert.deepEqual(next.manual.map(({ id }) => id), ['manual-first', 'manual-second']);
+});
+
 test('fine-grained model options apply capacity and modality overrides to catalog and listModels', async t => {
   const f = fixture(); t.after(() => f.runtime.dispose());
   await f.runtime.ready;
@@ -570,50 +616,108 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
   assert.equal(profileOptions.requestImageMaxBytes, 1024 * 1024);
 });
 
-test('the native adapter injects the current IAM token at call time and keeps it out of the catalogue', async () => {
-  let capturedOptions; let captured;
-  const protocol = {
-    stream: (model, context, options) => { captured = options; },
-    streamSimple: (model, context, options) => { captured = options; },
+async function nativeIamFixture(resolveIamToken) {
+  const received = [];
+  const requestLabel = new AsyncLocalStorage();
+  let sdkOptions;
+  const protocolStreams = [];
+  const endpoint = 'https://gateway.corp.example/v1/chat/completions';
+  const stream = (_model, _context, options) => {
+    const response = Promise.resolve().then(() => options.fetch(endpoint, { method: 'POST', headers: options.headers }));
+    const events = {
+      async *[Symbol.asyncIterator]() { yield await response; },
+      result: () => response,
+    };
+    protocolStreams.push(events);
+    return events;
   };
-  let token = 'iam-token-1';
   await createNativeGatewayAdapter({
     host: {
       loader: {
-        async import(specifier) {
-          if (specifier === '@deepseek-ai/dsh-llm-pi-ai') {
-            return { PiAiAdapter: class { constructor(opts) { capturedOptions = opts; } } };
+        async import(identifier) {
+          if (identifier === '@deepseek-ai/dsh-llm-pi-ai') {
+            return { PiAiAdapter: class { constructor(options) { sdkOptions = options; } } };
           }
-          if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
-            return { openAICompletionsApi: () => protocol };
+          if (identifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
+            return { openAICompletionsApi: () => ({ stream, streamSimple: stream }) };
           }
-          throw new Error(`unexpected import: ${specifier}`);
+          throw new Error('Unexpected SDK import');
         },
       },
     },
-    config: {
-      defaultProvider: 'enterprise',
-      managedModels: {
-        baseURL: 'https://gw.example/v1',
-        models: applyModelOptions([{ id: 'm1', contextWindow: 200000, maxTokens: 64000, input: ['text'] }], {}),
-      },
-    },
-    resolveKey: async () => 'synthetic-only',
-    resolveIamToken: async () => token,
+    config: { defaultProvider: 'enterprise', managedModels: { baseURL: configuration.baseURL, models: [{ id: 'm1' }] } },
+    resolveKey: async () => 'synthetic-gateway-key',
+    resolveIamToken: resolveIamToken && (() => resolveIamToken(requestLabel.getStore())),
   });
-  const profile = capturedOptions.profiles().get('enterprise');
-  await capturedOptions.resolveApiKey('enterprise', profile);
-  profile.piProvider.streamSimple('m1', {}, { headers: { 'x-base': '1' } });
-  assert.equal(captured.headers['X-IAM-Token'], 'iam-token-1');
-  assert.equal(captured.headers['X-Consumer-Type'], 'personal');
-  assert.equal(captured.headers['x-base'], '1');
-  assert.equal(captured.headers.Authorization, undefined);
-  token = 'iam-token-2';
-  await capturedOptions.resolveApiKey('enterprise', profile);
-  profile.piProvider.stream('m1', {}, undefined);
-  assert.equal(captured.headers['X-IAM-Token'], 'iam-token-2');
-  assert.equal(captured.headers['X-Consumer-Type'], 'personal');
-  assert.equal(JSON.stringify(profile.piProvider.getModels()).includes('iam-token'), false);
+  const profile = sdkOptions.profiles().get('enterprise');
+  const provider = profile.piProvider;
+  const [model] = provider.getModels();
+  return {
+    received, protocolStreams, provider,
+    open(method, label, beforeStream) {
+      return requestLabel.run(label, async () => {
+        const apiKey = await sdkOptions.resolveApiKey('enterprise', profile);
+        await beforeStream?.();
+        return provider[method](model, {}, {
+          apiKey,
+          headers: { 'x-request-test': label },
+          async fetch(url, init) {
+            assert.equal(url, endpoint);
+            assert.equal(apiKey, 'synthetic-gateway-key');
+            const headers = new Headers(init.headers);
+            received.push({
+              label: headers.get('x-request-test'),
+              token: headers.get('x-iam-token'),
+              consumer: headers.get('x-consumer-type'),
+            });
+            return Response.json({ label });
+          },
+        });
+      });
+    },
+  };
+}
+
+test('overlapping native stream and streamSimple calls resolve their own IAM headers and keep the SDK event streams', async () => {
+  const firstHasKey = Promise.withResolvers();
+  const allowFirstStream = Promise.withResolvers();
+  const fixture = await nativeIamFixture(label => `synthetic-iam-${label}`);
+  const verifyFirst = fixture.open('stream', 'first', () => {
+    firstHasKey.resolve();
+    return allowFirstStream.promise;
+  }).then(async first => {
+    const [response] = await Array.fromAsync(first);
+    assert.deepEqual(await response.json(), { label: 'first' });
+    assert.equal(first, fixture.protocolStreams[1]);
+  });
+  const verifySecond = firstHasKey.promise.then(async () => {
+    const second = await fixture.open('streamSimple', 'second');
+    assert.deepEqual(await (await second.result()).json(), { label: 'second' });
+    assert.equal(second, fixture.protocolStreams[0]);
+  }).finally(() => allowFirstStream.resolve());
+  await Promise.all([verifyFirst, verifySecond]);
+  assert.deepEqual(fixture.received, [
+    { label: 'second', token: 'synthetic-iam-second', consumer: 'personal' },
+    { label: 'first', token: 'synthetic-iam-first', consumer: 'personal' },
+  ]);
+  assert.equal(JSON.stringify(fixture.provider.getModels()).includes('synthetic-iam-'), false);
+});
+
+test('the native fallback sends nothing when IAM is missing or when an earlier valid token expires', async t => {
+  await t.test('resolver absent', async () => {
+    const fixture = await nativeIamFixture();
+    await assert.rejects(async () => (await fixture.open('stream', 'missing')).result(), { code: 'IAM_LOGIN_REQUIRED' });
+    assert.deepEqual(fixture.received, []);
+  });
+  await t.test('token later unavailable', async () => {
+    let token = 'synthetic-iam-valid';
+    const fixture = await nativeIamFixture(async () => token);
+    const valid = await fixture.open('streamSimple', 'valid');
+    await valid.result();
+    token = undefined;
+    await assert.rejects(async () => (await fixture.open('streamSimple', 'expired')).result(), { code: 'IAM_LOGIN_REQUIRED' });
+    assert.deepEqual(fixture.received, [{ label: 'valid', token: 'synthetic-iam-valid', consumer: 'personal' }]);
+  });
 });
 
 test('first run enables and persists one catalogue model without any user input', async t => {
@@ -917,6 +1021,41 @@ test('same-account relogin keeps available models usable regardless of the direc
       }
     });
   }
+});
+
+test('same-account relogin uses the current stored selection with the last confirmed directory', async t => {
+  const selectionRead = Promise.withResolvers();
+  const releaseRead = Promise.withResolvers();
+  let directoryAvailable = true;
+  const f = fixture({
+    selection: { models: { 'enterprise-chat': {} }, defaultModelId: 'enterprise-chat' },
+    fetch: async () => directoryAvailable ? Response.json({ data: [{ id: 'enterprise-chat' }, { id: 'enterprise-other' }] })
+      : new Response('{}', { status: 403 }),
+  });
+  t.after(async () => { releaseRead.resolve(); await f.runtime.dispose(); });
+  await f.runtime.ready;
+  const list = async () => (await f.adapter.listModels('enterprise')).map(({ id }) => id);
+  assert.deepEqual(await list(), ['enterprise-chat']);
+
+  f.iam.captureModelSettings = () => ({
+    assertCurrent() {}, async verify() {},
+    async readSelection() {
+      selectionRead.resolve();
+      await releaseRead.promise;
+      return f.iam.readModelSelection();
+    },
+  });
+  await f.iam.saveModelSelection({ models: { 'enterprise-other': {} }, defaultModelId: 'enterprise-other' });
+  directoryAvailable = false;
+  f.change({}, { newSession: true });
+  const refresh = assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_FORBIDDEN' });
+  await selectionRead.promise;
+  assert.deepEqual(await list(), []);
+  assert.deepEqual(f.runtime.getView().models.map(({ id }) => id), ['enterprise-chat', 'enterprise-other']);
+  releaseRead.resolve();
+  await refresh;
+  assert.deepEqual(await list(), ['enterprise-other']);
+  assert.equal((await chunks(f.adapter.stream({ ...options, model: 'enterprise-other' }))).at(-1).reason.kind, 'stop');
 });
 
 test('saved manual models work while directory discovery is pending and inference can still refuse a call', async t => {
