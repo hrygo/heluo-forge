@@ -62,7 +62,7 @@ test('the base bundle mounts universal account, keychain, policy, and skills row
       ['heluo-credentials-keychain', '@heluo/forge-credentials-keychain'],
       ['heluo-policy', '@heluo/forge-policy'],
       ['heluo-iam', '@heluo/forge-iam'],
-      ['skills-manager', '@heluo/forge-skills-manager'],
+      ['heluo-skills-manager', '@heluo/forge-skills-manager'],
     ],
     '通用底座装凭据、策略、IAM 与技能管理，不含任何研发行',
   );

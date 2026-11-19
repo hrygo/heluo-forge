@@ -15,7 +15,7 @@ try {
   const { apply } = await import("../lib/index.js");
 
   // 1. 默认值与入口位置持久化
-  assert.equal(await core.getEntryLocation(), "settings", "entryLocation 默认仅设置");
+  assert.equal(await core.getEntryLocation(), "both", "entryLocation 默认侧边栏与设置两处显示");
 
   // 测试 setEntryLocation 的落盘持久化与重启重读
   await core.setEntryLocation("sidebar");
