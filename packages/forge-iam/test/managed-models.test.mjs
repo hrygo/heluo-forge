@@ -1551,3 +1551,42 @@ test('the downgrade follows the target model, so switching models tries images a
   assert.equal(attempts.length, 4);
   assert.equal(attempts[3][0].content[0].offloaded, undefined);
 });
+
+test('a catalogue 429 waits as long as Retry-After asks (issue #304)', async t => {
+  const f = fixture({
+    fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': '7' } }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await f.runtime.refresh().catch(() => { });
+  const view = f.runtime.getView();
+  assert.equal(view.state, 'error');
+  // The advertised retry deadline follows the header, not the local backoff.
+  assert.ok(Number.isFinite(view.retryAt));
+  const waitMs = view.retryAt - Date.now();
+  assert.ok(waitMs > 5000 && waitMs <= 7000, `expected ~7s, got ${waitMs}ms`);
+});
+
+test('a Retry-After above the ceiling leaves the failure visible (issue #304)', async t => {
+  const f = fixture({ fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': '120' } }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await f.runtime.refresh().catch(() => { });
+  // Waiting two minutes silently is worse than showing the failure now.
+  assert.equal(f.runtime.getView().retryAt, null);
+});
+
+test('catalogue retries stop after three attempts in total (issue #304)', async t => {
+  let calls = 0;
+  const f = fixture({
+    fetch: async () => {
+      calls += 1;
+      return new Response('down', { status: 503, headers: { 'retry-after': '0' } });
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;   // first attempt already failed
+  await new Promise(resolve => setTimeout(resolve, 150));
+  // initial + at most two retries; a fourth request would mean the ceiling moved.
+  assert.equal(calls, 3, `expected exactly 3 attempts, got ${calls}`);
+});

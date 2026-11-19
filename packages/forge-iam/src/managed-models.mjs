@@ -4,7 +4,7 @@ import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
 import { failureCode, gatewayCode, USER_CODE_BY_INTERNAL } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import { adapterInitializationDetailCode } from './model-failure-log.mjs';
-import { modelFetchOptions, modelPreconnectFault, modelTransportDiagnostic, trackModelAttempt } from './model-transport.mjs';
+import { modelFetchOptions, modelPreconnectFault, modelTransportDiagnostic, retryAfterHint, trackModelAttempt } from './model-transport.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
@@ -161,7 +161,12 @@ async function discover(connection, signal, fetcher, headers) {
     headers: { ...headers, authorization: `Bearer ${connection.key}`, accept: 'application/json' },
     redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
   });
-  if (!response.ok) throw error(gatewayCode(response.status));
+  if (!response.ok) {
+    const failure = error(gatewayCode(response.status));
+    const retryAfterMs = retryAfterHint(response.headers?.get?.('retry-after'));
+    if (retryAfterMs !== undefined) failure.details = { ...failure.details, retryAfterMs };
+    throw failure;
+  }
   let text = '';
   if (response.body) {
     const decoder = new TextDecoder(); let size = 0;
@@ -196,7 +201,11 @@ async function discover(connection, signal, fetcher, headers) {
 
 /** Gateway outages at start-up (network not up yet) heal without a click; credential or catalogue errors need a person. */
 const RETRYABLE = new Set(['ENTERPRISE_GATEWAY_UNAVAILABLE', 'ENTERPRISE_GATEWAY_RATE_LIMIT']);
-const RETRY_DELAYS = Object.freeze([2000, 5000, 15000, 30000, 60000]);
+// Three attempts in total (initial + two retries) for the catalogue, which has
+// no side effects and no billing; `Retry-After` replaces the local delay while
+// it fits under the ceiling below.
+const RETRY_DELAYS = Object.freeze([2000, 5000]);
+const MAX_CATALOG_RETRY_AFTER_MS = 60_000;
 const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name); } catch { return undefined; } };
 
 /**
@@ -987,7 +996,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           if (!RETRYABLE.has(code)) { backend = undefined; installedModels.clear(); }
         }
         // Advertise the retry time before the frame that carries it.
-        scheduleRetry(code);
+        scheduleRetry(code, cause?.details?.retryAfterMs);
         publish();
       } else if (!disposed && mine !== version && code === 'IAM_MODEL_CONTEXT_CHANGED') {
         // This refresh was voided by a context change that already happened. The
@@ -1021,10 +1030,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   }
 
   /** Bounded back-off for transient gateway failures; any context change cancels it. */
-  function scheduleRetry(code) {
+  function scheduleRetry(code, retryAfterMs) {
     if (!RETRYABLE.has(code) || retryAttempt >= retryDelays.length || retryTimer) return;
+    // A wait longer than the ceiling is not shortened silently: the failure
+    // stays visible instead of parking the recovery for minutes.
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > MAX_CATALOG_RETRY_AFTER_MS) return;
+    const delay = Number.isFinite(retryAfterMs) ? retryAfterMs : retryDelays[retryAttempt];
+    retryAttempt += 1;
     const mine = version;
-    retryAt = Date.now() + retryDelays[retryAttempt];
+    retryAt = Date.now() + delay;
     retryTimer = setTimeout(() => {
       retryTimer = undefined; retryAt = null;
       // The countdown ending is itself a visible change: publish it before the
@@ -1034,7 +1048,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // list matters: keeping the old backend must not cancel its recovery.
       if (disposed || mine !== version || permit(sample())) return;
       void refresh().catch(() => { });
-    }, retryDelays[retryAttempt++]);
+    }, delay);
     retryTimer.unref?.();
   }
 
