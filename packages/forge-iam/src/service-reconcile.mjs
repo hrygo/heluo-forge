@@ -20,7 +20,7 @@ const OBSERVATION_EXPIRED = Symbol('pending observation expired');
 export function createReconciler(env) {
   const {
     ctx, provider, grants, gateway, token, now, monotonic,
-    configured, hasSignInAttempt, isSigningOut, getAuthEpoch, getObservation, setObservation,
+    configured, hasSignInAttempt, isSigningOut, getAuthEpoch, getObservation, setObservation, rememberPendingSignOut,
     getPublications, bumpPublications, beginConsumption, adoptConsumption, resolveToken, logRenewal,
   } = env;
   // A discovery-only process resolves the document issuer at most once. The
@@ -304,7 +304,7 @@ export function createReconciler(env) {
     });
     const beforeDeadline = (operation) => expiration ? Promise.race([operation, expiration]) : operation;
     try {
-      const record = await beforeDeadline(targetStore.read());
+      const record = await beforeDeadline(targetStore.read({ includeSignOutIdentity: !expectedGrant && !observation }));
       reading = false;
       if (record === OBSERVATION_EXPIRED) return ctx.view();
       ctx.recheckExclusive();
@@ -313,6 +313,7 @@ export function createReconciler(env) {
       if (!record.ok) {
         const signOutPending = record.reason === 'sign-out-pending';
         const code = signOutPending ? 'IAM_REVOCATION_UNKNOWN' : 'IAM_GRANT_INVALID';
+        if (signOutPending) rememberPendingSignOut(targetStore, observation?.identity ?? record.signOutIdentity);
         logRenewal?.('store-sync', { reason: signOutPending ? 'sign-out-pending' : 'grant-invalid', code });
         setObservation(null);
         ctx.lastGrant = null;
@@ -455,7 +456,8 @@ export function createReconciler(env) {
       // A cold observer can confirm an unsent attempt with no saved timer.
       if (restored && (renewAt === null || renewAt <= now()) && isCurrent()) {
         token.scheduleRenewal({ retry: true, restored: true });
-      } else if (renewAt !== null && (ctx.state === 'ready' || restored) && isCurrent()) {
+      } else if (renewAt !== null && isCurrent()) {
+        // The durable match can resume while access is expired and refresh is usable.
         token.scheduleRenewal({ resumeAt: renewAt });
       }
       // A normal account switch also returns the updated gateway match. The

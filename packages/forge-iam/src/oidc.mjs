@@ -350,7 +350,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, optio
   const authorizationEndpoint = config.authorizationEndpoint || document.authorization_endpoint;
   const tokenEndpoint = config.tokenEndpoint || document.token_endpoint;
   const jwksUri = config.jwksUri || document.jwks_uri;
-  const revocationEndpoint = config.revocationEndpoint || (document.issuer && document.revocation_endpoint);
+  const revocationEndpoint = config.revocationEndpoint || (document.issuer ? document.revocation_endpoint : undefined);
   const endSessionEndpoint = config.endSessionEndpoint || (document.issuer && document.end_session_endpoint);
   const userInfoEndpoint = config.userInfoEndpoint || (document.issuer && document.userinfo_endpoint);
 
@@ -378,6 +378,8 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, optio
     tokenEndpoint: tokenUrl.href,
     jwksUri: jwksUrl.href,
     revocationEndpoint: revokeUrl?.href,
+    // Core and UserInfo reads still use valid fields from the same document.
+    ...(revocationEndpoint !== undefined && !revokeUrl ? { invalidRevocationEndpoint: true } : {}),
     endSessionEndpoint: logoutUrl?.href,
     userInfoEndpoint: userInfoUrl?.href,
   };

@@ -245,12 +245,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // from: a write must never be composed for one person out of another's state.
   let selectionSaved = false; let selectionError = null; let selectionWriteError = null;
   let selectionLoaded = false; let selectionOwner = null;
+  const settingsIdentity = (view) => JSON.stringify([identity(view), iam.getModelAuthorizationEpoch?.() ?? null]);
   const enabled = id => Object.hasOwn(modelOptions, id);
   const callable = model => enabled(model.id);
   const enabledModel = (route, model) => route === provider && enabled(model) ? models.find(item => item.id === model) : undefined;
   const allowed = (route, model) => Boolean(enabledModel(route, model));
   const lifetime = new AbortController();
-  let lease = new AbortController(); let version = 0; let last; let lastId; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
+  let lease = new AbortController(); let version = 0; let last; let lastId; let lastSettingsIdentity; let lastSessionIdentity; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
   const activeStreams = new Set();
   let rotationCheck;
   // The catalogue can move ahead of a failed adapter rebuild. Only the
@@ -263,7 +264,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let rebuildAttempts = 0; let rebuiltVersion = -1;
   let retryAttempt = 0; let retryTimer; let retryAt = null; let syncedAt = null;
   let hostDefault = null; let alignment = null; let alignQueued = false;
-  let optionsChain = Promise.resolve();
+  let optionsChain = null;
   let inSample = false;
   let observedVersion = 0;
   // `host.emit` reaches SDK listeners; `onChange` reaches this plugin's own
@@ -374,22 +375,35 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     try {
       const view = iam.getView();
       const currentId = identity(view);
-      const current = `${currentId}:${iam.getModelAccessEpoch?.() ?? ''}`;
+      const currentSettingsIdentity = settingsIdentity(view);
+      const currentSessionIdentity = iam.getModelSessionIdentity?.();
+      const current = `${currentSettingsIdentity}:${iam.getModelAccessEpoch?.() ?? ''}`;
       const currentAuthorization = authorizationId(view, iam.getModelAuthorizationEpoch?.());
       if (lastAuthorization !== currentAuthorization) {
         lastAuthorization = currentAuthorization;
         lease.abort(); lease = new AbortController();
       }
       if (last !== current) {
-        const idChanged = lastId !== currentId;
+        const scopeChanged = lastSettingsIdentity !== currentSettingsIdentity;
+        const bindingChanged = lastId !== currentId;
+        const sessionChanged = lastSessionIdentity !== currentSessionIdentity;
         last = current;
         lastId = currentId;
+        lastSettingsIdentity = currentSettingsIdentity;
+        lastSessionIdentity = currentSessionIdentity;
         version++;
-        if (idChanged) {
+        if (scopeChanged) { selectionLoaded = false; selectionOwner = null; }
+        if (bindingChanged || sessionChanged) {
           cancelRetry(); retryAttempt = 0; hostDefault = null;
-          clearCatalog();
           modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
-          selectionLoaded = false; selectionOwner = null;
+          if (bindingChanged) clearCatalog();
+          else {
+            // Directory metadata still belongs to this account and gateway.
+            // Install a route only after reading the new login's selection.
+            manualModels = []; manualTruncated = 0;
+            syncRawModels(); models = applyModelOptions(rawModels, modelOptions);
+            backend = undefined; installedModels.clear(); adapterError = null;
+          }
           publish();
         }
       }
@@ -749,14 +763,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
    * stored record, so writing without a successful read would delete whatever
    * this session could not see.
    */
-  async function loadSelection() {
-    const owner = identity(iam.getView());
+  async function loadSelection(settings) {
+    const owner = settingsIdentity(iam.getView());
     if (typeof iam.readModelSelection !== 'function') {
       selectionSaved = true; selectionLoaded = true; selectionOwner = owner;
       return;
     }
     try {
-      const saved = await iam.readModelSelection();
+      const saved = settings ? await settings.readSelection() : await iam.readModelSelection();
+      if (settingsIdentity(iam.getView()) !== owner) throw error('IAM_MODEL_CONTEXT_CHANGED');
       selectionError = null;
       selectionLoaded = true; selectionOwner = owner;
       if (!saved || saved.saved !== true) {
@@ -771,6 +786,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       selectionSaved = true;
       return saved.subject;
     } catch (cause) {
+      if (settingsIdentity(iam.getView()) !== owner) throw error('IAM_MODEL_CONTEXT_CHANGED');
+      if (settings && cause?.code !== 'IAM_MODEL_SELECTION_UNREADABLE') throw cause;
       // A storage read failure must not look like "nothing saved": that would
       // silently re-enable a default the user may have turned off.
       selectionError = cause?.code ?? 'IAM_CREDENTIALS_UNAVAILABLE';
@@ -785,26 +802,46 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
    * safe answer: an unreadable record is not an empty one, and the write would
    * otherwise persist this session's partial view over the person's models.
    */
-  async function ensureSelectionLoaded() {
-    const activeId = identity(iam.getView());
+  async function ensureSelectionLoaded(settings) {
+    const activeId = settingsIdentity(iam.getView());
     if (selectionLoaded && selectionOwner === activeId) return;
-    await loadSelection();
-    if (selectionLoaded && selectionOwner === activeId) return;
+    await loadSelection(settings);
+    if (selectionLoaded && selectionOwner === activeId) {
+      syncRawModels();
+      return;
+    }
     throw error(Object.hasOwn(MESSAGES, selectionError ?? '') ? selectionError : 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE');
   }
 
+  const ownsSelection = (owner) => selectionOwner === owner && settingsIdentity(iam.getView()) === owner;
+
   /** Best effort: an unwritten selection still applies to this session. */
-  async function persistSelection() {
-    if (typeof iam.saveModelSelection !== 'function') return true;
+  async function persistSelection(settings, next) {
+    if (!settings && typeof iam.saveModelSelection !== 'function') return true;
+    const owner = selectionOwner;
     try {
-      await iam.saveModelSelection({ models: modelOptions, defaultModelId, manual: manualModels });
-      selectionWriteError = null;
-      selectionSaved = true;
+      if (settings) await settings.saveSelection(next);
+      else await iam.saveModelSelection(next);
+      if (ownsSelection(owner)) {
+        // The durable record is ahead of the local model state until publish.
+        selectionLoaded = false;
+        selectionWriteError = null;
+        selectionSaved = true;
+      }
       return true;
     } catch (cause) {
-      selectionWriteError = cause?.code ?? 'IAM_MODEL_SELECTION_UNWRITTEN';
+      // A provider without verified write locking is read-only. The local
+      // settings can still serve an otherwise valid gateway session.
+      if (settings && !['IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_MODEL_SELECTION_UNWRITTEN',
+        'IAM_MODEL_SELECTION_INVALID', 'IAM_RECORD_KIND_MISMATCH'].includes(cause?.code)) throw cause;
+      if (ownsSelection(owner)) selectionWriteError = cause?.code ?? 'IAM_MODEL_SELECTION_UNWRITTEN';
       return false;
     }
+  }
+
+  function publishSelection(owner, persisted) {
+    publish();
+    if (persisted && ownsSelection(owner)) selectionLoaded = true;
   }
 
   /**
@@ -833,10 +870,22 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
   }
 
-  async function refresh() {
+  async function refresh(settings) {
     const denied = permit(sample());
     if (disposed || denied) throw error(denied ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
+    settings ??= iam.captureModelSettings?.();
+    settings?.assertCurrent();
+    const scope = lastSettingsIdentity;
     if (flight?.version === version) return flight.promise;
+    // Only a running refresh can be a predecessor of a settings write.
+    // While writes are pending, leave flight empty and retain the caller's scope.
+    while (optionsChain) {
+      await optionsChain;
+      if (settings) await settings.verify();
+      if (disposed || permit(sample()) || scope !== lastSettingsIdentity) throw error('IAM_MODEL_CONTEXT_CHANGED');
+      settings?.assertCurrent();
+      if (flight?.version === version) return flight.promise;
+    }
     let mine = version;
     let directoryFailed = false;
     const localReady = Promise.withResolvers();
@@ -844,8 +893,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const current = () => {
       if (disposed || permit(sample()) || mine !== version) throw error('IAM_MODEL_CONTEXT_CHANGED');
       if (credentialRevoked()) throw error('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+      settings?.assertCurrent();
     };
     const task = Promise.resolve().then(async () => {
+      current();
       catalogState = 'loading'; catalogError = null;
       const connection = await iam.resolveGatewayConnection(); current();
       assertSendableCredential(connection.key); current();
@@ -853,14 +904,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       connectionBaseURL = connection.baseURL;
       // Publish available models before the directory request. Only a saved
       // selection belonging to the verified connection can seed a local route.
-      const selectionSubject = await loadSelection(); current();
+      const selectionSubject = await loadSelection(settings); current();
       syncRawModels();
       const available = applyModelOptions(rawModels, modelOptions);
       let builtLocally = false;
       if (selectionSubject === iam.getView().principal && selectionSubject === connection.subject
         && available.some(callable) && (!backend || installedModels.size !== available.length || !available.every(installed))) {
-        builtLocally = await refreshAdapter(connection, available, current);
+        builtLocally = await refreshAdapter(connection, available, current, settings);
       }
+      current();
       models = available;
       if (builtLocally) publish();
       localReady.resolve();
@@ -868,46 +920,56 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       let directory;
       try {
         // The gateway contract scopes the second factor to inference requests.
-        const headers = await requestHeaders(); current();
+        const headers = await requestHeaders();
+        if (settings) await settings.verify();
+        current();
         directory = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers);
       } catch (cause) {
         current();
         directoryFailed = true;
         throw cause;
       }
+      if (settings) await settings.verify();
       current();
-      catalogTruncated = directory.truncated;
-      catalogModels = directory.models;
-      catalogueRead = true;
-      syncRawModels();
+      const nextRawModels = mergeAvailableModels(directory.models, manualModels);
+      let nextOptions = modelOptions;
+      let nextDefault = defaultModelId;
+      let selectionPersisted = false;
       // First run for this person: enable one model so the panel is usable
       // without any configuration. The admin's defaultModel wins when the
       // gateway still offers it, otherwise the first catalogue entry (the
       // catalogue is sorted, so "first" is stable across refreshes).
-      if (!selectionSaved && rawModels.length > 0) {
-        const chosen = pickDefaultModel(rawModels, config.defaultModel);
+      if (!selectionSaved && nextRawModels.length > 0) {
+        const chosen = pickDefaultModel(nextRawModels, config.defaultModel);
         if (chosen) {
-          modelOptions = { [chosen]: {} }; defaultModelId = chosen;
-          await persistSelection();
-          // That write bumps the selection generation. It is our own change, so
-          // adopt it; treating it as foreign aborted the first sync after login
-          // and left the catalogue in "loading" until another view arrived.
+          nextOptions = { [chosen]: {} };
+          nextDefault = chosen;
+          selectionPersisted = await persistSelection(settings, { models: nextOptions, defaultModelId: nextDefault, manual: manualModels });
+          // Adopt a generation advanced by our own write only while the
+          // catalogue and selection still belong to its original scope.
           sample();
+          if (scope !== lastSettingsIdentity) throw error('IAM_MODEL_CONTEXT_CHANGED');
           mine = version;
           if (flight?.promise === task) flight.version = mine;
           current();
         }
-      } else if (!defaultModelId || !enabled(defaultModelId) || !rawModels.some(m => m.id === defaultModelId)) {
-        defaultModelId = rawModels.find(m => enabled(m.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
+      } else if (!nextDefault || !enabled(nextDefault) || !nextRawModels.some(m => m.id === nextDefault)) {
+        nextDefault = nextRawModels.find(m => enabled(m.id))?.id ?? Object.keys(nextOptions)[0] ?? null;
       }
-      syncRawModels();
-      const entries = applyModelOptions(rawModels, modelOptions);
+      const entries = applyModelOptions(nextRawModels, nextOptions);
       if (!builtLocally || !isDeepStrictEqual(available, entries)) {
-        await refreshAdapter(connection, entries, current);
+        await refreshAdapter(connection, entries, current, settings);
       }
+      current();
+      catalogTruncated = directory.truncated;
+      catalogModels = directory.models;
+      catalogueRead = true;
+      rawModels = nextRawModels;
+      modelOptions = nextOptions;
+      defaultModelId = nextDefault;
       models = entries;
       catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
-      syncedAt = Date.now(); publish();
+      syncedAt = Date.now(); publishSelection(scope, selectionPersisted);
       await syncHostDefault(); current();
       return { models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
     }).catch(cause => {
@@ -915,8 +977,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // check the gateway address after we stopped the request ourselves sends
       // them to the wrong place, and scheduling a retry for it would repeat the
       // same cancellation.
+      const typedFailure = settings && cause instanceof IamError;
       const code = cause?.name === 'AbortError' ? 'ENTERPRISE_MODEL_SYNC_CANCELLED'
-        : Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
+        : typedFailure || Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
       if (mine === version && !disposed) {
         markFailed(code);
         if (!directoryFailed) {
@@ -932,12 +995,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         // version would keep failing on a stale adapter; rebuild it once.
         scheduleVersionRebuild();
       }
-      throw error(code);
+      throw typedFailure ? cause : error(code);
     }).finally(() => {
       localReady.resolve();
       if (flight?.promise === task) flight = null;
     });
-    flight = { version: mine, promise: task, localReady: localReady.promise }; return task;
+    flight = { scope, version: mine, promise: task, localReady: localReady.promise }; return task;
   }
 
   /**
@@ -1120,7 +1183,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     adapterError = null;
   }
 
-  async function refreshAdapter(connection, entries, current) {
+  async function refreshAdapter(connection, entries, current, settings) {
     // Only initialization errors belong here. Context and directory failures
     // keep their own paths. The logger receives fixed codes without the cause.
     const resolved = await buildAdapter(connection, entries).catch(cause => {
@@ -1130,6 +1193,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       } catch { /* optional diagnostics cannot change the directory result */ }
       return undefined;
     });
+    // Adapter construction can yield to a peer that commits a new login.
+    if (settings) await settings.verify();
     current();
     if (!resolved) {
       adapterError = 'ENTERPRISE_MODELS_UNAVAILABLE';
@@ -1139,41 +1204,29 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     return true;
   }
 
-  async function rebuildAdapter(stale) {
-    const entries = models;
+  async function prepareAdapterUpdate(entries, stale) {
     if (entries.length === 0) {
-      backend = undefined;
-      installedModels.clear();
-      return null;
+      return () => { backend = undefined; installedModels.clear(); };
     }
     const connection = await iam.resolveGatewayConnection();
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
     const resolved = await buildAdapter(connection, entries);
-    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
-    installAdapter(resolved, entries);
-    return resolved;
+    return () => installAdapter(resolved, entries);
   }
 
   /** Apply one enabled-set submission for the person who is signed in right now. */
-  async function applyOptions(nextOptions) {
+  async function applyOptions(nextOptions, settings) {
+    settings?.assertCurrent();
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     const denied = permit(sample());
     if (denied) throw error(denied);
-    const activeId = identity(iam.getView());
-    // Let an in-flight discovery finish first: the same person's stored
-    // selection is adopted there, and composing this write from a half-loaded
-    // state is how a save replaced models it had not seen yet.
-    if (flight) {
-      try { await flight.promise; } catch { /* the catalogue failure is reported by the refresh itself */ }
-    }
-    if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    const activeId = settingsIdentity(iam.getView());
     // The submitted map is the whole stored record, so it may only be composed
     // after a successful read of what is already there.
-    await ensureSelectionLoaded();
+    await ensureSelectionLoaded(settings);
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
-    // A sign-out or account switch while either wait above ran must not land
-    // this submission in the next person's record.
-    if (identity(iam.getView()) !== activeId || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    // The storage read may outlive this account's local selection.
+    if (settingsIdentity(iam.getView()) !== activeId || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED');
     // A successfully read empty catalogue still means "the gateway no longer
     // offers these", so pruning keys off the successful read itself.
     const catalogueKnown = catalogueRead;
@@ -1183,7 +1236,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     // the gateway catalogue a precondition for saving a manual model: the
     // catalogue is the fallback's reason to exist, not its gate.
     if (rawModels.length === 0 && Object.keys(modelOptions).length === 0) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
-    const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
+    const stale = () => { sample(); return disposed || settingsIdentity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
     // The submitted map is the enabled set, not just an override list: an
     // empty object enables a model with the catalogue defaults, and dropping
     // a key disables it. Only known models can be enabled.
@@ -1197,22 +1250,29 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (!catalogueKnown && enabled(id)) continue;
       delete nextMap[id];
     }
-    modelOptions = nextMap;
-    if (!defaultModelId || !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
-    const persisted = await persistSelection();
+    const nextDefault = defaultModelId && Object.hasOwn(nextMap, defaultModelId)
+      ? defaultModelId : Object.keys(nextMap)[0] ?? null;
+    const persisted = await persistSelection(settings, { models: nextMap, defaultModelId: nextDefault, manual: manualModels });
     // Signed out or switched account mid-save: the reset already happened;
     // never let this person's options land in the next person's state.
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
-    models = applyModelOptions(rawModels, modelOptions);
+    const nextModels = applyModelOptions(rawModels, nextMap);
+    let install;
     if (rawModels.length > 0) {
       try {
-        await rebuildAdapter(stale);
+        install = await prepareAdapterUpdate(nextModels, stale);
       } catch (cause) {
         if (cause?.code === 'IAM_MODEL_CONTEXT_CHANGED') throw cause;
         /* keep existing backend if rebuild fails */
       }
     }
-    publish();
+    if (settings) await settings.verify();
+    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    modelOptions = nextMap;
+    defaultModelId = nextDefault;
+    models = nextModels;
+    install?.();
+    publishSelection(activeId, persisted);
     // The enabled set and the user's Host default are separate settings.
     await syncHostDefault();
     return {
@@ -1223,29 +1283,29 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
   }
 
-  async function applyManualModel({ action, id } = {}) {
-    if (flight) {
-      try { await flight.promise; } catch {}
-    }
+  async function applyManualModel({ action, id }, settings) {
+    settings?.assertCurrent();
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     const denied = permit(sample());
     if (denied) throw error(denied);
-    const activeId = identity(iam.getView());
+    const activeId = settingsIdentity(iam.getView());
     if (action !== 'add' && action !== 'remove') throw error('IAM_MANUAL_MODEL_INVALID');
     const cleanId = typeof id === 'string' ? id.trim() : '';
     if (!isModelId(cleanId)) throw error('IAM_MANUAL_MODEL_INVALID');
     // Adopt the stored manual list before computing the next one: adding to an
     // unread record persisted a list holding only the new id, which is how one
     // add could erase every manual model saved before it.
-    await ensureSelectionLoaded();
+    await ensureSelectionLoaded(settings);
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     // The read is asynchronous: a sign-out or account switch inside it must not
     // add this person's model to the next person's list.
-    if (identity(iam.getView()) !== activeId || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    if (settingsIdentity(iam.getView()) !== activeId || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED');
 
-    const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
+    const stale = () => { sample(); return disposed || settingsIdentity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
 
     let removed = false;
+    let nextManual;
+    let nextOptions = modelOptions;
     if (action === 'add') {
       if (catalogModels.some(item => item.id === cleanId) || manualModels.some(item => item.id === cleanId)) {
         throw error('IAM_MANUAL_MODEL_CONFLICT');
@@ -1255,12 +1315,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       }
       // Adding a record is not enabling it: the person still has to turn the
       // model on explicitly, and the Host default must not move on its own.
-      manualModels = [...manualModels, { id: cleanId, addedAt: new Date().toISOString() }];
+      nextManual = [...manualModels, { id: cleanId, addedAt: new Date().toISOString() }];
     } else {
       // A manual record must stay removable even after the catalogue starts
       // returning the same id: otherwise it would shadow the gateway entry for
       // good and the person could never clean it up.
-      const nextManual = manualModels.filter(item => item.id !== cleanId);
+      nextManual = manualModels.filter(item => item.id !== cleanId);
       if (nextManual.length === manualModels.length) {
         // 计划 §U3/§6.1：删除不存在的手动条目是幂等成功——不写库、不重建、不换默认值。
         return {
@@ -1281,31 +1341,36 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           manualTruncated,
         };
       }
-      manualModels = nextManual;
       removed = true;
-      const nextOptions = { ...modelOptions };
+      nextOptions = { ...modelOptions };
       delete nextOptions[cleanId];
-      modelOptions = nextOptions;
     }
 
-    syncRawModels();
-    if (!defaultModelId || !enabled(defaultModelId) || !rawModels.some(item => item.id === defaultModelId)) {
-      defaultModelId = rawModels.find(item => enabled(item.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
-    }
+    const nextRawModels = mergeAvailableModels(catalogModels, nextManual);
+    const isEnabled = (model) => Object.hasOwn(nextOptions, model);
+    const nextDefault = defaultModelId && isEnabled(defaultModelId) && nextRawModels.some(item => item.id === defaultModelId)
+      ? defaultModelId : nextRawModels.find(item => isEnabled(item.id))?.id ?? Object.keys(nextOptions)[0] ?? null;
 
-    const persisted = await persistSelection();
+    const persisted = await persistSelection(settings, { models: nextOptions, defaultModelId: nextDefault, manual: nextManual });
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
-    models = applyModelOptions(rawModels, modelOptions);
-
+    const nextModels = applyModelOptions(nextRawModels, nextOptions);
+    let install;
     let rebuildError = null;
     try {
-      await rebuildAdapter(stale);
+      install = await prepareAdapterUpdate(nextModels, stale);
     } catch (cause) {
       if (cause?.code === 'IAM_MODEL_CONTEXT_CHANGED') throw cause;
       rebuildError = cause?.code ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
     }
-
-    publish();
+    if (settings) await settings.verify();
+    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    modelOptions = nextOptions;
+    manualModels = nextManual;
+    defaultModelId = nextDefault;
+    rawModels = nextRawModels;
+    models = nextModels;
+    install?.();
+    publishSelection(activeId, persisted);
     await syncHostDefault();
     return {
       ok: true,
@@ -1327,19 +1392,31 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
   }
 
+  function queueSettings(apply, input, settings) {
+    const scope = settingsIdentity(iam.getView());
+    const runningRefresh = flight?.scope === scope ? flight.promise : undefined;
+    const run = Promise.resolve(optionsChain).then(async () => {
+      // A refresh that already started can finish adopting the saved selection.
+      // A later refresh waits for this write without creating a flight of its own.
+      if (runningRefresh) await runningRefresh.catch(() => {});
+      if (settingsIdentity(iam.getView()) !== scope) throw error('IAM_MODEL_CONTEXT_CHANGED');
+      return apply(input, settings);
+    });
+    const pending = run.catch(() => {}).finally(() => {
+      if (optionsChain === pending) optionsChain = null;
+    });
+    optionsChain = pending;
+    return run;
+  }
+
   return {
     ready, refresh,
     syncDefaultModel: () => syncHostDefault(),
-    updateModelOptions(nextOptions = {}) {
-      // Serialise saves: two quick clicks must not interleave their writes.
-      const run = optionsChain.then(() => applyOptions(nextOptions));
-      optionsChain = run.catch(() => { });
-      return run;
+    updateModelOptions(nextOptions = {}, settings = iam.captureModelSettings?.()) {
+      return queueSettings(applyOptions, nextOptions, settings);
     },
-    updateManualModel(payload = {}) {
-      const run = optionsChain.then(() => applyManualModel(payload));
-      optionsChain = run.catch(() => { });
-      return run;
+    updateManualModel(payload = {}, settings = iam.captureModelSettings?.()) {
+      return queueSettings(applyManualModel, payload, settings);
     },
     getModelOptions: () => ({ ...modelOptions }),
     getView: () => {

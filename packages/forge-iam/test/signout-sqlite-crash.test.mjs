@@ -122,6 +122,109 @@ test('SQLite restart fences sign-out interrupted during revoke until an explicit
   assert.deepEqual((await reopened.store.read()).grant, replacement);
 });
 
+test('SQLite fences sign-out before optional Discovery and preserves explicit retry across restart', { timeout: 10000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-discovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, 'store');
+  const configured = { ...config, revocationEndpoint: '', discoveryUrl: `${grant.issuer}/discovery` };
+  const first = open(directory);
+  const peer = open(directory);
+  const entered = Promise.withResolvers();
+  const unavailable = Promise.withResolvers();
+  const outgoing = [];
+  const firstService = createIamService(configured, { credentials: first.credentials, fetch: async (url) => {
+    outgoing.push(new URL(url).pathname);
+    entered.resolve();
+    return unavailable.promise;
+  } });
+  let fenced;
+  try {
+    await first.store.write(grant);
+    const signOut = firstService.signOut();
+    await Promise.race([entered.promise, signOut.then(() => assert.fail('Discovery did not start'))]);
+    fenced = await peer.credentials.readRecord(GRANT_KEY);
+    assert.deepEqual(await peer.store.read(), { ok: false, reason: 'sign-out-pending' });
+    assertCompatiblePendingMarker(fenced.payload.signOutOperation);
+    assert.equal(accessTokenOf(fenced).ok, false);
+    unavailable.resolve(new Response(null, { status: 503 }));
+    const result = await signOut;
+    assert.equal(result.revocation, 'unknown');
+    assert.equal(result.view.canSignOut, true);
+    assert.deepEqual(outgoing, ['/discovery']);
+  } finally {
+    unavailable.resolve(new Response(null, { status: 503 }));
+    await firstService.dispose();
+    await Promise.all([first.backend.close(), peer.backend.close()]);
+  }
+
+  const reopened = open(directory);
+  const requests = [];
+  let expectedMarker = fenced;
+  let discoveredEndpoint = config.revocationEndpoint;
+  let confirmRevocation = false;
+  const fetch = async (url) => {
+    const target = new URL(url);
+    requests.push(target.pathname);
+    if (target.pathname.endsWith('/discovery')) {
+      assert.deepEqual(await reopened.credentials.readRecord(GRANT_KEY), expectedMarker);
+      return Response.json({ issuer: grant.issuer, revocation_endpoint: discoveredEndpoint });
+    }
+    assert.equal(target.pathname, '/revoke');
+    assert.equal(target.searchParams.get('access_token'), grant.accessToken);
+    const pinned = await reopened.credentials.readRecord(GRANT_KEY);
+    assertCompatiblePendingMarker(pinned.payload.signOutOperation);
+    assert.notEqual(pinned.payload.signOutOperation.id, fenced.payload.signOutOperation.id);
+    return confirmRevocation ? Response.json({ result: true }) : new Response(null, { status: 204 });
+  };
+  try {
+    for (const change of [{ discoveryUrl: `${grant.issuer}/different/discovery` },
+      { revocationMode: 'rfc7009' }, { revocationEndpoint: config.revocationEndpoint },
+      { discoveryUrl: '' }, { clientId: 'different-client' }]) {
+      const other = createIamService({ ...configured, ...change }, { credentials: reopened.credentials, fetch });
+      try {
+        assert.equal((await other.signOut()).revocation, 'unknown');
+        assert.deepEqual(await reopened.credentials.readRecord(GRANT_KEY), fenced);
+        assert.equal(requests.includes('/revoke'), false);
+      } finally { await other.dispose(); }
+    }
+    requests.length = 0;
+    const retry = createIamService(configured, { credentials: reopened.credentials, fetch });
+    try {
+      await assert.rejects(retry.resolveToken(), { code: 'IAM_INVALID_GRANT' });
+      assert.equal(retry.getView().error, 'IAM_REVOCATION_UNKNOWN');
+      assert.equal(retry.getView().canSignOut, true);
+      assert.deepEqual(requests, []);
+      assert.equal((await retry.signOut()).revocation, 'unknown');
+      assert.deepEqual(requests, ['/discovery', '/revoke']);
+    } finally { await retry.dispose(); }
+
+    expectedMarker = await reopened.credentials.readRecord(GRANT_KEY);
+    assertCompatiblePendingMarker(expectedMarker.payload.signOutOperation);
+    assert.notEqual(expectedMarker.payload.signOutOperation.id, fenced.payload.signOutOperation.id);
+    assert.deepEqual(await reopened.store.read(), { ok: false, reason: 'sign-out-pending' });
+    for (const change of [{ discoveryUrl: `${grant.issuer}/different/discovery` }, {}]) {
+      requests.length = 0;
+      discoveredEndpoint = change.discoveryUrl ? config.revocationEndpoint : `${grant.issuer}/different/revoke`;
+      const other = createIamService({ ...configured, ...change }, { credentials: reopened.credentials, fetch });
+      try {
+        assert.equal((await other.signOut()).revocation, 'unknown');
+        assert.deepEqual(await reopened.credentials.readRecord(GRANT_KEY), expectedMarker);
+        assert.equal(requests.every((path) => path.endsWith('/discovery')), true);
+      } finally { await other.dispose(); }
+    }
+    requests.length = 0;
+    discoveredEndpoint = config.revocationEndpoint;
+    confirmRevocation = true;
+    const matching = createIamService(configured, { credentials: reopened.credentials, fetch });
+    try {
+      assert.equal((await matching.signOut()).revocation, 'ok');
+      assert.deepEqual(requests, ['/discovery', '/revoke']);
+      assert.equal((await matching.signOut()).revocation, 'skipped');
+      assert.deepEqual(await reopened.store.read(), { ok: true, grant: null });
+    } finally { await matching.dispose(); }
+  } finally { await reopened.backend.close(); }
+});
+
 test('a new Host retries the persisted sign-out only at its original protocol and endpoint', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-retry-'));
   const directory = join(root, 'store');
@@ -173,40 +276,61 @@ test('a new Host retries the persisted sign-out only at its original protocol an
   ]);
 });
 
-test('RFC 7009 sign-out authenticates under the stored pin and revokes only the refresh token', async (t) => {
+test('RFC 7009 sign-out fences an unavailable client-auth read and retries under the stored pin', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-rfc-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const opened = open(join(root, 'store'));
+  const directory = join(root, 'store');
+  const opened = open(directory);
   const fixture = createClientSecretFixture(opened.credentials, { issuer: grant.issuer, clientId: grant.clientId });
   const pinned = fixture.snapshot();
   const confidential = { ...grant, version: 2, authContext: {
     mode: 'confidential', method: fixture.config.clientAuthMethod,
     secretRef: fixture.config.clientSecretRef, secretRevision: pinned.revision,
   } };
+  const configured = { ...config, ...fixture.config, revocationMode: 'rfc7009' };
   const calls = [];
-  let marker;
-  const service = createIamService({ ...config, ...fixture.config, revocationMode: 'rfc7009' }, {
-    ...fixture.options, fetch: async (url, init) => {
-      marker = (await opened.credentials.readRecord(GRANT_KEY)).payload.signOutOperation;
+  const first = createIamService(configured, { ...fixture.options, fetch: async () => {
+    calls.push('unexpected revoke');
+    return new Response(null, { status: 200 });
+  } });
+  let pending;
+  try {
+    await opened.store.write(confidential);
+    fixture.remove();
+    const outcome = await first.signOut();
+    assert.equal(outcome.revocation, 'unknown');
+    assert.equal(outcome.view.canSignOut, true);
+    assert.equal(calls.length, 0);
+    pending = await opened.credentials.readRecord(GRANT_KEY);
+    assert.deepEqual(await opened.store.read(), { ok: false, reason: 'sign-out-pending' });
+    assertCompatiblePendingMarker(pending.payload.signOutOperation);
+  } finally {
+    await first.dispose();
+    await opened.backend.close();
+  }
+
+  const reopened = open(directory);
+  const replacement = createClientSecretFixture(reopened.credentials, { issuer: grant.issuer, clientId: grant.clientId });
+  const retry = createIamService(configured, {
+    ...replacement.options, fetch: async (url, init) => {
+      assert.deepEqual(await reopened.credentials.readRecord(GRANT_KEY), pending);
       calls.push({ target: new URL(url).pathname, method: init.method,
         authorization: Boolean(init.headers.authorization), fields: Object.fromEntries(new URLSearchParams(init.body)) });
       return new Response(null, { status: 200 });
     },
   });
   try {
-    await opened.store.write(confidential);
-    fixture.replace();
-    assert.equal((await service.signOut()).revocation, 'unknown');
+    assert.equal((await retry.signOut()).revocation, 'unknown');
     assert.equal(calls.length, 0);
-    fixture.restore(pinned);
-    assert.equal((await service.signOut()).revocation, 'ok');
-    assertCompatiblePendingMarker(marker);
+    assert.deepEqual(await reopened.credentials.readRecord(GRANT_KEY), pending);
+    replacement.restore(pinned);
+    assert.equal((await retry.signOut()).revocation, 'ok');
     assert.deepEqual(calls, [{ target: '/revoke', method: 'POST', authorization: true,
       fields: { token: grant.refreshToken, token_type_hint: 'refresh_token' } }]);
-    assert.deepEqual(await opened.store.read(), { ok: true, grant: null });
+    assert.deepEqual(await reopened.store.read(), { ok: true, grant: null });
   } finally {
-    await service.dispose();
-    await opened.backend.close();
+    await retry.dispose();
+    await reopened.backend.close();
   }
 });
 
@@ -334,6 +458,41 @@ for (const sameLogin of [false, true]) {
       await service.dispose();
       await Promise.all([opened.backend.close(), peer.backend.close()]);
     }
+  });
+}
+
+for (const observation of ['cold panel', 'warm panel', 'cold token read', 'warm token read']) {
+  test(`a ${observation} keeps exit retry scoped to the observed SQLite login`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-exit-retry-'));
+    const directory = join(root, 'store');
+    const observer = open(directory);
+    const peer = open(directory);
+    let retryRequests = 0;
+    const service = createIamService(config, { credentials: observer.credentials, fetch: async () => {
+      retryRequests++;
+      return new Response(null, { status: 204 });
+    } });
+    const initiator = createIamService(config, { credentials: peer.credentials, fetch: async () => new Response(null, { status: 204 }) });
+    t.after(async () => {
+      await Promise.all([service.dispose(), initiator.dispose()]);
+      await Promise.all([observer.backend.close(), peer.backend.close()]);
+      await rm(root, { recursive: true, force: true });
+    });
+
+    await peer.store.write(grant);
+    if (observation.startsWith('warm')) assert.equal((await service.hydrate()).state, 'ready');
+    assert.equal((await initiator.signOut()).revocation, 'unknown');
+    if (observation.endsWith('panel')) await service.hydrate();
+    else await assert.rejects(service.resolveToken(), { code: 'IAM_INVALID_GRANT' });
+    assert.equal(service.getView().error, 'IAM_REVOCATION_UNKNOWN');
+    assert.equal(service.getView().canSignOut, true);
+
+    const replacement = { ...grant, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url'),
+      accessToken: 'synthetic-peer-access', refreshToken: 'synthetic-peer-refresh' };
+    await peer.store.write(replacement);
+    assert.equal((await service.signOut()).revocation, 'unknown');
+    assert.equal(retryRequests, 0);
+    assert.deepEqual(await peer.store.read(), { ok: true, grant: replacement });
   });
 }
 

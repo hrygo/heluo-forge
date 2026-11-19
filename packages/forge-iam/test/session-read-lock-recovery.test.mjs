@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,6 +12,7 @@ import { createIamRoutes } from '../src/routes.mjs';
 import { createIamService } from '../src/service.mjs';
 import { refreshBaseId } from '../src/session-identity.mjs';
 import { createGrantStore, GATEWAY_RECORD_KEY, GATEWAY_REF, GRANT_KEY } from '../src/store.mjs';
+import { startMockOidc } from './support/mock-oidc.mjs';
 
 const start = Date.parse('2030-01-01T00:00:00.000Z');
 const accessLifetimeMs = 300_000;
@@ -34,6 +37,7 @@ const shortRefresh = { ...original, refreshExpiresAt: new Date(start + 6000).toI
 
 async function startHost(t, initial = original, {
   refreshSkewSeconds = config.refreshSkewSeconds, getManagedModelRuntime, hydratedState = 'ready',
+  liveEndpoints, failFirstJwks = false,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'forge-iam-read-lock-'));
   const directory = join(root, 'store');
@@ -47,7 +51,7 @@ async function startHost(t, initial = original, {
   const posts = [];
   const events = [];
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
-  const service = createIamService({ ...config, refreshSkewSeconds }, {
+  const service = createIamService({ ...config, ...liveEndpoints, refreshSkewSeconds }, {
     credentials,
     getCredentials: () => activeCredentials,
     getOrigin: () => new URL(config.redirectUri).origin,
@@ -58,8 +62,14 @@ async function startHost(t, initial = original, {
     getGatewayAtomicStore: (candidate) => candidate === credentials ? joint : undefined,
     verifyGatewayAtomicStore: (candidate, adapter) => candidate === credentials && adapter === joint,
     logRenewal: (event, fields) => events.push({ event, ...fields }),
-    async fetch(url, init) {
-      if (url === config.jwksUri) return Response.json({ keys: [] });
+    fetch: liveEndpoints ? undefined : async (url, init) => {
+      if (url === config.jwksUri) {
+        if (failFirstJwks) {
+          failFirstJwks = false;
+          return new Response(null, { status: 503 });
+        }
+        return Response.json({ keys: [] });
+      }
       assert.equal(url, config.tokenEndpoint);
       assert.equal(init.method, 'POST');
       posts.push(new URLSearchParams(init.body).get('refresh_token'));
@@ -216,6 +226,104 @@ test('panel reads honor a shared backoff and the Host recovers without another r
   await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
   assert.deepEqual(posts, [initial.refreshToken]);
 });
+
+test('panel read recovery restores a due preflight retry after access expires', async (t) => {
+  const initial = { ...original, accessExpiresAt: new Date(start + 2200).toISOString(),
+    refreshExpiresAt: new Date(start + 3200).toISOString() };
+  const { blocker, store, service, posts, events, handler } = await startHost(t, initial, { failFirstJwks: true });
+
+  t.mock.timers.setTime(start + 1700);
+  assert.equal(await service.getAccessToken(), initial.accessToken);
+  const preflightRetry = scheduledRenewal(events);
+  assert.equal(preflightRetry.dueAtMs, start + 2700);
+  blocker.exec('BEGIN EXCLUSIVE');
+  assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
+  await assert.rejects(service.getAccessToken(), { code: 'IAM_CREDENTIALS_UNAVAILABLE' });
+  blocker.exec('COMMIT');
+  assert.deepEqual((await store.read()).grant, initial);
+  assert.deepEqual(posts, []);
+
+  t.mock.timers.tick(1000);
+  assert.equal((await waitForView(service, (view) => view.state === 'expired')).renewal, 'available');
+  const recoveryRenewal = scheduledRenewal(events);
+  assert.notEqual(recoveryRenewal.renewalId, preflightRetry.renewalId);
+  assert.equal(recoveryRenewal.dueAtMs, preflightRetry.dueAtMs);
+  assert.deepEqual(posts, []);
+  fireRenewal(t, events);
+  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  assert.ok(Date.now() < Date.parse(initial.refreshExpiresAt));
+  assert.deepEqual(posts, [initial.refreshToken]);
+  const renewed = (await store.read()).grant;
+  assert.equal(renewed.sessionInstanceId, initial.sessionInstanceId);
+  assert.equal(renewed.refreshOperation.state, 'complete');
+  assert.equal(await service.getAccessToken(), rotated.access_token);
+});
+
+for (const startsExpired of [true, false]) {
+  const scenario = startsExpired ? 'access already expired when the timer fires' : 'the claim outlives access';
+  test(`a confirmed unsent renewal retries when ${scenario}`, async (t) => {
+    const oidc = await startMockOidc();
+    t.after(() => oidc.close());
+    const posts = [];
+    const tokenEndpoint = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      posts.push(new URLSearchParams(Buffer.concat(chunks).toString()).get('refresh_token'));
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify(rotated));
+    });
+    tokenEndpoint.listen(0, '127.0.0.1');
+    await once(tokenEndpoint, 'listening');
+    const { port } = tokenEndpoint.address();
+    await new Promise((resolve) => tokenEndpoint.close(resolve));
+    t.after(() => { if (tokenEndpoint.listening) return new Promise((resolve) => tokenEndpoint.close(resolve)); });
+    const initial = { ...original, accessExpiresAt: new Date(start + 3000).toISOString(),
+      refreshExpiresAt: new Date(start + 3550).toISOString() };
+    const { credentials, events, service, store } = await startHost(t, initial, {
+      refreshSkewSeconds: startsExpired ? 0 : 1,
+      liveEndpoints: { jwksUri: oidc.endpoints.jwksUri, tokenEndpoint: `http://127.0.0.1:${port}/token` },
+    });
+
+    const releaseRestore = Promise.withResolvers();
+    t.after(releaseRestore.resolve);
+    const modifyRecord = credentials.modifyRecord.bind(credentials);
+    let restoring = false;
+    let writes = 0;
+    t.mock.method(credentials, 'modifyRecord', async (...args) => {
+      if (++writes === 2) {
+        restoring = true;
+        await releaseRestore.promise;
+      }
+      return modifyRecord(...args);
+    });
+    const { renewalId } = scheduledRenewal(events);
+    fireRenewal(t, events);
+    await waitForView(service, () => restoring);
+    assert.equal((await store.read()).grant.refreshOperation.state, 'pending');
+    if (!startsExpired) t.mock.timers.tick(1000);
+    assert.equal(service.notifyView().state, 'expired');
+    assert.equal(Date.parse(initial.refreshExpiresAt) - Date.now(), 550);
+    const waiter = assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+    releaseRestore.resolve();
+    await waiter;
+    await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+    assert.equal(service.getView().state, 'expired');
+    assert.deepEqual((await store.read()).grant, initial);
+    assert.deepEqual(posts, []);
+
+    tokenEndpoint.listen(port, '127.0.0.1');
+    await once(tokenEndpoint, 'listening');
+    const retryAt = scheduledRenewal(events).dueAtMs;
+    assert.ok(retryAt > Date.now() && retryAt < Date.parse(initial.refreshExpiresAt));
+    fireRenewal(t, events);
+    await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+    assert.deepEqual(posts, [initial.refreshToken]);
+    const renewed = (await store.read()).grant;
+    assert.equal(renewed.sessionInstanceId, initial.sessionInstanceId);
+    assert.equal(renewed.refreshOperation.state, 'complete');
+    assert.equal(await service.getAccessToken(), rotated.access_token);
+  });
+}
 
 test('a recovered grant renews before its refresh deadline while the gateway summary is stalled', async (t) => {
   const { blocker, store, service, credentials, posts, events, handler } = await startHost(t, shortRefresh, {

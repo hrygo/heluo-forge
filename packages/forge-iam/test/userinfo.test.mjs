@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setTimeout as delay } from 'node:timers/promises';
+import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { createIamService } from './support/trusted-service.mjs';
 import { validateConfig } from '../src/config.mjs';
+import { createGrantStore } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 import { normalizeProfileFields, projectUserInfo } from '../src/userinfo.mjs';
@@ -71,19 +72,25 @@ test('no field mapping means no UserInfo request', async (t) => {
   assert.equal(mock.counts.userInfo, 0);
 });
 
-test('complete explicit login succeeds while optional UserInfo discovery is still in flight', { timeout: 4000 }, async (t) => {
+test('explicit login and panel polling preserve in-flight optional UserInfo discovery', { timeout: 4000 }, async (t) => {
   const mock = await startMockOidc();
   const entered = Promise.withResolvers();
   const release = Promise.withResolvers();
   const discoveryUrl = `${mock.issuer}/.well-known/openid-configuration`;
-  const service = createIamService(configFor(mock, { userInfoEndpoint: '', discoveryUrl }), {
+  let discoveryReads = 0;
+  const service = createIamService(configFor(mock, { userInfoEndpoint: '', revocationEndpoint: '', discoveryUrl }), {
     credentials: new MemoryCredentials(),
     profileFields: { workNo: 'work_no' },
     async fetch(url, init) {
       if (String(url) === discoveryUrl) {
+        discoveryReads++;
         entered.resolve();
         await release.promise;
-        return Response.json({ issuer: mock.issuer, userinfo_endpoint: `${mock.issuer}/userinfo` });
+        return Response.json({
+          issuer: mock.issuer,
+          userinfo_endpoint: `${mock.issuer}/userinfo`,
+          revocation_endpoint: null,
+        });
       }
       return fetch(url, init);
     },
@@ -93,12 +100,50 @@ test('complete explicit login succeeds while optional UserInfo discovery is stil
   const login = signIn(service);
   await entered.promise;
   assert.equal((await login).state, 'ready');
+  assert.equal((await service.syncFromStore()).state, 'ready');
+  assert.equal((await service.syncFromStore()).state, 'ready');
   assert.equal(mock.counts.userInfo, 0);
   release.resolve();
   const deadline = Date.now() + 1500;
   while (!service.getIdentityProfile() && Date.now() < deadline) await delay(10);
   assert.deepEqual(service.getIdentityProfile(), { workNo: '10001234' });
   assert.equal(mock.counts.userInfo, 1);
+  assert.equal((await service.signOut()).revocation, 'unknown');
+  assert.equal(service.getView().canSignOut, true);
+  assert.equal(discoveryReads, 2, 'malformed revoke metadata cached by UserInfo must be checked again on sign-out');
+});
+
+test('late UserInfo for the previous access token is discarded after the same login rotates', { timeout: 4000 }, async (t) => {
+  const mock = await startMockOidc();
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  const profileRequest = Promise.withResolvers();
+  const profileResponse = Promise.withResolvers();
+  const service = createIamService(configFor(mock, {
+    userInfoEndpoint: '',
+    discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
+  }), {
+    credentials,
+    profileFields: { workNo: 'work_no' },
+    async fetch(url, init) {
+      if (String(url) !== `${mock.issuer}/userinfo`) return fetch(url, init);
+      profileRequest.resolve();
+      return profileResponse.promise;
+    },
+  });
+  t.after(async () => {
+    profileResponse.resolve(Response.json({ work_no: 'first-access-profile' }));
+    await service.dispose();
+    await mock.close();
+  });
+  assert.equal((await signIn(service)).state, 'ready');
+  await profileRequest.promise;
+  const { grant } = await store.read();
+  await store.write({ ...grant, accessToken: 'synthetic-next-access', refreshToken: 'synthetic-next-refresh' });
+  assert.equal((await service.syncFromStore()).state, 'ready');
+  profileResponse.resolve(Response.json({ work_no: 'first-access-profile' }));
+  await setImmediate();
+  assert.equal(service.getIdentityProfile(), undefined);
 });
 
 test('UserInfo failure degrades without failing login', async (t) => {

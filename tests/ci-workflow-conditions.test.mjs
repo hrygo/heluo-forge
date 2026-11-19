@@ -45,6 +45,7 @@ const iamReadTestPaths = [
   'packages/forge-iam/test/client-auth-refresh.test.mjs',
   'packages/forge-iam/test/callback-port.test.mjs',
   'packages/forge-iam/test/signout-sqlite-crash.test.mjs',
+  'packages/forge-iam/test/userinfo.test.mjs',
 ];
 
 const platformEnvironment = new Map([
@@ -507,6 +508,9 @@ const executionMutations = [
     /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
   ['sign-out crash recovery test removed',
     workflow.replace(' packages/forge-iam/test/signout-sqlite-crash.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
+  ['UserInfo polling regression test removed',
+    workflow.replace(' packages/forge-iam/test/userinfo.test.mjs', ''),
     /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
   ['IAM read paths moved to a comment',
     workflow.replace('node --test packages/forge-iam/test/read-paths-matrix.test.mjs ', 'node --test ')

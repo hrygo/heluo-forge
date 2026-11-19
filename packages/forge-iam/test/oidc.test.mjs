@@ -458,3 +458,36 @@ test('missing optional endpoints are discovered only when requested and bound to
       { code: 'IAM_DISCOVERY_ISSUER_MISMATCH' });
   }
 });
+
+test('core and UserInfo Discovery preserve the distinction between malformed and omitted revoke metadata', async () => {
+  const issuer = 'https://iam.example';
+  const config = { issuer, discoveryUrl: issuer + '/discovery', authorizationEndpoint: issuer + '/authorize',
+    tokenEndpoint: issuer + '/token', jwksUri: issuer + '/jwks' };
+  const document = {
+    issuer, userinfo_endpoint: issuer + '/userinfo',
+    authorization_endpoint: config.authorizationEndpoint, token_endpoint: config.tokenEndpoint, jwks_uri: config.jwksUri,
+  };
+  const optional = 'userInfoEndpoint';
+  for (const malformed of [null, false, 0, '']) {
+    const fetchImpl = async () => Response.json({ ...document, revocation_endpoint: malformed });
+    const core = await loadMetadata({ discoveryUrl: config.discoveryUrl }, { fetchImpl });
+    const profile = await loadMetadata(config, { fetchImpl, optional });
+    assert.equal(core.issuer, issuer);
+    assert.equal(profile.userInfoEndpoint, document.userinfo_endpoint);
+    assert.equal(core.invalidRevocationEndpoint, true);
+    assert.equal(profile.invalidRevocationEndpoint, true);
+  }
+  for (const malformed of [{}, ['https://iam.example/revoke'], 'ftp://iam.example/revoke']) {
+    const fetchImpl = async () => Response.json({ ...document, revocation_endpoint: malformed });
+    await assert.rejects(() => loadMetadata(config, { fetchImpl, optional }), { code: 'IAM_CONFIG_INVALID' });
+  }
+  const omitted = await loadMetadata(config, { optional, fetchImpl: async () => Response.json(document) });
+  assert.equal(omitted.revocationEndpoint, undefined);
+  assert.equal(omitted.invalidRevocationEndpoint, undefined);
+  const explicit = await loadMetadata({ ...config, revocationEndpoint: issuer + '/revoke' }, {
+    optional, fetchImpl: async () => Response.json({ ...document, revocation_endpoint: null }),
+  });
+  assert.equal(explicit.revocationEndpoint, issuer + '/revoke');
+  assert.equal(explicit.invalidRevocationEndpoint, undefined);
+  assert.equal(explicit.userInfoEndpoint, issuer + '/userinfo');
+});

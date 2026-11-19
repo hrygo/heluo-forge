@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import { createCredentialStore, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { createIamService } from '../src/service.mjs';
 import { REFRESH_TIMEOUT_MS } from '../src/service-helpers.mjs';
@@ -16,7 +17,10 @@ const config = {
   redirectUri: 'http://127.0.0.1:4567/iam/callback',
 };
 
-async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fetchJwks, monotonic } = {}) {
+async function openHosts(t, {
+  refreshSkewSeconds = config.refreshSkewSeconds, fetchJwks, fetchToken, monotonic,
+  accessLifetimeMs = 300_000, refreshLifetimeMs = 360_000,
+} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'forge-iam-pending-binding-'));
   const backend = createCredentialStore({ directory });
   const peer = createCredentialStore({ directory });
@@ -27,6 +31,7 @@ async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fe
   const readingReceipt = Promise.withResolvers();
   const releaseReceipt = Promise.withResolvers();
   const posts = [];
+  const renewals = [];
   let trustBinding = {};
   const service = createIamService({ ...config, refreshSkewSeconds }, {
     credentials,
@@ -35,10 +40,12 @@ async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fe
     getAtomicStoreBinding: (candidate) => candidate === credentials ? trustBinding : null,
     logRenewal(event, fields) {
       if (event === 'session-state' && fields.code === 'IAM_REAUTH_REQUIRED') pendingObserved.resolve();
+      if (event === 'renewal-scheduled') renewals.push(fields);
     },
     async fetch(url, init) {
       if (url === config.jwksUri && fetchJwks) return fetchJwks();
       if (init?.method === 'POST') posts.push(url);
+      if (url === config.tokenEndpoint && fetchToken) return fetchToken();
       throw new Error('pending receipt observation does not need network I/O');
     },
   });
@@ -62,8 +69,8 @@ async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fe
   const original = {
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
     issuer, clientId: config.clientId, subject: 'synthetic-subject', scope: 'openid',
-    obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 300_000).toISOString(),
-    refreshExpiresAt: new Date(now + 360_000).toISOString(),
+    obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + accessLifetimeMs).toISOString(),
+    refreshExpiresAt: new Date(now + refreshLifetimeMs).toISOString(),
     accessToken: 'synthetic-original-access', refreshToken: 'synthetic-original-refresh',
   };
   const id = Buffer.alloc(32, 9).toString('base64url');
@@ -75,11 +82,145 @@ async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fe
     refreshOperation: { ...operation, state: 'complete' },
   };
   return {
-    service, writer, posts, observerWrites, original, pending, complete,
+    service, credentials, writer, posts, renewals, observerWrites, original, pending, complete,
     pendingObserved: pendingObserved.promise, readingReceipt: readingReceipt.promise,
     releaseReceipt: releaseReceipt.resolve,
     replaceTrust() { trustBinding = {}; },
   };
+}
+
+for (const refreshUsable of [true, false]) {
+  const outcome = refreshUsable ? 'schedules a retry' : 'cannot renew again';
+  test(`a warm peer rollback after access expiry ${outcome}`, { timeout: 5000 }, async (t) => {
+    const start = Date.now();
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
+    const { service, writer, original, pending, posts, renewals, releaseReceipt } = await openHosts(t, {
+      refreshSkewSeconds: 0,
+      accessLifetimeMs: 1000,
+      refreshLifetimeMs: 1500,
+      monotonic: () => Date.now() - start,
+      fetchJwks: () => Response.json({ keys: [] }),
+      fetchToken: () => Response.json({
+        access_token: 'synthetic-rotated-access', refresh_token: 'synthetic-rotated-refresh',
+        token_type: 'Bearer', expires_in: 120, refresh_expires_in: 180,
+      }),
+    });
+    await writer.write(original);
+    assert.equal((await service.hydrate()).state, 'ready');
+    await writer.write(pending);
+    assert.equal((await service.syncFromStore()).state, 'ready');
+    const result = assert.rejects(service.getAccessToken(), {
+      code: refreshUsable ? 'IAM_UNREACHABLE' : 'IAM_RENEWAL_UNCONFIRMED',
+    });
+    void result.catch(() => {});
+    // The observing Host is already waiting when the exact rollback arrives.
+    t.mock.timers.setTime(start + (refreshUsable ? 1050 : 1500));
+    await writer.write(original);
+    t.mock.timers.tick(50);
+    await result;
+    assert.deepEqual(posts, []);
+    assert.deepEqual((await writer.read()).grant, original);
+
+    if (!refreshUsable) {
+      assert.equal(service.getView().state, 'error');
+      assert.equal(service.getView().renewal, 'none');
+      return;
+    }
+    assert.equal(service.getView().state, 'expired');
+    assert.equal(service.getView().renewal, 'available');
+    const dueAt = renewals.at(-1)?.dueAtMs;
+    assert.ok(dueAt > Date.now() && dueAt < Date.parse(original.refreshExpiresAt));
+    t.mock.timers.tick(dueAt - Date.now());
+    const deadline = performance.now() + 1500;
+    while (service.getView().state !== 'ready' && performance.now() < deadline) await setImmediate();
+    assert.equal(service.getView().state, 'ready');
+    releaseReceipt();
+    assert.equal(await service.getAccessToken(), 'synthetic-rotated-access');
+    assert.deepEqual(posts, [config.tokenEndpoint]);
+    const { grant } = await writer.read();
+    assert.equal(grant.sessionInstanceId, original.sessionInstanceId);
+    assert.equal(grant.refreshOperation.state, 'complete');
+  });
+}
+
+async function persistSignOutPending(writer, grant) {
+  const signOutOperation = { version: 1, state: 'pending', id: Buffer.alloc(32, 12).toString('base64url') };
+  await writer.write({ ...grant, signOutOperation });
+}
+
+for (const adopted of [true, false]) {
+  const scenario = adopted ? 'a warm observer' : 'a cold token waiter';
+  test(`${scenario} retains explicit sign-out after its receipt read finds a sign-out marker`, { timeout: 5000 }, async (t) => {
+    const { service, writer, original, pending, complete, posts, observerWrites, pendingObserved, releaseReceipt } = await openHosts(t);
+    if (adopted) {
+      await writer.write(original);
+      assert.equal((await service.hydrate()).state, 'ready');
+    }
+    await writer.write(pending);
+    if (adopted) assert.equal((await service.syncFromStore()).state, 'ready');
+    const result = assert.rejects(service.getAccessToken(), { code: adopted ? 'IAM_INVALID_GRANT' : 'IAM_REAUTH_REQUIRED' });
+    void result.catch(() => {});
+    if (!adopted) await pendingObserved;
+    await persistSignOutPending(writer, complete);
+    releaseReceipt();
+    await result;
+    assert.equal(service.getView().error, 'IAM_REVOCATION_UNKNOWN');
+    assert.equal(service.getView().canSignOut, true);
+    assert.equal(service.getView().signedIn, false);
+    assert.deepEqual(await writer.read(), { ok: false, reason: 'sign-out-pending' });
+    assert.deepEqual(posts, []);
+    assert.deepEqual(observerWrites, []);
+  });
+}
+
+for (const duringClaim of [true, false]) {
+  const scenario = duringClaim ? 'during its SQLite mutation' : 'after losing its SQLite mutation';
+  test(`a refresh claim that discovers a sign-out marker ${scenario} retains explicit sign-out`, { timeout: 5000 }, async (t) => {
+    const readingJwks = Promise.withResolvers();
+    const releaseJwks = Promise.withResolvers();
+    t.after(releaseJwks.resolve);
+    const { service, credentials, writer, original, complete, posts, observerWrites, releaseReceipt } = await openHosts(t, {
+      refreshSkewSeconds: 600,
+      async fetchJwks() {
+        readingJwks.resolve();
+        await releaseJwks.promise;
+        return Response.json({ keys: [] });
+      },
+    });
+    await writer.write(original);
+    assert.equal((await service.hydrate()).state, 'ready');
+    const result = assert.rejects(service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+    void result.catch(() => {});
+    await readingJwks.promise;
+    if (duringClaim) {
+      await persistSignOutPending(writer, original);
+      releaseJwks.resolve();
+    } else {
+      const compared = Promise.withResolvers();
+      const releaseComparison = Promise.withResolvers();
+      t.after(releaseComparison.resolve);
+      const modifyRecord = credentials.modifyRecord.bind(credentials);
+      t.mock.method(credentials, 'modifyRecord', async (...args) => {
+        const result = await modifyRecord(...args);
+        compared.resolve();
+        await releaseComparison.promise;
+        return result;
+      });
+      await writer.write(complete);
+      releaseJwks.resolve();
+      await compared.promise;
+      await persistSignOutPending(writer, complete);
+      releaseComparison.resolve();
+    }
+    releaseReceipt();
+    await result;
+    assert.equal(service.getView().error, 'IAM_REVOCATION_UNKNOWN');
+    assert.equal(service.getView().canSignOut, true);
+    assert.equal(service.getView().signedIn, false);
+    assert.deepEqual(await writer.read(), { ok: false, reason: 'sign-out-pending' });
+    assert.deepEqual(posts, []);
+    assert.deepEqual(observerWrites, []);
+  });
 }
 
 for (const adopted of [true, false]) {

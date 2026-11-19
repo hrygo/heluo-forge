@@ -5,7 +5,7 @@ import { IamError } from './errors.mjs';
 import { normalizeGatewayBaseURL } from './model-options.mjs';
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
 import { StoreError } from './store.mjs';
-import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
+import { addSeconds, grantIdentity, nowIso, safeMessage } from './service-helpers.mjs';
 
 const GATEWAY_RELOAD_MS = 5000;
 const GATEWAY_CONFIRM_TIMEOUT_MS = 10000;
@@ -21,7 +21,7 @@ const GATEWAY_CONFIRM_TIMEOUT_MS = 10000;
 export function createServiceGateway(env) {
   const {
     config, ctx, provider, grants, now, selection,
-    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage, syncSession,
+    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage, syncSession, pendingObservationFor, captureModelSession,
   } = env;
   let cancelConfirmation = null;
   let summaryRead = null;
@@ -275,28 +275,63 @@ export function createServiceGateway(env) {
       throw error;
     }
   }
-  async function withModelSettings(use) {
+  async function withModelSettings(use, { readGateway = true, signedOutCode = 'IAM_LOGIN_REQUIRED' } = {}) {
     const epoch = getAuthEpoch();
-    if (!ctx.lastGrant) await syncSession();
-    const target = sessionIdentity(ctx.lastGrant);
-    const check = () => {
-      if (ctx.disposed || isSigningOut() || getAuthEpoch() !== epoch
-        || !isDeepStrictEqual(target, sessionIdentity(ctx.lastGrant))) {
+    const assertActive = () => {
+      ctx.assertExclusive();
+      if (ctx.disposed || isSigningOut() || getAuthEpoch() !== epoch) {
         throw new IamError('IAM_MODEL_CONTEXT_CHANGED', '企业账号状态已变化，请重新登录。');
       }
     };
-    check();
-    if (ctx.lastGrant && isAccessExpired(ctx.lastGrant, now())) await resolveToken();
-    check();
-    if (ctx.state === 'ready') await (sessionSummaryRead ?? load());
-    check();
-    return use();
+    assertActive();
+    const cold = !ctx.lastGrant;
+    if (cold) {
+      const pendingAtStart = pendingObservationFor(provider.store, provider.storeCredentials);
+      if (!pendingAtStart) await syncSession();
+      assertActive();
+      const targetStore = provider.store;
+      const credentials = provider.storeCredentials;
+      const pending = pendingAtStart ?? pendingObservationFor(targetStore, credentials);
+      if (pending) {
+        // A cold caller may join only this operation's receipt. General token
+        // resolution can adopt a distinct login while the receipt is pending.
+        const receipt = await pending.wait();
+        assertActive();
+        assertClientAuthCurrent(receipt?.authentication);
+        if (!receipt || provider.atomicBinding(targetStore, credentials) !== pending.atomicBinding
+          || !ctx.lastGrant || !isDeepStrictEqual(grantIdentity(ctx.lastGrant), grantIdentity(receipt.grant))) {
+          throw new IamError('IAM_RENEWAL_UNCONFIRMED', safeMessage('IAM_RENEWAL_UNCONFIRMED'));
+        }
+      }
+    }
+    const settings = selection.captureSettings(signedOutCode);
+    const expired = isAccessExpired(ctx.lastGrant, now());
+    const modelSession = expired ? captureModelSession() : null;
+    try {
+      await settings.verify({ allowExpired: expired });
+    } catch (error) {
+      // Only the bound renewal may wait for a pending rotation. Settings
+      // reads, writes and gateway dispatch still require a confirmed grant.
+      if (!expired || !(error instanceof IamError) || error.code !== 'IAM_RENEWAL_UNCONFIRMED') throw error;
+    }
+    if (expired) {
+      settings.assertCurrent();
+      if (isAccessExpired(ctx.lastGrant, now())) {
+        await modelSession.renew({ expiredCode: signedOutCode });
+      }
+      await settings.verify();
+    }
+    if (readGateway) await (sessionSummaryRead ?? load({ force: cold }));
+    settings.assertCurrent();
+    const result = await use(settings);
+    await settings.verify();
+    return result;
   }
 
   async function refreshModels() {
     const runtime = getManagedModelRuntime?.();
     if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-    return withModelSettings(() => runtime.refresh());
+    return withModelSettings((settings) => runtime.refresh(settings));
   }
 
   async function resolveConnection() {

@@ -16,9 +16,12 @@ async function setup(t, { subject = 'synthetic-subject', expiresAt = new Date(no
   await createGrantStore(credentials).write({
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, clientId: config.clientId, subject,
     accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh', scope: 'openid',
-    obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: expiresAt,
+    obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: expiresAt, refreshExpiresAt: expiresAt,
   });
-  const service = createIamService(config, { credentials, now: () => now, fetch: async () => { throw new Error('no network permitted'); } });
+  const service = createIamService(config, {
+    credentials, verifyAtomicStore: (candidate) => candidate === credentials,
+    now: () => now, fetch: async () => { throw new Error('no network permitted'); },
+  });
   t.after(() => service.dispose());
   return { credentials, service };
 }

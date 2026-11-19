@@ -54,9 +54,11 @@ function isNonEmptyString(value) {
 // bound ID packs a four-byte tag, a 12-byte nonce and a 16-byte context hash.
 const SIGN_OUT_BOUND_TAG = Buffer.from('ISO1', 'ascii');
 const SIGN_OUT_HASH_OFFSET = 16;
-function signOutContextHash(grant, { mode, endpoint, resource }, prefix) {
+function signOutContextHash(grant, { mode, endpoint, resource, discovery }, prefix) {
+  const context = [mode, endpoint, resource, grantIdentity(grant), grant.accessToken ?? null, grant.refreshToken];
+  if (discovery) context.push([discovery.stage, discovery.url, discovery.issuer, discovery.configuredEndpoint]);
   return createHash('sha256').update('heluo-iam/sign-out-context/v1\0').update(prefix)
-    .update(JSON.stringify([mode, endpoint, resource, grantIdentity(grant), grant.accessToken ?? null, grant.refreshToken]))
+    .update(JSON.stringify(context))
     .digest().subarray(0, 16);
 }
 
@@ -74,7 +76,12 @@ function canResumeSignOut(grant, revocationContext, allowLegacyRecovery) {
   }
   // A malformed or mismatched bound ID must never receive legacy treatment.
   const prefix = id.subarray(0, SIGN_OUT_HASH_OFFSET);
-  return id.subarray(SIGN_OUT_HASH_OFFSET).equals(signOutContextHash(grant, revocationContext, prefix));
+  const digest = id.subarray(SIGN_OUT_HASH_OFFSET);
+  if (digest.equals(signOutContextHash(grant, revocationContext, prefix))) return true;
+  // Earlier bound markers carry only the resolved endpoint. They remain
+  // retryable after Discovery confirms that same endpoint.
+  return revocationContext.discovery?.stage === 'pinned'
+    && digest.equals(signOutContextHash(grant, { ...revocationContext, discovery: undefined }, prefix));
 }
 
 /**
@@ -99,16 +106,96 @@ export function createGrantStore(credentials, options = {}) {
     }
   }
 
-  async function read() {
-    const session = inspectSessionRecord(await credentials.readRecord(key));
+  async function read({ includeSignOutIdentity = false } = {}) {
+    const record = await credentials.readRecord(key);
+    const session = inspectSessionRecord(record);
     if (session.state === 'absent') return { ok: true, grant: null };
     if (session.state === 'invalid') {
       return session.reason === 'wrong-kind'
         ? { ok: false, reason: session.reason, kind: session.kind }
         : { ok: false, reason: session.reason, errors: session.errors };
     }
-    if (session.state === 'pending' && session.operation === 'sign-out') return { ok: false, reason: 'sign-out-pending' };
+    if (session.state === 'pending' && session.operation === 'sign-out') {
+      return { ok: false, reason: 'sign-out-pending',
+        ...(includeSignOutIdentity ? { signOutIdentity: grantIdentity(parseGrant(record.payload).value) } : {}) };
+    }
     return { ok: true, grant: session.grant };
+  }
+
+  function signOutAuthorized(guard) {
+    return () => atomicVerified() && (guard === undefined || guard() === true);
+  }
+
+  async function claimSignOut(expected, confirmedRefresh, options, authorized) {
+    const { expectedRecord, revocationContext, discoveryIntent, allowLegacyRecovery } = options;
+    if (expected !== null && !validateGrant(expected).ok) return { ok: false };
+    let decision;
+    let called = 0;
+    let pending;
+    let original;
+    let unchanged;
+    const claim = (grant) => {
+      original = structuredClone(grant);
+      pending = { kind: 'grant', payload: { ...original, signOutOperation: {
+        version: 1, state: 'pending', id: signOutId(original, revocationContext),
+      } } };
+      decision = 'claimed';
+      return pending;
+    };
+    try {
+      if (!authorized()) return { ok: false };
+      const phaseResult = await credentials.modifyRecord(key, (current) => {
+        if (!authorized() || ++called !== 1) throw new Error('atomic store no longer verified');
+        if (Object.hasOwn(options, 'expectedRecord') && !isDeepStrictEqual(current, expectedRecord)) {
+          decision = 'replaced';
+          unchanged = structuredClone(current);
+          return undefined;
+        }
+        if (current == null || isTombstone(current)) {
+          decision = expected === null ? 'absent' : 'replaced';
+          unchanged = structuredClone(current);
+          return undefined;
+        }
+        if (current.kind !== 'grant') throw new Error('invalid record');
+        const parsed = parseGrant(current.payload);
+        if (!parsed.ok) throw new Error('invalid grant');
+        if (expectedRecord && isDeepStrictEqual(parsed.value, expected)) {
+          if (canResumeSignOut(parsed.value, revocationContext, allowLegacyRecovery)) {
+            pending = structuredClone(current);
+            original = structuredClone(parsed.value);
+            decision = 'resumed';
+            return undefined;
+          }
+          if (canResumeSignOut(parsed.value, discoveryIntent)) return claim(parsed.value);
+        }
+        const completesRefresh = parsed.value.refreshOperation?.state === 'pending'
+          && isDeepStrictEqual(parsed.value, confirmedRefresh?.pending)
+          && validateGrant(confirmedRefresh.complete).ok
+          && Boolean(confirmedRefresh.complete.accessToken)
+          && !confirmedRefresh.complete.signOutOperation
+          && isDeepStrictEqual(grantIdentity(parsed.value), grantIdentity(confirmedRefresh.complete))
+          && isDeepStrictEqual(confirmedRefresh.complete.refreshOperation, { ...parsed.value.refreshOperation, state: 'complete' })
+          && confirmedRefresh.complete.refreshToken !== parsed.value.refreshToken;
+        if (parsed.value.signOutOperation || (parsed.value.refreshOperation?.state === 'pending' && !completesRefresh)) {
+          decision = 'pending';
+          unchanged = structuredClone(current);
+          return undefined;
+        }
+        if (!isDeepStrictEqual(parsed.value, expected)) {
+          decision = 'replaced';
+          unchanged = structuredClone(current);
+          return undefined;
+        }
+        return claim(completesRefresh ? confirmedRefresh.complete : parsed.value);
+      });
+      if (!authorized() || called !== 1 || !decision) return { ok: false };
+      if (!['claimed', 'resumed'].includes(decision)) return isDeepStrictEqual(phaseResult, unchanged)
+        ? { ok: true, decision } : { ok: false };
+      if (!isDeepStrictEqual(phaseResult, pending)) return { ok: false };
+      return { ok: true, decision, pending, original };
+    } catch {
+      return { ok: false };
+    }
   }
 
   return {
@@ -171,7 +258,9 @@ export function createGrantStore(credentials, options = {}) {
           if (!parsed.ok) {
             throw new StoreError('IAM_GRANT_INVALID', 'stored IAM grant is invalid', { errors: parsed.errors });
           }
-          if (parsed.value.signOutOperation) throw new StoreError('IAM_REAUTH_REQUIRED', 'sign-out is pending');
+          if (parsed.value.signOutOperation) {
+            throw new StoreError('IAM_REAUTH_REQUIRED', 'sign-out is pending', { reason: 'sign-out-pending' });
+          }
           grant = parsed.value;
         }
         const next = await mutator(grant);
@@ -191,74 +280,23 @@ export function createGrantStore(credentials, options = {}) {
       return { ok: true, record: written };
     },
 
+    // Persist or verify the fence before resolving an external prerequisite.
+    async fenceSignOut(expected, confirmedRefresh, options) {
+      return claimSignOut(expected, confirmedRefresh, options, signOutAuthorized(options.guard));
+    },
+
     /**
-     * Claim or recheck a sign-out under the record lock. The external revoke
+     * Pin or recheck a sign-out under the record lock. The external revoke
      * runs after the lock releases and only that exact pending record can finish.
      */
     async signOutSnapshot(expected, beforeClear, confirmedRefresh, options = {}) {
-      const { expectedRecord, revocationContext, allowLegacyRecovery, guard } = options;
-      const authorized = () => atomicVerified() && (guard === undefined || guard() === true);
-      if (typeof beforeClear !== 'function'
-        || (expected !== null && !validateGrant(expected).ok)) return { ok: false };
-      let decision;
-      let called = 0;
-      let pending;
-      let original;
-      let phaseResult;
-      let unchanged;
+      if (typeof beforeClear !== 'function') return { ok: false };
+      const authorized = signOutAuthorized(options.guard);
+      const claim = await claimSignOut(expected, confirmedRefresh, options, authorized);
+      if (!claim.ok || !claim.pending) return claim;
+      const { pending, original } = claim;
       try {
         if (!authorized()) return { ok: false };
-        phaseResult = await credentials.modifyRecord(key, (current) => {
-          if (!authorized() || ++called !== 1) throw new Error('atomic store no longer verified');
-          if (Object.hasOwn(options, 'expectedRecord') && !isDeepStrictEqual(current, expectedRecord)) {
-            decision = 'replaced';
-            unchanged = structuredClone(current);
-            return undefined;
-          }
-          if (current == null || isTombstone(current)) {
-            decision = expected === null ? 'absent' : 'replaced';
-            unchanged = structuredClone(current);
-            return undefined;
-          }
-          if (current.kind !== 'grant') throw new Error('invalid record');
-          const parsed = parseGrant(current.payload);
-          if (!parsed.ok) throw new Error('invalid grant');
-          if (expectedRecord && canResumeSignOut(parsed.value, revocationContext, allowLegacyRecovery)
-            && isDeepStrictEqual(parsed.value, expected)) {
-            pending = structuredClone(current);
-            original = structuredClone(parsed.value);
-            decision = 'resumed';
-            return undefined;
-          }
-          const completesRefresh = parsed.value.refreshOperation?.state === 'pending'
-            && isDeepStrictEqual(parsed.value, confirmedRefresh?.pending)
-            && validateGrant(confirmedRefresh.complete).ok
-            && Boolean(confirmedRefresh.complete.accessToken)
-            && !confirmedRefresh.complete.signOutOperation
-            && isDeepStrictEqual(grantIdentity(parsed.value), grantIdentity(confirmedRefresh.complete))
-            && isDeepStrictEqual(confirmedRefresh.complete.refreshOperation, { ...parsed.value.refreshOperation, state: 'complete' })
-            && confirmedRefresh.complete.refreshToken !== parsed.value.refreshToken;
-          if (parsed.value.signOutOperation || (parsed.value.refreshOperation?.state === 'pending' && !completesRefresh)) {
-            decision = 'pending';
-            unchanged = structuredClone(current);
-            return undefined;
-          }
-          if (!isDeepStrictEqual(parsed.value, expected)) {
-            decision = 'replaced';
-            unchanged = structuredClone(current);
-            return undefined;
-          }
-          original = structuredClone(completesRefresh ? confirmedRefresh.complete : parsed.value);
-          pending = { kind: 'grant', payload: { ...original, signOutOperation: {
-            version: 1, state: 'pending', id: signOutId(original, revocationContext),
-          } } };
-          decision = 'claimed';
-          return pending;
-        });
-        if (!authorized() || called !== 1 || !decision) return { ok: false };
-        if (!['claimed', 'resumed'].includes(decision)) return isDeepStrictEqual(phaseResult, unchanged)
-          ? { ok: true, decision } : { ok: false };
-        if (!isDeepStrictEqual(phaseResult, pending)) return { ok: false };
         // The pending record is durable before any external side effect. A crash
         // or unknown result leaves it fenced for an explicit, bound retry.
         await beforeClear(original);
@@ -657,7 +695,7 @@ export function createModelSelectionStore(credentials, options = {}) {
     return { ok: true, selection };
   }
 
-  async function save({ subject, models, defaultModelId, manual } = {}) {
+  async function save({ subject, models, defaultModelId, manual } = {}, { guard } = {}) {
     if (Array.isArray(manual) && manual.length > MAX_MANUAL_MODELS) {
       throw new StoreError('IAM_MODEL_SELECTION_INVALID', 'manual models exceed limit');
     }
@@ -673,6 +711,7 @@ export function createModelSelectionStore(credentials, options = {}) {
         if (current !== undefined && current !== null && current.kind !== 'grant') {
           throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing IAM record is not a grant');
         }
+        if (guard) await guard();
         return {
           kind: 'grant', payload: {
             version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE,

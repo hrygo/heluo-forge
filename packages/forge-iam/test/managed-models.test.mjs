@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { IamError } from '../src/errors.mjs';
 import { applyModelOptions, buildThinkingLevelMap, createManagedModelRuntime, createNativeGatewayAdapter, validateManagedModels } from '../src/managed-models.mjs';
 import { createModelFailureLogger } from '../src/model-failure-log.mjs';
 
@@ -15,6 +16,7 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
   };
   const listeners = new Set();
   let selection = overrides.selection ?? null;
+  let authGeneration = 0;
   let selectionGeneration = 0;
   let sessionGeneration = 0;
   const iam = {
@@ -26,10 +28,15 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
     },
     async saveModelSelection(next) {
       selectionGeneration += 1;
-      selection = { models: structuredClone(next.models ?? {}), defaultModelId: next.defaultModelId ?? null };
+      selection = {
+        models: structuredClone(next.models ?? {}), defaultModelId: next.defaultModelId ?? null,
+        ...(next.manual?.length ? { manual: structuredClone(next.manual) } : {}),
+      };
       return { subject: 'person-a', ...structuredClone(selection) };
     },
-    getModelAccessEpoch: () => `${sessionGeneration}:${selectionGeneration}`,
+    getModelAccessEpoch: () => `${authGeneration}:${sessionGeneration}:${selectionGeneration}`,
+    getModelAuthorizationEpoch: () => `${authGeneration}:${sessionGeneration}:synthetic-login-${sessionGeneration}`,
+    getModelSessionIdentity: () => `${sessionGeneration}:synthetic-login-${sessionGeneration}`,
     async resolveGatewayConnection() {
       return { baseURL: gatewayBaseURL, key: connectionKey ?? 'synthetic-only', generation: 'one', subject: view.principal };
     },
@@ -80,6 +87,7 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
   return {
     iam, runtime, events, get adapter() { return adapter; }, get guard() { return guard; }, get calls() { return calls; }, get credential() { return credential; },
     get selection() { return selection; }, get selectionWrites() { return selectionGeneration; },
+    cancelSignIn() { authGeneration++; },
     change(next, { newSession = false } = {}) {
       if (newSession) sessionGeneration++;
       view = { ...view, ...next };
@@ -452,6 +460,43 @@ test('same-session token renewal preserves a prepared gateway call while updatin
   f.change({ accessExpiresAt: new Date(Date.now() + 120000).toISOString() }); await tick();
   assert.equal((await chunks(prepared.stream(options))).at(-1).reason.kind, 'stop');
   assert.equal(f.calls, 1);
+});
+
+test('cancelling sign-in without a pending attempt keeps the installed models available', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  f.iam.captureModelSession = () => {
+    const epoch = f.iam.getModelAuthorizationEpoch();
+    return { assertCurrent() {
+      if (f.iam.getModelAuthorizationEpoch() !== epoch) throw new IamError('IAM_NOT_SIGNED_IN', 'synthetic session changed');
+    } };
+  };
+  const previous = await f.adapter.prepareCall(options.provider, options.model);
+  f.cancelSignIn();
+
+  assert.deepEqual((await f.adapter.listModels('enterprise')).map(model => model.id), ['enterprise-chat']);
+  assert.equal(f.runtime.getView().state, 'ready');
+  const refused = await chunks(previous.stream(options));
+  assert.equal(refused.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+  assert.equal((await chunks(f.adapter.stream(options))).at(-1).reason.kind, 'stop');
+  assert.equal(f.calls, 1);
+});
+
+test('a later manual edit preserves a confirmed save when publication fails', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  const settings = {
+    assertCurrent() {},
+    readSelection: () => f.iam.readModelSelection(),
+    saveSelection: next => f.iam.saveModelSelection(next),
+    async verify() { throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', 'synthetic transient verification failure'); },
+  };
+  await assert.rejects(f.runtime.updateManualModel({ action: 'add', id: 'manual-first' }, settings), { code: 'IAM_CREDENTIALS_UNAVAILABLE' });
+  assert.deepEqual(f.selection.manual.map(({ id }) => id), ['manual-first']);
+  assert.deepEqual(f.runtime.getView().models.map(({ id }) => id), ['enterprise-chat']);
+
+  const next = await f.runtime.updateManualModel({ action: 'add', id: 'manual-second' });
+  assert.equal(next.persisted, true);
+  assert.deepEqual(f.selection.manual.map(({ id }) => id), ['manual-first', 'manual-second']);
+  assert.deepEqual(next.manual.map(({ id }) => id), ['manual-first', 'manual-second']);
 });
 
 test('fine-grained model options apply capacity and modality overrides to catalog and listModels', async t => {
@@ -976,6 +1021,41 @@ test('same-account relogin keeps available models usable regardless of the direc
       }
     });
   }
+});
+
+test('same-account relogin uses the current stored selection with the last confirmed directory', async t => {
+  const selectionRead = Promise.withResolvers();
+  const releaseRead = Promise.withResolvers();
+  let directoryAvailable = true;
+  const f = fixture({
+    selection: { models: { 'enterprise-chat': {} }, defaultModelId: 'enterprise-chat' },
+    fetch: async () => directoryAvailable ? Response.json({ data: [{ id: 'enterprise-chat' }, { id: 'enterprise-other' }] })
+      : new Response('{}', { status: 403 }),
+  });
+  t.after(async () => { releaseRead.resolve(); await f.runtime.dispose(); });
+  await f.runtime.ready;
+  const list = async () => (await f.adapter.listModels('enterprise')).map(({ id }) => id);
+  assert.deepEqual(await list(), ['enterprise-chat']);
+
+  f.iam.captureModelSettings = () => ({
+    assertCurrent() {}, async verify() {},
+    async readSelection() {
+      selectionRead.resolve();
+      await releaseRead.promise;
+      return f.iam.readModelSelection();
+    },
+  });
+  await f.iam.saveModelSelection({ models: { 'enterprise-other': {} }, defaultModelId: 'enterprise-other' });
+  directoryAvailable = false;
+  f.change({}, { newSession: true });
+  const refresh = assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_FORBIDDEN' });
+  await selectionRead.promise;
+  assert.deepEqual(await list(), []);
+  assert.deepEqual(f.runtime.getView().models.map(({ id }) => id), ['enterprise-chat', 'enterprise-other']);
+  releaseRead.resolve();
+  await refresh;
+  assert.deepEqual(await list(), ['enterprise-other']);
+  assert.equal((await chunks(f.adapter.stream({ ...options, model: 'enterprise-other' }))).at(-1).reason.kind, 'stop');
 });
 
 test('saved manual models work while directory discovery is pending and inference can still refuse a call', async t => {

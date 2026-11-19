@@ -681,22 +681,31 @@ test('a model-access failure keeps its own code and status', async () => {
   }
 });
 
-test('model settings only dispatch validated requests without eager token resolution', async () => {
+test('model settings only dispatch validated requests without eager session I/O', async () => {
   const calls = [];
-  const handler = routes(service({
+  const settings = service({
+    syncFromStore: async () => { calls.push('session'); },
+    loadGatewayCredential: async () => { calls.push('gateway'); },
     resolveToken: async () => { calls.push('token'); },
     refreshGatewayModels: async () => { calls.push('catalogue'); return {}; },
     updateModelOptions: async () => { calls.push('options'); return {}; },
-  }));
+    updateManualModel: async () => { calls.push('manual'); return {}; },
+  });
+  const handler = routes(settings);
+  const rejected = routes(settings, { getConnection: () => ({ requestRejection: () => 401 }) });
   const path = '/api/forge-iam/models';
+  const headers = { 'content-type': 'application/json', 'x-forge-iam-request': '1' };
+  assert.equal((await call(rejected, 'GET', path)).statusCode, 401);
+  assert.equal((await call(rejected, 'POST', `${path}/manual`, headers)).statusCode, 401);
   assert.equal((await call(handler, 'DELETE', path)).statusCode, 405);
   assert.equal((await call(handler, 'PUT', path)).statusCode, 403);
+  assert.equal((await call(handler, 'POST', `${path}/manual`)).statusCode, 403);
+  assert.equal((await call(handler, 'PUT', path, headers, '{')).statusCode, 400);
   assert.deepEqual(calls, []);
   assert.equal((await call(handler, 'GET', path)).statusCode, 200);
-  assert.equal((await call(handler, 'PUT', path, {
-    'content-type': 'application/json', 'x-forge-iam-request': '1',
-  }, { options: {} })).statusCode, 200);
-  assert.deepEqual(calls, ['catalogue', 'options']);
+  assert.equal((await call(handler, 'PUT', path, headers, { options: {} })).statusCode, 200);
+  assert.equal((await call(handler, 'POST', `${path}/manual`, headers, { action: 'add', id: 'synthetic' })).statusCode, 200);
+  assert.deepEqual(calls, ['catalogue', 'options', 'manual']);
 });
 
 test('callback and bridge admit the same loopback peers with the bridge capability', async () => {

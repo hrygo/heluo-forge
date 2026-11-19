@@ -1,4 +1,5 @@
-import { fetchJson, loadMetadata, randomToken, verifyIdToken } from './oidc.mjs';
+import { isDeepStrictEqual } from 'node:util';
+import { fetchJson, loadMetadata, OidcError, randomToken, verifyIdToken } from './oidc.mjs';
 import { fetchUserInfo, projectUserInfo } from './userinfo.mjs';
 import {
   assertClientAuthCurrent,
@@ -61,7 +62,10 @@ export function createServiceGrant(env) {
     const current = now();
     const fresh = metadataCache && current - metadataCache.loadedAt < METADATA_TTL_MS;
     const discoverOptional = optional && config.discoveryUrl && !config[optional];
-    if (fresh && (!discoverOptional || metadataCache.value[optional] || metadataCache.checkedOptional)) {
+    const needsRevocation = optional === 'revocationEndpoint';
+    const checkedOptional = metadataCache?.checkedOptional
+      && !(needsRevocation && metadataCache.value.invalidRevocationEndpoint);
+    if (fresh && (!discoverOptional || metadataCache.value[optional] || checkedOptional)) {
       return metadataCache.value;
     }
     if (discoverOptional) {
@@ -71,7 +75,11 @@ export function createServiceGrant(env) {
         metadataCache = { value, loadedAt: now(), checkedOptional: true };
         return value;
       }).finally(() => { optionalMetadataFlight = null; });
-      return optionalMetadataFlight;
+      const value = await optionalMetadataFlight;
+      if (needsRevocation && value.invalidRevocationEndpoint) {
+        throw new OidcError('IAM_CONFIG_INVALID', 'Discovery revocation endpoint is invalid');
+      }
+      return value;
     }
     const previous = metadataCache;
     const value = await loadMetadata(config, {
@@ -90,7 +98,9 @@ export function createServiceGrant(env) {
     const targetStore = grantOwners.get(grant);
     const credentials = provider.storeCredentials;
     const binding = provider.atomicBinding(targetStore, credentials);
-    const sameSession = () => !state.disposed && getAuthEpoch() === epoch && state.lastGrant === grant;
+    // A panel read can adopt a fresh copy of the same durable grant.
+    const sameSession = () => !state.disposed && getAuthEpoch() === epoch
+      && grantOwners.get(state.lastGrant) === targetStore && isDeepStrictEqual(state.lastGrant, grant);
     const current = () => binding && sameSession()
       && provider.atomicBinding(targetStore, credentials) === binding && sameSession();
     if (!current()) return;

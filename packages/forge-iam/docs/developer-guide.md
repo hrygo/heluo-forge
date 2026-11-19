@@ -228,7 +228,9 @@ Host 在运行期间按较早的已知令牌期限调度续期，并在退出或
 
 ### 退出与卸载
 
-显式退出先使本实例登录尝试失效。对受信存储，退出读取完整 grant 快照并核验可用 metadata 的 issuer，在同记录锁内比较快照、拒绝 pending 或替换记录，再持久化唯一的 `signOutOperation` pending。释放锁后按 D1 以 `GET <revocationEndpoint>?access_token=…` 撤销访问令牌（不带客户端认证）；撤销确认后重新取得记录锁，只有 pending 仍与本次操作完全一致时才写固定逻辑墓碑并核对回执。未配置撤销端点时可直接完成本地逻辑清理，不宣称服务端撤销。回执三态：`result=true` 或 `result=false`+`errcode=2002` 记 ok，明确拒绝记 failed，超时/5xx/无法解析记 unknown。刷新令牌不随之撤销，只能自然过期；登录换票失败后的 RFC 7009 POST 清理是另一条路径，不用于退出。配置未显式 issuer 时，单独配置撤销地址不能代替发行者绑定；须先解析当前 discovery，issuer 不匹配或无法取得该上下文时保留持久 grant、报告 unknown。撤销 HTTP 请求最多 5 秒，不表示整个退出 I/O 有界。
+显式退出先使本实例登录尝试失效。对受信存储，退出核验发行者并在同记录锁内核对完整 grant 快照，写入 `signOutOperation` pending。issuer 已核验、撤销端点仍待发现时，先持久化绑定发现来源的退出意图，再在锁外查询 Discovery，条件绑定解析出的撤销端点。发现失败保留同一待确认操作。冷启动缺少已核验 issuer 时，先建立发行者信任，才能封存记录。
+
+默认 D1 在锁外以 `GET <revocationEndpoint>?access_token=…` 撤销访问令牌，`result=true` 或 `result=false` 且 `errcode=2002` 记为 ok。显式 RFC 7009 先确认持久退出绑定，再取得原授权的客户端认证，优先撤销刷新令牌。明确拒绝记为 failed，超时、5xx 或无法解析时记为 unknown。撤销确认后，只有短事务内核对到同一 pending 才写入逻辑墓碑。确认为无撤销端点时，可完成本地清理并记为 skipped。撤销 HTTP 请求最多 5 秒。
 
 未验证 provider 的退出不修改持久记录、不发撤销请求，只清运行时会话并报告 `IAM_CREDENTIALS_CLEAR_FAILED`、`revocation: 'unknown'`；重启仍可能恢复。存储异常、mutator 未执行、提交/回执不确定均不报告成功。已写入 pending 后，撤销失败、结果未知或进程中断会保留该状态；不重发旧令牌、不返回旧令牌，也不报告本地清理完成。撤销成功响应不证明当前授权及所有刷新后代被撤销。用户侧结果与边界见[退出说明](<user-guide.md#退出的结果与边界>)。
 
@@ -388,7 +390,7 @@ Host 将会话续期事件写入 `$DSH_HOME/logs/forge-iam-session-renewal.jsonl
 
 模型启用与参数覆盖分两层。**启用集合**决定可用性：`modelOptions` 的键即"已启用"，值为覆盖参数（可为空对象）。未启用的目录模型照旧出现在企业模型页，但 `listModels` 不返回它，`prepareCall`/`resolveModel`/`llm/stream` 都以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝，避免"能选不能用"。首跑（该 subject 从未保存过）自动启用目录第一个模型并尝试保存；管理员配置了 `defaultModel` 且网关仍提供时优先用它。显式保存空集合是合法状态，不会被打回默认值——区分"从未保存"与"保存为空"的是 `readModelSelection()` 返回的 `saved` 标志。
 
-**持久化**在宿主侧凭证记录的独立键 `heluo-iam/model-selection`（`createModelSelectionStore`，`grant` 类载荷，保存 subject、模型 ID、覆盖参数与手动声明，不含凭据）。读写都以回读的 grant subject 为准，换人不继承旧记录，过期写入拒绝 `IAM_NOT_SIGNED_IN`；该记录不参与网关凭证的联合原子事务，最后确认写入者胜。模型配置或手动声明写入失败时，本次变更可在当前运行时生效并返回 `persisted: false`，面板提示持久化失败；刷新目录或重启可能恢复旧配置。一次同步先用本机记录还原手动声明与启用集，再请求网关目录，因此目录被拒或不可达时面板仍显示已保存的条目；提交的启用集与手动列表是整条记录的替换，写入前必须先成功读取记录，存储读取失败抛 `IAM_MODEL_SELECTION_UNREADABLE`（`USER_CODE_BY_INTERNAL` 映射为 `ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE`）并拒绝写入；只有记录属于他人（`IAM_MODEL_SELECTION_FOREIGN`）或载荷不可解析（`IAM_MODEL_SELECTION_INVALID`）才按未保存处理；目录请求失败时保存启用集不删除当前不可见的已启用条目；目录成功读取后（含成功返回空列表）按目录裁剪，撤下的条目不会随保存复活。删除不存在的有效手动 ID 则是幂等成功，返回 `removed: false, persisted: false`，不发生变更或写入；调用方须区分这两种情况。`PUT /api/forge-iam/models` 只改本地 `PiAiAdapter` 目录，不写 profile 配置、不改网关目录。面板以当前账号的宿主选择为准（包括显式空集合），浏览器缓存仅作副本，不向宿主自动回推；账号或宿主选择变化时更新显示，避免旧缓存覆盖已保存选择。
+**持久化**在宿主侧凭证记录的独立键 `heluo-iam/model-selection`（`createModelSelectionStore`，`grant` 类载荷，保存 subject、模型 ID、覆盖参数与手动声明，不含凭据）。模型设置按当前会话读取持久记录并核对账号。跨 Host 换绑或同主体重新登录会让原请求失效。写入前固定登录身份和存储绑定，并在 SQLite 写入锁内回读会话，确认仍属该次登录。该记录不参与网关凭证的联合事务，同一会话的并发写入由最后一次确认提交决定。模型配置或手动声明写入失败时，本次变更可在当前运行时生效并返回 `persisted: false`，面板提示持久化失败；刷新目录或重启可能恢复旧配置。一次同步先用本机记录还原手动声明与启用集，再请求网关目录，因此目录被拒或不可达时面板仍显示已保存的条目；提交的启用集与手动列表是整条记录的替换，写入前必须先成功读取记录，存储读取失败抛 `IAM_MODEL_SELECTION_UNREADABLE`（`USER_CODE_BY_INTERNAL` 映射为 `ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE`）并拒绝写入；只有记录属于他人（`IAM_MODEL_SELECTION_FOREIGN`）或载荷不可解析（`IAM_MODEL_SELECTION_INVALID`）才按未保存处理；目录请求失败时保存启用集不删除当前不可见的已启用条目；目录成功读取后（含成功返回空列表）按目录裁剪，撤下的条目不会随保存复活。删除不存在的有效手动 ID 则是幂等成功，返回 `removed: false, persisted: false`，不发生变更或写入；调用方须区分这两种情况。`PUT /api/forge-iam/models` 只改本地 `PiAiAdapter` 目录，不写 profile 配置、不改网关目录。面板以当前账号的宿主选择为准（包括显式空集合），浏览器缓存仅作副本，不向宿主自动回推；账号或宿主选择变化时更新显示，避免旧缓存覆盖已保存选择。
 
 模型行提供“一键启用”“一键停用”与“全部默认启用”快捷操作，支持一键采用默认参数（`200K` 上下文、`64K` 最大输出）启用并提交保存；持久化失败按上述回执提示。已启用模型的行可直接停用，不必展开精细配置。行上停用与一键启用对称：改完启用集立即提交整份集合，因此会连同其他未保存的面板修改一并生效；停用不会改写宿主新对话默认模型；用户需要时自行选择其他已启用模型。停用最后一个模型提交显式空集合，重新启用前新对话无企业模型可选。
 

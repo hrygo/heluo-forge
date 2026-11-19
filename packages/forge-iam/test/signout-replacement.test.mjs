@@ -42,6 +42,42 @@ test('RP logout can discover its optional endpoint after confirmed local sign-ou
   assert.equal(logout.searchParams.get('id_token_hint'), 'synthetic-id-token-hint');
 });
 
+for (const failure of ['a peer replaces the session', 'the confirmation read fails']) {
+  test(`RP logout suppresses the optional URL while preserving local completion if ${failure}`, async (t) => {
+    const credentials = new MemoryCredentials();
+    const store = createGrantStore(credentials);
+    await store.write({ ...grant('synthetic-user', 1), idToken: 'synthetic-id-token-hint' });
+    const replacement = grant('synthetic-user', 2);
+    const readRecord = credentials.readRecord.bind(credentials);
+    const requests = [];
+    const service = createIamService({ ...config, logoutMode: 'rp', discoveryUrl: `${config.issuer}/discovery` }, {
+      credentials, fetch: async (url) => {
+        const path = new URL(url).pathname;
+        requests.push(path);
+        if (path === '/revoke') return Response.json({ result: true });
+        assert.deepEqual(await store.read(), { ok: true, grant: null });
+        if (failure === 'a peer replaces the session') {
+          await store.write(replacement);
+        } else {
+          credentials.readRecord = async (key) => {
+            if (key === GRANT_KEY) throw new Error('synthetic confirmation read failure');
+            return readRecord(key);
+          };
+        }
+        return Response.json({ issuer: config.issuer, end_session_endpoint: `${config.issuer}/end-session` });
+      },
+    });
+    t.after(() => service.dispose());
+    const result = await service.signOut();
+    assert.equal(result.revocation, 'ok');
+    assert.equal(result.view.state, 'signed-out');
+    assert.equal(result.logoutUrl, null);
+    assert.deepEqual(requests, ['/revoke', '/discovery']);
+    credentials.readRecord = readRecord;
+    assert.deepEqual(await store.read(), { ok: true, grant: failure === 'a peer replaces the session' ? replacement : null });
+  });
+}
+
 test('an unavailable discovery result cannot establish that revocation is unconfigured', async (t) => {
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);
@@ -58,7 +94,142 @@ test('an unavailable discovery result cannot establish that revocation is unconf
   const result = await service.signOut();
   assert.equal(result.revocation, 'unknown');
   assert.deepEqual(requests, ['/discovery']);
-  assert.deepEqual(await store.read(), { ok: true, grant: original });
+  assert.deepEqual(await store.read(), { ok: false, reason: 'sign-out-pending' });
+});
+
+test('malformed Discovery revocation metadata stays pending until genuine omission is confirmed', async (t) => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  await store.write(grant('synthetic-user', 1));
+  const configured = { ...config, revocationEndpoint: '', discoveryUrl: `${config.issuer}/discovery` };
+  const requests = [];
+  let document = { issuer: config.issuer, revocation_endpoint: null };
+  const service = createIamService(configured, { credentials, fetch: async (url) => {
+    requests.push(new URL(url).pathname);
+    return Response.json(document);
+  } });
+  t.after(() => service.dispose());
+
+  assert.equal((await service.signOut()).revocation, 'unknown');
+  assert.deepEqual(await store.read(), { ok: false, reason: 'sign-out-pending' });
+  document = { issuer: config.issuer };
+  assert.equal((await service.signOut()).revocation, 'skipped');
+  assert.deepEqual(await store.read(), { ok: true, grant: null });
+  assert.deepEqual(requests, ['/discovery', '/discovery']);
+});
+
+test('an endpoint-only V1 marker can resume by Discovery only at its original endpoint', async () => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials, { verifyAtomicStore: () => true });
+  const saved = grant('synthetic-user', 1);
+  await store.write(saved);
+  assert.deepEqual(await store.signOutSnapshot(saved, () => { throw new Error('unconfirmed synthetic revoke'); }, undefined, {
+    revocationContext: { mode: 'access_token_query', endpoint: config.revocationEndpoint, resource: null },
+  }), { ok: false });
+  const pending = await credentials.readRecord(GRANT_KEY);
+  const configured = { ...config, revocationEndpoint: '', discoveryUrl: `${config.issuer}/discovery` };
+  for (const matching of [false, true]) {
+    const requests = [];
+    const service = createIamService(configured, { credentials, fetch: async (url) => {
+      const path = new URL(url).pathname;
+      requests.push(path);
+      if (path === '/discovery') {
+        return Response.json({ issuer: config.issuer,
+          revocation_endpoint: matching ? config.revocationEndpoint : `${config.issuer}/different-revoke` });
+      }
+      return Response.json({ result: true });
+    } });
+    try {
+      assert.equal((await service.signOut()).revocation, matching ? 'ok' : 'unknown');
+      assert.deepEqual(requests, matching ? ['/discovery', '/revoke'] : ['/discovery']);
+      if (!matching) assert.deepEqual(await credentials.readRecord(GRANT_KEY), pending);
+    } finally { await service.dispose(); }
+  }
+  assert.deepEqual(await store.read(), { ok: true, grant: null });
+});
+
+test('a cold discovery-only Host must verify the issuer before marking sign-out pending', async () => {
+  const credentials = new MemoryCredentials();
+  const saved = grant('synthetic-user', 1);
+  const store = createGrantStore(credentials);
+  await store.write(saved);
+  const configured = { ...config, issuer: '', revocationEndpoint: '', discoveryUrl: `${config.issuer}/discovery` };
+  for (const discovery of [null, { issuer: 'https://different.corp.example', revocation_endpoint: config.revocationEndpoint }]) {
+    const requests = [];
+    const service = createIamService(configured, { credentials, fetch: async (url) => {
+      requests.push(new URL(url).pathname);
+      assert.deepEqual(await store.read(), { ok: true, grant: saved });
+      return discovery ? Response.json(discovery) : new Response(null, { status: 503 });
+    } });
+    try {
+      assert.equal((await service.signOut()).revocation, 'unknown');
+      assert.deepEqual(await store.read(), { ok: true, grant: saved });
+      assert.deepEqual(requests, ['/discovery']);
+    } finally { await service.dispose(); }
+  }
+});
+
+for (const replaced of [true, false]) {
+  test(`a cold discovery-only Host ${replaced ? 'preserves a replacement' : 'can finish the original sign-out'} after an outage`, async (t) => {
+    const credentials = new MemoryCredentials();
+    const store = createGrantStore(credentials);
+    const saved = grant('synthetic-user', 1);
+    await store.write(saved);
+    const configured = { ...config, issuer: '', revocationEndpoint: '', discoveryUrl: `${config.issuer}/discovery` };
+    const requests = [];
+    let discoveryAvailable = false;
+    const service = createIamService(configured, { credentials, fetch: async (url) => {
+      const path = new URL(url).pathname;
+      requests.push(path);
+      if (path === '/discovery') {
+        return discoveryAvailable ? Response.json({ issuer: config.issuer, revocation_endpoint: config.revocationEndpoint })
+          : new Response(null, { status: 503 });
+      }
+      return Response.json({ result: true });
+    } });
+    t.after(() => service.dispose());
+    assert.equal((await service.signOut()).revocation, 'unknown');
+    assert.deepEqual(await store.read(), { ok: true, grant: saved });
+    discoveryAvailable = true;
+    if (replaced) {
+      const replacement = grant('synthetic-user', 2);
+      await store.write(replacement);
+      assert.equal((await service.signOut()).revocation, 'unknown');
+      assert.deepEqual(requests, ['/discovery']);
+      assert.deepEqual(await store.read(), { ok: true, grant: replacement });
+    } else {
+      assert.equal((await service.signOut()).revocation, 'ok');
+      assert.deepEqual(requests, ['/discovery', '/discovery', '/revoke']);
+      assert.deepEqual(await store.read(), { ok: true, grant: null });
+    }
+  });
+}
+
+test('a committed replacement during Discovery survives sign-out and its in-memory retry', async (t) => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  await store.write(grant('synthetic-user', 1));
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const requests = [];
+  const service = createIamService({ ...config, revocationEndpoint: '', discoveryUrl: `${config.issuer}/discovery` }, {
+    credentials, fetch: async (url) => {
+      requests.push(new URL(url).pathname);
+      entered.resolve();
+      await release.promise;
+      return Response.json({ issuer: config.issuer, revocation_endpoint: config.revocationEndpoint });
+    },
+  });
+  t.after(() => { release.resolve(); return service.dispose(); });
+  const signOut = service.signOut();
+  await Promise.race([entered.promise, signOut.then(() => assert.fail('Discovery did not start'))]);
+  const replacement = grant('synthetic-user', 2);
+  await store.write(replacement);
+  release.resolve();
+  assert.equal((await signOut).revocation, 'unknown');
+  assert.equal((await service.signOut()).revocation, 'unknown');
+  assert.deepEqual(requests, ['/discovery']);
+  assert.deepEqual(await store.read(), { ok: true, grant: replacement });
 });
 
 test('a revocation confirmation cannot finish under a replacement atomic binding for the same provider', async (t) => {
