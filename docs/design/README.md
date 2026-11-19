@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.47.0 |
+| 版本 | V0.48.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -30,6 +30,7 @@
 | `@heluo/forge-enterprise` | umbrella bundle（通用底座：企业账号与模型） | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测） | 版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile |
 | `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) | 草案（独立可预装研发组合包：`cordis.patch.yml` 插入 `heluo-policy`（共享 6 动作目录，无 `isolate`，单装独立就绪且与 `forge-enterprise` 同装自动单实例折叠）、`heluo-engineering-ui` 容器、`heluo-issue-delivery-skill` 按需交付 Skill、`@heluo/forge-devops` 与 `@heluo/forge-gitee`；不禁用官方行） | 双端、真实 DevOps/Gitee CLI 与企业 OSS 凭据库、`ai-publish`/`human-review` 业务行、角色 preset 粒度 |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（路线 B 已选定） | 当前身份/用途、B 双因子承载、应用/IP、五分钟及单授权退出、C4 策略与容量联调；模块仍为规划入口，无清单、源码或测试 |
+| `@heluo/forge-hindsight` | Host + Client 插件 | [plugins/forge-hindsight.md](plugins/forge-hindsight.md) | 草案（基于 Hindsight `v1.2.1`：单 schema + 员工 bank、只经 BFF、三档采集模式默认未配置并在首次调用时二选一；心智模型工具仅由员工显式调用，不在召回链路；复用上游 `coding-agents@0.8.7` 的事件桥与结构性类型，推翻按仓库解析 bank、含令牌的本地配置、云端默认与自动更新；模块为规划入口，无清单、源码或测试） | 宿主 `agent/*` 事件实测、IAM 令牌形态、BFF 形态与内部凭据、Hindsight 删除语义、索引阈值、范围基线与契约 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | CLI 接入（工具面 + 设置页） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案（容器在场时挂入 `heluo.engineering.tab`/order 10，独立回退保留 `devops-readiness`/29 与 `devops`/60；凭据卡片内置于 DevOps 面板，`cli-runner.mjs` 使用 `ENV_ALLOWLIST` 与托管优先链；真实 `dop` 系统凭据库未联调） | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验；真实 `dop` 凭据库未联调 |
 | `@heluo/forge-gitee` | CLI 接入（工具面 + 设置页） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案（容器在场时挂入 `heluo.engineering.tab`/order 20，独立回退保留 `gitee`/50；前端「高级」表单已移除，凭据与明文风险提示内置于 Gitee 面板；后端保留 `runtime-config.mjs` 契约和托管优先链） | aarch64 产物、鉴权注入与 `--json` 字段稳定性（企业 CLI 未联调）；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验；设置页实机与真实 `gh` 凭据库未验证 |
