@@ -1,6 +1,6 @@
 # EGM 第 9 阶段 · 实施就绪度评审
 
-代拟 · 2026-11-20 · [CORP-DSH-DESIGN-022 V1.0.0](../../../design/delegra-runtime-images.md) 第 186–403 行。三位评审者独立核对计划可执行性、当前源码及规格文字。参考目标为 Delegra `deploy/v2026.1106.0-r2`，提交 `25c86a283a9c787a01911c714618d78df7552af7`。
+代拟 · 2026-11-20 · [CORP-DSH-DESIGN-022 V1.0.0](https://github.com/hrygo/heluo-forge/blob/5d6fef75c8ce5d58ac0f5fc0080001f59cb0fb1c/docs/design/delegra-runtime-images.md) 第 186–403 行。三位评审者独立核对计划可执行性、当前源码及规格文字。参考目标为 Delegra `deploy/v2026.1106.0-r2`，提交 `25c86a283a9c787a01911c714618d78df7552af7`。
 
 任务 1 可准备两份本地参考配方和冒烟测试。任务 2 处于目标 Runner 资格核验阶段。任务 3 须先核定真实接入契约和凭据边界。任务 4 可核验候选能力，任务 5 按实际项目补齐锁定输入后分批实施。
 

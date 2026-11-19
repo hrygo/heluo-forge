@@ -1,6 +1,6 @@
 # EGM 第 8 阶段 · 中间全局复核
 
-代拟 · 2026-11-20 · [CORP-DSH-DESIGN-022 V1.0.0](../../../design/delegra-runtime-images.md) 第 1–403 行。复核使用同一 SHA-256 的评审稿、前三阶段报告和仓库关联材料。
+代拟 · 2026-11-20 · [CORP-DSH-DESIGN-022 V1.0.0](https://github.com/hrygo/heluo-forge/blob/5d6fef75c8ce5d58ac0f5fc0080001f59cb0fb1c/docs/design/delegra-runtime-images.md) 第 1–403 行。复核使用同一 SHA-256 的评审稿、前三阶段报告和仓库关联材料。
 
 可以进入实施就绪度评审，目标环境的交付判定待定。首批交付范围是 `codex-min` 和 `codex-java-21`，两份都须在选定原生 `linux/arm64` Runner 上走正常调度入口，验收实际镜像身份、固定 Codex、模拟推理、工作区操作、取消和回收。本机已有 `0.167.1` 的两镜像和模拟请求证据。 [本机探针](../../spikes/2026-11-20-delegra-runtime-images/README.md)
 

@@ -1,6 +1,6 @@
 # Delegra 专家智能体运行时镜像 · EGM 综合评审报告
 
-代拟 · 2026-11-20 · 审阅 [CORP-DSH-DESIGN-022 V1.0.0 评审稿](../../../design/delegra-runtime-images.md)，方案 L1–185，实施计划与 Dockerfile 规格 L186–403。目标 SHA-256 为 `43542e7951ce544baad43d7e86b7254042e445cbea2c4a4927b8d4b7e1eca4d8`。
+代拟 · 2026-11-20 · 审阅 [CORP-DSH-DESIGN-022 V1.0.0 评审稿](https://github.com/hrygo/heluo-forge/blob/5d6fef75c8ce5d58ac0f5fc0080001f59cb0fb1c/docs/design/delegra-runtime-images.md)，方案 L1–185，实施计划与 Dockerfile 规格 L186–403。目标 SHA-256 为 `43542e7951ce544baad43d7e86b7254042e445cbea2c4a4927b8d4b7e1eca4d8`。
 
 **评审结论为修订后复审。** 五阶段连续评审合并为 5 项 Blocker、6 项 Major 和 3 项 Nit。`codex-min` 和 `codex-java-21` 可按固定 `r2`/Codex `0.160.0` 参考组合准备本地构建和合成验证。生产配方冻结取决于原生 ARM64 Runner 的正常启动及制品证据。企业凭据接入还取决于现行范围、网关契约与运行授权的实证。18 个 ARM64 目标、14 份 Dockerfile 的规划可作为构建目录使用，各目标按实际所需版本和验证结果启用。 [当前构建与验收计划](../../../design/delegra-runtime-images.md#8-实施计划) · [本机探针](../../spikes/2026-11-20-delegra-runtime-images/README.md)
 

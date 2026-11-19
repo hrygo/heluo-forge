@@ -18,4 +18,4 @@
 
 §6.4（L126–127、130）要求 Runner 向 Codex Provider 注入凭据，以 `shell_environment_policy` 约束命令继承环境。正文未确定所用策略、获准读取进程、出站网络与日志边界。读者能理解缺乏隔离证据时关闭企业凭据入口的条件，仍无法据此确定要实现的隔离契约与具体验收判据。
 
-代拟 · 2026-11-20 · EGM 第 6 阶段。独立评审仅读取 [CORP-DSH-DESIGN-022 V1.0.0](../../../design/delegra-runtime-images.md) 第 1–185 行及第 186–403 行，未打开链接目标。以上转述保留评审者从被评文档得到的理解。
+代拟 · 2026-11-20 · EGM 第 6 阶段。独立评审仅读取 [CORP-DSH-DESIGN-022 V1.0.0](https://github.com/hrygo/heluo-forge/blob/5d6fef75c8ce5d58ac0f5fc0080001f59cb0fb1c/docs/design/delegra-runtime-images.md) 第 1–185 行及第 186–403 行，未打开链接目标。以上转述保留评审者从被评文档得到的理解。

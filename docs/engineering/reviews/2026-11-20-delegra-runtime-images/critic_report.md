@@ -1,6 +1,6 @@
 # EGM 第 7 阶段 · 方案评审
 
-代拟 · 2026-11-20 · [CORP-DSH-DESIGN-022 V1.0.0](../../../design/delegra-runtime-images.md) 第 1–185 行。三位独立评审者从设计、结构和语言审阅方案，按需核对目标后半段锚点及仓库关联材料。
+代拟 · 2026-11-20 · [CORP-DSH-DESIGN-022 V1.0.0](https://github.com/hrygo/heluo-forge/blob/5d6fef75c8ce5d58ac0f5fc0080001f59cb0fb1c/docs/design/delegra-runtime-images.md) 第 1–185 行。三位独立评审者从设计、结构和语言审阅方案，按需核对目标后半段锚点及仓库关联材料。
 
 ## 设计
 

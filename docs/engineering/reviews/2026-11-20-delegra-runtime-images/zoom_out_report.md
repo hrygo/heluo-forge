@@ -1,6 +1,6 @@
 # EGM 第 5 阶段 · 初步全局评审
 
-代拟 · 2026-11-20 · 评审目标为 [CORP-DSH-DESIGN-022 V1.0.0](../../../design/delegra-runtime-images.md) 第 1–403 行。架构评审者与备选方案评审者独立读完整目标和关联材料。
+代拟 · 2026-11-20 · 评审目标为 [CORP-DSH-DESIGN-022 V1.0.0](https://github.com/hrygo/heluo-forge/blob/5d6fef75c8ce5d58ac0f5fc0080001f59cb0fb1c/docs/design/delegra-runtime-images.md) 第 1–403 行。架构评审者与备选方案评审者独立读完整目标和关联材料。
 
 ## 架构评审
 

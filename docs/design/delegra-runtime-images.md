@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.0.0 |
+| 版本 | V1.1.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -17,8 +17,8 @@
 | 确认人 | 项目负责人（当前用户） |
 | 确认日期 | 2026-11-20 |
 | 确认事项 | Delegra 组装和调度专家。镜像默认包含 Codex，构建、验收与交付统一使用 `linux/arm64`。镜像方案覆盖受监管机构开发、测试、运维和办公，按 DRY 与 SOLID 复用公共层，在保全 Agent 与 Codex 必需能力的前提下压缩体积。首版使用发起用户的授权，允许把 DSH IAM 获取的网关连接交给本次任务的 Harness 使用。接入 AIGS 后按用户与 Agent 两种身份的权限交集执行。 |
-| 适用范围 | 专家的组成、`linux/arm64` 镜像和两阶段身份模型。目标 Runner 与企业接入按 §5 核验。 |
-| 门禁 | 固定目标 Runner 后按 §3 验收原生 `linux/arm64` 镜像。企业接入按 §4 核对范围与授权，按 §5 核验实际契约。 |
+| 适用范围 | 专家组成、`linux/arm64` 镜像、首版 DSH 用户凭据与 AIGS 双主体授权。 |
+| 门禁 | 按 §3、§8 分别验收本地 ARM64 制品与目标 Runner。企业凭据接入须满足 §4、§6.4 的授权、契约与实测判据。 |
 
 > 编制依据为[运行时镜像概念简报](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md)、2026-11-20 的[本机镜像与模拟网关探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md)，以及 Delegra 标签 `deploy/v2026.1106.0-r2` 的构建和 Codex 配置源码。真实 Runner 和企业网关连接待联调。
 >
@@ -26,7 +26,7 @@
 
 ## 1. 概述
 
-**专家智能体 = 镜像 + skills + 工具集合 + 用户令牌。** Delegra 管理专家配置、组装这四项并调度任务。镜像提供 Codex Harness 和本地工具链，skills 定义工作方法，工具集合规定专家可调用的工具和动作。用户在发起任务时授权，目标服务按该用户的有效权限判定调用。
+**专家智能体 = 镜像 + skills + 工具集合 + 用户令牌。** Delegra 管理专家配置、组装这四项并调度任务。镜像提供 Codex Harness 和本地工具链，skills 定义工作方法，工具集合规定专家可调用的工具和动作。“用户令牌”指本次任务获准的用户凭据。首版网关使用同一用户的个人 Key 与 IAM access token，目标服务按实际用户和动作判定权限。
 
 最小镜像提供公共 Codex 层。开发、测试、运维与中文办公按场景派生各自的镜像。Java 8、11、17、21、25 各有独立构建目标。同一镜像可供多个专家使用，专家在每次运行中使用本次任务的工作区、会话和用户授权。 [镜像与 Dockerfile 构建规格](#9-镜像与-dockerfile-构建规格)
 
@@ -38,33 +38,35 @@
 
 ## 3. 目标与验收
 
-| 目标 | 完成判据 |
+| 交付面 | 完成判据 |
 | --- | --- |
-| 首批两镜像可运行 | 目标 Delegra Runner 在原生 Linux ARM64 环境启动锁定摘要的 `codex-min` 和 `codex-java-21`。核对实际镜像摘要、`linux/arm64` 平台、Runner 与 Codex 可执行文件的架构、Codex 版本、非 root 用户和工作区。Java 镜像用 ARM64 JDK 21 编译并运行样例，任务完成或取消后可核对回收结果。 |
-| 体积与必要能力同时验收 | 公共层与每个派生镜像均能完成同一套文件、Git、Shell、Codex stdio 会话和退出检查。真实 Runner 用合成网关完成模型会话和工作区内的工具操作。镜像体积按 ARM64 压缩层及派生增量记录，在相同功能验收通过的候选中选冷拉体积较小的配方。 |
-| 工具链镜像可独立演进 | 以共享 Codex 层派生开发、测试、运维、办公镜像。每个目标的 Dockerfile 对应固定的 ARM64 输入与场景验收，Java 各主版本独立发布。发布记录说明镜像摘要、工具链版本和适用 Runner。升级与回退分别用新任务验证，已经受理的任务仍可查到原镜像和配置版本。 |
-| 网关调用归属发起用户 | 用户在 DSH 授权本次任务。DSH IAM 提供网关地址、个人网关 Key 和同一用户的 IAM access token，Delegra 交给对应运行的 Harness。Harness 完成一次 `/responses` 推理，网关侧可核对用户、模型授权及用量归属。 |
-| 任务授权可隔离和撤回 | 两位用户分别运行同一个专家，核对工作区、会话、工具、凭据及用量归属。验收覆盖通用 Shell、日志和产物的凭据隔离。授权缺失、过期或已撤销时拒绝后续调用，按所属服务契约核对时限。 |
+| 本地参考镜像 | 在原生 Linux ARM64 BuildKit 节点构建 `codex-min` 和 `codex-java-21`，固定 `r2` Runner 源码和 Codex `0.160.0`。两份都通过 §9.2.3 的非 root 工作区、工具、Codex stdio 和退出断言，Java 21 完成样例编译与运行。 |
+| 目标 Runner | 从同一正常调度入口分别启动两份镜像，核对实际 OCI 摘要，或不可变快照 ID 加可证实的来源 OCI 摘要。运行回执同时证明原生 ARM64、实际 Runner 与 Codex 的架构、制品摘要、来源和版本。合成 `/responses` 会话覆盖工作区操作、完成、取消和回收。 |
+| 体积与工具目录 | 通过相同启动契约、公共冒烟与场景样例后比较压缩层和冷启动。按工具场景派生镜像，每个 Java 主版本独立出目标。发布、升级和回退演练覆盖排队任务原始版本、制品保留与紧急撤出。 |
+| 首版个人网关 | 范围基线、可信 DSH 提交、Delegra 受限员工接口、目标网关和托管运行安全条件成立后，用两个获准测试用户验证同一专家的 `/responses`。网关回执证明同属主双凭据、同一发起人的模型授权、用量和预算归属。 |
+| 授权隔离与失效 | 从实际调度入口验证同一任务的 Provider 与工具隔离、跨用户及跨运行代次隔离。旧进程仍存活时，验收取消、退出、切号、过期或失联后的新请求拒绝、在途流处置与回收回执。合成先验，企业时限按目标网关契约复验。 |
 
 ## 4. 范围边界
 
-本设计覆盖镜像及其版本、Delegra 运行环境和 Harness 的任务授权。专家目录、`@` 交互、员工接口及任务回执沿用[专家智能体 PRD](../requirements/delegra-experts-prd.md)和[接入方案](../plans/2026-11-18-forge-experts-integration-proposal.md)。邮箱、OA、DevOps 和 Gitee 的企业工具按各自接入设计验收，首批镜像验证以 Codex 启动、Java 样例和模型调用为主。
+本设计覆盖镜像、执行环境、Harness 的任务级模型授权及候选计费。专家目录、`@` 交互、员工接口、任务回执和隐私沿用[专家 PRD](../requirements/delegra-experts-prd.md)与[接入方案](../plans/2026-11-18-forge-experts-integration-proposal.md)。邮箱、OA、DevOps 与 Gitee 通过各自已准入的工具入口使用发起用户权限。首批镜像验证以 Codex 运行、Java 样例及合成模型会话为目标。
 
-项目实施范围以[需求基线 §2](../requirements/requirements-baseline.md#2-范围边界唯一真源)为准。现行基线把跨系统 Agent 调度列在范围之外，个人研发模型访问限定于 DSH。企业启用拟议的专家委派及个人模型访问路径，以项目负责人确定的实施范围和目标网关的实际准入为准。 [个人模型访问约束](../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)
+本地镜像制作和合成 Runner 验证可独立评审。企业跨系统委派和远端个人模型使用受[需求基线 §2](../requirements/requirements-baseline.md#2-范围边界唯一真源)及[个人模型访问约束](../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)约束。企业接入以项目负责人完成范围裁决及基线回写、可信宿主接缝和受限员工接口实际可用为前置，分别由 [issue #245](https://github.com/hrygo/heluo-forge/issues/245) 和 [issue #244](https://github.com/hrygo/heluo-forge/issues/244) 跟踪。还须取得目标网关对远端 Harness 客户端身份、网络来源、实际 `/responses`、IAM 令牌受众与同属主判据的有效证据。
 
-AIGS 接入阶段对同一资源和动作同时核验用户与 Agent 身份。双方均有权时才放行，任一身份缺失、失效或无权时拒绝调用。 [IAM 向 AIGS 演进预研](../plans/dsh-plugin-tools/iam-to-aigs-evolution.md)
+客户资料的试用按既有数据边界开通。核查机构内的 Delegra、Runner、网关和模型处理位置，网关及模型关闭正文日志，本机保留适用的人工确认。验收使用合成标记核对传输落点、诊断和持久化证据，再按已获准的数据类别启用。 [专家 PRD §6](../requirements/delegra-experts-prd.md#6-上下文权限与数据) · [网关数据与审计边界](../contracts/gateway-contract.md)
+
+AIGS 接入阶段由目标授权服务对同一资源和动作判定当前用户与独立 Agent 的权限交集。工具侧验收双方获准、仅一方获准、任一身份失效和授权服务不可用，切换后持续执行双主体判据，并用审计关联两种身份、动作和资源。模型候选路线另按 §7.4 核验。 [AIGS 预研](../plans/dsh-plugin-tools/iam-to-aigs-evolution.md)
 
 ## 5. 已有证据与待核验事项
 
 本机 Docker 已运行两个 `linux/arm64` 镜像，验证 Codex `0.167.1` 启动、非 root 工作区和 Java 样例。模拟网关收到 Codex 的 `/responses` 请求和两项合成凭据，缺失 IAM access token 时返回 `401`。 [镜像配方与实测记录](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md)
 
-Delegra 固定标签 `deploy/v2026.1106.0-r2`（`25c86a283a9c`）的 `runner-binary.ts` 能识别 Linux ARM64 Runner 可执行文件。该标签的 Daytona fleet 配方固定使用 `linux/amd64` 基镜像，并锁定同架构的 Cursor 和 GitHub CLI。该标签声明的远端 Native Codex 兼容范围为稳定版 `>=0.149.0 <0.161.0`，`Dockerfile.release` 检查 `0.160.0`。npm 注册表有 `0.160.0-linux-arm64` 制品，本机探针的 `0.167.1` 超出 `r2` 的远端兼容范围。 [固定版本与验收依据](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md#接入取舍) · [Codex ARM64 包元数据](https://registry.npmjs.org/@openai%2fcodex/0.160.0-linux-arm64)
+Delegra 固定标签 `deploy/v2026.1106.0-r2`（`25c86a283a9c`）的 `runner-binary.ts` 能识别 Linux ARM64 Runner。该标签的 Daytona fleet 配方使用 `linux/amd64`，`Dockerfile.release` 检查 Codex `0.160.0`。远端 Native 兼容稳定版 `>=0.149.0 <0.161.0`。npm 注册表有 `0.160.0-linux-arm64` 制品。本机探针使用的 `0.167.1` 超出该区间。 [固定版本与验收依据](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md#接入取舍) · [Codex ARM64 包元数据](https://registry.npmjs.org/@openai%2fcodex/0.160.0-linux-arm64)
 
 | 待核验事项 | 依据或责任方 | 验收时点 |
 | --- | --- | --- |
 | 目标 Delegra 版本、Runner 模式、提供方和镜像来源。核验实际沙箱为原生 `linux/arm64`，并核对 glibc、Codex 版本和启动契约。 | 目标部署记录及实际运行探针 | 目标 Runner 验收前 |
-| DSH IAM 如何将同一用户的两项凭据绑定到本次任务，以及 Runner 如何将可用范围限制在 Harness 的网关调用。 | DSH Host 及 Delegra 接入实现 | 企业凭据交接前 |
-| Delegra 调用来源准入、实际 `/responses`、用户计量、撤权和退出行为。 | 目标网关及[网关契约](../contracts/gateway-contract.md) | 企业试点前 |
+| 目标通道能否从同一 Host 授权记录绑定凭据、发起人、任务和运行代次，并在已运行 Harness 内执行逐请求失效。 | DSH Host、Delegra 及所选运行环境 | 企业凭据交接前 |
+| 远端 Harness 的受管身份与来源、实际 `/responses`、IAM 受众与主体比对阶段、用户计量、撤权和数据路径。 | 目标网关及[网关契约](../contracts/gateway-contract.md) | 企业联调前 |
 
 ## 6. 技术方案
 
@@ -80,10 +82,11 @@ sequenceDiagram
     participant R as Runner 和 Codex Harness
     participant G as 企业 AI 网关
     B->>S: 发布已验证的镜像摘要及适用执行环境
-    D->>S: 受权委派并绑定本次网关连接
+    D->>S: 提交已授权的委派并绑定本次网关连接
     S->>S: 固定专家配置，核对发起用户与本次运行
     S->>R: 启动已选镜像并交接本次授权
-    R->>G: 使用该用户的两项凭据发起 Responses 请求
+    R->>R: 核验当前运行与本次模型授权
+    R->>G: 通过私有 Provider 使用该用户的两项凭据
     G->>G: 校验用户和模型授权并记录计量
     G-->>R: 流式结果
     R-->>S: 运行结果和回收状态
@@ -103,44 +106,45 @@ sequenceDiagram
 
 首轮由 `codex-min` 和 `codex-java-21` 验证公共层、派生和真实 Runner。标准目录与按需目标依次扩展。镜像优先级、14 份 Dockerfile 的继承、安装内容和 18 个构建目标的验收以[构建规格](#9-镜像与-dockerfile-构建规格)为准。任务可调用的外部动作由专家工具集合、当次授权和实际服务权限决定。
 
-公共层只装配一次 Codex、Runner 和常用工作区工具。场景镜像继承同一运行约定，添加所需工具与直接依赖。下载、编译及缓存留在构建阶段，最终层保留完整运行资产。镜像体积与启动性能按实测比较，Agent 常用操作和 Codex 协议是裁剪的验收条件。 [镜像构建原则](#92-镜像构建原则)
+公共层只装配一次 Codex、Runner 和常用工作区工具。场景镜像继承同一运行约定，添加所需工具与直接依赖。下载、编译及缓存留在构建阶段，最终层保留完整运行资产。裁剪后按 §9.2.3 复验文件、Git、Shell、Codex stdio 会话和退出，比较冷拉压缩量、启动及首个 turn 耗时。 [镜像构建原则](#92-镜像构建原则)
 
 所有镜像仅构建和交付 `linux/arm64`。构建与启动验收均在原生 ARM64 环境执行。`r2` Native 参考组合使用 Codex `0.160.0` 及 GNU libc 2.39 或更新版本。基础镜像引用摘要，锁定 Codex 与工具链的 ARM64 制品版本和校验值。镜像发布至目标 Runner 获准访问的制品源，发布记录保存摘要、平台、构建输入、工具链、软件物料清单、构建来源证明、适用 Runner 与验收结果。探针配方用于复现共享层和工具链，部署配方还须覆盖目标 Runner 的启动及会话协议。 [本机镜像与模拟网关探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md) · [Paperclip Runner 平台要求](https://docs.paperclip.ing/reference/adapters/paperclip-runner/)
 
 ### 6.3 Delegra 如何选用镜像
 
-专家引用 Delegra 维护的执行环境。维护者在执行环境中配置镜像来源、目标 Runner 和平台，任务输入只选择获准的专家。任务受理时固定执行环境、镜像摘要、skills 和工具集合版本。派发按受理记录选择同一版本并核对实际环境。快照模式同时记录提供方的不可变快照标识及其来源镜像。运行回执关联请求、任务和运行代次，记录实际启动的镜像或可查证的快照、平台和 Codex 版本。
+专家引用不可变的执行环境版本。维护者登记目标提供方、执行模式、平台、镜像、skills 和工具集合版本。受理记录固定这些引用与专家配置，派发按同一版本选镜像并用当前授权复验。运行回执关联请求、任务和运行代次，记录实际镜像摘要或快照及来源摘要、平台、实际 Runner 与 Codex 的来源、摘要和版本。
 
-| 执行路径 | 固定标签源码证据 | 详细设计约束 |
+| 执行路径 | 固定标签源码证据 | 资格判据 |
 | --- | --- | --- |
-| Daytona Native | `packages/plugins/sandbox-providers/daytona/src/plugin.ts` 将环境的 `image` 或 `snapshot` 传给沙箱创建。快照资格验证可解析不可变 ID。该标签的 fleet 镜像为 `linux/amd64`。 | 接入依赖目标服务支持自定义 ARM64 镜像和原生 ARM64 沙箱。按所选模式核对镜像摘要或快照来源，并验证实际 `app-server`、工作区及退出。 |
-| Kubernetes | `packages/plugins/sandbox-providers/kubernetes/src/plugin.ts` 的领用路径把 `imageOverride` 设为 `null`。`image-allowlist.ts` 支持检查 override，当前启动从适配器的 `runtimeImage` 解析镜像。 | 选用此路径时先证明专家配置能选择并追溯到指定镜像，且 Pod 被调度到实际 ARM64 工作节点。适配器默认镜像的配置及 allowlist 单独核验。 |
-| `codex_local` | `packages/adapters/codex-local/src/server/runtime-config.ts` 可将 `PAPERCLIP_CODEX_PROVIDERS` 映射为 Codex 配置。 | 此证据适用于直接适配器。Native Runner 通过自己的 `app-server` 启动与配置入口验收。 |
+| Daytona Native | `packages/plugins/sandbox-providers/daytona/src/plugin.ts` 有按执行环境传入 `image`／`snapshot` 的接缝，可解析不可变快照 ID。该标签的默认 fleet 镜像为 `linux/amd64`。 | 优先核验现有自定义镜像或快照接缝。实际服务须具备原生 ARM64 沙箱、获准制品源、对应启动命令和可查证的实际镜像身份。 |
+| Kubernetes | `packages/plugins/sandbox-providers/kubernetes/src/plugin.ts` 的领用路径传入 `imageOverride: null`。当前选镜像采用适配器的 `runtimeImage`。Job 模式由 `pod-spec-builder.ts` 指定 Tini 与 `paperclip-agent-shim`。 | 选择此路线前须核定按专家选择摘要的接线及所用 backend 的真实启动契约。Job 路径须提供相应 shim。两个专家各使用指定摘要及 ARM64 工作节点，回执能反查实际运行。 |
+| `codex_local` | `packages/adapters/codex-local/src/server/runtime-config.ts` 可将 `PAPERCLIP_CODEX_PROVIDERS` 映射为直接适配器配置。 | 作为配置对照。Native 的 `app-server` 使用其专用 transport、启动与凭据消费入口。 |
 
-目标组合需要同时验证镜像拉取和原生 ARM64 启动。指定镜像、平台、固定版 Codex 或必要的 Runner 能力不满足时，任务报告启动失败。升级或回退切换新受理任务引用的已验证 ARM64 环境版本，原任务按已固定的版本追踪和对账。 [固定版本与验收依据](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md#接入取舍)
+固定 `r2` Native 远端冷启动需要在执行环境 `PATH` 可用的 Node。预装 `paperclip-runnerd` 由控制端验证构建能力和制品身份，预装件校验失败可以触发控制端制品落地。Codex 的兼容区间校验与精确版本固定是两个判据，配置还可通过显式路径或 npm 提供 Codex。验收预装模式时，控制端默认 ARM64 制品槽与镜像消费同一份 Runner 构建，消除显式制品及 npm 的替代路径，核对实际启动文件和两条镜像来源证据。镜像缺件、Runner 摘要错配或 Codex 不等于固定版均使该组合的验收失败。 [实际 Runner 验收](#82-任务-2-验证-delegra-实际启动版本固定与回收)
+
+已受理任务固定的镜像、快照、skills 和工具版本保留到排队、运行及约定可恢复期限结束。执行环境所有者依据任务引用清理制品。紧急撤出可停止使用有问题的版本，受影响任务记录版本及真实失败状态并保持获权回查。切换或回退后续任务的默认环境引用时，已受理任务按原版本查证。
 
 ### 6.4 DSH 网关授权交接
 
-1. **DSH 确认当前用户和任务。** Host 核对真实提交、选择的专家、当前 IAM 会话与本次授权。`resolveGatewayConnection()` 读取同属主个人网关 Key 和 `baseURL`，`getAccessToken()` 提供当前 IAM access token。Host 须在受控交接前把属主、会话、凭据版本和到期时间绑定到同一次提交，并复验账号与配置在异步读取期间仍有效。现有模型路径的 `captureModelSession()` 提供同一登录代次的检查语义，现有读取接口各有独立入口。 [Host 凭据接入](../../packages/forge-iam/docs/credential-access.md#33-dsh-host-插件宿主服务)
-2. **Delegra 按实际运行交接。** 员工接口依据自身接受的凭据核对发起人、组织和专家调用权限。网关连接在受信通道内与该用户、专家、请求、任务和运行代次绑定。任务和派发记录只保留归属、有效期及受控引用，每次取用都重新核对当前运行和授权。两项秘密仅由本次运行使用，授权到期时间取本次用户授权与 IAM access token 的较早到期时间。刷新由 DSH Host 管理。授权过期时沿用「待用户」状态，等待原用户重新授权。归属无法核实时阻断交接并核对原任务记录。
-3. **Runner 在 Harness 启动边界消费。** 经目标环境验证可隔离的路径，将两项凭据交给本次 Codex Provider。可信配置以 `base_url` 指定获准的企业网关，`wire_api` 选 `responses`，通过 `env_key` 和 `env_http_headers` 引用运行时值。Native Runner 在 `codex_provider.rs` 按名单向 `app-server` 传递环境。任务级配置和两项凭据的交接需在该启动路径接线并实测。加密传输、运行时私有注入与短期保管复用部署环境已有能力，具体接口随目标环境核验。 [Codex 0.160.0 配置定义](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/config.schema.json)
-4. **约束工具执行边界。** 工作区和 skills 可被本次任务读取，可信 Provider 配置和凭据由托管运行环境拥有。`shell_environment_policy` 约束命令继承的环境变量。隔离验收同时覆盖文件、进程、工具出站网络及日志，证明凭据限于 Harness。任一关键边界缺少目标 Runner 证据时，企业凭据调用入口保持关闭，镜像启动与协议验证使用合成凭据。 [Codex 0.160.0 配置定义](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/config.schema.json)
-5. **网关验证并记账。** 交接前将 `baseURL` 与目标环境获准的 HTTPS 网关地址核对。Harness 仅向获准的 `POST ${baseURL}/responses` 发送 `Authorization: Bearer …`、`X-IAM-Token` 和 `X-Consumer-Type: personal`。实际网络来源和客户端身份按网关开放的接入路径校验。网关验证两项凭据和模型授权，记录真实用户与团队用量。 [网关身份、用途与凭据](../contracts/gateway-contract.md#41-身份用途与凭据) · [网关服务端点契约](../contracts/gateway-contract.md#44-服务端点契约与流式协议)
+1. **绑定真实提交。** DSH Host 只接受可信的用户提交及当次专家授权，绑定用户、组织、原 DSH 会话、专家、请求和授权期限。使用 `captureModelSession()` 的会话代次校验，并复用 `resolveGatewayConnection()` 的属主与 Key 代次校验。发送前由可信 Host 回调从同一持久授权记录消费 IAM access token 及 `accessExpiresAt`，复验用户、会话、`baseURL` 和 Key 代次。该授权到期取用户授权与实际 token 到期的较早值。刷新由 DSH Host 管理。 [Host 凭据指南](../../packages/forge-iam/docs/credential-access.md#33-dsh-host-插件宿主服务)
+2. **受理与领取。** Delegra 受限员工入口使用自身认可的人员凭据核验发起用户、组织与专家调用权限，受理私有任务并分配运行代次。任务和派发记录保存授权绑定、有效期及受控引用。可信执行端在领取时核对发起人、任务、专家、运行代次和最新授权，拒绝旧代次及重复领取。消息、技能、工作区、构建输入、普通任务环境和提供方的执行命令均排除凭据值。
+3. **运行时私有注入。** 针对已选提供方验证独立秘密投递、私有配置和可信模型请求控制点。授权只在托管 Provider 的本次运行使用，工具的进程、文件、环境和出站边界独立验收。Codex 可信配置通过 `baseURL` 到 `base_url` 的映射固定网关，`wire_api` 为 `responses`，`env_key`、`env_http_headers` 只引用 Provider 私有运行时值。Codex 的 `shell_environment_policy` 限定工具环境继承，文件和进程可见性及网络由经验证的运行边界执行。固定 `r2` 的普通远端执行会把环境放入提供方执行请求。Rust 的环境名单仅控制最后一段传递。首版私有通道须逐段验证员工受理、队列引用、控制端 transport、提供方和 Runner 消费。 [Codex 0.160.0 配置定义](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/config.schema.json)
+4. **逐请求判定。** 可信请求控制点在每个新模型调用前验证当前运行代次、任务授权时效和撤销状态、专家配置允许的模型及当次授权范围。该控制点与任务工具隔离，并限制 Provider 只访问获准的 HTTPS 网关。网关从 `POST ${baseURL}/responses` 的 `Authorization: Bearer …` 和 `X-IAM-Token` 判定正在使用的人员身份、实际模型权限和预算。 `X-Consumer-Type: personal` 声明仅供审计。以目标网关认可的客户端身份与来源作为准入证据。 [网关身份与凭据](../contracts/gateway-contract.md#41-身份用途与凭据) · [网关服务端点](../contracts/gateway-contract.md#44-服务端点契约与流式协议)
+5. **验收与放行。** 先核验提供方是否能复用任务租约、出站控制和运行私有通道实现逐请求判定。若需新增中转或网关扩展，评估额外网络跳、流式透传、故障态和运维成本后提交选型。任一关键隔离、撤权和计量条件缺失时，企业凭据入口保持关闭。使用合成授权验证启动、网络、拒绝及诊断，确认目标条件后使用获准的企业测试账号和合成数据联调。
 
-接入改动落在三个边界。DSH Host 在可信提交出口封装任务授权。Delegra 的受限员工接口受理任务，派发端交接受控凭据引用。Native 路径的 `native-session-executor.ts` 准备 Harness，`codex_provider.rs` 启动 Provider 并限定继承环境。接入契约定义获准的授权交接方式、秘密的运行时取用以及任务状态。 [接入方案的权限与数据边界](../plans/2026-11-18-forge-experts-integration-proposal.md#4-delegra-权限隔离与数据)
-
-邮箱、OA、DevOps 和 Gitee 的凭据由各自受控工具入口按本次授权消费。工具动作用当前专家的配置和当次任务授权取交集，资源访问由对应服务判定。接入 AIGS 时，在同一调用入口同时绑定当前用户和 Agent 身份，按目标授权接口校验同一资源与动作。 [AIGS 演进预研](../plans/dsh-plugin-tools/iam-to-aigs-evolution.md)
+邮箱、OA、DevOps 与 Gitee 各自按当前专家配置、任务授权与目标服务权限消费相应用户凭据。AIGS 工具调用使用同一资源与动作的双身份授权，保持状态查询和对账所需的独立当前权限。 [接入方案权限边界](../plans/2026-11-18-forge-experts-integration-proposal.md#4-delegra-权限隔离与数据)
 
 ### 6.5 排队、失败与回收
 
-| 场景 | 处理与验收 |
+| 场景 | 权威检查与验收 |
 | --- | --- |
-| 排队期间过期、切换账号或撤权 | 派发再次核对当前运行及授权状态。核验失败的任务停止相关调用，由原用户重新授权。验证排队越过有效期及旧用户授权交接。 |
-| 提交丢回执、Worker 重启或迟到结果 | 通过原请求回查权威任务与运行代次。未决保持待核对。重派前核实前次执行结果并重新校验可用授权。旧代次交接、工具答复和结果均须通过当前代次检查。 |
-| 网关拒绝或流中断 | 凭据缺失、身份不一致、到期或撤销按网关契约处理。已建流按契约处置。对状态不明的请求先核对结果，适用的限流重试遵循网关的退避和副作用判据。 |
-| 任务结束、取消或环境回收失败 | 关闭本次 Harness 的凭据访问，再按现有执行环境机制回收凭据和工作区。回执可查任务归属及回收结果。未确认回收的环境保持隔离并进入对账。 |
+| 排队或领取时已过期、换账号或撤权 | 在本次运行领取前依据最新授权及同一发起人重新核验。归属不明时保持待核对，已知过期且允许恢复时进入待用户。取消与领取并发时只允许当前仍获权的运行启动。 |
+| 运行中授权到期、退出、取消或失联 | 本次授权状态以可信 Host 会话与 Delegra 当前运行租约为依据。逐请求控制点在期限、撤销或运行失联后拒绝新请求。已有活动流按目标契约处置。任务授权超期须由原用户重新授权并分配新的运行代次。跨授权热复用以实证为前置。 |
+| 提交丢回执、Worker 重启或迟到结果 | 按原请求回查权威任务及运行代次，未决保持待核对。重派前核实前次执行与副作用，重新校验权限。旧代次的凭据领取、工具答复和结果不能变更当前运行。 |
+| 网关拒绝或流中断 | 网关原因区分身份、权限、预算和限流。凭据错误不重放。可判定未发生副作用的限流按契约退避。归属或执行结果未知时按网关请求回执核对。 |
+| 任务结束或环境回收失败 | 先停用运行授权，再回收凭据与工作区。未确认回收时保持隔离并对账。回执记录已知归属、请求关联、实际回收状态和可继续的受权操作。 |
 
-运行验收先用合成凭据跑通镜像、真实 Runner 和协议请求，再以获准的企业测试用户核对网关 `/responses`、用户计量、撤权及跨用户隔离。两类验收使用实际启动路径，分别记录版本、环境、请求关联和结果。 [接入验收与恢复](../plans/2026-11-18-forge-experts-integration-proposal.md#61-待实测项) · [网关生命周期约束](../contracts/gateway-contract.md#411-生命周期与失败约束)
+验收让已取得授权的 Harness 在一次合成推理后继续存活，分别触发早于 token 的任务到期、取消、Host 退出或切号、回收失联，核对后续请求被拒。企业联调另核对实际撤权收敛、目标网关的在途流处置及其他有效会话。 [网关生命周期](../contracts/gateway-contract.md#411-生命周期与失败约束) · [现有接入验收](../plans/2026-11-18-forge-experts-integration-proposal.md#61-待实测项)
 
 ## 7. 方案取舍
 
@@ -154,23 +158,23 @@ sequenceDiagram
 
 ### 7.2 模型网关认证与费用归属
 
-此处的调用者指**发起并授权当前任务的自然人**。同一个已装配的专家可服务不同调用者，每次推理的积分与费用按该次任务获准的调用者归属。模型调用的有效权限仍是**调用者当前权限 ∩ Agent 当前权限**，本次授权范围进一步约束具体请求。
+调用者是发起并授权本次任务的自然人。同一个已装配的专家可服务不同调用者，网关按每次任务已核验的用户账户及团队预算结算实际用量。
 
-| 方案 | 网关如何确认身份 | 权限与计量 | 适用条件与代价 |
-| --- | --- | --- | --- |
-| 用户凭据直连 | 本次 Harness 使用 DSH IAM 取得的个人网关 Key 和 IAM access token。 | 首版按 §6 由 Delegra 约束专家配置和任务授权，网关执行当前用户的模型权限及成员和团队预算。 | 复用受管个人访问契约。须实测 Runner 内两项用户凭据的隔离、Delegra 来源准入和 `/responses`。 |
-| Agent 令牌认证，调用者计费 | 专家的 Harness 使用该 Agent 的网关访问令牌，同时提交网关可验证的本次用户委派。 | 网关或其认可的授权服务核验双方对同一模型和动作的当前权限。网关从已核验的委派确定调用者、成员与团队预算，按该归属管控并扣减实际用量。 | Harness 只持有 Agent 令牌与受限任务委派。个人网关 Key 和 IAM access token 留在原有的授权边界。新增依赖是受信委派、服务端双主体授权和调用者计量。 |
+| 路线 | 认证与授权决定点 | 费用及准入条件 |
+| --- | --- | --- |
+| 首版个人凭据 | Delegra 和托管运行控制点约束专家配置、当次任务授权和可用模型。网关用个人 Key 和 IAM access token 校验当前用户及实际模型权限。 | 按当前用户的成员和团队预算扣减。通过 §6.4 的远端来源、私有投递、逐请求失效和隔离验收后开放。 |
+| Agent 令牌认证，调用者计费 | Harness 持 Agent 网关令牌，并提交网关可验的本次用户委派。网关或认可的授权服务判断同一模型和动作的有效权限为 **调用者当前权限 ∩ Agent 当前权限**，并约束于本次用户授权。 | 网关从已核验的委派映射调用者、成员与团队预算，按实际用量结算。依赖可信签发、运行绑定、双主体授权、预算和结算接口。 |
 
-网关 `V2.2.0` 目标契约分别描述个人访问和无人值守应用访问。应用凭据归属服务与系统代码，现有计量维度包括成员、团队、凭证和模型。应用路径需要补充「按已验证的发起用户扣减预算」及网关校验双主体权限的契约。Delegra `deploy/v2026.1106.0-r2` 的 `packages/db/src/schema/cost_events.ts` 已有 `agentId`、`responsibleUserId` 和 `providerRequestId`。对账时核对这些字段与网关回执的实际映射，扣费账户与额度以网关验证和结算为准。 [网关身份与凭据](../contracts/gateway-contract.md#41-身份用途与凭据) · [网关额度与计量](../contracts/gateway-contract.md#42-额度与计量)
+网关 V2.2.0 目标契约的现有应用凭据归属服务与系统代码。候选需要补充用户委派和调用者计量支持。固定 `r2` 的 `cost_events` 已有 `agentId`、`responsibleUserId` 和 `providerRequestId`，用于关联审计、展示与对账。实际扣减、去重及预算真源为网关账本。 [网关身份与计量](../contracts/gateway-contract.md#42-额度与计量)
 
 ### 7.3 Agent 令牌路线的调用流程
 
 1. **授权。** 用户在 DSH 以本人身份选定专家并授权本次任务。Delegra 受理任务并确定运行代次后，由受信签发方核对本次授权与任务归属，签发仅供目标 LLM 网关使用的短时委派。委派绑定组织、用户、Agent、任务、运行代次、模型与动作范围，交给对应运行的 Harness。
 2. **鉴权。** Harness 使用 Agent 的网关访问令牌及任务委派调用 `/responses`。网关验证 Agent 令牌，并验证委派签发方、受众、有效期和撤权状态。网关从绑定到运行的 Agent 令牌或受信运行连接确认实际运行，再与委派比对。网关以核验出的用户和 Agent 身份判定双方对当前模型与动作的权限。委派可采用签名的短时证明，或通过受信服务查询的授权引用。具体载体由接入契约确定。
 3. **计量。** 网关从委派的用户身份映射其有效计费账户与团队，在推理前用该账户执行预算检查。实际用量按同一账户结算。Agent 身份用于执行审计和凭证级限流，网关回执关联用户、Agent、任务和请求。流式中断后按实际计量回执核对，重复回执按同一真实模型请求去重。Delegra 关联回执以展示和对账。
-4. **失效。** 任一身份失效、权限无法判定、用户授权撤销、任务结束或账户不可确认时，拒绝受影响的新模型请求。撤权覆盖签发与实际网关调用，时限沿用适用的企业网关要求。 [网关生命周期约束](../contracts/gateway-contract.md#411-生命周期与失败约束)
+4. **失效。** 任一身份失效、权限无法判定、用户授权撤销、任务结束或账户不可确认时，拒绝受影响的新模型请求。撤权覆盖签发与实际网关调用，按目标契约验证时限、在途流和持久账本。 [网关生命周期约束](../contracts/gateway-contract.md#411-生命周期与失败约束)
 
-AIGS 预研中的双标识令牌可以承载同一授权语义。采用 OAuth 令牌交换时，用户作为主体，Agent 作为执行者，短时令牌可用 `sub` 和 `act` 表达两者。令牌交换与用户委派的实时撤回、有效权限和积分结算分别取证。 [AIGS 演进预研](../plans/dsh-plugin-tools/iam-to-aigs-evolution.md) · [RFC 8693 委派语义](https://www.rfc-editor.org/rfc/rfc8693.html#section-1.1) · [RFC 8693 执行者声明](https://www.rfc-editor.org/rfc/rfc8693.html#section-4.1)
+AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时，用户作为主体，Agent 作为执行者，短时令牌可用 `sub` 和 `act` 表达两者。令牌交换、运行级授权撤回、有效权限和积分结算分别取证。 [AIGS 演进预研](../plans/dsh-plugin-tools/iam-to-aigs-evolution.md) · [RFC 8693 委派语义](https://www.rfc-editor.org/rfc/rfc8693.html#section-1.1) · [RFC 8693 执行者声明](https://www.rfc-editor.org/rfc/rfc8693.html#section-4.1)
 
 ### 7.4 候选路线验收及采用条件
 
@@ -179,103 +183,73 @@ AIGS 预研中的双标识令牌可以承载同一授权语义。采用 OAuth �
 | 甲、乙分别调用同一个专家并获双主体授权 | 同一个 Agent 身份出现在两条记录中。甲、乙各自的额度按实际推理扣减，另设的专家维护者和默认应用账户的额度无此项扣减。 |
 | 仅人有权、仅 Agent 有权，或委派缺失、失效或串用 | 对指定模型和动作拒绝请求。网关拒绝错用户、错 Agent、错任务、错代次或错目标的委派，且无对应推理扣费。 |
 | 人的预算用尽、任一方撤权或任务取消 | 网关按实际原因拒绝受影响的新请求。核对撤权和取消是否在规定时限内阻断后续调用。在途请求按真实网关回执结算。 |
-| 重复收到同一条推理回执或客户端中断 | 每条真实模型调用按网关回执对账。同一回执重复交付只结算一次，未知结果保留待核对。 |
+| 重复回执、并发预算或流中断 | 网关以稳定的请求及结算标识对账，同一真实请求重复回执只结算一次。并发调用遵循成员及团队预算，流中断按实际用量结算，未知结果保留待核对。 |
 
-§6 是已确认的首版技术方向。Agent 令牌路线具备调用者归因和权限交集的契约及实测证据后，可作为首版选型重新比较。两条路线共用镜像矩阵和 Runner 验证。新增取证集中在委派签发与校验、网关授权及调用者预算结算，实施成本以目标环境的现有支持度为准。
+§6 为首版个人凭据方向。Agent 令牌路线按任务 4 取得可信运行委派、双主体授权和用户结算的实际证据，并统一比较外部改造与联调成本，再决定是否采用。两条路线共用镜像矩阵与 Runner 验收。
 
 ## 8. 实施计划
 
-任务 1、2 交付首批两份可由已选 Runner 原生启动并按摘要查证的 `linux/arm64` 镜像。任务 3、4 验证按发起用户授权和计量的网关接入，任务 5 扩展受监管机构镜像目录。以 `deploy/v2026.1106.0-r2` 的 Native Runner 源码和 Codex `0.160.0` ARM64 制品作为参考构建组合。镜像配方交付路径为 Delegra 的 `docker/agent-runtime/experts/`，构建职责和各目标验收见[构建规格](#9-镜像与-dockerfile-构建规格)。沙箱提供方、实际部署版本和获准制品源在任务 2 核定。
+`deploy/v2026.1106.0-r2` 的 Native Runner 和 Codex `0.160.0` 为首轮 ARM64 参考组合。Delegra 构建配方位于 `docker/agent-runtime/experts/`。任务各自产出可核验结果。跨系统范围、托管镜像发布、企业接口与真实用户凭据遵循 §4 的适用准入。
 
-下列文件路径以所列仓库根目录为基准。任务 1 可独立进行本地验证。任务 2 依赖已确定的 Runner 和试验环境。任务 3、4 的企业调用依赖实际人员授权、受限员工接入及目标网关契约，范围按[需求基线 §2](../requirements/requirements-baseline.md#2-范围边界唯一真源)和[专家接入方案](../plans/2026-11-18-forge-experts-integration-proposal.md#6-恢复后的阶段与验收)核对。
+| 任务 | 主要交付 | 执行前置 |
+| --- | --- | --- |
+| 1 · [issue #393](https://github.com/hrygo/heluo-forge/issues/393) | 两份 ARM64 参考镜像、派生配方和本地冒烟 | 固定构建输入与原生 ARM64 构建节点 |
+| 2 · [issue #394](https://github.com/hrygo/heluo-forge/issues/394) | 目标 Runner 资格核验和两镜像正常调度验收 | 任务 1 的参考制品，目标部署、提供方和获准的试验制品源 |
+| 3 · [issue #395](https://github.com/hrygo/heluo-forge/issues/395) | DSH 本次用户授权与 Harness 安全接入 | 任务 2、§4 的范围及身份准入、合格的私有投递和请求控制点 |
+| 4 · [issue #396](https://github.com/hrygo/heluo-forge/issues/396) | Agent 令牌与调用者计费候选的能力证据 | 已核验的运行环境、提供方实际接口及相关试验授权 |
+| 5 · [issue #397](https://github.com/hrygo/heluo-forge/issues/397) | 开发、测试、运维和办公场景的锁定配方与制品 | 任务 2 固定公共层。各任务场景有适用工具版本及代表性样例 |
 
 ### 8.1 任务 1 · 构建首批两个镜像
 
 | ARM64 构建输入 | 固定来源 |
 | --- | --- |
-| 参考运行底座 | `node:24.21.0-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66` 的 `linux/arm64` 清单，本机探针实测 glibc `2.41`。精简候选的 Debian slim 与官方原生包摘要见[构建原则](#92-镜像构建原则)。 |
-| Runner 构建 | `rust:1.97-bookworm@sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa`。源码和 `Cargo.lock` 取自 `r2` 提交 `25c86a283a9c787a01911c714618d78df7552af7`，复用该标签的 `runnerd-build` 编译命令与构建输入。 |
-| Java 工具链 | 从 `maven:3.9-eclipse-temurin-21@sha256:71a6832f657180ea206901ffc548c0e73a257cb09b4912619177586d0268d59c` 提取 ARM64 JDK 和 Maven。 |
+| 参考运行底座 | `node:24.21.0-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66`，Linux ARM64，已有 glibc `2.41` 的本机证据。 |
+| Runner 构建 | `rust:1.97-bookworm@sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa`。取 `r2` 提交 `25c86a283a9c787a01911c714618d78df7552af7` 的构建输入及 `Cargo.lock`。 |
+| Java 工具链 | `maven:3.9-eclipse-temurin-21@sha256:71a6832f657180ea206901ffc548c0e73a257cb09b4912619177586d0268d59c`，提取 ARM64 JDK 和 Maven。 |
 
-| 仓库与文件 | 动作与理由 |
+| 交付路径 | 内容 |
 | --- | --- |
-| Delegra `docker/agent-runtime/experts/Dockerfile` | 新建 ARM64 `runnerd-build` 阶段，以 `cargo build --locked --release -p paperclip-runner-core --bin paperclip-runnerd` 构建。以独立阶段准备 Codex 完整运行资产，最终层只复制运行所需文件和工具。沿用 UID/GID `1000:1000`、`/workspace` 和 `tini` 命令入口。构建时检查 `BUILDOS`、`BUILDARCH`、`TARGETOS` 与 `TARGETARCH` 均对应 `linux/arm64`。 |
-| Delegra `docker/agent-runtime/experts/Dockerfile.java` | 新建共用 Java 配方。`codex-java-21` 从固定工具链阶段复制 `/opt/java/openjdk` 与 `/usr/share/maven`，使用 Bake 传入的最小镜像作为运行层。其他 Java 主版本按各自固定的工具链摘要增加目标。 |
-| Delegra `docker/agent-runtime/experts/package.json`、`docker/agent-runtime/experts/package-lock.json` | npm 参考构建使用最小清单及锁文件，以 `npm ci` 固定安装 `@openai/codex@0.160.0` 和同版本 `linux-arm64` 制品。采用完整原生包时，在 Bake 固定该归档的版本和摘要，交付配方采用通过验收的安装路径。 |
-| Delegra `docker/agent-runtime/experts/Dockerfile.dockerignore` | 将仓库根目录构建上下文限于此配方目录、`packages/paperclip-runner/runner/` 的 `Cargo.toml`、`Cargo.lock` 和 `crates/`，以及该 Runner 包的 `protocol/`、`acpx-profiles.json` 和 `antigravity-distributions.json`。 |
-| Delegra `docker/agent-runtime/experts/.dockerignore`、`docker/agent-runtime/experts/debian.sources` | 前者限定场景镜像的目录上下文，后者固定受信的版本化 Debian 构建软件源。公共层继承同一软件源约定。 |
-| Delegra `docker/agent-runtime/experts/buildx-bake.hcl` | 新建两份镜像的入口，固定 `platforms = ["linux/arm64"]`。Java 目标使用 `target:codex-min` 命名上下文复用公共层。 |
-| Delegra `tests/runner-e2e/expert-runtime-images-smoke.mjs` | 新建本地冒烟测试，接收最小镜像与 Java 镜像两个引用。断言实际平台、可执行文件架构、基础层复用、用户、版本、中文工作区、Git 与归档。测试进程从容器外驱动 `app-server` stdio 握手和 EOF 退出，Java 镜像执行编译运行样例。 |
-| HeluoForge `docs/design/verification/delegra-runtime-images.md` | 新建实测记录，写实际源码版本、构建输入与镜像摘要、平台、体积、构建及冷启动耗时、基础层增量和测试结果。 |
+| Delegra `docker/agent-runtime/experts/Dockerfile` | ARM64 `runnerd-build` 运行 `cargo build --locked --release -p paperclip-runner-core --bin paperclip-runnerd`。独立层准备 Codex 完整运行资产。最终层按 §9.2 保留 Node、基础工具及 `tini`，以普通用户启动。检查 `BUILDOS`、`BUILDARCH`、`TARGETOS`、`TARGETARCH` 均对应 `linux/arm64`。 |
+| Delegra `docker/agent-runtime/experts/Dockerfile.java` | 基于同一公共层复制工具链的 `/opt/java/openjdk` 和 `/usr/share/maven`，设置 `JAVA_HOME`、`PATH`。 |
+| Delegra `docker/agent-runtime/experts/package.json`、`package-lock.json` | 以 npm 锁文件与 `npm ci` 固定 `@openai/codex@0.160.0` 及对应 Linux ARM64 制品。 |
+| Delegra `docker/agent-runtime/experts/Dockerfile.dockerignore`、`.dockerignore` | 根上下文限定该配方目录、`packages/paperclip-runner/runner/` 下 manifest、锁文件和 crates，以及 `protocol/`、`acpx-profiles.json` 和 `antigravity-distributions.json`。场景配方的目录上下文包含配方和目标需要的工具锁文件。 |
+| Delegra `docker/agent-runtime/experts/debian.sources`、`buildx-bake.hcl` | 填入已验证 Debian 签名快照、信任根与 ARM64 包来源，快照标识及发布索引摘要保存在构建元数据。Bake 固定基础和工具链摘要、平台和命名上下文。Java 目标复用对应公共层。 |
+| Delegra `tests/runner-e2e/expert-runtime-images-smoke.mjs` | 从容器外驱动真实默认入口与 `app-server` stdio，用 `--network none` 验证 §9.2.3。输入为两个镜像引用，非零退出码和失败报告分别标明镜像、断言和清理结果。 |
+| HeluoForge `docs/design/verification/delegra-runtime-images.md` | 实测记录含固定源码、输入、镜像摘要、平台、压缩层增量、工具版本、耗时及通过和失败判据。 |
 
-- [ ] 先写冒烟断言。两份镜像的 OCI 平台均为 `linux/arm64`，容器内 `uname -m` 返回 `aarch64`，`paperclip-runnerd` 和 Codex 的 ELF 目标为 AArch64。两个镜像均报告 `codex-cli 0.160.0`。通过默认命令入口执行普通用户的工作区操作、Codex `app-server` 初始化及退出，断言见[运行验收](#923-agent-与-codex-运行验收)。`paperclip-runnerd --build-metadata` 报告 `dial_ws_loopback`、`dial_wss`、`listen_ws`。Java 镜像用 `javac --release 21` 编译并运行样例，`mvn --version` 核对 ARM64 JDK 与版本。
-- [ ] 在固定源码基线和原生 ARM64 BuildKit 节点上执行 `docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl --print codex-min codex-java-21`，核对阶段和平台。执行 `docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl --load codex-min codex-java-21`，得到本地测试标签 `paperclip-expert/codex-min:arm64-local` 和 `paperclip-expert/codex-java-21:arm64-local`。
-- [ ] 用 `node tests/runner-e2e/expert-runtime-images-smoke.mjs paperclip-expert/codex-min:arm64-local paperclip-expert/codex-java-21:arm64-local` 在 `--network none` 下验证参考产物。用同版 Codex 完整原生包试装精简候选，对相同镜像角色复跑同一套测试。验证架构、版本、工具缺失和制品校验失败的反例，记录产物摘要、平台、体积和压缩层增量。通过的候选进入任务 2。
-
-本机探针提供共享层、运行用户和 JDK 样例，`r2` 源码提供 Native Runner 编译入口。ARM64 Runner 构建、镜像产物及所选提供方的启动契约由本任务与任务 2 验收。 [本机镜像探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md) · [Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/)
+- [ ] 先用 `docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl --print codex-min codex-java-21` 核对平台与父层。用相同入口 `--load` 构建标签 `paperclip-expert/codex-min:arm64-local`、`paperclip-expert/codex-java-21:arm64-local`。记录原生 ARM64 构建节点。
+- [ ] 运行 `node tests/runner-e2e/expert-runtime-images-smoke.mjs paperclip-expert/codex-min:arm64-local paperclip-expert/codex-java-21:arm64-local`。断言两份的 OCI 平台、容器 `aarch64`、关键 ELF、`codex-cli 0.160.0`、UID/GID、文件与会话结束结果。核对 Runner `--build-metadata` 的 `dial_ws_loopback`、`dial_wss`、`listen_ws`。Java 执行 `javac --release 21` 样例与 `mvn --version`。
+- [ ] 精简候选使用独立 Bake 目标 `codex-min-native`、`codex-java-21-native` 和 `arm64-native-local` 标签，以相同 Node 运行资产和官方原生 Codex 归档复跑冒烟。按 §9.2.2 分别导出 OCI 布局，以相同压缩算法计算层大小。测试构建平台错误、固定摘要校验失败、公共工具缺失和 stdio 超时，核对失败且资源清理。通过本地验收的候选交任务 2 比较实际启动。
 
 ### 8.2 任务 2 · 验证 Delegra 实际启动、版本固定与回收
 
-| 仓库与文件 | 动作与理由 |
-| --- | --- |
-| HeluoForge `docs/design/verification/delegra-runtime-images.md` | 追加目标 Runner 版本、提供方与模式、执行环境、镜像或快照身份，以及各实测场景的通过或阻塞结果。 |
-| HeluoForge `docs/design/README.md` | 实测记录形成后，在 §2.2 增加运行时镜像的验证入口。 |
-
-- [ ] 确认目标提供方有原生 ARM64 节点并支持每个执行环境选用固定镜像。在获准的试验制品源登记两个候选摘要，核对各摘要提供 `linux/arm64` 清单。按现有执行环境入口配置两个测试专家。采用快照时登记可追溯到对应 ARM64 镜像摘要的不可变快照。验收记录节点平台、实际沙箱的 `aarch64` 与 glibc、实际镜像或快照身份和启动的 Codex。
-- [ ] 以合成任务分别启动两个专家。通过试验环境中的模拟 `/responses` 验证 `app-server` 会话、至少一次 Shell 操作和文件编辑，核对 Git 差异、工具调用事件、退出及产物回收。确认 Codex 来自指定镜像，实际执行版本与该环境的构建记录一致。按相同功能与运行约定验收精简候选和参考产物，选用通过验收且冷拉量较小的配方。
-- [ ] 演练摘要不可拉取、平台不匹配、Runner 或 Codex 版本不匹配、运行中取消。核对任务故障或取消回执以及环境清理状态，尚待确认的回收进入对账。
-- [ ] 受理一个任务后更新同专家的环境版本，再受理新任务，核对两者各自使用已固定的镜像、skills 和工具集合。回退新任务引用，并验证原任务的回执仍能查询。
+- [ ] 先产出提供方资格记录，包含实际部署版本、原生 ARM64 节点、执行模式、配置入口及镜像选择字段、制品源和镜像或快照身份。按 §6.3 核定现有入口，优先验证 Daytona 自定义 ARM64 组合。需要补齐提供方接线时，先列实际仓库路径、配置和测试清单。无满足条件的组合时记录 `BLOCKED`。
+- [ ] 从所选正常入口分别调度两个合成专家，使用固定的镜像摘要或不可变快照。预装模式从控制端匹配同一个 ARM64 Runner 制品，禁用显式 Codex 制品及 npm 安装路径，核对实际 `runnerd` 和 Codex 的来源、摘要及版本。通过同一 Runner 的合成 `/responses` 夹具验证初始化、工具事件、一次 Shell 和工作区编辑、退出、取消与子进程及工作区回收。
+- [ ] 验证按摘要拉取镜像失败、平台错误、Runner 哈希不符、预装 Codex 缺失及兼容区间内的非指定 Codex 版本。运行证据区分镜像预装与控制端回退；回退不能通过镜像预装验收。以失败回执记录实际阶段与清理状态。
+- [ ] 跨升级、默认版本回退、常规清理和紧急撤出验证排队与运行任务。后续任务使用切换后的引用，已受理任务保留原镜像、skills 和工具版本，回执可追溯。将证据写入 `docs/design/verification/delegra-runtime-images.md`，形成实测记录后登记设计索引 §2.2。
 
 ### 8.3 任务 3 · 接通 DSH 用户凭据与 Harness
 
-在任务 2 通过后，核对三项接入依据。DSH 可信提交能绑定原用户与所选专家。Delegra 受限员工入口能核验同一用户、任务与运行代次。网关允许该来源和客户端使用同属主双凭据调用 `/responses`。由实际部署的受控通道确定凭据交接接口，再启用以下接线。 [可信提交及受理](../plans/2026-11-18-forge-experts-integration-proposal.md#3-dsh-选择与委派绑定) · [网关端点](../contracts/gateway-contract.md#44-服务端点契约与流式协议)
+- [ ] 核对任务 2、§4 的企业准入、目标系统能力与有效契约。用合成凭据证明私有投递、任务级授权、逐请求判定和工具隔离，再固定员工入口、派发、运行引用、transport、Provider 消费的端口、错误与幂等状态。选定目标通道的接线清单形成后实施。
+- [ ] Host 私有交接位于 `packages/forge-iam/src/expert-gateway-handoff.mjs`，由 `service.mjs` 装配。调整 `service-token.mjs` 的受控消费投影，从同一持久授权记录提供 token 与到期时间，复用当前会话及网关 Key 绑定检查。对跨刷新、切号、换 Key、到期和重复提交验证绑定一致或零发送。
+- [ ] Delegra 运行端由 `server/src/services/native-runtime/expert-gateway-authorization.ts` 与 `native-session-executor.ts` 核验运行和授权。逐文件清单覆盖实际员工路由、持久派发、私有投递、`packages/paperclip-runner/src/live/runnerd-codex-transport.ts`、`packages/paperclip-runner/runner/crates/runner-core/src/codex_provider.rs` 的消费接缝以及选定提供方。按 §6.4 隔离 Provider 与工具，停用时保留获权查询和取消。
+- [ ] 定向验收入口为 `node --test packages/forge-iam/test/expert-gateway-handoff.test.mjs`、Delegra 的 `pnpm exec vitest run server/src/services/native-runtime/expert-gateway-authorization.test.ts server/src/services/native-runtime/native-session-executor.test.ts`、`cargo test --locked --manifest-path packages/paperclip-runner/runner/Cargo.toml -p paperclip-runner-core --test codex_provider`。复用 Runner 集成夹具，核对隔离和授权断言命中。
+- [ ] 用实际调度路径覆盖两个用户并发、重复领取、排队过期、同一任务的工具隔离、日志与产物、过期后的存活 Harness、取消、失联和回收。适用企业契约通过后，用获准测试账号核对真实身份、模型、用户及团队扣费、预算拒绝、撤销和在途流。正式契约与实测分别维护在 `docs/contracts/gateway-contract.md`、`docs/design/verification/delegra-runtime-images.md`。
 
-Host 交接以已核验的发起人、原 DSH 会话、专家、请求和用户授权到期时间为输入。受控回调消费 `baseURL`、个人 Key、IAM access token 与两项凭据的绑定和有效期。Delegra 按已受理的组织、发起人、专家、任务和运行代次取用授权，队列持有受控引用与过期时间，Harness 取得本次调用所需的连接。具体传输字段以已核验的员工接口和凭据通道为准。
+### 8.4 任务 4 · 核验 Agent 令牌与调用者计费
 
-| 仓库与文件 | 动作与理由 |
-| --- | --- |
-| HeluoForge `packages/forge-iam/src/expert-gateway-handoff.mjs`、`packages/forge-iam/src/service.mjs` | 新建 Host 内部交接模块，由现有服务装配受限调用入口。消费已验证的委派及当前 IAM 会话，复用 `captureModelSession()` 的代次判断、`resolveGatewayConnection()` 的属主检查和 Host 的访问令牌生命周期。在实际交接前对用户、Key 版本、地址与有效期复验，由受控发送回调消费连接。 |
-| HeluoForge `packages/forge-iam/test/expert-gateway-handoff.test.mjs` | 新建合成验证，覆盖取凭据期间换账号或切换凭据、到期、旧授权与重复提交。断言未授权时发送回调零调用。 |
-| Delegra `server/src/services/native-runtime/expert-gateway-authorization.ts`、`server/src/services/native-runtime/native-session-executor.ts` | 新建前者作为本次运行的授权消费模块，修改后者以接入 Native Harness 准备入口。比较已核验任务和授权的用户、专家、任务及运行代次，按有效期决定能否启动模型调用。 |
-| Delegra `server/src/services/native-runtime/expert-gateway-authorization.test.ts`、`server/src/services/native-runtime/native-session-executor.test.ts` | 新建前者覆盖两个用户并发、引用重复领取、过期与旧代次、取消与恢复。更新后者，从正常 Native 启动入口验证受控消费。 |
-| Delegra `packages/paperclip-runner/runner/crates/runner-core/src/codex_provider.rs` | 在实际 `app-server` 启动处接入每次运行的 Provider 配置及私有凭据，复用已有启动和环境策略。在同文件测试段加启动环境与命令环境隔离的断言。 |
-| HeluoForge `docs/contracts/gateway-contract.md`、`docs/design/verification/delegra-runtime-images.md` | 将获准接入方式、客户端与来源、撤权约束写入契约，实测记录只写所验版本、系统回执与结果。 |
-
-- [ ] 定向验收 Host 绑定与 Native 消费。Host 侧执行 `node --test packages/forge-iam/test/expert-gateway-handoff.test.mjs`。Delegra 侧执行 `pnpm exec vitest run server/src/services/native-runtime/expert-gateway-authorization.test.ts server/src/services/native-runtime/native-session-executor.test.ts`。Runner 侧执行 `cargo test --locked --manifest-path packages/paperclip-runner/runner/Cargo.toml -p paperclip-runner-core codex_provider`。
-- [ ] 以实际 Runner 和合成凭据执行 `/responses`，核对 `Authorization`、`X-IAM-Token`、个人用途声明及运行归属。检查 Shell、文件、其他任务、日志、产物、停止和回收边界。测试换账号、旧运行与过期时，客户端进入可核对的拒绝或待用户状态。
-- [ ] 用获准的企业测试账号联调。核对成功调用的实际用户、模型授权和计量，验证缺失凭据、错配、任务取消以及凭据撤权后的新请求。测试耗尽预算和中断流时的回执与状态。通过后才开放对应的企业接入路径。 [接入验收场景](../plans/2026-11-18-forge-experts-integration-proposal.md#61-待实测项) · [凭据失效约束](../contracts/gateway-contract.md#411-生命周期与失败约束)
-
-### 8.4 任务 4 · 取证 Agent 令牌与调用者计费
-
-| 仓库与文件 | 动作与理由 |
-| --- | --- |
-| HeluoForge `docs/design/verification/delegra-runtime-images.md` | 增记目标网关和身份系统是否支持 Agent 认证、运行级委派校验、双主体权限与调用者计费，附可对账的实际请求记录。 |
-| HeluoForge `docs/contracts/gateway-contract.md` | 选定该路线并取得真实契约后，写入 Agent 令牌用途、网关接受的委派载体、双方授权和撤权判据，以及调用者扣费与结算回执约束。 |
-
-- [ ] 查实 Agent 注册及签发入口、委派与运行的可信绑定、网关查询双方当前授权的能力，以及用量按发起用户映射的账本接口。以实际契约确定令牌承载和网关接缝，再核定双方逐文件接线清单。
-- [ ] 通过同一专家运行甲、乙两次任务，核对单一 Agent 身份与两个用户的真实额度扣减。仅用户有权、仅 Agent 有权、委派串用或账户缺失时，从网关记录确认请求被拒。
-- [ ] 演练两方分别撤权、任务取消及重复和迟到回执。核对新请求停止、已发生用量准确归属，以及同一请求的结算去重。用实际回执判断此路线的准入和与首版方向的取舍。
+- [ ] 核验现有身份与网关是否提供 Agent 签发、运行绑定、可信用户委派、双主体授权、调用者预算与结算接口。接口或可授权试验环境缺失时记录 `BLOCKED`。该能力验证独立于首版个人凭据完成判据。
+- [ ] 有目标契约与试验条件时，按 §7.4 核验两个用户同一专家的额度归属、单侧有权拒绝、撤权时限、运行代次错配、并发预算和结算回执去重。用网关账本判定实际扣费，Delegra 关联展示。
+- [ ] 按身份系统及网关的接口改动、验证工作量与隔离收益记录选型依据，留在实测记录。采用候选路线时形成对应网关契约、逐文件接线方案、停用与回退验收。
 
 ### 8.5 任务 5 · 构建开发、测试、运维和办公镜像目录
 
-以任务 1 的公共层及 Java 配方为基础，按[构建规格](#93-逐份-dockerfile-构建内容)加入 16 个派生目标。以下配方及工具锁文件路径相对于 Delegra 的 `docker/agent-runtime/experts/`。
+- [ ] 保留 §9.1 的 18 个构建目标及 14 份 Dockerfile 定义。按真实项目所需版本和场景分批启用。每批先固定目标工具版本、ARM64 归档及校验值、包来源和运行依赖，样例有明确入口、固定预期和退出结果。
+- [ ] 在 Delegra 的 `docker/agent-runtime/experts/` 中通过 `Dockerfile.java` 派生四个其他 JDK。其他配方及父层以 §9.3 为准。Node、Newman 和 Playwright 分别在 `tooling/node/`、`tooling/test-api/`、`tooling/test-web/` 维护 `package.json` 与 `package-lock.json`。在 `buildx-bake.hcl` 和 `.dockerignore` 补入已选目标的输入及上下文。
+- [ ] 在原生 ARM64 节点用 `buildx bake --print` 检查实际目标，再以统一 `tests/runner-e2e/expert-runtime-images-smoke.mjs` 和各场景样例跑实际镜像。浏览器验证进程沙箱与取消后回收，办公验证 CJK 字体及三类格式导出。记录失败、体积增量、启动时间和回退结果。
+- [ ] 通过 §9.4 才登记可用镜像。试点形成冷拉、启动、并发和每任务 Token 用量证据，由负责人据预算与代表性任务决定扩展顺序与规模。公共层更新时重建并复验受影响的发布目标。
 
-| 文件 | 动作与理由 |
-| --- | --- |
-| `Dockerfile.python`、`Dockerfile.node`、`Dockerfile.go`、`Dockerfile.dotnet`、`Dockerfile.sql` | 新建开发场景配方，分别提供 Python 虚拟环境、Node/TypeScript、Go、.NET SDK 和 SQL 客户端。 |
-| `Dockerfile.test-api`、`Dockerfile.test-web`、`Dockerfile.test-load` | 新建接口、浏览器及容量测试配方，分别锁定 Newman、Playwright/Chromium 和 k6。 |
-| `Dockerfile.ops-diag`、`Dockerfile.ops-k8s`、`Dockerfile.ops-iac` | 新建诊断、Kubernetes 清单处理和 OpenTofu 配方，后两者复用诊断层。 |
-| `Dockerfile.office-zh` | 新建中文办公配方，锁定 CJK 字体、LibreOffice、Pandoc 和 PDF 检查工具。 |
-| `tooling/node/package.json`、`tooling/node/package-lock.json`、`tooling/test-api/package.json`、`tooling/test-api/package-lock.json`、`tooling/test-web/package.json`、`tooling/test-web/package-lock.json` | 新建场景工具清单和锁文件，固定 CLI 和其依赖的完整性。 |
-| `buildx-bake.hcl`、`.dockerignore` | 加入场景目标，固定每个目标的 ARM64 制品来源和校验值。`Dockerfile.java` 复用于其他四个 JDK。场景上下文加入所需 Dockerfile 和锁文件。 |
-| Delegra `tests/runner-e2e/expert-runtime-images-smoke.mjs` | 扩展为按目标执行公共断言和[场景样例](#93-逐份-dockerfile-构建内容)，保留任务 1 的两镜像基础层复用检查。 |
-| HeluoForge `docs/design/verification/delegra-runtime-images.md` | 追加各镜像的配方、固定输入、实测摘要、架构、构建与启动耗时、大小及 Runner 验收。 |
-
-- [ ] 按[目录顺序](#91-目录与选型依据)加入标准目标，再按项目核定的版本和任务需求完成其余配方。`buildx bake --print` 确认 18 个目标各自使用正确 Dockerfile 和父层，Java 五个目标的 JDK 主版本与 ARM64 摘要逐项核对。
-- [ ] 在原生 ARM64 环境分目标构建，以同一套公共冒烟和对应的场景样例验证精简前后的能力与体积。每个目标核对固定版本、非 root 用户、实际架构、可写工作区和 Codex 协议。浏览器测试另验 Chromium 沙箱及清理，办公另验 CJK 字体、三类文件转 PDF 和版式。构建失败和功能不符按目标记录。
-- [ ] 按[制品与运行验收](#94-构建与发布验收)记录 SBOM、构建来源和精确版本，完成任务 2 的真实 Runner 拉取、启动、取消和回收检查。通过后登记对应镜像与适用场景。公共层更新时重建受影响的目标，核对按摘要切换与回退。
-
-交付记录保留命令、执行环境、版本、结果与耗时。计划与契约交付执行 `pnpm check` 与 `git diff --check`。每项实现用其具名测试和实际入口分别验收，按镜像、Runner、网关请求及用户归属核对证据。
+计划和契约交付前执行 `pnpm check` 与 `git diff --check`。实测记录保留环境、命令、版本、请求关联、结果与耗时。
 
 ## 9. 镜像与 Dockerfile 构建规格
 
@@ -294,7 +268,7 @@ Host 交接以已核验的发起人、原 DSH 会话、专家、请求和用户�
 | 标准目录 · 办公 | `codex-office-zh` | 中文 Word、Excel、PPT 处理与 PDF 导出 |
 | 按项目需求 | `codex-java-8`、`codex-java-11`、`codex-java-25`、`codex-dotnet-10`、`codex-test-load`、`codex-ops-iac` | 存量或指定 JDK、Linux .NET 项目、容量回归和基础设施即代码 |
 
-共 18 个 `linux/arm64` 构建目标、14 份 Dockerfile。Java 8、11、17、21、25 各自发布一份镜像，共用 `Dockerfile.java`。项目依赖库、业务 SDK、Gradle Wrapper 和 Python 数据分析库等按项目锁文件提供，镜像内仅预置该场景共用的工具。 [Temurin 支持路线图](https://adoptium.net/support)
+目录包含 18 个 `linux/arm64` 发布目标、14 份 Dockerfile。任务 1 的两个精简对照目标用于本地候选比较。Java 8、11、17、21、25 各自发布一份镜像，共用 `Dockerfile.java`。项目依赖库、业务 SDK、Gradle Wrapper 和 Python 数据分析库等按项目锁文件提供，镜像内仅预置该场景共用的工具。 [Temurin 支持路线图](https://adoptium.net/support)
 
 ### 9.2 镜像构建原则
 
@@ -309,18 +283,24 @@ Host 交接以已核验的发起人、原 DSH 会话、专家、请求和用户�
 | 接口隔离 | 浏览器、JDK、数据库客户端和办公工具按场景装入。专家任务按构建清单选择能完成工作的最小镜像。 |
 | 依赖倒置 | Dockerfile 通过 `expert_base` 消费已核验的父层，通过摘要和锁文件消费官方制品。Delegra 依赖镜像的运行约定与能力清单，可用同一个调度入口启动各场景。 |
 
-所有 Bake 目标使用 `platforms = ["linux/arm64"]`，由原生 ARM64 BuildKit 构建。以 Debian 13 glibc 底座交付目标版本的 Codex 和 `paperclip-runnerd`。配方目录为 Delegra 的 `docker/agent-runtime/experts/`。公共 `Dockerfile` 使用仓库根上下文，以 `Dockerfile.dockerignore` 保留编译所需的 Runner 源码和配方。场景文件使用配方目录及其 `.dockerignore`。`expert_base` 默认连接 `target:codex-min`，API 和 Web 测试连接 `target:codex-node`，Kubernetes 和 IaC 连接 `target:codex-ops-diag`。 [Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/) · [Docker Bake 目标上下文](https://docs.docker.com/build/bake/contexts/#using-a-target-as-a-build-context) · [Paperclip Runner 平台要求](https://docs.paperclip.ing/reference/adapters/paperclip-runner/)
+所有 Bake 目标使用 `platforms = ["linux/arm64"]`，由原生 ARM64 BuildKit 构建。以 Debian 13 glibc 底座交付目标版本的 Codex 和 `paperclip-runnerd`。配方目录为 Delegra 的 `docker/agent-runtime/experts/`。公共 `Dockerfile` 使用仓库根上下文，以 `Dockerfile.dockerignore` 保留编译所需的 Runner 源码和配方。场景文件使用配方目录及其 `.dockerignore`。`expert_base` 默认连接 `target:codex-min`，API 和 Web 测试复用 `codex-min` 的 Node 运行时和固定 Node 工具阶段的 npm 安装入口，仅复制各自运行工具。Kubernetes 和 IaC 连接 `target:codex-ops-diag`。 [Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/) · [Docker Bake 目标上下文](https://docs.docker.com/build/bake/contexts/#using-a-target-as-a-build-context) · [Paperclip Runner 平台要求](https://docs.paperclip.ing/reference/adapters/paperclip-runner/)
 
 `buildx-bake.hcl` 固定基础及工具链镜像摘要、发行归档版本和校验值，APT 使用 `debian.sources` 指定有签名的版本化 Debian 源，Node 工具按各目录 npm 锁文件安装。访问私有制品源的构建授权通过 BuildKit secret 临时挂载。企业工具授权和工作区数据随任务交接。 [Docker 构建密钥](https://docs.docker.com/build/building/secrets/)
 
 #### 9.2.2 保留能力并控制体积
 
-1. 把 Rust 编译、Codex 下载安装、压缩包解包和场景工具的准备放在构建阶段。用 `COPY --from` 将 `paperclip-runnerd`、Codex 的完整运行资产和必要工具复制到最终层。保留上游许可文件、Codex 配套二进制与资源，以及实际执行所需的动态库、沙箱和证书。对官方制品保留包内配套目录，私有构建缓存留在 BuildKit 的 cache mount。 [Docker 多阶段构建](https://docs.docker.com/build/building/multi-stage/) · [BuildKit 缓存优化](https://docs.docker.com/build/cache/optimize/)
-2. 每个目标按能力清单安装运行依赖。APT 在同一个 `RUN` 中更新索引并使用 `--no-install-recommends` 安装，索引与下载缓存使用构建缓存挂载或在该层结束前清理。归档下载及解包留在工具阶段。JDK、浏览器、办公字体和数据库客户端只进对应场景。Codex 运行安装只选择 `linux/arm64` 的官方制品。 [Docker 构建最佳实践](https://docs.docker.com/build/building/best-practices/)
-3. 首轮用固定 Node 24 slim 与完整 ARM64 npm 包建立 Codex `0.160.0` 参考产物。在临时构建目标中试装同版本的官方完整原生包 `codex-package-aarch64-unknown-linux-musl.tar.zst`，运行层用固定 ARM64 Debian slim，继续提供同一 UID、`HOME` 和命令入口。按官方制品摘要验证完整归档，通过 §9.2.3、Java 样例和实际 Runner 验收后，以实测选定体积更小的配方。原生包可独立履行公共能力时，Node 和 npm 按 `Dockerfile.node` 的工具链引入。 [Codex 0.160.0 官方发行](https://github.com/openai/codex/releases/tag/rust-v0.160.0) · [npm 启动器源码](https://github.com/openai/codex/blob/rust-v0.160.0/codex-cli/bin/codex.js)
-4. 用相同的 Codex、Runner、目标平台与压缩算法比较候选。以 ARM64 OCI manifest 的 `layers[].size` 之和记录冷拉所需的压缩层字节数，并按 layer digest 去重计算各派生镜像相对父层的增量。用相同 Docker 存储配置记录 `docker image inspect` 的本地大小，单独测量冷拉、启动和首个 turn 的耗时。每次更新标明新增能力、依赖与体积变化，优先保留通过全部验收且拉取量小的产物。
+1. Rust 编译、下载、验签、归档解包和工具安装缓存留在构建阶段。最终层只复制固定版 Runner、Codex 的完整运行资产以及直接依赖，保留许可、Codex 配套资源、动态库、证书和实际沙箱所需的文件。 [Docker 多阶段构建](https://docs.docker.com/build/building/multi-stage/) · [BuildKit 缓存优化](https://docs.docker.com/build/cache/optimize/)
+2. 公共层用已验证签名的 Debian 13 快照固定包集。最小公共能力覆盖 `bash`、`ca-certificates`、`coreutils`、`diffutils`、`findutils`、`gawk`、`git`、`grep`、`procps`、`ripgrep`、`sed`、`tar`、`tini`、`util-linux`，保留底座自带的 POSIX Shell 与必要系统库。APT 在同层更新并以 `--no-install-recommends` 安装，签名索引与包缓存留在 BuildKit 缓存或清理。只在对应场景引入 JDK、浏览器、字体和数据库客户端。 [Docker 构建最佳实践](https://docs.docker.com/build/building/best-practices/)
+3. 参考镜像用固定 Node 24 slim 和完整 ARM64 npm 包安装 Codex `0.160.0`。原生候选用固定 ARM64 Debian slim 和完整 `codex-package-aarch64-unknown-linux-musl.tar.zst`，从同一 Node 24 运行底座复制 Node 可执行文件并核对直接运行依赖。在两条路径均保留 Runner 正常入口的 Node，按 Codex 包形态及场景需要保留 npm。两条底座创建或沿用 `1000:1000` 的非 root 账户，默认 `HOME` 指向镜像账号的主目录、`WORKDIR /workspace`、`tini` 透传入口。场景层构建需要提权时以 `USER 0` 完成安装，再恢复 `USER 1000:1000`，运行时将工作区和缓存分配给该用户。 [Codex 0.160.0 官方发行](https://github.com/openai/codex/releases/tag/rust-v0.160.0)
+4. `--load` 验功能，本地 OCI 导出测压缩层。每次对一个目标用同一 Bake 文件及压缩设置覆写输出，例如下列命令。读取 ARM64 manifest 的 `layers[].size` 之和，按 layer digest 去重计算相对父层增量。用相同存储配置记录本地大小，区分冷拉、启动及首个 turn 耗时。选择通过相同公共验收、场景样例和真实 Runner 验收后压缩拉取量较小的候选。 [Docker OCI 导出](https://docs.docker.com/build/exporters/oci-docker/)
 
-2026-11-20 的本机探针为 Codex `0.167.1`。`docker image inspect` 报告最小镜像 1,092,912,077 字节，Java 21 镜像 1,578,874,730 字节。容器内 `du -ms` 测得 Codex 安装目录约 393 MiB，其中配套资源约 54 MiB。该结果用于定位优化重点。发布选择依据同版本 `0.160.0` 的完整构建与功能对比。原生候选基镜像为 `debian:trixie-slim@sha256:24a01011d10eba3a023bc8585b9650b8b29021240d4217c05b905e09ef4a5232`，已核对 Linux ARM64。完整 Codex 原生归档的发布摘要为 `sha256:83d68fdeb6022722b66f50459363aa43f55ce0fb70778aa1cfeaa70e46ce97fe`。 [本机探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md) · [Codex 发行文件](https://github.com/openai/codex/releases/tag/rust-v0.160.0)
+```sh
+docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl \
+  --set 'codex-min.output=type=oci,dest=/tmp/codex-min-arm64.oci.tar,compression=gzip,compression-level=6,force-compression=true' \
+  codex-min
+```
+
+2026-11-20 本机探针使用 Codex `0.167.1`。本地最小镜像为 1,092,912,077 字节，Java 21 为 1,578,874,730 字节。Codex 目录约 393 MiB，其中资源约 54 MiB。发布选型使用同版本 `0.160.0` 的完整对比。原生候选基镜像为 `debian:trixie-slim@sha256:24a01011d10eba3a023bc8585b9650b8b29021240d4217c05b905e09ef4a5232` 的 ARM64 制品。Codex 原生归档的发布摘要为 `sha256:83d68fdeb6022722b66f50459363aa43f55ce0fb70778aa1cfeaa70e46ce97fe`。 [本机探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md) · [Codex 发行文件](https://github.com/openai/codex/releases/tag/rust-v0.160.0)
 
 #### 9.2.3 Agent 与 Codex 运行验收
 
@@ -343,7 +323,7 @@ Host 交接以已核验的发起人、原 DSH 会话、专家、请求和用户�
 
 | Dockerfile → Bake 目标 | 构建指令与输入 | 完成判据 |
 | --- | --- | --- |
-| `Dockerfile` → `codex-min` | `FROM` 固定 ARM64 Rust 镜像进入编译阶段，`COPY` 固定标签的 Runner 源码和 `Cargo.lock`，`RUN cargo build --locked --release` 编译 `paperclip-runnerd`。最终阶段使用按 §9.2.2 验收的精简底座，`COPY` Runner 与 Codex `0.160.0` 的完整运行资产。安装 `git`、`ripgrep`、`ca-certificates`、`tar` 和 `tini` 等公共依赖。创建 `/workspace`，切换至 `1000:1000` 并以 `tini` 传递任务命令。 | OCI 为 `linux/arm64`，关键 ELF 为 AArch64，满足 §9.2.3 的文件、Shell、Codex 会话和进程退出验收。 |
+| `Dockerfile` → `codex-min` | `FROM` 固定 ARM64 Rust 镜像进入编译阶段，`COPY` 固定标签的 Runner 源码和 `Cargo.lock`，`RUN cargo build --locked --release` 编译 `paperclip-runnerd`。最终层 `COPY` Runner、Codex `0.160.0` 的完整运行资产及所需 Node。安装 §9.2.2 的公共包集，配置账户、`HOME`、`/workspace` 与 `tini`，切换至 `USER 1000:1000`。 | OCI 为 `linux/arm64`，关键 ELF 为 AArch64，通过公共、Java 派生及目标 Runner 的相应验收。 |
 | `Dockerfile.java` → `codex-java-8`、`codex-java-11`、`codex-java-17`、`codex-java-21`、`codex-java-25` | Bake 为每个目标传入 `JAVA_TOOLCHAIN_IMAGE`，`FROM` 对应的 Maven/Temurin ARM64 摘要作 `java-toolchain` 阶段，最终阶段 `FROM expert_base`。`COPY --from=java-toolchain` 取 `/opt/java/openjdk` 和 `/usr/share/maven`，`ENV JAVA_HOME=/opt/java/openjdk`，将 JDK 和 Maven 的 `bin` 加入 `PATH`。每个目标只装对应主版本的 JDK。 | `java`、`javac`、`mvn --version` 确认为所选 JDK。Java 8 编译指定 `-source 8 -target 8`，其余用 `javac --release <major>`，执行样例并核对输出。 |
 
 以下为 2026-11-20 从 Docker Official Images 的 Maven 制品查询得到的 ARM64 清单摘要，作为各 Java 目标的构建输入候选。复制工具链后的执行兼容性按上表逐个验证。 [Maven 官方镜像](https://hub.docker.com/_/maven) · [Temurin 发布平台](https://adoptium.net/supported-platforms/)
@@ -361,7 +341,7 @@ Host 交接以已核验的发起人、原 DSH 会话、专家、请求和用户�
 | Dockerfile → Bake 目标 | 在 `FROM expert_base` 的最终阶段添加 | 完成判据 |
 | --- | --- | --- |
 | `Dockerfile.python` → `codex-python` | `RUN` 从 Debian 13 锁定源安装 `python3.13`、`python3.13-venv`，从固定原生 ARM64 `ghcr.io/astral-sh/uv` 工具阶段 `COPY` `uv` 至 `/usr/local/bin/uv`。项目依赖进任务自己的 `.venv`。 | 创建 venv，核对 `python`、`pip` 和 `uv`，运行处理合成 CSV 的 Python 样例与单元测试。 |
-| `Dockerfile.node` → `codex-node` | 使用锁定的 ARM64 Node 24 与 npm。按选定的公共层在构建期确定由父层继承或从 Node 工具阶段复制，保证同一套 Node 运行时。`COPY tooling/node/package.json` 与同目录 `package-lock.json`，`RUN npm ci` 安装固定版 `pnpm` 和 `typescript` 至 `/opt/expert-tools/node`，`ENV PATH` 包含对应 `.bin`。 | 验证 Node 和工具版本，`tsc` 编译小型 TypeScript 程序，运行产物并核对输出。 |
+| `Dockerfile.node` → `codex-node` | 继承公共层的锁定 Node 24；从同一 Node 工具阶段取得 npm，与公共运行时版本一致。`COPY tooling/node/package.json` 与同目录 `package-lock.json`，`RUN npm ci` 安装固定版 `pnpm` 和 `typescript` 至 `/opt/expert-tools/node`，`ENV PATH` 包含对应 `.bin`。 | 验证 Node 和工具版本，`tsc` 编译小型 TypeScript 程序，运行产物并核对输出。 |
 | `Dockerfile.go` → `codex-go` | 工具阶段取官方 `go1.27.4.linux-arm64.tar.gz`，按发布方 SHA-256 `3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92` 校验后解压。最终阶段 `COPY` Go 到 `/usr/local/go`，设置 `PATH` 和 `GOTOOLCHAIN=local`。项目需要 CGo 时按其依赖核验构建工具。 | `go env GOOS GOARCH` 返回 `linux`、`arm64`，断开外网运行无依赖样例的 `go test`。 |
 | `Dockerfile.dotnet` → `codex-dotnet-10` | 工具阶段 `FROM mcr.microsoft.com/dotnet/sdk:10.0-noble` 的 ARM64 摘要 `sha256:299dd5c45103c1fb44ea9d1fd1b149ca056786da47afb84438140411892eec46`。从中 `COPY /usr/share/dotnet`，核对底座并补齐 Debian 13 的 `libc6`、`libgcc-s1`、`libgssapi-krb5-2`、`libicu76`、`libssl3t64`、`libstdc++6`、`ca-certificates`、`tzdata`，设置 `DOTNET_ROOT`、`PATH` 和 `DOTNET_CLI_TELEMETRY_OPTOUT=1`。 | `dotnet --info` 核对 ARM64 和 .NET 10 SDK，清空样例的外部 NuGet 源，构建并运行 `net10.0` 控制台样例。 |
 | `Dockerfile.sql` → `codex-sql` | `RUN` 安装 `postgresql-client`、`default-mysql-client` 和 `sqlite3`。按项目核对目标数据库客户端、TLS 及认证方式。Oracle、DB2、国产数据库等通过目标环境获准的 ARM64 客户端或受控连接器接入。 | 核对客户端版本，对合成 SQLite 库执行固定查询。拟启用 PostgreSQL 或 MySQL 时在相应测试服务核对 TLS、用户权限和查询结果。 |
@@ -372,8 +352,8 @@ ARM64 Go 发行元数据和 .NET 镜像清单已核对，完整场景镜像按�
 
 | Dockerfile → Bake 目标 | 构建指令与输入 | 完成判据 |
 | --- | --- | --- |
-| `Dockerfile.test-api` → `codex-test-api` | `FROM expert_base` 对应 `codex-node`。`RUN` 安装 `curl`、`jq`，复制 `tooling/test-api/` 的 npm 清单和锁文件，以 `npm ci` 安装 Newman，添加 CLI 到 `PATH`。 | 在容器回环地址启动模拟接口，用 Postman Collection v2.1 断言状态码、JSON 字段和错误响应，生成 JUnit 测试报告。 |
-| `Dockerfile.test-web` → `codex-test-web` | `FROM expert_base` 对应 `codex-node`。用 `tooling/test-web/` 的锁文件安装 `@playwright/test`。设置 `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright`，以固定版 Playwright 执行 `playwright install --with-deps chromium`，将浏览器目录设为运行用户可读、可执行。 | 以非 root 用户设置 `chromiumSandbox: true`，对回环样例页校验表单和页面跳转，保存测试报告与截图。Runner 同时验证所需沙箱能力及浏览器进程回收。 |
+| `Dockerfile.test-api` → `codex-test-api` | `FROM expert_base` 对应 `codex-min`。使用固定 Node 工具阶段在 `tooling/test-api/` 的锁文件上执行 `npm ci`，复制 Newman 运行闭包并加入 `PATH`。按样例需要安装 `curl`、`jq`。 | 在容器回环地址启动模拟接口，用 Postman Collection v2.1 断言状态码、JSON 字段和错误响应，生成 JUnit 测试报告。 |
+| `Dockerfile.test-web` → `codex-test-web` | `FROM expert_base` 对应 `codex-min`。使用固定 Node 工具阶段和 `tooling/test-web/` 的锁文件准备 `@playwright/test`，复制运行闭包。设置 `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright`，按 Debian 快照安装系统库，再按锁定的 Playwright 版本安装并校验其对应的 ARM64 Chromium，运行用户具备读取和执行权限。 | 以非 root 用户设置 `chromiumSandbox: true`，对回环样例页校验表单和页面跳转，保存测试报告与截图。Runner 同时验证所需沙箱能力及浏览器进程回收。 |
 | `Dockerfile.test-load` → `codex-test-load` | `FROM expert_base` 对应 `codex-min`。在下载阶段按发布方校验值取得 Grafana k6 Linux ARM64 归档，复制 `k6` 至 `/usr/local/bin`。 | 用一个虚拟用户对回环模拟接口运行固定时长的容量样例，校验成功率和本地结果。实际测试的目标、负载规模和时段按任务授权。 |
 
 Java 项目复用相应 JDK 镜像执行项目自带的测试，Python 项目可从项目锁文件安装 `pytest`。PostgreSQL、MySQL、缓存与消息队列这类集成测试依赖使用独立的 ARM64 服务镜像或获准测试实例，按项目固定版本和摘要。依赖服务由试验环境编排，任务容器通过获准的测试网络访问。已核对 k6 `v2.4.0` 的 Linux ARM64 归档。 [Newman CLI](https://learning.postman.com/docs/reference/newman-cli/command-line-integration-with-newman/) · [Playwright ARM64 系统要求](https://playwright.dev/docs/intro#system-requirements) · [Playwright Docker 沙箱](https://playwright.dev/docs/docker) · [k6 ARM64 发布制品](https://github.com/grafana/k6/releases/tag/v2.4.0)
@@ -392,12 +372,24 @@ Java 项目复用相应 JDK 镜像执行项目自带的测试，Python 项目可
 
 | Dockerfile → Bake 目标 | 构建指令与输入 | 完成判据 |
 | --- | --- | --- |
-| `Dockerfile.office-zh` → `codex-office-zh` | `FROM expert_base` 对应 `codex-min`。`RUN` 从锁定 Debian 源安装 `libreoffice-writer`、`libreoffice-calc`、`libreoffice-impress`、`libreoffice-l10n-zh-cn`、`fonts-noto-cjk`、`fontconfig`、`locales`、`pandoc`、`poppler-utils`。生成 `zh_CN.UTF-8`，设置 `LANG`，运行 `fc-cache`，回到 `USER node:node`。 | `fc-match` 命中简体中文 Noto 字体。使用独立 LibreOffice 用户目录，以 `soffice --headless --convert-to pdf` 转换含中文及表格的 `.docx`、`.xlsx`、`.pptx` 样张，检查 PDF 页数与提取文本，抽验表格和分页。 |
+| `Dockerfile.office-zh` → `codex-office-zh` | `FROM expert_base` 对应 `codex-min`。`RUN` 从锁定 Debian 源安装 `libreoffice-writer`、`libreoffice-calc`、`libreoffice-impress`、`libreoffice-l10n-zh-cn`、`fonts-noto-cjk`、`fontconfig`、`locales`、`pandoc`、`poppler-utils`。生成 `zh_CN.UTF-8`，设置 `LANG`，运行 `fc-cache`，回到 `USER 1000:1000`。 | `fc-match` 命中简体中文 Noto 字体。使用独立 LibreOffice 用户目录，以 `soffice --headless --convert-to pdf` 转换含中文及表格的 `.docx`、`.xlsx`、`.pptx` 样张，检查 PDF 页数与提取文本，抽验表格和分页。 |
 
 中文字体和办公工具随镜像版本固定。对指定机构模板要求的一致性通过合成样张单独验收。邮件、OA 和文件系统访问通过各自获准的工具入口。 [Debian Noto CJK 包](https://packages.debian.org/trixie/fonts-noto-cjk) · [LibreOffice 命令行参数](https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html)
+
+#### 9.3.6 版本锁与场景样例
+
+| 构建输入 | 锁定位置与验收 |
+| --- | --- |
+| 公共 Debian 依赖 | `debian.sources` 锁定原生 ARM64 签名快照与信任根。记录快照标识、发布索引摘要和所安装包及版本。所有派生层使用同一快照时只维护一份来源。 |
+| Java、Python、Go、.NET | 在 Bake 为每个目标记录基础或工具链镜像摘要、归档版本、SHA-256 与选择的架构。Python 的 uv 跟随工具镜像摘要，venv 和项目依赖按项目锁文件。 |
+| Node、接口和浏览器 | 各工具目录的 npm 锁文件固定闭包。浏览器额外锁定 Playwright 对应的 Chromium 版本、ARM64 归档、校验值及系统依赖。 |
+| 容量测试与平台工具 | Bake 固定 k6、kubectl、Helm、OpenTofu 的 ARM64 归档及 SHA-256。kubectl 的版本差与 Helm 兼容性按目标集群核定。 |
+| SQL 和办公 | 在允许的 Debian 快照锁定客户端、LibreOffice、CJK 字体和 PDF 工具，按目标系统核验直接依赖、认证方式或样张。 |
+
+新增目标的合成文件与预期结果放在 Delegra 的 `tests/runner-e2e/fixtures/expert-runtime/<target>/`。统一冒烟入口按目标选择场景测试，记录退出码、输出核对、失败阶段和剩余资源。只有目标项目的指定版本及输入锁可复现时才登记该镜像。
 
 ### 9.4 构建与发布验收
 
 1. **先验证配方。** 用 `docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl --print <target>` 核对每个目标的 Dockerfile、父层、构建输入及平台。使用 `--load <target>` 在 ARM64 构建节点装入本地测试镜像，验证镜像元数据和关键原生程序的 ELF 架构。冒烟测试以普通用户执行，合成服务按需使用回环地址或独立测试环境。
-2. **生成可追溯制品。** 获准发布时以 `--push --sbom=true --provenance=mode=min` 生成镜像及证明。记录实际 ARM64 manifest、工具版本、构建时间、体积和冷启动耗时。在获准制品库检查摘要、证明和扫描结果，再创建 Delegra 的测试执行环境。验收覆盖错误架构、摘要无法拉取、工具缺失及版本错配。
+2. **生成可追溯制品。** 获准发布时以 `--push --sbom=true --provenance=mode=min` 生成镜像及证明。复用发布流程的 Bake 元数据和摘要签名校验。记录发布入口摘要、实际 ARM64 manifest、工具版本、构建时间、体积和冷启动耗时。在获准制品库检查摘要、证明和扫描结果，再创建 Delegra 的测试执行环境。验收覆盖错误架构、摘要无法拉取、工具缺失及版本错配。
 3. **从实际调度入口验收。** 最小镜像和 Java 21 先验证完整 Runner 会话。其余目标同样经过真实 Runner 的拉取、启动、功能样例、取消和回收。达到运行判据后，才在实际目录登记其可用场景。按项目需用版本逐个启用，公共层变更后以新任务演练切换与回退。 [Delegra 运行验收](#3-目标与验收)
