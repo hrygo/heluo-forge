@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.47.2 |
+| 版本 | V0.47.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组；本轮更新 Agent（代拟） |
 | 审核 | DSH 平台组（既有）；本轮更新待定 |
 | 批准 | DSH 平台组（既有）；本轮更新待定 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -61,23 +61,21 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 
 以下记录各模块的实现和验证边界；已有记录不证明 ADR-16 的目标令牌、归属一致、用途及单授权生命周期已经实现。
 
-**技能管理接入范围核验（2026-11-18，本机 Windows，Agent 代拟）**
+**技能管理接入范围核验（2026-11-19，本机 Windows，Agent 代拟）**
 
-相对本地 `origin/main`（`244a918`），DevOps、Gitee、Policy、Engineering 的全部代码与测试，以及通用组合构建、闭包和 workspace 链接脚本及其测试均无差异。插件目录外保留 27 个文件的必要接入与说明，其中 15 个为文档、12 个为配置、检查和集成测试。DevOps、Gitee、Engineering 的 React 依赖沿用主线 `19.3.1`，管理器自身开发依赖为 `18.3.1`，冻结安装后实际解析一致。版本检查按通用开发依赖规则核对 DSH SDK 基线，不再按技能管理器包名设专属分支。
+按 `origin/main...HEAD` 的 PR 比较口径及当前工作区增量，DevOps、Gitee、IAM、Policy、Engineering 的代码与测试，以及通用组合构建、闭包和 workspace 链接脚本及其测试均无本分支新增改动。远端 main 已更新至 `7280ad5`，共同祖先为 `244a918`；当前分支尚未同步 main 的六个后续提交，直接比较两端文件时的其他插件差异不记为本分支新增。插件目录外保留 25 个文件的必要接入与说明，其中 15 个为文档、10 个为配置、检查和测试。DevOps、Gitee、Engineering 的 React 依赖沿用主线 `19.3.1`，管理器自身开发依赖为 `18.3.1`；2026-11-18 冻结安装验证实际解析一致。公共版本检查入口与 main 一致，开发 SDK 基线校验归插件自己的生成物检查；公共实现仅保留按 JSON 字段和准确原文位置放行开发依赖与生成锁文件的规则。
 
-正式 Issue 技能沿用主线 `rank: 600`，管理器仅在自己的创建、导入和 provider 中拒绝 `enterprise-*` 个人候选。实际 SDK 集成验证正式技能正常注册，以及原生同名候选仍按宿主优先级胜出；此前记录中的全宿主同名副本防覆盖证据属于旧实现，不适用于当前范围。
+正式 Issue 技能沿用主线 `rank: 600`，管理器仅在自己的创建、导入和 provider 中拒绝 `enterprise-*` 个人候选。保留名称测试归插件目录，以实际 SDK 和合成 provider 验证文件保留及宿主候选选择，不直接导入研发插件源码。2026-11-18 的真实研发入口注册测试为历史证据；当前合成 provider 测试不代替该联合验收。此前全宿主同名副本防覆盖证据属于旧实现，不适用于当前范围。
 
 | 本轮本地验证命令 | 结果与耗时 |
 |---|---|
-| `pnpm install --frozen-lockfile --ignore-scripts` | 通过，约 3 秒；锁文件未重解析，未运行安装脚本 |
-| `node --test --test-timeout=120000 packages/forge-skills-manager/test/*.test.mjs` | 122 项通过，约 123.3 秒，含完整保留回归、下载状态及结构变异用例 |
-| `node --test --test-timeout=120000 tests/skills-manager-integration.test.mjs tests/dsh-version.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-engineering/test/issue-delivery-skill.test.mjs` | 38 项通过，约 4.5 秒 |
-| `node --run check:skills-manager` | 24 项生成物一致，TypeScript 类型检查通过 |
-| `node scripts/check-docs.mjs`、`node scripts/dsh-version.mjs check` | 通过；静态检查组整体约 10 秒 |
-| `node scripts/check-repo.mjs` | 未通过：Windows 上 IAM 的 `bin.heluo-forge` 执行位断言失败；该入口与检查规则均和主线一致，不追加其他插件或通用规则修改 |
-| `git diff --check`、`git diff --name-only origin/main -- packages/forge-devops packages/forge-gitee packages/forge-policy packages/forge-engineering scripts/build-enterprise-bundle.mjs scripts/lib/bundle-rules.mjs scripts/link-workspace.mjs tests/bundle-build.test.mjs tests/bundle-closure.test.mjs tests/link-workspace.test.mjs` | 空输出，格式通过且上述路径无差异 |
+| `node --test --test-timeout=120000 tests/dsh-version.test.mjs packages/forge-skills-manager/test/*.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs` | 153 项通过，约 110.8 秒，含完整保留回归、包内 SDK/保留名称测试、下载状态及结构变异用例 |
+| `node --run check:skills-manager` | 24 项生成物一致，插件 SDK 基线及 TypeScript 类型检查通过，约 20.8 秒 |
+| `node scripts/dsh-version.mjs check` | 通过，约 1.7 秒 |
+| `node --run check` | 生成物、类型及文档阶段通过，约 9.9 秒后在仓库检查处失败：Windows 上 IAM 的 `bin.heluo-forge` 执行位断言失败；该入口与规则均和主线一致，未追加其他插件或通用规则修改，后续全库测试未执行 |
+| `git diff --check`、`git diff --name-only origin/main -- scripts/dsh-version.mjs`、`git diff --name-only 244a918 -- packages/forge-devops packages/forge-gitee packages/forge-iam packages/forge-policy packages/forge-engineering scripts/build-enterprise-bundle.mjs scripts/lib/bundle-rules.mjs scripts/link-workspace.mjs tests/bundle-build.test.mjs tests/bundle-closure.test.mjs tests/link-workspace.test.mjs` | 空输出，格式通过，公共版本检查入口恢复主线，上述其他插件和通用脚本无本分支新增改动 |
 
-实际工具链为 Node 24.21.0 / pnpm 11.28.5。Loader 演练的 sdk/web 两项因 PATH 无 DSH 跳过；未重跑全库 `pnpm check`，未重新打包、重启现有预览或验证企业环境。本轮结果不替代历史制品的宿主验收，也不声明全库检查通过。
+实际工具链为 Node 24.21.0 / pnpm 11.28.5。本轮未修改依赖或生成物，未重装依赖、重新打包、重启现有预览或验证企业环境；完整检查结果不记为通过。版本判据覆盖紧凑/缩进 JSON、同一行混合字段、CRLF 行号、嵌套及伪造字段、损坏 JSON；临时变异探针确认旧解析器的两种错误及取消字段位置约束均被断言拒绝。2026-11-18 的冻结安装、真实研发入口注册及 Loader 演练记录为历史证据，不替代本轮未执行的真实宿主验收。
 
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|

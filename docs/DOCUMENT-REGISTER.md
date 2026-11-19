@@ -6,22 +6,22 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.87.6 |
+| 版本 | V1.87.7 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组；本轮更新 Agent（代拟） |
 | 审核 | DSH 平台组（既有）；本轮更新待定 |
 | 批准 | DSH 平台组（既有）；本轮更新待定 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | — |
 
 ## 1. 清单
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.87.6 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.87.7 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.48.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.47.2 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.47.3 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.5.0 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.1.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V3.3.1 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
@@ -43,7 +43,7 @@
 | CORP-DSH-DESIGN-018 | 企业设置菜单统一与 Token 收敛详细设计 | [design/enterprise-menu-and-token-unification.md](<design/enterprise-menu-and-token-unification.md>) | V2.2.1 | 生效 | 平台组（代拟） | 不改 DSH；双独立预装包拆分、四包源码、双定位 UI 契约与合成探针离线闭环；容器级汇总属后续项，企业网关/OS 凭据库/双端 GUI 与联邦换票未联调 |
 | CORP-DSH-DESIGN-019 | 企业研发工具套件详细设计 | [design/plugins/forge-engineering.md](<design/plugins/forge-engineering.md>) | V1.1.2 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-020 | 策略判定模型设计 | [design/policy-model.md](<design/policy-model.md>) | V0.1.0 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-021 | 企业技能管理器详细设计 | [design/plugins/forge-skills-manager.md](design/plugins/forge-skills-manager.md) | V0.6.2 | 草案 | Agent（代拟） | 本地与企业组合验证 |
+| CORP-DSH-DESIGN-021 | 企业技能管理器详细设计 | [design/plugins/forge-skills-manager.md](design/plugins/forge-skills-manager.md) | V0.6.3 | 草案 | Agent（代拟） | 本地与企业组合验证 |
 | CORP-DSH-SKILLS-001 | Nacos 公共技能库契约 | [contracts/nacos-skills.md](contracts/nacos-skills.md) | V0.5.0 | 草案 | Agent（代拟） | 本地合成与独立实例验证；企业环境未验 |
 | CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
 | CORP-DSH-IAM-003 | IAM 模型与工具隔离消费契约草案 | [contracts/iam-consumer-isolated.md](<contracts/iam-consumer-isolated.md>) | V0.8.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；见证/许可/合成工具与模型已分段验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
@@ -88,7 +88,7 @@
 | CORP-DSH-REQ-005 | 员工智能助理个人记忆产品方案 | [requirements/employee-assistant-memory-proposal.md](<requirements/employee-assistant-memory-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 产品方案评审、范围基线同步、接口与宿主准入；企业环境验证后试点 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.2.0 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.3 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
-| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.10.2 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
+| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.10.3 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-ENG-003 | DSH 插件高阶规范 | [engineering/dsh-plugin-conventions.md](<engineering/dsh-plugin-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 每个新插件准入时对照复核 |
 | CORP-DSH-ENG-004 | SQLite 存储扩展与使用规范 | [engineering/sqlite-storage-conventions.md](<engineering/sqlite-storage-conventions.md>) | V0.1.1 | 草案 | 平台组（代拟） | 新增或修改 SQLite 存储时复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.5 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
