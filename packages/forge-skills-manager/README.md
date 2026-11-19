@@ -40,6 +40,14 @@ pnpm --filter @heluo/forge-skills-manager verify
 pnpm check
 ```
 
+默认回归保留 Cordis 装卸和 SkillRegistry 候选选择测试。原生文件系统 provider、scope 合并与实际技能调用使用指定已安装宿主独立验证，不随默认测试安装完整调用链：
+
+```sh
+pnpm --filter @heluo/forge-skills-manager test:compat <installed-dsh-dir>
+```
+
+参数是已安装 `@deepseek-ai/dsh` 的包目录，须包含该包的 `package.json`；入口核对宿主及所需 DSH SDK 与根 `.dsh-version` 精确一致。未指定路径、依赖缺失或版本不符直接失败，不自动安装、不回落开发依赖、不跳过用例。发布、升级宿主基线以及修改技能发现、优先级或启停逻辑时必须运行，并单独记录兼容结果。该命令仅在临时目录验证原生技能调用，不启动用户 profile。
+
 隔离宿主验收使用已安装 DSH 的 CLI 入口和本轮制品：
 
 ```sh

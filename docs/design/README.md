@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.47.3 |
+| 版本 | V0.48.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组；本轮更新 Agent（代拟） |
@@ -61,7 +61,23 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 
 以下记录各模块的实现和验证边界；已有记录不证明 ADR-16 的目标令牌、归属一致、用途及单授权生命周期已经实现。
 
-**技能管理接入范围核验（2026-11-19，本机 Windows，Agent 代拟）**
+**技能管理测试分层验证（2026-11-19，本机 Windows，Agent 代拟）**
+
+默认回归仅保留 Cordis 与 SkillRegistry 直接 SDK 开发依赖；原生 filesystem provider、scope 合并和 `skill.execute` 回归迁至插件 `compat/`，由 `test:compat <installed-dsh-dir>` 显式执行，移除未使用的 WebServer 导入。入口要求指定已安装宿主及所需 DSH SDK 与根基线一致，缺依赖或版本不符直接失败，不回落本包依赖，也不以跳过代替兼容结果。发布、宿主升级及技能发现、优先级或启停逻辑变更须单独执行兼容验证，规则见[技能管理器设计 §6](plugins/forge-skills-manager.md#6-实施与验收)。
+
+锁文件相对分层前减少 403 行，依赖包条目从 189 个降至 157 个，其中 `@deepseek-ai/*` 从 27 个降至 12 个；其他工作区 importer 内容逐字一致，DevOps、Gitee、Engineering 的 React 仍为 `19.3.1`。运行源码与 24 项生成物未变，根 README、其他插件代码和公共检查器未改。
+
+| 本轮本地验证命令 | 结果与耗时 |
+|---|---|
+| `pnpm install --frozen-lockfile --ignore-scripts --offline` | 通过，约 1.9 秒；本地依赖移除 32 个包 |
+| `node --test --test-timeout=120000 packages/forge-skills-manager/test/*.test.mjs` | 129 项通过、无失败或跳过，约 103.3 秒；含默认保留回归、运行时预检正反例和结构变异 |
+| `node --run check:skills-manager` | SDK 基线、24 项生成物一致性及类型检查通过，未单独计时 |
+| `pnpm --filter @heluo/forge-skills-manager test:compat <installed-dsh-dir>` | 本机已安装 DSH 与根基线不同，预检按设计拒绝，约 2.4 秒；原生兼容用例未执行，不记为兼容通过 |
+| `node scripts/check-repo.mjs`、`node scripts/dsh-version.mjs check` | 约 4 秒；版本检查通过，仓库检查仅有既有 Windows IAM 执行位错误，未修公共规则或其他插件 |
+
+实际工具链为 Node 24.21.0 / pnpm 11.28.5。全量 `check` 未重跑，现有预览未重启；真实宿主原生调用、浏览器完整布局、企业服务及目标平台仍需分别验证。以下接入核验是拆分前的历史记录，不代替上述当前默认回归结果。
+
+**技能管理接入范围核验（2026-11-19，本机 Windows，Agent 代拟，历史记录）**
 
 按 `origin/main...HEAD` 的 PR 比较口径及当前工作区增量，DevOps、Gitee、IAM、Policy、Engineering 的代码与测试，以及通用组合构建、闭包和 workspace 链接脚本及其测试均无本分支新增改动。远端 main 已更新至 `7280ad5`，共同祖先为 `244a918`；当前分支尚未同步 main 的六个后续提交，直接比较两端文件时的其他插件差异不记为本分支新增。插件目录外保留 25 个文件的必要接入与说明，其中 15 个为文档、10 个为配置、检查和测试。DevOps、Gitee、Engineering 的 React 依赖沿用主线 `19.3.1`，管理器自身开发依赖为 `18.3.1`；2026-11-18 冻结安装验证实际解析一致。公共版本检查入口与 main 一致，开发 SDK 基线校验归插件自己的生成物检查；公共实现仅保留按 JSON 字段和准确原文位置放行开发依赖与生成锁文件的规则。
 
