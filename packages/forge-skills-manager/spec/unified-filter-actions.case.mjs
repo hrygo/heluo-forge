@@ -80,10 +80,10 @@ test("SourceSelect action 模式真实属性与契约验证（杜绝夹具假绿
   assert.ok(btn, "Menu 必须挂载真实 anchor Button 触发器");
 
   // 严格断言生产代码真实生成的 anchor Button 属性，杜绝测试夹具硬编码自证
-  assert.equal(btn.props.variant, "outline", "生产代码必须赋予 variant=outline");
-  assert.equal(btn.props.className, "dssm-icon-action", "生产代码必须赋予真实 className=dssm-icon-action（防夹具自证）");
-  assert.equal(btn.props.style?.width, 22, "生产代码必须赋予真实宽度 22px");
-  assert.equal(btn.props.style?.height, 22, "生产代码必须赋予真实高度 22px");
+  assert.equal(btn.props.variant, "primary", "添加技能使用宿主主操作样式");
+  assert.equal(btn.props.className, "dssm-add-action", "添加菜单使用带文字的按钮");
+  assert.equal(btn.props.style?.width, undefined, "文字按钮不锁定图标宽度");
+  assert.ok(all.some(node => node.children?.includes(t("layout.add"))), "添加技能文案可见");
   assert.equal(btn.props["aria-haspopup"], "menu", "生产代码必须声明 aria-haspopup=menu");
   assert.equal(btn.props["aria-expanded"], false, "未打开时 aria-expanded 必须为 false");
   assert.equal(btn.props["aria-label"], t("btn.add"), "无障碍名称正确为添加");

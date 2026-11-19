@@ -30,7 +30,7 @@ assert.equal(resolveRepoBrand(null, 'team/tool'), 'GitHub', '默认简写 repo �
 const start = source.indexOf('      type ProvenanceRow =');
 const end = source.indexOf('      function renderTrash()', start);
 assert.ok(start >= 0 && end > start, 'provenance UI source is present');
-const grouping = stripTypeScriptTypes(source.slice(start, end));
+const grouping = stripTypeScriptTypes(sourceFunctions(source, 'sourceColumns') + '\n' + source.slice(start, end));
 const make = new Function('filteredRows', 'h', 't', 'expanded', 'query', 'activeSource', 'filters', 'filterKey', 'renderSkill', 'foldChevron', 'sourceExtra', 'rootDisplayName', 'renderRootIcon', 'renderRepoBrandIconByUrl', 'countKey', 'setExpanded', 'strokeIcon', 'scope', 'selectedWorkspace', 'roots', 'renderRoot', 'workspaceList', 'workspaceRows', 'rows', 'selectedDetail', grouping + '\nreturn { collectProvenanceRoots, renderProvenanceRepo, renderProvenanceRoot, renderProvenanceList, renderList };');
 const root = { key: 'dsh', path: '/skills', mutable: true, categories: [] };
 const skill = (name, provenance) => ({ name, provenance });
