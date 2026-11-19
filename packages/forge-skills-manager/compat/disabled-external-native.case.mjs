@@ -1,16 +1,14 @@
 // 用真实 DSH scope 合并与 skill.execute 回归；仅使用临时用户目录。
-// 默认使用开发宿主依赖；DSH_RUNTIME_DIR 可指定真实安装的 dsh 包目录。
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { createRequire } from "node:module";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const req = process.env.DSH_RUNTIME_DIR
-  ? createRequire(join(resolve(process.env.DSH_RUNTIME_DIR), "package.json"))
-  : createRequire(import.meta.url);
-const load = (name) => import(pathToFileURL(req.resolve(name)).href);
+import { inspectRuntime } from "../scripts/verify-runtime.mjs";
+
+const runtime = inspectRuntime(process.env.DSH_RUNTIME_DIR);
+const load = (name) => import(pathToFileURL(runtime.entries[name]).href);
 const qa = await mkdtemp(join(tmpdir(), "dssm-disabled-external-"));
 process.env.USERPROFILE = process.env.HOME = join(qa, "user");
 process.env.DSH_HOME = join(qa, "home");

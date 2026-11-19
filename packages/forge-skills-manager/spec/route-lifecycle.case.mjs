@@ -2,7 +2,6 @@
 // plugin startup or effect disposal during restart and failed activation.
 import assert from "node:assert/strict";
 import { Context } from "@deepseek-ai/cordis";
-import { WebServer } from "@deepseek-ai/dsh-host-webserver";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
