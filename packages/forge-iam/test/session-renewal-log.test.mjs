@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once, on } from 'node:events';
-import { appendFile, link, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, link, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -133,8 +133,8 @@ async function isolatedLog(t) {
   const waitFor = (renewalId) => until(() => readLog(path), (content) => (
     parseRows(content).some((row) => row.renewalId === renewalId)
   ), `expected log entry ${renewalId}`);
-  return { home, directory, name, path, waitFor, startProcess(role) {
-    const writer = logProcess(home, role);
+  return { home, directory, name, path, waitFor, startProcess(role, processHome = home) {
+    const writer = logProcess(processHome, role);
     children.push(writer);
     return writer;
   } };
@@ -174,15 +174,20 @@ test('oversized legacy active and archived logs are discarded before appending',
   assert.deepEqual((await readdir(directory)).sort(), [name, `${name}${lockSuffix}`]);
 });
 
-test('two processes preserve the same full generation when both approach rollover', { timeout: 15_000 }, async (t) => {
-  const { directory, name, path, startProcess } = await isolatedLog(t);
+async function assertConcurrentRollover(t, redirected) {
+  const { home, directory, name, path, startProcess } = await isolatedLog(t);
   await mkdir(directory);
   await writeFile(path, fullGeneration);
   await writeFile(`${path}.1`, seedRow);
 
+  const secondHome = redirected ? join(home, 'redirected') : home;
+  if (redirected) {
+    await mkdir(secondHome);
+    await symlink(directory, join(secondHome, 'logs'), process.platform === 'win32' ? 'junction' : 'dir');
+  }
   const first = startProcess('first');
   assert.equal(await first.next(), 'rotate');
-  const second = startProcess('second');
+  const second = startProcess('second', secondHome);
   const phase = await second.next();
   assert.ok(['rotate', 'contended'].includes(phase), `unexpected second process phase: ${phase}`);
   first.child.send('release');
@@ -200,7 +205,13 @@ test('two processes preserve the same full generation when both approach rollove
   assert.equal(new Set(parseRows(current).map((row) => row.pid)).size, 2);
   assert.deepEqual((await readdir(directory)).sort(), [name, `${name}.1`, `${name}${lockSuffix}`]);
   assert.equal((await readFile(`${path}${lockSuffix}`)).length, 0);
-});
+}
+
+test('two processes preserve the same full generation when both approach rollover', { timeout: 15_000 },
+  (t) => assertConcurrentRollover(t, false));
+
+test('two processes preserve the same full generation through a redirected log directory', { timeout: 15_000 },
+  (t) => assertConcurrentRollover(t, true));
 
 test('a busy writer drops a diagnostic and a killed lock owner allows later appends', { timeout: 15_000 }, async (t) => {
   const { directory, path, startProcess } = await isolatedLog(t);

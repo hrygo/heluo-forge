@@ -68,14 +68,19 @@ export function createReconciler(env) {
   function deferRead({ targetStore, targetCredentials, authEpoch, grant, renewalDue = false, observation = null }, previous = null) {
     if (ctx.disposed || !configured || !ctx.exclusive.ok || isSigningOut() || hasSignInAttempt()
       || ctx.state === 'authenticating' || getAuthEpoch() !== authEpoch
-      || provider.store !== targetStore || provider.storeCredentials !== targetCredentials
-      || (observation ? getObservation() !== observation || pendingTimeLeft(observation) <= 0 : ctx.state === 'error')) return false;
+      || provider.store !== targetStore || provider.storeCredentials !== targetCredentials) return false;
+    if (!observation && renewalDue && ctx.state === 'error' && ctx.error === 'IAM_REAUTH_REQUIRED') {
+      const pending = getObservation();
+      // A panel retry may already be observing a peer's pending write. Attach
+      // the due time to that read; only its matching durable result can renew.
+      if (pending && readRetry !== previous && readRetry?.observation === pending) observation = pending;
+    }
+    if (observation ? getObservation() !== observation || pendingTimeLeft(observation) <= 0 : ctx.state === 'error') return false;
     if (readRetry && readRetry !== previous) {
       if (readRetry.store !== targetStore || readRetry.credentials !== targetCredentials
         || readRetry.authEpoch !== authEpoch || readRetry.observation !== observation
         || !isDeepStrictEqual(readRetry.grant, grant)) return false;
-      // A timer may learn of the lock after a panel read already cleared the
-      // live grant and queued this same durable read.
+      // Keep the earliest due time across deferred reads and pending polls.
       if (renewalDue) {
         readRetry.renewAt = Math.min(readRetry.renewAt ?? Infinity, now());
       }
@@ -127,7 +132,8 @@ export function createReconciler(env) {
     const syncEpoch = getAuthEpoch();
     let publication = getPublications();
     let expectedGrant = ctx.lastGrant;
-    const isActive = () => !ctx.disposed && !isSigningOut() && ctx.exclusive.ok && getAuthEpoch() === syncEpoch
+    const lifecycleCurrent = () => !ctx.disposed && !isSigningOut() && ctx.exclusive.ok && getAuthEpoch() === syncEpoch;
+    const isActive = () => lifecycleCurrent()
       && getPublications() === publication && ctx.lastGrant === expectedGrant
       && (observation ? ctx.state === 'error' && ctx.error === 'IAM_REAUTH_REQUIRED'
         && getObservation() === observation && pendingTimeLeft(observation) > 0
@@ -136,15 +142,13 @@ export function createReconciler(env) {
       publication = bumpPublications();
       expectedGrant = ctx.lastGrant;
     };
-    const discardIdentity = (reason) => {
-      // Store lookups can be rebound independently. Clear only the adopted
-      // identity this sync still owns, never a later publication (even null).
-      if (expectedGrant && ctx.lastGrant === expectedGrant && grants.had(expectedGrant)) {
-        logRenewal?.('store-sync', { reason, ...renewalDeadlines(expectedGrant) });
+    const discardIdentity = (reason, grant = expectedGrant) => {
+      if (grant && ctx.lastGrant === grant && grants.had(grant)) {
         ctx.lastGrant = null;
         ctx.state = 'signed-out';
         ctx.error = null;
         published();
+        logRenewal?.('store-sync', { reason, ...renewalDeadlines(grant) });
         ctx.notify();
       }
     };
@@ -201,6 +205,20 @@ export function createReconciler(env) {
         }
       }
       return true;
+    };
+    const discardOutgoingGrant = () => {
+      // Another panel read can re-adopt an outgoing store's grant while the
+      // display read waits. Check ownership of the current publication.
+      const grant = ctx.lastGrant;
+      const currentPublication = getPublications();
+      const ownsGrant = () => lifecycleCurrent() && !hasSignInAttempt()
+        && (ctx.state === 'ready' || ctx.state === 'expired') && grant && ctx.lastGrant === grant
+        && getPublications() === currentPublication && grants.ownerOf(grant) === targetStore;
+      if (!ownsGrant()) return;
+      const currentStore = provider.ensure();
+      if (ownsGrant() && (currentStore !== targetStore || provider.storeCredentials !== targetCredentials)) {
+        discardIdentity('provider-changed', grant);
+      }
     };
     if (observation && !isCurrent()) return ctx.view();
     let reading = true;
@@ -352,14 +370,19 @@ export function createReconciler(env) {
         || previousRefreshExpiry !== (ctx.lastGrant.refreshExpiresAt ?? null)
         || previousRefreshToken !== (ctx.lastGrant.refreshToken ?? null)) ctx.notify();
       // Restore the timer's deadline only for the exact grant read back.
-      if (retry?.renewAt != null && ctx.state === 'ready' && isDeepStrictEqual(retry.grant, record.grant) && isCurrent()) {
-        if (restored && retry.renewAt <= now()) token.scheduleRenewal({ retry: true });
+      if (retry?.renewAt != null && (ctx.state === 'ready' || (restored && ctx.state === 'expired'))
+        && isDeepStrictEqual(retry.grant, record.grant) && isCurrent()) {
+        if (restored && retry.renewAt <= now()) token.scheduleRenewal({ retry: true, restored: true });
         else token.scheduleRenewal({ resumeAt: retry.renewAt });
       }
       // A normal account switch also returns the updated gateway match. The
       // session and its timer are already published before this display read.
       if (accountChanged && !retry && !fromObservation) {
         await gatewayRefresh;
+        if (!isActive()) {
+          discardOutgoingGrant();
+          return ctx.view();
+        }
         if (!isCurrent()) return ctx.view();
         assertClientAuthCurrent(authentication);
       }

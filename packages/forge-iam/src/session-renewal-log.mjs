@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants, writeFileSync } from 'node:fs';
-import { appendFile, lstat, mkdir, rename, unlink } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, realpath, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -9,6 +9,7 @@ import { ERROR_STATUS } from './error-contract.mjs';
 import { OAUTH_ERROR_CODES, OidcError } from './oidc.mjs';
 import { STATES } from './state.mjs';
 
+const LOG_FILE_NAME = 'forge-iam-session-renewal.jsonl';
 const MAX_LOG_FILE_BYTES = 1024 * 1024;
 const MAX_PENDING_WRITES = 128;
 const LOCK_WAIT_MS = 250;
@@ -150,7 +151,7 @@ export function createSessionRenewalLogger({
   maxFileBytes = MAX_LOG_FILE_BYTES, maxPending = MAX_PENDING_WRITES, append = appendFile,
 } = {}) {
   const directory = join(resolve(home), 'logs');
-  const path = join(directory, 'forge-iam-session-renewal.jsonl');
+  const queuePath = join(directory, LOG_FILE_NAME);
   const hostId = randomUUID();
   let warned = false;
   function warnOnce() {
@@ -176,13 +177,17 @@ export function createSessionRenewalLogger({
       if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599) row.httpStatus = httpStatus;
       const line = `${JSON.stringify(row)}\n`;
       const bytes = Buffer.byteLength(line);
-      const pending = pendingByPath.get(path) ?? [];
+      const pending = pendingByPath.get(queuePath) ?? [];
       if (pending.length >= maxPending) return warnOnce();
       if (bytes > maxFileBytes) return warnOnce();
       pending.push(async () => {
         try {
           await mkdir(directory, { recursive: true, mode: 0o700 });
-          if (!(await lstat(directory)).isDirectory()) throw new Error('invalid renewal log directory');
+          // Resolve directory aliases inside the bounded queue so all writers
+          // use the same physical log and coordinator paths.
+          const outputDirectory = await realpath(directory);
+          if (!(await lstat(outputDirectory)).isDirectory()) throw new Error('invalid renewal log directory');
+          const path = join(outputDirectory, LOG_FILE_NAME);
           await withWriteLock(`${path}.lock.sqlite`, async () => {
             await rotateIfNeeded(path, bytes, maxFileBytes);
             await append(path, line, { encoding: 'utf8', flag: APPEND_FLAGS, mode: 0o600 });
@@ -196,8 +201,8 @@ export function createSessionRenewalLogger({
       // The per-path queue includes the in-flight write. Renewal and Host
       // shutdown do not await its drain.
       if (pending.length === 1) {
-        pendingByPath.set(path, pending);
-        void drainWrites(path, pending);
+        pendingByPath.set(queuePath, pending);
+        void drainWrites(queuePath, pending);
       }
     } catch {
       warnOnce();

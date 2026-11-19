@@ -271,9 +271,10 @@ test('a recovered grant renews before its refresh deadline while the gateway sum
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-for (const replacementHasGrant of [false, true]) {
-  const scenario = replacementHasGrant ? 'a newer adopted grant' : 'an empty provider';
-  test(`a provider switch to ${scenario} fences /view after an ordinary account switch`, async (t) => {
+for (const [replacementHasGrant, readAgain] of [[false, false], [true, false], [false, true], [true, true]]) {
+  const replacementState = replacementHasGrant ? 'a newer adopted grant' : 'an empty provider';
+  const scenario = readAgain ? 'after concurrent re-adoption' : 'after an ordinary account switch';
+  test(`a provider switch to ${replacementState} fences /view ${scenario}`, async (t) => {
     const { credentials, store, service, handler, replaceCredentials, posts } = await startHost(t);
     const accountSwitch = {
       ...original, subject: 'synthetic-second-subject', sessionInstanceId: Buffer.alloc(32, 10).toString('base64url'),
@@ -298,6 +299,11 @@ for (const replacementHasGrant of [false, true]) {
     const panel = callRoute(handler, 'GET', 'view');
     await readingGateway.promise;
     assert.equal(service.getView().principal, accountSwitch.subject);
+    if (readAgain) {
+      const concurrentPanel = await callRoute(handler, 'GET', 'view');
+      assert.equal(concurrentPanel.body.principal, accountSwitch.subject);
+      assert.equal(concurrentPanel.body.signedIn, true);
+    }
     const replacement = replaceCredentials();
     if (replacementHasGrant) {
       await replacement.write(replacementGrant);
@@ -337,10 +343,10 @@ test('panel lock recovery keeps the renewal that became due during the read back
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-async function beginPanelRecoveryWhileTimerFailureIsHeld(t) {
-  const host = await startHost(t, shortRefresh, { refreshSkewSeconds: 3 });
+async function beginPanelRecoveryWhileTimerFailureIsHeld(t, initial = shortRefresh) {
+  const host = await startHost(t, initial, { refreshSkewSeconds: 3 });
   const { blocker, service, credentials, events, handler } = host;
-  const { renewalId } = scheduledRenewal(events);
+  const { renewalId, dueAtMs } = scheduledRenewal(events);
   const releaseTimeout = Promise.withResolvers();
   t.after(releaseTimeout.resolve);
   const readRecord = credentials.readRecord.bind(credentials);
@@ -362,11 +368,11 @@ async function beginPanelRecoveryWhileTimerFailureIsHeld(t) {
   fireRenewal(t, events);
   await waitForView(service, () => actualTimeout !== undefined);
   assert.equal(actualTimeout.code, 'CRED_LOCK_TIMEOUT');
-  assert.equal(Date.now(), start + 3000);
+  assert.equal(Date.now(), dueAtMs);
   t.mock.timers.tick(800);
   assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
   blocker.exec('COMMIT');
-  return { ...host, renewalId, releaseTimeout: releaseTimeout.resolve };
+  return { ...host, renewalId, dueAtMs, releaseTimeout: releaseTimeout.resolve };
 }
 
 test('a delayed timer read timeout preserves the due renewal when panel recovery is still reading', async (t) => {
@@ -421,9 +427,15 @@ test('a delayed timer read timeout keeps the newly armed renewal after panel rec
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0) {
-  const host = await startHost(t);
-  const { blocker, service, events, handler, openPeerStore } = host;
+function pendingPeerGrant(grant) {
+  const id = Buffer.alloc(32, 9).toString('base64url');
+  return { ...grant, refreshOperation: { version: 1, state: 'pending', id, base: refreshBaseId(grant, id) } };
+}
+
+async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0, host) {
+  host ??= await startHost(t);
+  const { blocker, service, events, handler, openPeerStore, store } = host;
+  const { grant } = await store.read();
   const originalDueAt = scheduledRenewal(events).dueAtMs;
   blocker.exec('BEGIN EXCLUSIVE');
   if (beforeDueMs > 0) {
@@ -435,8 +447,7 @@ async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0) {
   }
   blocker.exec('COMMIT');
 
-  const id = Buffer.alloc(32, 9).toString('base64url');
-  const pending = { ...original, refreshOperation: { version: 1, state: 'pending', id, base: refreshBaseId(original, id) } };
+  const pending = pendingPeerGrant(grant);
   const peerStore = openPeerStore();
   await peerStore.write(pending);
   t.mock.timers.tick(1000);
@@ -501,6 +512,71 @@ for (const beforeDueMs of [3000, 0]) {
     t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
     await waitForView(service, (current) => current.state === 'ready' && current.accessExpiresAt !== original.accessExpiresAt);
     assert.deepEqual(posts, [original.refreshToken]);
+    assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
+  });
+}
+
+test('a delayed timer read timeout preserves the due renewal during a peer pending observation', async (t) => {
+  const { dueAtMs, renewalId, releaseTimeout, service, store, events, openPeerStore, posts } =
+    await beginPanelRecoveryWhileTimerFailureIsHeld(t, original);
+  const peerStore = openPeerStore();
+  const pending = pendingPeerGrant(original);
+  await peerStore.write(pending);
+  t.mock.timers.tick(1000);
+  await waitForView(service, (view) => view.error === 'IAM_REAUTH_REQUIRED');
+
+  releaseTimeout();
+  await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+  assert.deepEqual((await store.read()).grant, pending);
+  assert.deepEqual(posts, []);
+  await peerStore.write(original);
+  t.mock.timers.tick(1000);
+  await waitForView(service, (view) => view.state === 'ready');
+  const retryAt = scheduledRenewal(events).dueAtMs;
+  assert.ok(retryAt >= dueAtMs && retryAt <= Date.now() + 30_000,
+    `expected the due renewal within its normal backoff, got +${retryAt - Date.now()}ms`);
+
+  t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
+  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== original.accessExpiresAt);
+  assert.deepEqual(posts, [original.refreshToken]);
+  assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
+});
+
+for (const state of ['ready', 'expired']) {
+  test(`a session restored by a peer with a short refresh window still renews from ${state} before expiry`, async (t) => {
+    const initial = state === 'ready' ? shortRefresh
+      : { ...shortRefresh, accessExpiresAt: new Date(start + 4900).toISOString() };
+    const host = await startHost(t, initial, { refreshSkewSeconds: 3 });
+    const { credentials, service, store, events, posts } = host;
+    const releaseGateway = Promise.withResolvers();
+    t.after(releaseGateway.resolve);
+    const readRecord = credentials.readRecord.bind(credentials);
+    let holdingGateway = false;
+    t.mock.method(credentials, 'readRecord', async (key) => {
+      const record = await readRecord(key);
+      if (key === GATEWAY_RECORD_KEY) {
+        holdingGateway = true;
+        await releaseGateway.promise;
+      }
+      return record;
+    });
+
+    const { peerStore } = await observePeerPendingAfterReadTimeout(t, 0, host);
+    const expiry = Date.parse(initial.refreshExpiresAt);
+    t.mock.timers.tick(expiry - 800 - Date.now());
+    await peerStore.write(initial);
+    t.mock.timers.tick(50);
+    await waitForView(service, (view) => view.state === state);
+    await waitForView(service, () => holdingGateway);
+    assert.equal(expiry - Date.now(), 750);
+    assert.deepEqual((await store.read()).grant, initial);
+    assert.deepEqual(posts, []);
+
+    const retryAt = scheduledRenewal(events).dueAtMs;
+    assert.ok(retryAt >= Date.now() && retryAt < expiry, 'expected a new renewal within the remaining refresh window');
+    t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
+    await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+    assert.deepEqual(posts, [initial.refreshToken]);
     assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
   });
 }

@@ -141,7 +141,7 @@
 
 1. 发送 IdP 请求前，对同一 grant 执行短暂 `modifyRecord`，写入随机唯一的 `refreshOperation` pending 标记。标记包含版本、状态、标识和绑定原记录的随机盐摘要；只有 provider 确认写入成功才发送请求。首次提交抛错或未确认时不发送请求。
 2. 请求和响应校验在锁外进行。成功后通过第二次短事务核对完整 pending 记录，条件提交新 grant 与同操作的 `complete` 标记，避免迟到的旧刷新覆盖新登录。
-3. 等待者绑定 pending 的 issuer、clientId、resource、subject、obtainedAt 和原 refresh token。可采用的 complete 须有相同 version/id/base、相同身份、已变化的 refresh token 和未过期 access token；未知或损坏记录失败关闭。
+3. 等待者固定凭据库及原子信任绑定，并核对 pending 的 issuer、clientId、resource、subject、obtainedAt 和原 refresh token。可采用的 complete 须有相同 version/id/base、相同身份、已变化的 refresh token 和未过期 access token。绑定变化、未知或损坏记录均失败关闭。
 
 超时、崩溃或响应不确定时保留 pending 并要求重新登录，不接管或重发同一 refresh token，不返回旧 access token，也不显示 ready。响应缺少新 refresh token 或返回原值时同样保留 pending 并要求重新登录。重新登录使用既有授权路径替换记录；刷新失败时不以读后删除清理记录。若第二次提交已成功但响应或通知失败，发起方不能确认结果，其他实例仍可能读到已提交的 complete。
 
@@ -149,7 +149,7 @@
 
 `waitFor` 使用单调时钟的 5 秒截止时间；轮询 sleep 不超过剩余时间，仅对无副作用的读取使用 `Promise.race`。超时不会取消底层 I/O，迟到的结果不得改变视图或产生未处理拒绝；读取完成及采纳前重新检查截止时间和生命周期。进入等待前的首次读取、claim 和写入不使用竞速超时，也不属于该等待时限；`signOut` 的全部 I/O 不受此时限保证。
 
-尚无已采用的有效授权时，观察到 pending 的视图进入 error。宿主固定存储信任绑定，并保留操作标识、原会话身份和五秒观察期限。SQLite 读锁恢复时发现 pending，Host 会在同一窗口内后台只读核验匹配回执或确认恢复原记录，面板无需保持打开。此期间的 `CRED_LOCK_TIMEOUT` 可在剩余窗口内退避重读，截止时间保持不变。读回经确认未发送请求后还原的同一份授权，沿用原续期时间，已到期时按续期退避安排重试。
+尚无已采用的有效授权时，观察到 pending 的视图进入 error。SQLite 读锁恢复时发现 pending，Host 在原五秒窗口内后台只读核验匹配回执或确认恢复原记录。面板无需保持打开。此期间的 `CRED_LOCK_TIMEOUT` 沿用同一截止时间退避重读，令牌请求共享原有结果或返回 `IAM_REAUTH_REQUIRED`。读回经确认未发送请求后还原的同一份授权，沿用原续期时间。时间已到时，在剩余刷新有效期内退避重试。
 
 可信存储中的 pending 与当前仍有效的授权基线相符时，保留该登录，并暂停对这一授权的模型发送和在途输出。拥有操作的 Host 共享原换票结果，其他 Host 只读核对同一操作的回执。输出和最终发送分别复核会话。已受理的流仅在原授权截止及五秒等待上限前确认续期时继续。新调用在五秒内完成回执、网关绑定和令牌核验后发送一次。超时、未知结果、退出或观察到撤权时结束相应调用。失败的模型调用保持结束状态，迟到的回执不会重新派发。
 

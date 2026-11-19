@@ -27,6 +27,7 @@ function refreshOutcome(pending, current) {
 
 const unconfirmedRenewal = () => new IamError('IAM_RENEWAL_UNCONFIRMED', safeMessage('IAM_RENEWAL_UNCONFIRMED'));
 const changedSession = () => new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
+const reauthenticationRequired = () => new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
 
 function raceCancellation(promise, signal) {
   if (!signal) return promise;
@@ -181,7 +182,12 @@ export function createTokenResolver(env) {
       && getAuthEpoch() === auth && getSessionEpoch() === session && ['ready', 'expired'].includes(ctx.state)
       && provider.store === store && provider.storeCredentials === credentials;
     const ownsGrant = () => bindingCurrent() && isDeepStrictEqual(ctx.lastGrant, original);
-    if (providerBlockReason(store, credentials) || !ownsGrant()) return null;
+    const atomicBinding = provider.atomicBinding(store, credentials);
+    if (!atomicBinding || !ownsGrant()) return null;
+    const atomicBindingCurrent = () => provider.atomicBinding(store, credentials) === atomicBinding;
+    const assertBinding = () => {
+      if (!atomicBindingCurrent()) throw reauthenticationRequired();
+    };
 
     const ownFlight = ownedPendingFlight(store, credentials, pending);
     const issuer = ctx.knownIssuer();
@@ -198,13 +204,14 @@ export function createTokenResolver(env) {
     };
     const onView = () => {
       if (!compatibleGrant()) controller.abort(changedSession());
+      else if (!atomicBindingCurrent()) controller.abort(reauthenticationRequired());
     };
     const check = () => {
       signal.throwIfAborted();
       if (!compatibleGrant()) throw changedSession();
       if (monotonic() >= deadline) throw unconfirmedRenewal();
       ctx.assertExclusive();
-      provider.assertAtomic(store, credentials);
+      assertBinding();
       if (!compatibleGrant()) throw changedSession();
       if (monotonic() >= deadline) throw unconfirmedRenewal();
     };
@@ -253,12 +260,12 @@ export function createTokenResolver(env) {
         if (ownsGrant()) {
           const consumption = beginConsumption(issuer, store, credentials);
           publishGrant(latest, store, authentication, consumption, { restored: outcome === 'restored' });
-          if (outcome === 'restored') scheduleRenewal({ retry: true });
+          if (outcome === 'restored') scheduleRenewal({ retry: true, restored: true });
         } else if (!isDeepStrictEqual(ctx.lastGrant, latest)) throw changedSession();
         return latest;
       }
     };
-    const observation = { store, credentials, pending, ownsGrant, deadline, result: null };
+    const observation = { store, credentials, pending, ownsGrant, assertBinding, deadline, result: null };
     modelRotation = observation;
     ctx.addListener(onView);
     observation.result = Promise.resolve().then(confirm).catch(cause => {
@@ -340,7 +347,7 @@ export function createTokenResolver(env) {
 
   // The Host owns the timer; the callback enters the existing single-flight
   // resolver and therefore uses the same provider and rotation checks.
-  function scheduleRenewal({ retry = false, resumeAt = null } = {}) {
+  function scheduleRenewal({ retry = false, resumeAt = null, restored = false } = {}) {
     const grant = ctx.lastGrant;
     const currentTime = now();
     // Observe the clock on every pass: the first activity after a suspension is
@@ -380,6 +387,9 @@ export function createTokenResolver(env) {
     const lead = renewalLeadMillis(grant, expiry, currentTime, config.refreshSkewSeconds);
     let delay = retry || recovering
       ? Math.min(AUTO_REFRESH_BACKOFF_MS, Math.max(1000, Math.floor(remaining / 2))) : Math.max(0, remaining - lead);
+    // A confirmed unsent refresh can use the remaining window when the
+    // normal minimum backoff would land at or after a known deadline.
+    if (restored && retry && delay >= remaining) delay = Math.floor(remaining / 2);
     if (resumeAt !== null) delay = Math.min(delay, Math.max(0, resumeAt - currentTime));
     const sameBackoff = renewal?.backoff && renewal.auth === auth && renewal.session === session
       && renewal.targetStore === targetStore && renewal.targetCredentials === targetCredentials
@@ -468,7 +478,7 @@ export function createTokenResolver(env) {
     const expectedIssuer = ctx.knownIssuer();
     const useObservedRotation = async (observation) => {
       const latest = await observation.result;
-      if (providerBlockReason(observation.store, observation.credentials)) throw changedSession();
+      observation.assertBinding();
       checkExpected(true);
       if (ctx.disposed || isSigningOut() || ctx.state !== 'ready' || !isDeepStrictEqual(ctx.lastGrant, latest)
         || isAccessExpired(latest, now())) throw changedSession();
@@ -534,7 +544,14 @@ export function createTokenResolver(env) {
       && (refreshPromiseStore !== expected.targetStore || refreshPromiseCredentials !== expected.targetCredentials)) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
+    const pendingRefusal = reauthenticationRequired();
+    const assertNoPendingRefusal = () => {
+      // A Host already observing pending owns the only recovery window for
+      // this rejected view. A new request cannot restart or bypass it.
+      if (ctx.state === 'error' && ctx.error === pendingRefusal.code) throw pendingRefusal;
+    };
     if (refreshPromise) return useSharedRefresh();
+    assertNoPendingRefusal();
     const observed = activeModelRotation();
     if (observed) return useObservedRotation(observed);
     const epoch = getSessionEpoch();
@@ -551,6 +568,7 @@ export function createTokenResolver(env) {
     let refreshWriteAttempted = false;
     let unclaimedLockTimeout = false;
     let waitingForPending = false;
+    let pendingBinding;
     let operationGrant = null;
     const staleSession = new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
     let authentication;
@@ -559,7 +577,11 @@ export function createTokenResolver(env) {
     const checkLifecycle = () => {
       if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
       ctx.assertExclusive();
-      if (refreshing) provider.assertAtomic(targetStore, targetCredentials);
+      if (pendingBinding !== undefined) {
+        if (!pendingBinding || provider.atomicBinding(targetStore, targetCredentials) !== pendingBinding) {
+          throw reauthenticationRequired();
+        }
+      } else if (refreshing) provider.assertAtomic(targetStore, targetCredentials);
     };
     const checkAlive = () => { checkLifecycle(); assertClientAuthCurrent(authentication); };
     const rejectSession = (code = 'IAM_REAUTH_REQUIRED', reason = 'rejected', cause) => {
@@ -599,7 +621,7 @@ export function createTokenResolver(env) {
       if (grant.refreshOperation?.state === 'pending' || (expired && !(restored && isRefreshUsable(grant, now())))) return rejectSession();
       publishGrant(grant, targetStore, authentication, consumption, { expired, restored });
       if (adoptionReason) trace('refresh-adopted', { reason: adoptionReason, ...renewalDeadlines(grant) });
-      if (restored) scheduleRenewal({ retry: true });
+      if (restored) scheduleRenewal({ retry: true, restored: true });
       if (expired) throw unsent;
       return grant.accessToken;
     };
@@ -689,6 +711,7 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     if (refreshPromise) return useSharedRefresh();
+    assertNoPendingRefusal();
     refreshPromiseStore = targetStore;
     refreshPromiseCredentials = targetCredentials;
     refreshPromiseIssuer = expectedIssuer;
@@ -706,9 +729,14 @@ export function createTokenResolver(env) {
         // Take a completed rotation from another Host through the usual checks.
         const forcedRenewal = expected?.renewalDue === true
           && initial.refreshToken === expected.refreshToken;
+        if (initial.refreshOperation?.state === 'pending') {
+          pendingBinding = provider.atomicBinding(targetStore, targetCredentials);
+          checkAlive();
+        }
         stage = 'client-auth';
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
         checkAlive();
+        assertNoPendingRefusal();
         flightAuthentication.value = clientAuthDescriptor(authentication);
         const observed = activeModelRotation();
         if (observed) {
@@ -732,9 +760,12 @@ export function createTokenResolver(env) {
         // Wait only for the observed operation; a timeout is never a lease or
         // permission to resend. Polling never holds the provider lock.
         const waitFor = async (pending) => {
+          pendingBinding ??= provider.atomicBinding(targetStore, targetCredentials);
+          checkAlive();
           const observed = observePendingRotation(targetStore, targetCredentials, pending);
           if (observed) {
             const latest = await observed.result;
+            observed.assertBinding();
             checkAlive();
             if (ctx.state !== 'ready' || !isDeepStrictEqual(ctx.lastGrant, latest)) throw staleSession;
             return latest.accessToken;
@@ -966,7 +997,7 @@ export function createTokenResolver(env) {
         trace('refresh-committed', renewalDeadlines(next));
         return useGrant(next);
       } catch (cause) {
-        if (cause === unsent || cause?.code === 'IAM_RENEWAL_UNCONFIRMED') throw cause;
+        if (cause === pendingRefusal || cause === unsent || cause?.code === 'IAM_RENEWAL_UNCONFIRMED') throw cause;
         if (cause === staleSession) {
           reportFailure('IAM_NOT_SIGNED_IN', 'session-changed');
           throw cause;
@@ -1091,13 +1122,14 @@ export function createTokenResolver(env) {
         (wait?.signal ?? signal)?.throwIfAborted();
         if (wait && monotonic() >= wait.deadline) throw unconfirmedRenewal();
         assertCurrent();
+        wait?.assertBinding?.();
       };
-      const awaitRotation = async (result, deadline = monotonic() + REFRESH_TIMEOUT_MS) => {
+      const awaitRotation = async (result, deadline = monotonic() + REFRESH_TIMEOUT_MS, assertBinding) => {
         if (wait) throw unconfirmedRenewal();
         const timeout = new AbortController();
         const timer = setTimeout(() => timeout.abort(unconfirmedRenewal()), Math.max(0, deadline - monotonic()));
         timer.unref?.();
-        wait = { deadline, timer, signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal };
+        wait = { deadline, timer, assertBinding, signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal };
         confirmed = await raceCancellation(result, wait.signal);
         check();
         if (!confirmed || !isDeepStrictEqual(ctx.lastGrant, confirmed)) throw changedSession();
@@ -1111,7 +1143,7 @@ export function createTokenResolver(env) {
           const observation = activeModelRotation();
           if (observation) {
             if (rotationOnly) return false;
-            await awaitRotation(observation.result, observation.deadline);
+            await awaitRotation(observation.result, observation.deadline, observation.assertBinding);
           }
           const local = ctx.lastGrant;
           const claim = refreshPromisePending;
@@ -1142,14 +1174,14 @@ export function createTokenResolver(env) {
           const observedDuringRead = activeModelRotation();
           if (observedDuringRead) {
             if (rotationOnly) return false;
-            await awaitRotation(observedDuringRead.result, observedDuringRead.deadline);
+            await awaitRotation(observedDuringRead.result, observedDuringRead.deadline, observedDuringRead.assertBinding);
             continue;
           }
           if (latest.refreshOperation?.state === 'pending') {
             const rotation = observePendingRotation(targetStore, targetCredentials, latest);
             if (rotationOnly && (rotation || ownedPendingFlight(targetStore, targetCredentials, latest))) return false;
             if (!rotation) throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
-            await awaitRotation(rotation.result, rotation.deadline);
+            await awaitRotation(rotation.result, rotation.deadline, rotation.assertBinding);
             continue;
           }
           if (confirmed) {
@@ -1230,6 +1262,7 @@ export function createTokenResolver(env) {
         const confirmed = await raceCancellation(observation.result, signal);
         signal.throwIfAborted();
         assertCurrent();
+        observation.assertBinding();
         if (activeModelRotation() || !isDeepStrictEqual(ctx.lastGrant, confirmed)) throw unconfirmedRenewal();
       },
       waitForCompletedRotation(signal, recheckDelay) {
