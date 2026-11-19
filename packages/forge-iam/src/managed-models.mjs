@@ -1031,7 +1031,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 
   /** Bounded back-off for transient gateway failures; any context change cancels it. */
   function scheduleRetry(code, retryAfterMs) {
-    if (!RETRYABLE.has(code) || retryAttempt >= retryDelays.length) return;
+    if (!RETRYABLE.has(code)) return;
     const asked = Number.isFinite(retryAfterMs) ? retryAfterMs : undefined;
     let reusedBudget = false;
     if (retryTimer) {
@@ -1045,6 +1045,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       cancelRetry();
       reusedBudget = true;
     }
+    // Budget is checked after the pending-timer handling: the last scheduled
+    // retry must still learn about a newer, longer Retry-After.
+    if (retryAttempt >= retryDelays.length) return;
     // A wait longer than the ceiling is not shortened silently: the failure
     // stays visible instead of parking the recovery for minutes.
     if (asked !== undefined && asked > MAX_CATALOG_RETRY_AFTER_MS) return;

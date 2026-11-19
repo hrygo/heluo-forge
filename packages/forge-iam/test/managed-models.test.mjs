@@ -1626,3 +1626,27 @@ test('a too-long Retry-After cancels a pending retry instead of firing early (is
   await f.runtime.refresh().catch(() => { });  // now the gateway asks for two minutes
   assert.equal(f.runtime.getView().retryAt, null);
 });
+
+test('a valid but very long Retry-After is not mistaken for "no hint" (issue #304)', async t => {
+  // 86400 seconds parses fine; falling back to the 2s local backoff would hammer
+  // a gateway that explicitly asked for a day.
+  const f = fixture({ fetch: async () => new Response('later', { status: 429, headers: { 'retry-after': '86400' } }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().retryAt, null);
+});
+
+test('the last scheduled retry still honours a newer longer Retry-After (issue #304)', async t => {
+  let retryAfter = '0';
+  const f = fixture({
+    fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': retryAfter } }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // Burn the retry budget quickly with zero-second hints.
+  await new Promise(resolve => setTimeout(resolve, 120));
+  retryAfter = '3600';
+  await f.runtime.refresh().catch(() => { });
+  // The pending (last) retry must be cancelled, not fired against the gateway.
+  assert.equal(f.runtime.getView().retryAt, null);
+});

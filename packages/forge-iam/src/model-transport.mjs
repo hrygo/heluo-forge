@@ -41,7 +41,8 @@ export function retryAfterMillis(value) {
 
 /**
  * Unbounded form used by callers that decide their own ceiling: a valid but very
- * long wait must stay distinguishable from "no hint at all".
+ * long wait must stay distinguishable from "no hint at all", otherwise it would
+ * silently fall back to a short local backoff.
  */
 export function retryAfterHint(value) {
   if (typeof value !== 'string') return undefined;
