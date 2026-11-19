@@ -859,3 +859,110 @@ test('sign-out during SQLite read backoff fences the deferred renewal', async (t
   assert.equal((await store.read()).grant, null);
   assert.deepEqual(posts, []);
 });
+
+test('explicit sign-in waits for the trusted store after repeated SQLite read timeouts', async (t) => {
+  const { blocker, store, service, posts, events, handler, setAtomicStoreBinding } = await startHost(t);
+  const initial = service.getView();
+  assert.equal(initial.state, 'ready');
+  blocker.exec('BEGIN EXCLUSIVE');
+  fireRenewal(t, events);
+  const blocked = await waitForView(service, (view) => view.error === 'IAM_CREDENTIALS_UNAVAILABLE');
+  assert.equal(blocked.canSignIn, true, 'the user can request a verified recovery');
+  for (let i = 0; i < 2; i += 1) {
+    const reply = await callRoute(handler, 'POST', 'sign-in');
+    assert.equal(reply.statusCode, 503);
+    assert.equal(reply.body.error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
+    assertUnavailable(service, service.getView());
+    t.mock.timers.tick(1000);
+    await waitForView(service, () => events.filter((event) => event.reason === 'read-lock-timeout').length >= i + 2);
+  }
+  assert.deepEqual(posts, []);
+  blocker.exec('COMMIT');
+  await store.clear();
+  setAtomicStoreBinding(null);
+  const unverified = await callRoute(handler, 'POST', 'sign-in');
+  assert.equal(unverified.statusCode, 503);
+  assert.equal(unverified.body.error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
+  assertUnavailable(service, service.getView());
+
+  setAtomicStoreBinding({});
+  t.mock.timers.tick(1000);
+  const recovered = await callRoute(handler, 'POST', 'sign-in');
+  assert.equal(recovered.statusCode, 200);
+  assert.equal(recovered.body.view.state, 'authenticating');
+  assert.ok(recovered.body.authorizationUrl);
+  assert.deepEqual(posts, []);
+});
+
+test('explicit recovery shares a durable read after a persistent storage error', async (t) => {
+  const { credentials, service, handler, posts } = await startHost(t);
+  const readRecord = credentials.readRecord.bind(credentials);
+  const entered = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  t.after(() => resume.resolve());
+  let available = false;
+  let recoveryReads = 0;
+  t.mock.method(credentials, 'readRecord', async (key) => {
+    if (key === GRANT_KEY) {
+      if (!available) throw Object.assign(new Error('synthetic storage unavailable'), { code: 'CRED_LOCK_RECOVERY_FAILED' });
+      recoveryReads += 1;
+      entered.resolve();
+      await resume.promise;
+    }
+    return readRecord(key);
+  });
+
+  await service.syncFromStore();
+  assert.equal(service.getView().error, 'IAM_CREDENTIALS_UNAVAILABLE');
+  const blocked = await callRoute(handler, 'POST', 'sign-in');
+  assert.equal(blocked.statusCode, 503);
+  assert.equal(blocked.body.error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
+  assert.equal(service.getView().signedIn, false);
+
+  available = true;
+  const retry = callRoute(handler, 'POST', 'sign-in');
+  await entered.promise;
+  const duplicate = callRoute(handler, 'POST', 'sign-in');
+  assert.equal(service.getView().signedIn, false, 'a restored binding still needs its durable result');
+  resume.resolve();
+  for (const result of await Promise.all([retry, duplicate])) {
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body.authorizationUrl, null);
+    assert.equal(result.body.view.state, 'ready');
+  }
+  assert.equal(recoveryReads, 1);
+  assert.deepEqual(posts, []);
+});
+
+test('cancelling an explicit sign-in leaves the shared SQLite read able to recover', async (t) => {
+  const { blocker, store, credentials, service, events, handler, posts } = await startHost(t);
+  blocker.exec('BEGIN EXCLUSIVE');
+  fireRenewal(t, events);
+  await waitForView(service, (view) => view.error === 'IAM_CREDENTIALS_UNAVAILABLE');
+  blocker.exec('COMMIT');
+  await store.clear();
+
+  const readRecord = credentials.readRecord.bind(credentials);
+  const entered = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  t.after(() => resume.resolve());
+  t.mock.method(credentials, 'readRecord', async (key) => {
+    if (key === GRANT_KEY) {
+      entered.resolve();
+      await resume.promise;
+    }
+    return readRecord(key);
+  });
+  t.mock.timers.tick(1000);
+  await entered.promise;
+  const retry = callRoute(handler, 'POST', 'sign-in');
+  await setImmediate();
+  await callRoute(handler, 'POST', 'cancel');
+  resume.resolve();
+
+  const result = await retry;
+  assert.equal(result.statusCode, 409);
+  assert.equal(result.body.error.code, 'IAM_ATTEMPT_CANCELLED');
+  assert.equal(service.getView().state, 'signed-out');
+  assert.deepEqual(posts, []);
+});

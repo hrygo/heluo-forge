@@ -23,7 +23,7 @@ const events = new Set([
   'host-start', 'host-stop', 'binding-changed', 'session-state', 'store-sync',
   'renewal-scheduled', 'renewal-fired', 'renewal-blocked', 'renewal-cancelled', 'renewal-resume', 'renewal-failed',
   'refresh-stage', 'refresh-claimed', 'refresh-shared', 'refresh-reused',
-  'refresh-retry', 'refresh-failed', 'refresh-committed', 'refresh-adopted',
+  'refresh-retry', 'refresh-failed', 'refresh-committed', 'refresh-adopted', 'refresh-handed-off',
 ]);
 const codes = [
   ...Object.keys(ERROR_STATUS), 'CRED_LOCK_TIMEOUT', 'CRED_LOCK_LOST', 'CRED_LOCK_RECOVERY_FAILED',
@@ -41,7 +41,7 @@ const reasons = [
   'disposed', 'replaced', 'session-inactive', 'session-changed', 'no-grant', 'refresh-pending',
   'refresh-unusable', 'deadline-unknown', 'deadline-passed', 'deadline-changed', 'retry-after-expiry', 'timer-before-due',
   'credentials-unavailable', 'provider-changed', 'atomic-store-unverified', 'stored-session-changed',
-  'grant-invalid', 'grant-missing', 'preflight', 'claim-lock-timeout', 'claim-conflict', 'claim-unconfirmed',
+  'grant-invalid', 'grant-missing', 'sign-out-pending', 'preflight', 'claim-lock-timeout', 'claim-conflict', 'claim-unconfirmed',
   'rejected', 'rotation-missing', 'rotation-unchanged', 'commit-unconfirmed',
   'peer-pending', 'peer-timeout', 'peer-record-invalid', 'peer-complete', 'local-complete', 'local-pending-timeout',
   'peer-restored', 'request-unsent',

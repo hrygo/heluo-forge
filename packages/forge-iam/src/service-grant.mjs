@@ -28,6 +28,7 @@ export function createServiceGrant(env) {
   const { config, options, now, fetchImpl, profileFields, state, provider, getAuthEpoch } = env;
 
   let metadataCache = null;
+  let optionalMetadataFlight = null;
   let jwksCache = null;
   let identityProfile;
   // A weak association prevents a discarded cached grant retaining its provider.
@@ -56,40 +57,58 @@ export function createServiceGrant(env) {
     if (operation) state.sessionAuthentication = Object.freeze({ ...clientAuthDescriptor(operation), identity: grantIdentity(grant), credentials: provider.storeCredentials });
   }
 
-  async function metadata() {
+  async function metadata({ optional } = {}) {
     const current = now();
-    if (metadataCache && current - metadataCache.loadedAt < METADATA_TTL_MS) {
+    const fresh = metadataCache && current - metadataCache.loadedAt < METADATA_TTL_MS;
+    const discoverOptional = optional && config.discoveryUrl && !config[optional];
+    if (fresh && (!discoverOptional || metadataCache.value[optional] || metadataCache.checkedOptional)) {
       return metadataCache.value;
     }
+    if (discoverOptional) {
+      optionalMetadataFlight ??= loadMetadata(config, {
+        fetchImpl, timeoutMs: config.httpTimeoutMs, optional,
+      }).then((value) => {
+        metadataCache = { value, loadedAt: now(), checkedOptional: true };
+        return value;
+      }).finally(() => { optionalMetadataFlight = null; });
+      return optionalMetadataFlight;
+    }
+    const previous = metadataCache;
     const value = await loadMetadata(config, {
       fetchImpl,
       timeoutMs: config.httpTimeoutMs,
     });
-    metadataCache = { value, loadedAt: current };
-    return value;
+    if (metadataCache === previous || !metadataCache.checkedOptional) {
+      metadataCache = { value, loadedAt: now(), checkedOptional: false };
+    }
+    return metadataCache.value;
   }
 
   async function loadIdentityProfile(grant) {
     if (Object.keys(profileFields).length === 0) return;
-    identityProfile = undefined;
     const epoch = getAuthEpoch();
+    const targetStore = grantOwners.get(grant);
+    const credentials = provider.storeCredentials;
+    const binding = provider.atomicBinding(targetStore, credentials);
+    const sameSession = () => !state.disposed && getAuthEpoch() === epoch && state.lastGrant === grant;
+    const current = () => binding && sameSession()
+      && provider.atomicBinding(targetStore, credentials) === binding && sameSession();
+    if (!current()) return;
+    identityProfile = undefined;
     try {
-      const meta = metadataCache?.value ?? await metadata();
+      const meta = await metadata({ optional: 'userInfoEndpoint' });
       const endpoint = meta?.userInfoEndpoint;
-      if (!endpoint) return;
+      if (!endpoint || meta.issuer !== grant.issuer || !current()) return;
       const raw = await fetchUserInfo({
         userInfoEndpoint: endpoint,
         accessToken: grant.accessToken,
         fetchImpl,
         timeoutMs: Math.min(config.httpTimeoutMs, 5000),
       });
-      if (state.disposed || getAuthEpoch() !== epoch || state.lastGrant !== grant) return;
+      if (!current()) return;
       const profile = projectUserInfo(raw, profileFields);
       identityProfile = profile ? Object.freeze({ identity: grantIdentity(grant), profile }) : undefined;
-    } catch {
-      // UserInfo is enrichment only: login stays successful without it.
-      identityProfile = undefined;
-    }
+    } catch { /* Optional enrichment may fail after a newer session has published. */ }
   }
 
   async function jwks(uri) {

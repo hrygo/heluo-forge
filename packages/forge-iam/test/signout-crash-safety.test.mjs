@@ -11,7 +11,7 @@ const grant = { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('bas
 const options = { verifyAtomicStore: () => true };
 function defer() { let resolve; const promise = new Promise((r) => { resolve = r; }); return { resolve, promise }; }
 
-test('interrupted revoke leaves a durable pending grant that cannot be observed as ready or resent', async () => {
+test('interrupted revoke leaves a durable pending grant that ordinary reads and stale logout cannot use', async () => {
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials, options);
   await store.write(grant);
@@ -71,7 +71,8 @@ test('sign-out marker has strict validated shape in both grant versions', () => 
   const confidential = { ...grant, version: 2, authContext: { mode: 'confidential', method: 'client_secret_post', secretRef: 'a', secretRevision: 'b' } };
   for (const base of [grant, confidential]) {
     assert.equal(validateGrant({ ...base, signOutOperation: marker }).ok, true);
-    for (const invalid of [null, {}, { ...marker, state: 'complete' }, { ...marker, extra: 1 }, { ...marker, id: 'short' }]) {
+    for (const invalid of [null, {}, { ...marker, state: 'complete' }, { ...marker, extra: 1 }, { ...marker, id: 'short' },
+      { ...marker, version: 2 }, { ...marker, binding: 'a'.repeat(64) }]) {
       assert.equal(validateGrant({ ...base, signOutOperation: invalid }).ok, false);
     }
   }
@@ -108,7 +109,7 @@ test('confirmed, failed, unknown and skipped revoke have explicit durable outcom
         assert.notEqual(service.getView().state, 'ready');
         const callsBeforeRetry = calls;
         assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-        assert.equal(calls, callsBeforeRetry);
+        assert.equal(calls, callsBeforeRetry + 1);
         assert.deepEqual(await credentials.readRecord(GRANT_KEY), raw);
       }
     });
@@ -129,7 +130,7 @@ test('actual process death after pending commit leaves restart fenced and cannot
   const code = `import { createGrantStore } from ${JSON.stringify(new URL('../src/store.mjs', import.meta.url).href)};
 import { FileCredentials } from ${JSON.stringify(new URL('./support/file-credentials.mjs', import.meta.url).href)};
 const s = createGrantStore(new FileCredentials(process.argv[1]), { verifyAtomicStore: () => true });
-await s.signOutSnapshot(${JSON.stringify(grant)}, async () => { process.stdout.write('revoked\\n'); await new Promise(() => {}); });`;
+await s.signOutSnapshot(${JSON.stringify(grant)}, async () => { process.stdout.write('revoked\\n'); setInterval(() => {}, 1000); await new Promise(() => {}); });`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', code, dir], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ended = new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
   await new Promise((resolve, reject) => { child.stdout.once('data', resolve); child.once('error', reject); child.once('close', () => reject(new Error('child ended before revoke'))); });

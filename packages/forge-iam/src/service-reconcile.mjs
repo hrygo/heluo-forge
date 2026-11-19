@@ -30,6 +30,25 @@ export function createReconciler(env) {
   let issuerResolution = null;
 
   let readRetry = null;
+  let recoveryFlight = null;
+
+  function credentialsUnavailable() {
+    return (ctx.state === 'error' || ctx.state === 'unreachable') && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE';
+  }
+
+  function recoverCredentialStore() {
+    if (!credentialsUnavailable() || ctx.disposed || isSigningOut() || !configured || !ctx.exclusive.ok) return ctx.view();
+    recoveryFlight ??= Promise.resolve().then(() => {
+      if (!credentialsUnavailable() || ctx.disposed || isSigningOut()) return ctx.view();
+      const authEpoch = getAuthEpoch();
+      const store = provider.ensure();
+      const credentials = provider.storeCredentials;
+      const binding = provider.atomicBinding(store, credentials);
+      if (!binding) return ctx.view();
+      return syncFromStore(null, { store, credentials, binding, authEpoch });
+    }).finally(() => { recoveryFlight = null; });
+    return recoveryFlight;
+  }
 
   function cancelReadRetry() {
     if (!readRetry) return;
@@ -55,7 +74,7 @@ export function createReconciler(env) {
   }
 
   function pendingTimeLeft(observation) {
-    return Math.min(observation.deadline - now(), observation.monotonicDeadline - monotonic());
+    return observation.deadline - monotonic();
   }
 
   function pollPending(retry, observation) {
@@ -114,7 +133,7 @@ export function createReconciler(env) {
 
   // All callers share one deferred read. Only a fresh durable read can restore
   // the view or put a renewal back on the timer after a storage timeout.
-  function deferRead({ targetStore, targetCredentials, authEpoch, grant, renewalDue = false, observation = null }, previous = null) {
+  function deferRead({ targetStore, targetCredentials, authEpoch, grant, renewalDue = false, observation = null, recovery = null }, previous = null) {
     if (ctx.disposed || !configured || !ctx.exclusive.ok || isSigningOut() || hasSignInAttempt()
       || ctx.state === 'authenticating' || getAuthEpoch() !== authEpoch
       || provider.store !== targetStore || provider.storeCredentials !== targetCredentials) return false;
@@ -124,7 +143,8 @@ export function createReconciler(env) {
       // the due time to that read; only its matching durable result can renew.
       if (pending && readRetry !== previous && readRetry?.observation === pending) observation = pending;
     }
-    if (observation ? getObservation() !== observation || pendingTimeLeft(observation) <= 0 : ctx.state === 'error') return false;
+    if (observation ? getObservation() !== observation || pendingTimeLeft(observation) <= 0
+      : ctx.state === 'error' && !(recovery && credentialsUnavailable())) return false;
     if (readRetry && readRetry !== previous) {
       if (readRetry.store !== targetStore || readRetry.credentials !== targetCredentials
         || readRetry.authEpoch !== authEpoch || readRetry.observation !== observation
@@ -148,7 +168,7 @@ export function createReconciler(env) {
       : token.scheduledRenewalAt(grant, targetStore, targetCredentials);
     const delay = observation ? Math.min(CREDENTIAL_READ_BACKOFF_MS, pendingTimeLeft(observation)) : CREDENTIAL_READ_BACKOFF_MS;
     scheduleRead({ store: targetStore, credentials: targetCredentials, authEpoch, observation,
-      grant: previous ? previous.grant : grant, renewAt, polling: false }, delay);
+      grant: previous ? previous.grant : grant, renewAt, polling: false, recovery }, delay);
     if (!observation && (ctx.state !== 'unreachable' || ctx.error !== 'IAM_CREDENTIALS_UNAVAILABLE')) {
       setObservation(null);
       ctx.lastGrant = null;
@@ -162,16 +182,19 @@ export function createReconciler(env) {
     return true;
   }
 
-  async function syncFromStore(retry = null) {
+  async function syncFromStore(retry = null, recovery = retry?.recovery) {
     if (retry && readRetry !== retry) return ctx.view();
     if (ctx.disposed || isSigningOut()) return ctx.view();
     if (!configured || !ctx.exclusive.ok) return ctx.view();
     // A user-triggered sign-in owns the state machine until its callback,
     // cancellation, or timeout; a background hydration must not clobber it.
     if (ctx.state === 'authenticating' || hasSignInAttempt()) return ctx.view();
-    // Only an error created by this instance observing pending can recover.
-    let observation = ctx.state === 'error' ? getObservation() : null;
-    if (ctx.state === 'error' && (!observation || ctx.error !== 'IAM_REAUTH_REQUIRED'
+    if (recovery && getAuthEpoch() !== recovery.authEpoch) return ctx.view();
+    // Only local pending observation and explicit verified storage recovery
+    // may read through an error state.
+    const recoveringStorage = () => recovery && credentialsUnavailable();
+    let observation = ctx.state === 'error' && ctx.error === 'IAM_REAUTH_REQUIRED' ? getObservation() : null;
+    if (ctx.state === 'error' && !recoveringStorage() && (!observation
       || observation.authEpoch !== getAuthEpoch() || pendingTimeLeft(observation) <= 0)) {
       if (observation) logRenewal?.('store-sync', { reason: 'pending-window-ended', state: ctx.state, code: ctx.error });
       setObservation(null);
@@ -186,7 +209,7 @@ export function createReconciler(env) {
       && getPublications() === publication && ctx.lastGrant === expectedGrant
       && (observation ? ctx.state === 'error' && ctx.error === 'IAM_REAUTH_REQUIRED'
         && getObservation() === observation && pendingTimeLeft(observation) > 0
-        : ctx.state !== 'authenticating' && ctx.state !== 'error' && !hasSignInAttempt());
+        : ctx.state !== 'authenticating' && (ctx.state !== 'error' || recoveringStorage()) && !hasSignInAttempt());
     const published = () => {
       publication = bumpPublications();
       expectedGrant = ctx.lastGrant;
@@ -224,7 +247,8 @@ export function createReconciler(env) {
         cancelReadRetry();
         if (retry) return ctx.view();
       } else if (!retry) {
-        return readRetry.polling ? runReadRetry(readRetry) : ctx.view();
+        if (readRetry.polling) return runReadRetry(readRetry);
+        return (recovery && readRetry.flight) || ctx.view();
       }
     }
     if (!targetStore || (observation && (targetStore !== observation.store || targetCredentials !== observation.credentials))) {
@@ -244,6 +268,8 @@ export function createReconciler(env) {
         if (observation && getObservation() === observation) setObservation(null);
         return false;
       }
+      if (recovery && (targetStore !== recovery.store || targetCredentials !== recovery.credentials
+        || provider.atomicBinding(targetStore, targetCredentials) !== recovery.binding || !isActive())) return false;
       if (observation) {
         const binding = provider.atomicBinding(targetStore, targetCredentials);
         if (!isActive()) return false;
@@ -269,7 +295,7 @@ export function createReconciler(env) {
         discardIdentity('provider-changed', grant);
       }
     };
-    if (observation && !isCurrent()) return ctx.view();
+    if ((observation || recovery) && !isCurrent()) return ctx.view();
     let reading = true;
     let observationTimer;
     const expiration = observation && new Promise((resolve) => {
@@ -285,10 +311,12 @@ export function createReconciler(env) {
       if (!isCurrent()) return ctx.view();
       if (retry && !retry.polling) logRenewal?.('store-sync', { stage: 'store-read', reason: 'store-read-recovered' });
       if (!record.ok) {
-        logRenewal?.('store-sync', { reason: 'grant-invalid', code: 'IAM_GRANT_INVALID' });
+        const signOutPending = record.reason === 'sign-out-pending';
+        const code = signOutPending ? 'IAM_REVOCATION_UNKNOWN' : 'IAM_GRANT_INVALID';
+        logRenewal?.('store-sync', { reason: signOutPending ? 'sign-out-pending' : 'grant-invalid', code });
         setObservation(null);
         ctx.lastGrant = null;
-        ctx.error = 'IAM_GRANT_INVALID';
+        ctx.error = code;
         ctx.state = 'error';
         published();
         ctx.notify();
@@ -366,7 +394,7 @@ export function createReconciler(env) {
         const observed = atomicBinding ? { version: marker.version, id: marker.id, base: marker.base,
           identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch: getAuthEpoch(),
           store: targetStore, credentials: targetCredentials, atomicBinding,
-          deadline: now() + REFRESH_TIMEOUT_MS, monotonicDeadline: monotonic() + REFRESH_TIMEOUT_MS } : null;
+          deadline: monotonic() + REFRESH_TIMEOUT_MS } : null;
         setObservation(observed);
         token.refusePending(record.grant);
         ctx.lastGrant = null;
@@ -401,7 +429,7 @@ export function createReconciler(env) {
       ctx.state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
       ctx.error = null;
       published();
-      const gatewayRefresh = retry || fromObservation || accountChanged ? gateway.refreshSessionSummary() : null;
+      const gatewayRefresh = retry || recovery || fromObservation || accountChanged ? gateway.refreshSessionSummary() : null;
       adoptConsumption(consumption, record.grant);
       if (logRenewal && (fromObservation || (marker?.state === 'complete' && previousGrant
         && previousRefreshToken !== record.grant.refreshToken && isDeepStrictEqual(grantIdentity(previousGrant), identity)))) {
@@ -444,7 +472,7 @@ export function createReconciler(env) {
     } catch (cause) {
       if (!isCurrent()) return ctx.view();
       if (reading && cause?.code === 'CRED_LOCK_TIMEOUT' && deferRead({ targetStore, targetCredentials,
-        authEpoch: syncEpoch, grant: expectedGrant, observation }, retry)) return ctx.view();
+        authEpoch: syncEpoch, grant: expectedGrant, observation, recovery }, retry)) return ctx.view();
       setObservation(null);
       ctx.lastGrant = null;
       ctx.error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)
@@ -471,5 +499,5 @@ export function createReconciler(env) {
     return ctx.view();
   }
 
-  return { syncFromStore, hydrate, deferRead, cancelReadRetry, pendingObservationFor };
+  return { syncFromStore, hydrate, deferRead, recoverCredentialStore, cancelReadRetry, pendingObservationFor };
 }

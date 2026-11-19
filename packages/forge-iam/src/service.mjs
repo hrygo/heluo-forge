@@ -133,6 +133,10 @@ export function createIamService(rawConfig, options = {}) {
     bumpGeneration: () => { selection.generation += 1; },
     getManagedModelRuntime: () => options.getManagedModelRuntime?.(),
     logGatewayStage: options.logGatewayStage,
+    async syncSession() {
+      await reconcile.syncFromStore();
+      if (reconcile.pendingObservationFor(provider.store, provider.storeCredentials)) await token.resolveToken();
+    },
   });
 
   // Token refresh: the flight records its own provider, so it is created after
@@ -212,6 +216,7 @@ export function createIamService(rawConfig, options = {}) {
     fetchImpl,
     openCallback: options.openCallback,
     closeCallback: options.closeCallback,
+    recoverCredentialStore: reconcile.recoverCredentialStore,
     isSigningOut: () => signout.signingOut,
     getAuthEpoch: () => authEpoch,
     bumpAuthEpoch: () => { authEpoch += 1; },
@@ -323,12 +328,12 @@ export function createIamService(rawConfig, options = {}) {
     /** Host-only request credential; never exposed by management routes or IamView. */
     async resolveGatewayCredential() { return (await service.resolveGatewayConnection()).key; },
 
-refreshGatewayModels: gateway.refreshModels,
+    refreshGatewayModels: gateway.refreshModels,
 
     async updateModelOptions(nextOptions) {
       const runtime = options.getManagedModelRuntime?.();
       if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-      return runtime.updateModelOptions(nextOptions);
+      return gateway.withModelSettings(() => runtime.updateModelOptions(nextOptions));
     },
 
     async updateManualModel(payload) {
@@ -370,7 +375,6 @@ clearGatewayCredential: gateway.clearCredential,
 
     /** Sign-out owns its flight and cleanup order. */
     signOut: signout.signOut,
-    _signOutOnce: signout.signOutOnce,
     bridgeCapability: signout.bridgeCapability,
 
     /** Sign-in attempt and its callback live in service-signin.mjs. */
@@ -378,8 +382,6 @@ clearGatewayCredential: gateway.clearCredential,
     _startSignInOnce: signin.signInOnce,
     handleCallback: signin.handleCallback,
     cancelSignIn: signin.cancelSignIn,
-    /** Route-owned drain: call after the callback response has been written. */
-    releaseCallback: options.closeCallback,
 
 
 

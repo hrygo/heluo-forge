@@ -329,20 +329,13 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           sendHtml(res, 403, '登录回调失败', '回调来源不受信任。');
           return;
         }
-        // The attempt clears before this response is written. Draining the
-        // listener only after the page is out keeps a slow token/JWKS/cleanup
-        // path from having its 200 cut by the release grace timer.
-        let released = false;
-        const release = () => {
-          if (released) return;
-          released = true;
-          // A rejected release must not turn into an unhandled rejection or
-          // mask the response. The listener is already closing either way.
-          Promise.resolve(service.releaseCallback?.()).catch(() => {});
-        };
-        if (typeof res.once === 'function') {
-          res.once('finish', release);
-          res.once('close', release);
+        // Only the terminal attempt uses this signal to drain its own listener.
+        const responseDone = Promise.withResolvers();
+        if (typeof res.once === 'function' && !res.destroyed && !res.writableFinished) {
+          res.once('finish', responseDone.resolve);
+          res.once('close', responseDone.resolve);
+        } else if (res.destroyed || res.writableFinished) {
+          responseDone.resolve();
         }
         try {
           // Resolve origin-form requests against the trusted live origin, not
@@ -352,7 +345,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
             sendHtml(res, 403, '登录回调失败', '回调来源不受信任。');
             return;
           }
-          await service.handleCallback(callbackUrl.href);
+          await service.handleCallback(callbackUrl.href, responseDone.promise);
           sendHtml(res, 200, '登录完成', '企业账号已完成登录；登录成功不代表模型访问已开通，回到应用后按界面提示继续。', { closeable: true });
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
@@ -363,8 +356,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           console.error('[heluo-iam] callback failed:', error?.code ?? 'unknown', oauthError);
           sendHtml(res, status, '登录失败', '企业账号登录未完成。');
         } finally {
-          // Test doubles have no event emitter; the response is already ended.
-          if (typeof res.once !== 'function') release();
+          if (typeof res.once !== 'function') responseDone.resolve();
         }
         return;
       }
@@ -480,9 +472,6 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
       }
 
       if (url.pathname === '/api/forge-iam/models') {
-        if (typeof service.resolveToken === 'function') {
-          await service.resolveToken().catch(() => {});
-        }
         if (req.method === 'GET') {
           try { return sendJson(res, 200, { ...(await service.refreshGatewayModels()), view: service.getView() }); }
           catch (error) { return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error)); }

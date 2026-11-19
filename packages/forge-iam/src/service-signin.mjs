@@ -2,9 +2,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent, clientAuthDescriptor } from './client-auth.mjs';
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { buildAuthorizationUrl, createPkce, exchangeCode, parseCallbackUrl, randomToken, revokeToken, safeStateEqual } from './oidc.mjs';
+import { OidcError, buildAuthorizationUrl, createPkce, exchangeCode, parseCallbackUrl, randomToken, revokeSessionToken, safeStateEqual } from './oidc.mjs';
 import { nowIso, safeMessage, tokenErrorMessage } from './service-helpers.mjs';
-import { transition } from './state.mjs';
+import { credentialStoreUnavailable, transition } from './state.mjs';
 
 /**
  * The sign-in attempt: one at a time, cancellable, and provably the same attempt
@@ -18,25 +18,22 @@ import { transition } from './state.mjs';
 export function createSignIn(env) {
   const {
     config, configured, ctx, provider, grants, gateway, token, now, fetchImpl,
-    openCallback, closeCallback, isSigningOut, getAuthEpoch, bumpAuthEpoch, clearObservation,
+    openCallback, closeCallback, recoverCredentialStore, isSigningOut, getAuthEpoch, bumpAuthEpoch,
+    clearObservation,
     getSignInPromise, setSignInPromise, invalidateConsumption, beginConsumption, adoptConsumption,
   } = env;
 
   let attempt = null;
-  // While the callback route is still producing its HTML response, the attempt
-  // ends before that response is written. Releasing the loopback listener here
-  // would start its drain timer and can cut the page on a slow failure path, so
-  // the route owns that release and calls it once the response is out.
-  let callbackInFlight = false;
+  let recoveryRequestEpoch = 0;
 
-  function clearAttempt() {
-    // Every terminal transition of an attempt passes here: success, expiry,
-    // cancellation, a replaced provider or a sign-out. The loopback listener
-    // lives exactly as long as the attempt, so this is also where it drains.
-    if (!callbackInFlight) closeCallback?.();
-    if (!attempt) return;
-    if (attempt.timer) clearTimeout(attempt.timer);
+  function clearAttempt(responseDone) {
+    const current = attempt;
+    if (!current) return;
     attempt = null;
+    clearTimeout(current.timer);
+    // A terminal callback defers its own drain until the HTML is flushed.
+    // Cancellation and teardown can release immediately.
+    closeCallback?.(current.listenerOwner, responseDone);
   }
 
   async function startSignIn() {
@@ -48,11 +45,31 @@ export function createSignIn(env) {
       });
     }
     if (isSigningOut()) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-    if (ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') {
-      throw new IamError(ctx.error, safeMessage(ctx.error));
-    }
     const targetStore = provider.ensure();
     const credentials = provider.storeCredentials;
+    if (credentialStoreUnavailable(ctx.state, ctx.error)) {
+      const epoch = getAuthEpoch();
+      const requestEpoch = recoveryRequestEpoch;
+      const binding = provider.atomicBinding(targetStore, credentials);
+      if (!binding) throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+      await recoverCredentialStore();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
+      if (provider.atomicBinding(targetStore, credentials) !== binding) {
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+      }
+      if (isSigningOut() || requestEpoch !== recoveryRequestEpoch) {
+        throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+      }
+      if (epoch !== getAuthEpoch()) {
+        if (getSignInPromise()) return getSignInPromise();
+        throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+      }
+      if (!['signed-out', 'ready', 'expired'].includes(ctx.state)) {
+        const code = ctx.error ?? 'IAM_CREDENTIALS_UNAVAILABLE';
+        throw new IamError(code, safeMessage(code));
+      }
+    }
     if (attempt && (attempt.targetStore !== targetStore || attempt.credentials !== credentials)) {
       bumpAuthEpoch();
       clearAttempt();
@@ -141,19 +158,23 @@ export function createSignIn(env) {
     // The callback listener exists only while an attempt is open, so it binds
     // here: a failed bind refuses the sign-in before any URL is produced. Every
     // await re-checks the same guards.
+    const listenerOwner = {};
     try {
-      await openCallback?.();
+      await openCallback?.(listenerOwner);
     } catch (error) {
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       throw error;
     }
-    if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+    if (ctx.disposed) {
+      closeCallback?.(listenerOwner);
+      throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+    }
     if (getAuthEpoch() !== startEpoch || isSigningOut()) {
-      closeCallback?.();
+      closeCallback?.(listenerOwner);
       throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
     }
     if (!transition(ctx.state, 'SIGN_IN').ok) {
-      closeCallback?.();
+      closeCallback?.(listenerOwner);
       throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
     }
     const oauthState = randomToken(32);
@@ -176,11 +197,12 @@ export function createSignIn(env) {
     } catch (error) {
       // No attempt owns the listener yet, so unwind both the bind and the state
       // transition here; otherwise the port stays open with nothing to close it.
-      closeCallback?.();
+      closeCallback?.(listenerOwner);
       if (transition(ctx.state, 'CANCEL').ok) ctx.notify();
       throw error;
     }
     attempt = {
+      listenerOwner,
       state: oauthState,
       nonce,
       verifier: pkce.verifier,
@@ -197,7 +219,7 @@ export function createSignIn(env) {
     attempt.timer = setTimeout(() => {
       if (attempt === scheduledAttempt) {
         scheduledAttempt.expired = true;
-        clearAttempt();
+        clearAttempt(scheduledAttempt.responseDone);
         ctx.error = 'IAM_ATTEMPT_EXPIRED';
         if (ctx.state === 'authenticating') ctx.state = 'error';
         ctx.notify();
@@ -208,7 +230,7 @@ export function createSignIn(env) {
     return { view: ctx.view(), authorizationUrl };
   }
 
-  async function handleCallbackInner(rawUrl) {
+  async function handleCallback(rawUrl, responseDone) {
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     ctx.assertExclusive();
     let callback;
@@ -234,7 +256,7 @@ export function createSignIn(env) {
       throw new IamError('IAM_CALLBACK_ISSUER', safeMessage('IAM_CALLBACK_ISSUER'));
     }
     if (now() > attempt.expiresAt) {
-      clearAttempt();
+      clearAttempt(responseDone);
       ctx.error = 'IAM_ATTEMPT_EXPIRED';
       if (ctx.state === 'authenticating') ctx.state = 'error';
       ctx.notify();
@@ -248,7 +270,10 @@ export function createSignIn(env) {
       if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
         throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
       }
-      if (code === 'IAM_AUTHORIZATION_ERROR') ctx.fail(code);
+      if (code === 'IAM_AUTHORIZATION_ERROR') {
+        clearAttempt(responseDone);
+        ctx.fail(code);
+      }
       throw new IamError(code, safeMessage(code));
     }
     const { code } = parsed;
@@ -263,13 +288,14 @@ export function createSignIn(env) {
     // Claim the attempt synchronously before the first await. A replay must
     // never consume the same authorization code or interfere with its owner.
     current.processing = true;
+    current.responseDone = responseDone;
     const attemptEpoch = getAuthEpoch();
     const consumption = beginConsumption(current.metadata.issuer, current.targetStore, current.credentials, current.consumption ?? null);
     const isCurrent = () => {
       if (attempt === current && getAuthEpoch() === attemptEpoch && ctx.state === 'authenticating'
         && now() > current.expiresAt) {
         current.expired = true;
-        clearAttempt();
+        clearAttempt(responseDone);
         ctx.error = 'IAM_ATTEMPT_EXPIRED';
         ctx.state = 'error';
         ctx.notify();
@@ -285,14 +311,25 @@ export function createSignIn(env) {
     let writeUnconfirmed = false;
     let guardRejection;
     let authentication;
+    let exchangeBinding;
     const callbackGuard = () => {
       if (!isCurrent()) throw interrupted();
       ctx.assertExclusive();
       provider.assertAtomic(current.targetStore, current.credentials);
       if (!isCurrent()) throw interrupted();
     };
+    const cleanupBindingCurrent = () => {
+      if (!exchangeBinding || provider.atomicBinding(current.targetStore, current.credentials) !== exchangeBinding) return false;
+      try {
+        return assertClientAuthCurrent(authentication);
+      } catch (error) {
+        if (!(error instanceof IamError)) throw error;
+        return false;
+      }
+    };
     try {
       authentication = await grants.prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
+      exchangeBinding = provider.atomicBinding(current.targetStore, current.credentials);
       callbackGuard();
       const token = await exchangeCode({
         tokenEndpoint: current.metadata.tokenEndpoint,
@@ -355,11 +392,15 @@ export function createSignIn(env) {
       provider.assertAtomic(current.targetStore, current.credentials);
       if (!isCurrent()) throw interrupted();
       grants.rememberAuthentication(authentication, grant);
-      await grants.loadIdentityProfile(grant);
+      if (current.metadata.userInfoEndpoint) await grants.loadIdentityProfile(grant);
       if (!isCurrent()) throw interrupted();
-      clearAttempt();
+      clearAttempt(responseDone);
       ctx.publish('SIGN_IN_SUCCESS');
       adoptConsumption(consumption, grant);
+      if (!current.metadata.userInfoEndpoint && config.discoveryUrl) {
+        // Discovery of optional profile data does not consume the login deadline.
+        void grants.loadIdentityProfile(grant);
+      }
       return ctx.view();
     } catch (cause) {
       const guardPreventedWrite = guardRejection && cause === guardRejection;
@@ -373,25 +414,39 @@ export function createSignIn(env) {
         if (!cleanup.ok) cleanupUnknown = true;
       }
       if (ctx.lastGrant === intendedGrant) ctx.lastGrant = null;
-      if (issuedToken?.refreshToken && current.metadata.revocationEndpoint) {
-        try {
-          const cleanupAuthentication = await grants.prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
-          await revokeToken({
-            revocationEndpoint: current.metadata.revocationEndpoint,
-            token: issuedToken.refreshToken,
-            clientAuthentication: cleanupAuthentication,
-            tokenTypeHint: 'refresh_token',
+      if (issuedToken && cleanupBindingCurrent()) {
+        // Revoke only the tokens issued under the original callback binding.
+        // RFC 7009 uses the
+        // very same bound authentication as the exchange. The enterprise
+        // endpoint only receives this callback's access token.
+        let revocationEndpoint = current.metadata.revocationEndpoint;
+        if (!revocationEndpoint && config.discoveryUrl) {
+          const metadata = await grants.metadata({ optional: 'revocationEndpoint' }).catch((error) => {
+            // A discovery protocol failure leaves cleanup unconfirmed.
+            if (!(error instanceof OidcError)) throw error;
+            return null;
+          });
+          if (metadata?.issuer === current.metadata.issuer && cleanupBindingCurrent()) {
+            revocationEndpoint = metadata.revocationEndpoint;
+          }
+        }
+        if (revocationEndpoint) {
+          await revokeSessionToken({
+            revocationMode: config.revocationMode,
+            revocationEndpoint,
+            accessToken: issuedToken.accessToken,
+            refreshToken: issuedToken.refreshToken,
+            clientAuthentication: authentication,
             clientId: config.clientId,
             fetchImpl,
             timeoutMs: config.httpTimeoutMs,
           });
-          assertClientAuthCurrent(cleanupAuthentication);
-        } catch { /* no new source, no unauthenticated fallback or retry */ }
+        }
       }
       const stillCurrent = isCurrent();
       if (cleanupUnknown) {
         if (!ctx.disposed && !isSigningOut() && (stillCurrent || (!attempt && (ctx.state === 'signed-out' || ctx.state === 'error')))) {
-          if (stillCurrent) clearAttempt();
+          if (stillCurrent) clearAttempt(responseDone);
           ctx.state = 'error';
           ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
           ctx.notify();
@@ -402,21 +457,16 @@ export function createSignIn(env) {
         throw cause?.code === 'IAM_ATTEMPT_EXPIRED' ? cause : interrupted();
       }
       const failureCode = tokenErrorMessage(cause);
+      clearAttempt(responseDone);
       ctx.fail(failureCode);
       throw new IamError(failureCode, safeMessage(failureCode));
     }
   }
 
-  async function handleCallback(rawUrl) {
-    callbackInFlight = true;
-    try {
-      return await handleCallbackInner(rawUrl);
-    } finally {
-      callbackInFlight = false;
-    }
-  }
-
   async function cancelSignIn() {
+    // A user can cancel their explicit sign-in while the shared storage read
+    // is pending. The background reader keeps its retry and renewal schedule.
+    recoveryRequestEpoch += 1;
     if (ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') return ctx.view();
     invalidateConsumption();
     if (ctx.disposed) return ctx.view();

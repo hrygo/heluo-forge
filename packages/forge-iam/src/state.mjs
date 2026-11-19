@@ -102,6 +102,10 @@ export function canSignIn(state) {
   return state === 'signed-out' || state === 'expired' || state === 'error';
 }
 
+export function credentialStoreUnavailable(state, error) {
+  return (state === 'unreachable' || state === 'error') && error === 'IAM_CREDENTIALS_UNAVAILABLE';
+}
+
 /**
  * Build the non-secret snapshot consumed by the Host service and Client UI.
  *
@@ -109,13 +113,17 @@ export function canSignIn(state) {
  * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null, renewal?: string, refreshExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
  */
 export function createView(state, details = {}) {
+  const storageUnavailable = credentialStoreUnavailable(state, details.error);
+  const sessionActionsAllowed = details.configured !== false && (details.exclusive ?? 'ok') === 'ok';
+  const signOutPending = state === 'error'
+    && ['IAM_REVOCATION_UNKNOWN', 'IAM_CREDENTIALS_CLEAR_FAILED'].includes(details.error);
   return {
     state,
     configured: details.configured !== false,
     // Storage recovery still needs a durable grant before publishing sign-in.
-    signedIn: isSignedIn(state) && !(state === 'unreachable' && details.error === 'IAM_CREDENTIALS_UNAVAILABLE'),
-    canSignOut: isSignedIn(state) || state === 'expired',
-    canSignIn: details.configured !== false && (details.exclusive ?? 'ok') === 'ok' && canSignIn(state),
+    signedIn: isSignedIn(state) && !storageUnavailable,
+    canSignOut: sessionActionsAllowed && (isSignedIn(state) || state === 'expired' || signOutPending),
+    canSignIn: sessionActionsAllowed && (canSignIn(state) || storageUnavailable),
     missing: details.missing ?? [],
     error: details.error ?? null,
     exclusive: details.exclusive ?? 'ok',

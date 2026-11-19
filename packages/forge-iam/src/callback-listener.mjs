@@ -9,25 +9,14 @@
 // is published on the listening event; the request gate reads it lazily.
 import { createServer } from 'node:http';
 import { IamError } from './errors.mjs';
+import { isLoopbackAddress } from './loopback.mjs';
+
+export { isLoopbackAddress };
 
 // A release waits for the callback response it just produced, but nothing else.
 // A local client that connects and never completes its request must not hold
 // the port, the next bind or the unload behind it.
 const RELEASE_GRACE_MS = 1000;
-
-/**
- * True only for loopback peers. IPv4-mapped IPv6 addresses are unwrapped first,
- * and the whole 127/8 block counts because the kernel may report any of it.
- *
- * @param {unknown} address
- * @returns {boolean}
- */
-export function isLoopbackAddress(address) {
-  const value = String(address ?? '');
-  if (value.startsWith('::ffff:')) return isLoopbackAddress(value.slice(7));
-  if (value === '::1') return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(value);
-}
 
 /**
  * Refuse a peer that is not loopback. The listener already binds a loopback
@@ -191,10 +180,10 @@ export function startCallbackListener({ port = 0, address = '127.0.0.1', path, h
 /**
  * Binds the callback listener only while an attempt needs it.
  *
- * `ensure()` returns the origin of the live listener, binding first if there is
- * none. `release()` drains the current listener: the attempt is over, but the
- * response being written must still reach the browser. `close()` cuts it and is
- * only used on teardown.
+ * `ensure(owner)` returns the origin of the listener for that sign-in attempt.
+ * `release(owner, responseDone)` drains only its listener after the response
+ * or a bounded wait. Rebinding and teardown can release the previous listener
+ * while its response is waiting.
  *
  * The default is `auto`: the IPv4 loopback is always tried first, because that
  * is the prefix IAM registers, and IPv6 is only tried when the IPv4 loopback
@@ -206,21 +195,27 @@ export function startCallbackListener({ port = 0, address = '127.0.0.1', path, h
  *   address?: 'auto' | '127.0.0.1' | '::1',
  *   path: string,
  *   handler: (req: object, res: object) => unknown,
+ *   responseTimeoutMs?: number,
  *   startListener?: typeof startCallbackListener,
  * }} input
  */
-export function createCallbackManager({ port = 0, address = 'auto', path, handler, startListener = startCallbackListener } = {}) {
+export function createCallbackManager({
+  port = 0, address = 'auto', path, handler, responseTimeoutMs = 10_000,
+  startListener = startCallbackListener,
+} = {}) {
   const candidates = address === 'auto' ? ['127.0.0.1', '::1'] : [address];
   let listener;
+  let listenerOwner;
   let chain = Promise.resolve();
 
-  async function bind() {
+  async function bind(owner) {
     let failure;
     for (const candidate of candidates) {
       const attempt = startListener({ port, address: candidate, path, handler });
       const outcome = await attempt.ready;
       if (!outcome) {
         listener = attempt;
+        listenerOwner = owner;
         return attempt.origin;
       }
       await attempt.release();
@@ -238,22 +233,42 @@ export function createCallbackManager({ port = 0, address = 'auto', path, handle
     return next;
   }
 
+  function takeListener() {
+    const current = listener;
+    listener = undefined;
+    listenerOwner = undefined;
+    return current;
+  }
+
+  function release(owner, responseDone) {
+    const releaseListener = () => serial(async () => {
+      if (!listener || (owner !== undefined && owner !== listenerOwner)) return;
+      await takeListener().release();
+    });
+    if (!responseDone) return releaseListener();
+    // Keep waiting outside the bind queue so a new attempt or teardown can
+    // free the port. A late response still releases only its original owner.
+    let timer;
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(resolve, Math.max(responseTimeoutMs, RELEASE_GRACE_MS));
+      timer.unref?.();
+    });
+    return Promise.race([responseDone, deadline])
+      .finally(() => clearTimeout(timer))
+      .then(releaseListener, releaseListener);
+  }
+
   return {
     get origin() { return listener?.origin; },
     get port() { return listener?.port; },
-    ensure: () => serial(async () => {
-      if (listener) return listener.origin;
-      return bind();
+    ensure: (owner) => serial(async () => {
+      if (listener && owner === listenerOwner) return listener.origin;
+      if (listener) await takeListener().release();
+      return bind(owner);
     }),
-    release: () => serial(async () => {
-      const current = listener;
-      listener = undefined;
-      if (current) await current.release();
-    }),
+    release,
     close: () => serial(async () => {
-      const current = listener;
-      listener = undefined;
-      if (current) await current.close();
+      await takeListener()?.close();
     }),
   };
 }

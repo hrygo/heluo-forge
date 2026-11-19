@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -570,50 +571,108 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
   assert.equal(profileOptions.requestImageMaxBytes, 1024 * 1024);
 });
 
-test('the native adapter injects the current IAM token at call time and keeps it out of the catalogue', async () => {
-  let capturedOptions; let captured;
-  const protocol = {
-    stream: (model, context, options) => { captured = options; },
-    streamSimple: (model, context, options) => { captured = options; },
+async function nativeIamFixture(resolveIamToken) {
+  const received = [];
+  const requestLabel = new AsyncLocalStorage();
+  let sdkOptions;
+  const protocolStreams = [];
+  const endpoint = 'https://gateway.corp.example/v1/chat/completions';
+  const stream = (_model, _context, options) => {
+    const response = Promise.resolve().then(() => options.fetch(endpoint, { method: 'POST', headers: options.headers }));
+    const events = {
+      async *[Symbol.asyncIterator]() { yield await response; },
+      result: () => response,
+    };
+    protocolStreams.push(events);
+    return events;
   };
-  let token = 'iam-token-1';
   await createNativeGatewayAdapter({
     host: {
       loader: {
-        async import(specifier) {
-          if (specifier === '@deepseek-ai/dsh-llm-pi-ai') {
-            return { PiAiAdapter: class { constructor(opts) { capturedOptions = opts; } } };
+        async import(identifier) {
+          if (identifier === '@deepseek-ai/dsh-llm-pi-ai') {
+            return { PiAiAdapter: class { constructor(options) { sdkOptions = options; } } };
           }
-          if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
-            return { openAICompletionsApi: () => protocol };
+          if (identifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
+            return { openAICompletionsApi: () => ({ stream, streamSimple: stream }) };
           }
-          throw new Error(`unexpected import: ${specifier}`);
+          throw new Error('Unexpected SDK import');
         },
       },
     },
-    config: {
-      defaultProvider: 'enterprise',
-      managedModels: {
-        baseURL: 'https://gw.example/v1',
-        models: applyModelOptions([{ id: 'm1', contextWindow: 200000, maxTokens: 64000, input: ['text'] }], {}),
-      },
-    },
-    resolveKey: async () => 'synthetic-only',
-    resolveIamToken: async () => token,
+    config: { defaultProvider: 'enterprise', managedModels: { baseURL: configuration.baseURL, models: [{ id: 'm1' }] } },
+    resolveKey: async () => 'synthetic-gateway-key',
+    resolveIamToken: resolveIamToken && (() => resolveIamToken(requestLabel.getStore())),
   });
-  const profile = capturedOptions.profiles().get('enterprise');
-  await capturedOptions.resolveApiKey('enterprise', profile);
-  profile.piProvider.streamSimple('m1', {}, { headers: { 'x-base': '1' } });
-  assert.equal(captured.headers['X-IAM-Token'], 'iam-token-1');
-  assert.equal(captured.headers['X-Consumer-Type'], 'personal');
-  assert.equal(captured.headers['x-base'], '1');
-  assert.equal(captured.headers.Authorization, undefined);
-  token = 'iam-token-2';
-  await capturedOptions.resolveApiKey('enterprise', profile);
-  profile.piProvider.stream('m1', {}, undefined);
-  assert.equal(captured.headers['X-IAM-Token'], 'iam-token-2');
-  assert.equal(captured.headers['X-Consumer-Type'], 'personal');
-  assert.equal(JSON.stringify(profile.piProvider.getModels()).includes('iam-token'), false);
+  const profile = sdkOptions.profiles().get('enterprise');
+  const provider = profile.piProvider;
+  const [model] = provider.getModels();
+  return {
+    received, protocolStreams, provider,
+    open(method, label, beforeStream) {
+      return requestLabel.run(label, async () => {
+        const apiKey = await sdkOptions.resolveApiKey('enterprise', profile);
+        await beforeStream?.();
+        return provider[method](model, {}, {
+          apiKey,
+          headers: { 'x-request-test': label },
+          async fetch(url, init) {
+            assert.equal(url, endpoint);
+            assert.equal(apiKey, 'synthetic-gateway-key');
+            const headers = new Headers(init.headers);
+            received.push({
+              label: headers.get('x-request-test'),
+              token: headers.get('x-iam-token'),
+              consumer: headers.get('x-consumer-type'),
+            });
+            return Response.json({ label });
+          },
+        });
+      });
+    },
+  };
+}
+
+test('overlapping native stream and streamSimple calls resolve their own IAM headers and keep the SDK event streams', async () => {
+  const firstHasKey = Promise.withResolvers();
+  const allowFirstStream = Promise.withResolvers();
+  const fixture = await nativeIamFixture(label => `synthetic-iam-${label}`);
+  const verifyFirst = fixture.open('stream', 'first', () => {
+    firstHasKey.resolve();
+    return allowFirstStream.promise;
+  }).then(async first => {
+    const [response] = await Array.fromAsync(first);
+    assert.deepEqual(await response.json(), { label: 'first' });
+    assert.equal(first, fixture.protocolStreams[1]);
+  });
+  const verifySecond = firstHasKey.promise.then(async () => {
+    const second = await fixture.open('streamSimple', 'second');
+    assert.deepEqual(await (await second.result()).json(), { label: 'second' });
+    assert.equal(second, fixture.protocolStreams[0]);
+  }).finally(() => allowFirstStream.resolve());
+  await Promise.all([verifyFirst, verifySecond]);
+  assert.deepEqual(fixture.received, [
+    { label: 'second', token: 'synthetic-iam-second', consumer: 'personal' },
+    { label: 'first', token: 'synthetic-iam-first', consumer: 'personal' },
+  ]);
+  assert.equal(JSON.stringify(fixture.provider.getModels()).includes('synthetic-iam-'), false);
+});
+
+test('the native fallback sends nothing when IAM is missing or when an earlier valid token expires', async t => {
+  await t.test('resolver absent', async () => {
+    const fixture = await nativeIamFixture();
+    await assert.rejects(async () => (await fixture.open('stream', 'missing')).result(), { code: 'IAM_LOGIN_REQUIRED' });
+    assert.deepEqual(fixture.received, []);
+  });
+  await t.test('token later unavailable', async () => {
+    let token = 'synthetic-iam-valid';
+    const fixture = await nativeIamFixture(async () => token);
+    const valid = await fixture.open('streamSimple', 'valid');
+    await valid.result();
+    token = undefined;
+    await assert.rejects(async () => (await fixture.open('streamSimple', 'expired')).result(), { code: 'IAM_LOGIN_REQUIRED' });
+    assert.deepEqual(fixture.received, [{ label: 'valid', token: 'synthetic-iam-valid', consumer: 'personal' }]);
+  });
 });
 
 test('first run enables and persists one catalogue model without any user input', async t => {

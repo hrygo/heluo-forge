@@ -128,10 +128,17 @@ test('a non-loopback redirectUri may use HTTP with the configured callback path'
   }
 });
 
-test('RP logout requires an end-session endpoint', () => {
+test('RP logout requires an end-session endpoint or discovery', () => {
   const result = validateConfig({ logoutMode: 'rp' });
   assert.equal('issues' in result, true);
   assert.equal(result.issues.some((issue) => issue.path.includes('endSessionEndpoint')), true);
+  assert.equal(validateConfig({ logoutMode: 'rp', discoveryUrl: 'https://iam.example/discovery' }).value.logoutMode, 'rp');
+});
+
+test('revocation mode defaults to enterprise and accepts only the two defined protocols', () => {
+  assert.equal(validateConfig({}).value.revocationMode, 'access_token_query');
+  assert.equal(validateConfig({ revocationMode: 'rfc7009' }).value.revocationMode, 'rfc7009');
+  assert.equal(validateConfig({ revocationMode: 'automatic' }).issues[0].path[0], 'revocationMode');
 });
 
 test('a gateway console URL is optional but must be absolute http(s)', () => {

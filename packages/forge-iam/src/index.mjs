@@ -135,8 +135,8 @@ export function apply(ctx, rawConfig = {}) {
       } catch { return undefined; }
     },
     getOrigin: () => currentWebServer?.getOrigin?.(),
-    openCallback: () => callbackManager?.ensure(),
-    closeCallback: () => callbackManager?.release(),
+    openCallback: (owner) => callbackManager?.ensure(owner),
+    closeCallback: (owner, responseDone) => callbackManager?.release(owner, responseDone),
     getCallbackOrigin: () => callbackManager?.origin,
   });
 
@@ -154,6 +154,7 @@ export function apply(ctx, rawConfig = {}) {
       address: result.value.callbackAddress,
       path: result.value.redirectPath,
       handler: loopbackRoutes,
+      responseTimeoutMs: result.value.httpTimeoutMs,
     });
   }
 

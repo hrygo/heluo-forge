@@ -21,7 +21,7 @@ const GATEWAY_CONFIRM_TIMEOUT_MS = 10000;
 export function createServiceGateway(env) {
   const {
     config, ctx, provider, grants, now, selection,
-    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage,
+    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage, syncSession,
   } = env;
   let cancelConfirmation = null;
   let summaryRead = null;
@@ -275,10 +275,28 @@ export function createServiceGateway(env) {
       throw error;
     }
   }
+  async function withModelSettings(use) {
+    const epoch = getAuthEpoch();
+    if (!ctx.lastGrant) await syncSession();
+    const target = sessionIdentity(ctx.lastGrant);
+    const check = () => {
+      if (ctx.disposed || isSigningOut() || getAuthEpoch() !== epoch
+        || !isDeepStrictEqual(target, sessionIdentity(ctx.lastGrant))) {
+        throw new IamError('IAM_MODEL_CONTEXT_CHANGED', '企业账号状态已变化，请重新登录。');
+      }
+    };
+    check();
+    if (ctx.lastGrant && isAccessExpired(ctx.lastGrant, now())) await resolveToken();
+    check();
+    if (ctx.state === 'ready') await (sessionSummaryRead ?? load());
+    check();
+    return use();
+  }
+
   async function refreshModels() {
     const runtime = getManagedModelRuntime?.();
     if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-    return runtime.refresh();
+    return withModelSettings(() => runtime.refresh());
   }
 
   async function resolveConnection() {
@@ -467,6 +485,6 @@ export function createServiceGateway(env) {
   }
 
   return {
-    read, load, refreshSessionSummary, refreshModels, resolveConnection, saveCredential, clearCredential,
+    read, load, refreshSessionSummary, withModelSettings, refreshModels, resolveConnection, saveCredential, clearCredential,
   };
 }

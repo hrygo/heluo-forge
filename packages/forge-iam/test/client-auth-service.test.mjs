@@ -60,17 +60,37 @@ for (const method of ['client_secret_basic', 'client_secret_post']) {
     assert.notEqual(after.refreshToken, before.refreshToken);
   });
 
-  test(`actual ${method} callback failure performs only original-context authenticated cleanup`, async (t) => {
-    const h = await confidentialHarness(t, method, { fetch: async (url, init) => {
-      const response = await fetch(url, init);
-      if (String(url).endsWith('/token')) { const body = await response.json(); delete body.id_token; return Response.json(body); }
-      return response;
-    } });
+  test(`RFC 7009 callback cleanup uses the original ${method} binding`, async (t) => {
+    const h = await confidentialHarness(t, method, {
+      config: { revocationMode: 'rfc7009' },
+      async fetch(url, init) {
+        if (String(url).endsWith('/revoke')) {
+          assert.equal(init.method, 'POST');
+          const form = new URLSearchParams(init.body);
+          assert.equal(form.get('token_type_hint'), 'refresh_token');
+          if (method === 'client_secret_basic') {
+            assert.match(init.headers.authorization, /^Basic /);
+            assert.equal(form.has('client_secret'), false);
+          } else {
+            assert.equal(init.headers.authorization, undefined);
+            assert.equal(form.has('client_secret'), true);
+          }
+        }
+        const response = await fetch(url, init);
+        if (!String(url).endsWith('/token') || !response.ok) return response;
+        const tokens = await response.json();
+        delete tokens.id_token;
+        return Response.json(tokens);
+      },
+    });
     const callback = await authorization(h.service);
     await assert.rejects(h.service.handleCallback(callback), { code: 'IAM_ID_TOKEN_INVALID' });
     assert.equal(h.mock.counts.token, 1);
-    assert.equal(h.mock.counts.revoke, 1);
+    assert.equal(h.mock.counts.revokeAccess, 0);
+    assert.equal(h.mock.counts.revokePost, 1);
+    assert.equal(h.mock.revoked.has([...h.mock.refreshTokens.keys()][0]), true);
     assert.equal(await h.record(), undefined);
+    assert.equal(h.service.getView().signedIn, false);
   });
 }
 
@@ -99,7 +119,7 @@ for (const flow of ['code', 'refresh']) {
 
 test('a cancelled old callback cannot publish over a new confidential login and revision', async (t) => {
   const gate = hold(); t.after(gate.release); let first = true;
-  const h = await confidentialHarness(t, 'client_secret_post', { fetch: async (url, init) => {
+  const h = await confidentialHarness(t, 'client_secret_post', { config: { revocationMode: 'rfc7009' }, fetch: async (url, init) => {
     const response = await fetch(url, init);
     if (String(url).endsWith('/token') && first) { first = false; await gate.pause(); }
     return response;
@@ -140,11 +160,14 @@ for (const change of ['revision', 'source', 'credentials']) {
 for (const change of ['rotation', 'cancel', 'dispose']) {
   test(`a code response after ${change} is not adopted or revoked using a new context`, async (t) => {
     const gate = hold(); t.after(gate.release);
-    const h = await confidentialHarness(t, 'client_secret_basic', { fetch: async (url, init) => {
-      const response = await fetch(url, init);
-      if (String(url).endsWith('/token')) await gate.pause();
-      return response;
-    } });
+    const h = await confidentialHarness(t, 'client_secret_basic', {
+      config: { revocationMode: 'rfc7009' },
+      fetch: async (url, init) => {
+        const response = await fetch(url, init);
+        if (String(url).endsWith('/token')) await gate.pause();
+        return response;
+      },
+    });
     const callback = await authorization(h.service);
     const pending = h.service.handleCallback(callback); const observed = pending.catch((error) => error);
     await gate.entered;
@@ -185,4 +208,28 @@ test('sign-out revokes the access token without a client secret even after the s
   assert.equal(h.mock.lastRevokeAccess.set.token, grant.accessToken);
   assert.equal(h.mock.lastRevokeAccess.set.authorization, null);
   assert.equal(h.fixture.counts.read, reads, 'no client-secret read is needed');
+});
+
+test('an unconfirmed RFC 7009 cleanup keeps the callback failed without trying another protocol', async (t) => {
+  let requests = 0;
+  const h = await confidentialHarness(t, 'client_secret_basic', {
+    config: { revocationMode: 'rfc7009' },
+    async fetch(url, init) {
+      if (String(url).includes('/revoke')) {
+        requests += 1;
+        assert.equal(init.method, 'POST');
+        return new Response(null, { status: 503 });
+      }
+      const response = await fetch(url, init);
+      if (!String(url).endsWith('/token') || !response.ok) return response;
+      const tokens = await response.json();
+      delete tokens.id_token;
+      return Response.json(tokens);
+    },
+  });
+  await assert.rejects(h.service.handleCallback(await authorization(h.service)), { code: 'IAM_ID_TOKEN_INVALID' });
+  assert.equal(requests, 1);
+  assert.equal(h.mock.revoked.size, 0);
+  assert.equal(await h.record(), undefined);
+  assert.equal(h.service.getView().signedIn, false);
 });

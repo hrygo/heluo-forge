@@ -8,15 +8,12 @@
 // it is not a second authorization model.
 
 import { timingSafeEqual } from 'node:crypto';
+import { isLoopbackAddress } from './loopback.mjs';
+
+export { isLoopbackAddress };
 
 /** Credential ref holding the bridge capability. */
 export const BRIDGE_REF = 'HELUO_IAM_BRIDGE_TOKEN';
-
-const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-
-export function isLoopbackAddress(address) {
-  return typeof address === 'string' && LOOPBACK_ADDRESSES.has(address);
-}
 
 export function bearerMatches(header, secret) {
   if (typeof header !== 'string' || typeof secret !== 'string' || secret.length === 0) return false;

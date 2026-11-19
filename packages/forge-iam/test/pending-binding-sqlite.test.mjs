@@ -16,7 +16,7 @@ const config = {
   redirectUri: 'http://127.0.0.1:4567/iam/callback',
 };
 
-async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fetchJwks } = {}) {
+async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fetchJwks, monotonic } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'forge-iam-pending-binding-'));
   const backend = createCredentialStore({ directory });
   const peer = createCredentialStore({ directory });
@@ -30,6 +30,7 @@ async function openHosts(t, { refreshSkewSeconds = config.refreshSkewSeconds, fe
   let trustBinding = {};
   const service = createIamService({ ...config, refreshSkewSeconds }, {
     credentials,
+    monotonic,
     verifyAtomicStore: (candidate) => candidate === credentials && trustBinding !== null,
     getAtomicStoreBinding: (candidate) => candidate === credentials ? trustBinding : null,
     logRenewal(event, fields) {
@@ -181,14 +182,13 @@ for (const replaceTrust of [false, true]) {
 }
 
 test('a token request keeps the original pending observation deadline after cold hydration', { timeout: 10_000 }, async (t) => {
-  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
-  const host = await openHosts(t);
+  let elapsed = 0;
+  const host = await openHosts(t, { monotonic: () => elapsed });
   const { service, writer, pending, complete, posts, observerWrites } = host;
   await writer.write(pending);
   assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
 
-  const elapsed = REFRESH_TIMEOUT_MS / 2;
-  t.mock.timers.tick(elapsed);
+  elapsed = REFRESH_TIMEOUT_MS / 2;
   const rejection = assert.rejects(service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
   void rejection.catch(() => {});
   await writer.write(complete);
@@ -196,7 +196,7 @@ test('a token request keeps the original pending observation deadline after cold
     host.readingReceipt,
     rejection.then(() => assert.fail('token request must wait within the original observation window')),
   ]);
-  t.mock.timers.tick(REFRESH_TIMEOUT_MS - elapsed + 1);
+  elapsed = REFRESH_TIMEOUT_MS + 1;
   host.releaseReceipt();
 
   await rejection;
@@ -207,6 +207,25 @@ test('a token request keeps the original pending observation deadline after cold
   assert.deepEqual(posts, []);
 });
 
+test('a wall-clock jump does not spend the original SQLite pending observation budget', { timeout: 10_000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let elapsed = 0;
+  const host = await openHosts(t, { monotonic: () => elapsed });
+  const { service, writer, pending, complete, posts, observerWrites } = host;
+  await writer.write(pending);
+  assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
+
+  t.mock.timers.tick(2 * REFRESH_TIMEOUT_MS);
+  elapsed = REFRESH_TIMEOUT_MS / 2;
+  await writer.write(complete);
+  host.releaseReceipt();
+  assert.equal(await service.getAccessToken(), complete.accessToken);
+  assert.equal(service.getView().state, 'ready');
+  assert.deepEqual(await writer.read(), { ok: true, grant: complete });
+  assert.deepEqual(posts, []);
+  assert.deepEqual(observerWrites, []);
+});
+
 const preflightOutcomes = [
   ['within', 'adopts a receipt within the panel observation window'],
   ['late', 'rejects a receipt after the panel observation window'],
@@ -214,12 +233,13 @@ const preflightOutcomes = [
 ];
 for (const [outcome, description] of preflightOutcomes) {
   test(`a request in preflight ${description}`, { timeout: 10_000 }, async (t) => {
-    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    let elapsed = 0;
     const readingJwks = Promise.withResolvers();
     const releaseJwks = Promise.withResolvers();
     t.after(releaseJwks.resolve);
     const host = await openHosts(t, {
       refreshSkewSeconds: 600,
+      monotonic: () => elapsed,
       async fetchJwks() {
         readingJwks.resolve();
         await releaseJwks.promise;
@@ -234,7 +254,7 @@ for (const [outcome, description] of preflightOutcomes) {
     await writer.write(pending);
     assert.equal((await service.syncFromStore()).error, 'IAM_REAUTH_REQUIRED');
 
-    if (outcome === 'late') t.mock.timers.tick(REFRESH_TIMEOUT_MS + 1);
+    if (outcome === 'late') elapsed = REFRESH_TIMEOUT_MS + 1;
     const saved = outcome === 'replacement' ? {
       ...original,
       sessionInstanceId: Buffer.alloc(32, 12).toString('base64url'),

@@ -4,7 +4,7 @@ import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
 import { failureCode, gatewayCode, USER_CODE_BY_INTERNAL } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import { adapterInitializationDetailCode } from './model-failure-log.mjs';
-import { modelFetchOptions, modelPreconnectFault, modelTransportDiagnostic, resolveModelAccessToken, trackModelAttempt } from './model-transport.mjs';
+import { modelFetchOptions, modelPreconnectFault, modelTransportDiagnostic, trackModelAttempt } from './model-transport.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
@@ -220,8 +220,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
   }
   const provider = config.defaultProvider;
-  // The host asks for the key on every call; resolving the IAM token at the
-  // same point keeps both factors from one session snapshot.
+  // The native transport prefers the session-bound dispatch port. Adapters
+  // without that port can resolve the IAM token for the current call.
   const resolveIamToken = typeof iam.getAccessToken === 'function' ? () => iam.getAccessToken() : undefined;
   // `modelOptions` doubles as the enabled set: a key means "this person turned
   // this model on", and its value carries the overrides (possibly none). A
@@ -552,7 +552,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const session = preparedSession === undefined ? iam.captureModelSession?.() : preparedSession;
     const checkSession = () => {
       request.signal?.throwIfAborted();
-      if (preparedSession === null) throw error('IAM_LOGIN_REQUIRED');
+      if (session === null) throw error('IAM_LOGIN_REQUIRED');
       session?.assertCurrent();
     };
     try {
@@ -632,7 +632,6 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const attempt = observeTransport ? {
         calls: 0, version, binding: lastId,
         withDispatchAccessToken: session?.withDispatchAccessToken && (send => session.withDispatchAccessToken(send, signal, confirmBinding)),
-        currentAccessToken: session?.currentAccessToken,
         accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, streamLease, signal); },
         revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },
         refuse(cause) { this.denied ??= failureCode(cause); },
@@ -693,7 +692,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           if (failure) {
             // The model layer turns an HTTP error into a finish chunk, so the code
             // arrives here without ever passing through the thrown-error branch.
-            const mapped = attempt?.denied ?? record(failureCode(failure, preconnectFault), attempt?.binding);
+            const mapped = attempt?.denied ?? attempt?.authFailure ?? record(failureCode(failure, preconnectFault), attempt?.binding);
             noteMapped(failure, mapped);
             if (await retryTransport(attempt, failure, mapped)) continue engine;
             if (downgradeImages(mapped)) continue engine;
@@ -711,7 +710,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       } catch (cause) {
         if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
         const authorization = streamRefusal();
-        code = authorization ?? attempt?.denied ?? attempt?.revocation ?? failureCode(cause, modelPreconnectFault(attempt));
+        code = authorization ?? attempt?.denied ?? attempt?.revocation ?? attempt?.authFailure ?? failureCode(cause, modelPreconnectFault(attempt));
         if (!authorization && await retryTransport(attempt, cause, code)) continue engine;
         if (!authorization && downgradeImages(code)) continue engine;
         // Retry only before the first chunk leaves: after emission a second
@@ -1106,7 +1105,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     return createAdapter({
       host,
       config: { ...config, managedModels: { baseURL: connection.baseURL, models: entries } },
-      resolveIamToken,
+      // Losing the bound dispatch context must close the native call when
+      // the IAM service supports session capture.
+      resolveIamToken: createAdapter === createNativeGatewayAdapter && typeof iam.captureModelSession === 'function'
+        ? undefined : resolveIamToken,
       resolveKey: createKeyResolver(connection),
       ...resolveAttachments === undefined ? {} : { resolveAttachments },
       ...prepareHeaders === undefined ? {} : { prepareHeaders },
@@ -1417,26 +1419,15 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
       configuredMaxTokens.set(m.id, m.maxTokens);
     }
   }
-  // A protected call's SDK header is only a snapshot. The transport authorizes
-  // the same login's durable token just before send.
-  let iamToken = null;
-  const resolveApiKey = async (...args) => {
-    const key = await resolveKey(...args);
-    if (typeof resolveIamToken === 'function') iamToken = await resolveModelAccessToken(resolveIamToken);
-    return key;
-  };
-  const withIamHeaders = (options) => {
-    const headers = typeof iamToken === 'string' && iamToken.length > 0
-      ? { ...options, headers: { ...(options?.headers ?? {}), 'X-IAM-Token': iamToken, 'X-Consumer-Type': 'personal' } }
-      : options;
-    return modelFetchOptions(headers, baseURL);
-  };
+  // Both provider methods return the SDK's event stream synchronously. Bind
+  // the IAM resolver to their fetch options and authorize only at dispatch.
+  const fetchOptions = options => modelFetchOptions(options, baseURL, resolveIamToken);
   const piProvider = {
     id: provider, name: '企业模型', baseUrl: baseURL,
     auth: { apiKey: { name: '企业个人访问凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
     getModels: () => catalog,
-    stream: (model, context, options) => protocol.stream(model, context, withIamHeaders(options)),
-    streamSimple: (model, context, options) => protocol.streamSimple(model, context, withIamHeaders(options))
+    stream: (model, context, options) => protocol.stream(model, context, fetchOptions(options)),
+    streamSimple: (model, context, options) => protocol.streamSimple(model, context, fetchOptions(options))
   };
   // The gateway keeps the socket alive with `: ping` comments every 15s, but the
   // host watchdog counts parsed events and a comment never becomes one: only the
@@ -1459,7 +1450,7 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
   // which leaves the session unable to complete any later request because the
   // image rides in every one of them.
   return new PiAiAdapter({
-    profiles: () => profiles, resolveApiKey,
+    profiles: () => profiles, resolveApiKey: resolveKey,
     ...typeof resolveAttachments === 'function' ? { resolveAttachments } : {},
     ...typeof prepareHeaders === 'function' ? { prepareHeaders } : {},
     auth: {

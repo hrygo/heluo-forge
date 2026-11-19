@@ -4,6 +4,7 @@ import { IamError } from './errors.mjs';
 // Operations may hold short-lived material; provenance deliberately cannot.
 const operations = new WeakMap();
 const provenances = new WeakMap();
+const unavailableReads = new WeakSet();
 const snapshotFields = ['issuer', 'clientId', 'ref', 'revision', 'value'];
 const fail = (code) => new IamError(code, {
   IAM_CONFIG_INVALID: 'IAM client authentication configuration is invalid',
@@ -110,7 +111,9 @@ export async function prepareClientAuthentication(rawConfig, options = {}, conte
   catch {
     if (context.guard) context.guard();
     assertClientAuthProvenance(provenance);
-    throw fail('IAM_CLIENT_AUTH_UNVERIFIED');
+    const error = fail('IAM_CLIENT_AUTH_UNVERIFIED');
+    unavailableReads.add(error);
+    throw error;
   }
   if (context.guard && !literalTrue(context.guard())) throw fail('IAM_CLIENT_AUTH_CHANGED');
   assertClientAuthProvenance(provenance);
@@ -127,6 +130,9 @@ export async function prepareClientAuthentication(rawConfig, options = {}, conte
   const operation = Object.freeze({ pin, provenance });
   operations.set(operation, { clientId: scope.clientId, method: scope.method, secret: copy.value, assertCurrent });
   return operation;
+}
+export function isClientAuthReadUnavailable(error) {
+  return unavailableReads.has(error);
 }
 export function clientAuthDescriptor(operation) {
   return operation === undefined ? undefined : Object.freeze({ pin: operation.pin, provenance: operation.provenance });

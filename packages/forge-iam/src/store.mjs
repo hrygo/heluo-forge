@@ -50,6 +50,33 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0;
 }
 
+// Retain the V1 marker shape for rollback and concurrent older Hosts. A
+// bound ID packs a four-byte tag, a 12-byte nonce and a 16-byte context hash.
+const SIGN_OUT_BOUND_TAG = Buffer.from('ISO1', 'ascii');
+const SIGN_OUT_HASH_OFFSET = 16;
+function signOutContextHash(grant, { mode, endpoint, resource }, prefix) {
+  return createHash('sha256').update('heluo-iam/sign-out-context/v1\0').update(prefix)
+    .update(JSON.stringify([mode, endpoint, resource, grantIdentity(grant), grant.accessToken ?? null, grant.refreshToken]))
+    .digest().subarray(0, 16);
+}
+
+function signOutId(grant, revocationContext) {
+  if (!revocationContext) return randomBytes(32).toString('base64url');
+  const prefix = Buffer.concat([SIGN_OUT_BOUND_TAG, randomBytes(12)]);
+  return Buffer.concat([prefix, signOutContextHash(grant, revocationContext, prefix)]).toString('base64url');
+}
+
+function canResumeSignOut(grant, revocationContext, allowLegacyRecovery) {
+  if (!grant?.signOutOperation || !revocationContext) return false;
+  const id = Buffer.from(grant.signOutOperation.id, 'base64url');
+  if (!id.subarray(0, SIGN_OUT_BOUND_TAG.length).equals(SIGN_OUT_BOUND_TAG)) {
+    return Boolean(revocationContext.endpoint && allowLegacyRecovery === true);
+  }
+  // A malformed or mismatched bound ID must never receive legacy treatment.
+  const prefix = id.subarray(0, SIGN_OUT_HASH_OFFSET);
+  return id.subarray(SIGN_OUT_HASH_OFFSET).equals(signOutContextHash(grant, revocationContext, prefix));
+}
+
 /**
  * Host-only adapter around the IAM grant record. It owns only its own record
  * key and never enumerates or mutates other owners' records.
@@ -87,6 +114,19 @@ export function createGrantStore(credentials, options = {}) {
   return {
     key,
     read,
+    canResumeSignOut,
+
+    // Only explicit sign-out may inspect the complete pending record. Ordinary
+    // readers continue to see a token-free refusal through inspectSessionRecord.
+    async readSignOutSnapshot() {
+      if (!atomicVerified()) return { ok: false };
+      const record = structuredClone(await credentials.readRecord(key));
+      const session = inspectSessionRecord(record);
+      if (!atomicVerified() || session.state === 'invalid') return { ok: false };
+      const grant = session.state === 'pending' && session.operation === 'sign-out'
+        ? parseGrant(record.payload).value : session.grant ?? null;
+      return { ok: true, grant, record };
+    },
 
     // The optional synchronous guard runs under modifyRecord's lock; only an
     // explicit true permits a write. A thrown error is propagated unchanged.
@@ -152,11 +192,13 @@ export function createGrantStore(credentials, options = {}) {
     },
 
     /**
-     * Replace the exact sign-out snapshot under the same record lock that
-     * selects and revokes it. An unknown result must never trigger a delete.
+     * Claim or recheck a sign-out under the record lock. The external revoke
+     * runs after the lock releases and only that exact pending record can finish.
      */
-    async signOutSnapshot(expected, beforeClear, confirmedRefresh) {
-      if (!atomicVerified() || typeof beforeClear !== 'function'
+    async signOutSnapshot(expected, beforeClear, confirmedRefresh, options = {}) {
+      const { expectedRecord, revocationContext, allowLegacyRecovery, guard } = options;
+      const authorized = () => atomicVerified() && (guard === undefined || guard() === true);
+      if (typeof beforeClear !== 'function'
         || (expected !== null && !validateGrant(expected).ok)) return { ok: false };
       let decision;
       let called = 0;
@@ -165,8 +207,14 @@ export function createGrantStore(credentials, options = {}) {
       let phaseResult;
       let unchanged;
       try {
+        if (!authorized()) return { ok: false };
         phaseResult = await credentials.modifyRecord(key, (current) => {
-          if (!atomicVerified() || ++called !== 1) throw new Error('atomic store no longer verified');
+          if (!authorized() || ++called !== 1) throw new Error('atomic store no longer verified');
+          if (Object.hasOwn(options, 'expectedRecord') && !isDeepStrictEqual(current, expectedRecord)) {
+            decision = 'replaced';
+            unchanged = structuredClone(current);
+            return undefined;
+          }
           if (current == null || isTombstone(current)) {
             decision = expected === null ? 'absent' : 'replaced';
             unchanged = structuredClone(current);
@@ -175,6 +223,13 @@ export function createGrantStore(credentials, options = {}) {
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
           if (!parsed.ok) throw new Error('invalid grant');
+          if (expectedRecord && canResumeSignOut(parsed.value, revocationContext, allowLegacyRecovery)
+            && isDeepStrictEqual(parsed.value, expected)) {
+            pending = structuredClone(current);
+            original = structuredClone(parsed.value);
+            decision = 'resumed';
+            return undefined;
+          }
           const completesRefresh = parsed.value.refreshOperation?.state === 'pending'
             && isDeepStrictEqual(parsed.value, confirmedRefresh?.pending)
             && validateGrant(confirmedRefresh.complete).ok
@@ -195,28 +250,28 @@ export function createGrantStore(credentials, options = {}) {
           }
           original = structuredClone(completesRefresh ? confirmedRefresh.complete : parsed.value);
           pending = { kind: 'grant', payload: { ...original, signOutOperation: {
-            version: 1, state: 'pending', id: randomBytes(32).toString('base64url'),
+            version: 1, state: 'pending', id: signOutId(original, revocationContext),
           } } };
           decision = 'claimed';
           return pending;
         });
-        if (!atomicVerified() || called !== 1 || !decision) return { ok: false };
-        if (decision !== 'claimed') return isDeepStrictEqual(phaseResult, unchanged)
+        if (!authorized() || called !== 1 || !decision) return { ok: false };
+        if (!['claimed', 'resumed'].includes(decision)) return isDeepStrictEqual(phaseResult, unchanged)
           ? { ok: true, decision } : { ok: false };
         if (!isDeepStrictEqual(phaseResult, pending)) return { ok: false };
         // The pending record is durable before any external side effect. A crash
-        // or unknown result leaves it fenced and cannot replay the old token.
+        // or unknown result leaves it fenced for an explicit, bound retry.
         await beforeClear(original);
-        if (!atomicVerified()) return { ok: false };
+        if (!authorized()) return { ok: false };
         let finishCalls = 0;
         let finished = false;
         const result = await credentials.modifyRecord(key, (current) => {
-          if (!atomicVerified() || ++finishCalls !== 1) throw new Error('atomic store no longer verified');
+          if (!authorized() || ++finishCalls !== 1) throw new Error('atomic store no longer verified');
           if (!isDeepStrictEqual(current, pending)) return undefined;
           finished = true;
           return { kind: 'grant', payload: { ...TOMBSTONE.payload } };
         });
-        return atomicVerified() && finishCalls === 1 && finished && isDeepStrictEqual(result, TOMBSTONE)
+        return authorized() && finishCalls === 1 && finished && isDeepStrictEqual(result, TOMBSTONE)
           ? { ok: true, decision: 'cleared' } : { ok: false };
       } catch {
         return { ok: false };

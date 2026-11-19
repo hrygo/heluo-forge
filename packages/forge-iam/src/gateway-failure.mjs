@@ -148,9 +148,9 @@ const bodyTokens = (failure) => {
 };
 
 // The SDK can flatten wire 401 reasons to AUTH. Examine a bounded copy and
-// retain only the explicit revocation decision, leaving the SDK's body intact.
-export async function gatewayResponseRevoked(response) {
-  if (response.status !== 401 || !response.body || Number(response.headers.get('content-length')) > MAX_ERROR_BODY_BYTES) return false;
+// retain only explicit revocation or invalid IAM token codes, leaving the SDK's body intact.
+export async function gatewayResponseAuthFailure(response) {
+  if (response.status !== 401 || !response.body || Number(response.headers.get('content-length')) > MAX_ERROR_BODY_BYTES) return undefined;
   const reader = response.clone().body.getReader();
   const decoder = new TextDecoder();
   let text = '';
@@ -162,18 +162,21 @@ export async function gatewayResponseRevoked(response) {
       done = part.done;
       if (done) break;
       size += part.value.byteLength;
-      if (size > MAX_ERROR_BODY_BYTES) return false;
+      if (size > MAX_ERROR_BODY_BYTES) return undefined;
       text += decoder.decode(part.value, { stream: true });
     }
   } catch {
-    // Cancellation or a truncated 401 provides no explicit revocation proof.
-    return false;
+    // Cancellation or a truncated 401 cannot establish the gateway's reason.
+    return undefined;
   } finally {
     if (!done) void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
-  return bodyTokens({ responseBody: text + decoder.decode() }).some(token =>
-    BODY_CODES[squash(token.split('/').at(-1))] === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+  const codes = bodyTokens({ responseBody: text + decoder.decode() }).map(token =>
+    BODY_CODES[squash(token.split('/').at(-1))]);
+  if (codes.includes('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED')) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
+  if (codes.includes('ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED')) return 'ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED';
+  return undefined;
 }
 /**
  * Internal IAM and credential-storage codes answer "what should the person do?".

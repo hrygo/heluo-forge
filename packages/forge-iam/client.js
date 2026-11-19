@@ -1652,6 +1652,7 @@ window.__ModuleLoader__.load({
         expiredUnrenewable: state === 'expired' && view?.renewal === 'unavailable',
         unreachable: state === 'unreachable',
         storageRecovering: state === 'unreachable' && view?.error === 'IAM_CREDENTIALS_UNAVAILABLE',
+        signOutPending: state === 'error' && view?.canSignOut === true,
         failed: state === 'error',
         unconfigured: state === 'unconfigured',
       };
@@ -1987,8 +1988,8 @@ window.__ModuleLoader__.load({
       IAM_UNCONFIGURED: '企业登录尚未设置完成，请联系管理员。',
       IAM_CREDENTIALS_UNAVAILABLE: '凭据存储不可用，暂时无法登录。',
       IAM_CREDENTIALS_CLEAR_FAILED: '无法清除本设备的登录信息，请联系管理员。',
-      IAM_REVOCATION_FAILED: '已在此设备退出：服务器拒绝了访问令牌撤销，该令牌可能仍然有效。',
-      IAM_REVOCATION_UNKNOWN: '已在此设备退出，但无法确认访问令牌是否已撤销。',
+      IAM_REVOCATION_FAILED: '已在此设备退出。服务器拒绝撤销令牌，令牌可能仍然有效。',
+      IAM_REVOCATION_UNKNOWN: '令牌撤销结果尚未确认。',
       IAM_EXCLUSIVE_CONFLICT: '登录设置有冲突，请联系管理员。',
       // 视图接口把独占配置冲突作为原始原因（不带 IAM_ 前缀）回传，同一
       // 条件必须与问题清单同句，不能落到兜底文案再显示一遍。
@@ -2315,7 +2316,7 @@ window.__ModuleLoader__.load({
           view.canSignIn ? h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: login }, '登录企业账号') : null,
           ui.authenticating ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
           h('button', { type: 'button', style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
-          view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, '退出') : null,
+          view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, ui.signOutPending ? '重试退出' : '退出') : null,
           deriveSessionUi(state.view).authenticating && linkIdentity.current && state.authorizationUrl === linkIdentity.current
             ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
         ),
@@ -4074,9 +4075,8 @@ window.__ModuleLoader__.load({
           const view = result.body?.view ?? null;
           form.setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
           catalogue.actions.reset();
-          // The refresh token cannot be revoked: say so instead of "signed out".
           const signedOutNotice = result.body?.revocation === 'ok'
-            ? '已退出：访问令牌已撤销；刷新令牌无法撤销，将在服务端自然过期。'
+            ? '已退出，服务器已确认令牌撤销。'
             : null;
           setState((current) => ({
             ...current,
@@ -4204,9 +4204,9 @@ window.__ModuleLoader__.load({
 
       const view = state.view ?? {};
       const sessionUi = deriveSessionUi(state.view);
-      const label = sessionUi.storageRecovering ? '正在恢复会话' : sessionUi.known
-        ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state))
-        : '未知状态';
+      const label = sessionUi.signOutPending ? '退出结果未确认'
+        : sessionUi.storageRecovering ? '正在恢复会话'
+          : sessionUi.known ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state)) : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;

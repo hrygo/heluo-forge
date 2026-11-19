@@ -18,6 +18,73 @@ const grant = (subject, id, legacy = false) => ({
   obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
 });
 
+test('RP logout can discover its optional endpoint after confirmed local sign-out', async (t) => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  const discovered = `${config.issuer}/end-session`;
+  await store.write({ ...grant('synthetic-user', 1), idToken: 'synthetic-id-token-hint' });
+  const requests = [];
+  const service = createIamService({ ...config, logoutMode: 'rp', discoveryUrl: `${config.issuer}/discovery` }, {
+    credentials, fetch: async (url) => {
+      requests.push(new URL(url).pathname);
+      if (requests.at(-1) === '/revoke') return Response.json({ result: true });
+      assert.deepEqual(await store.read(), { ok: true, grant: null });
+      return Response.json({ issuer: config.issuer, end_session_endpoint: discovered });
+    },
+  });
+  t.after(() => service.dispose());
+  const result = await service.signOut();
+  assert.equal(result.revocation, 'ok');
+  assert.equal(result.view.state, 'signed-out');
+  assert.deepEqual(requests, ['/revoke', '/discovery']);
+  const logout = new URL(result.logoutUrl);
+  assert.equal(`${logout.origin}${logout.pathname}`, discovered);
+  assert.equal(logout.searchParams.get('id_token_hint'), 'synthetic-id-token-hint');
+});
+
+test('an unavailable discovery result cannot establish that revocation is unconfigured', async (t) => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  const original = grant('synthetic-user', 1);
+  await store.write(original);
+  const requests = [];
+  const service = createIamService({ ...config, revocationEndpoint: '', discoveryUrl: `${config.issuer}/discovery` }, {
+    credentials, fetch: async (url) => {
+      requests.push(new URL(url).pathname);
+      return new Response(null, { status: 503 });
+    },
+  });
+  t.after(() => service.dispose());
+  const result = await service.signOut();
+  assert.equal(result.revocation, 'unknown');
+  assert.deepEqual(requests, ['/discovery']);
+  assert.deepEqual(await store.read(), { ok: true, grant: original });
+});
+
+test('a revocation confirmation cannot finish under a replacement atomic binding for the same provider', async (t) => {
+  const credentials = new MemoryCredentials();
+  await createGrantStore(credentials).write(grant('synthetic-user', 1));
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  let binding = {};
+  const service = createIamService(config, {
+    credentials, getAtomicStoreBinding: () => binding,
+    fetch: async () => {
+      entered.resolve();
+      await release.promise;
+      return Response.json({ result: true });
+    },
+  });
+  t.after(() => { release.resolve(); return service.dispose(); });
+  const signOut = service.signOut();
+  await Promise.race([entered.promise, signOut.then(() => assert.fail('revocation never started'))]);
+  const pending = await credentials.readRecord(GRANT_KEY);
+  binding = {};
+  release.resolve();
+  assert.equal((await signOut).revocation, 'unknown');
+  assert.deepEqual(await credentials.readRecord(GRANT_KEY), pending);
+});
+
 for (const initial of ['absent', 'tombstone', 'wrong-kind', 'invalid-grant']) {
   test(`sign-out handles ${initial} without blind deletion`, async (t) => {
     const credentials = new MemoryCredentials();

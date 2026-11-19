@@ -81,28 +81,22 @@ test('the callback route follows the configured path', async () => {
   assert.equal(miss.statusCode, 404);
 });
 
-test('the callback route drains the listener only after the page is written', async () => {
-  let releases = 0;
-  let releasesAtEnd = -1;
-  const handler = routes(service({ releaseCallback: async () => { releases += 1; } }));
-  const res = response();
-  const end = res.end.bind(res);
-  res.end = (value) => { releasesAtEnd = releases; end(value); };
-  await handler(request('GET', '/iam/callback?code=x&state=y'), res);
-  assert.equal(res.statusCode, 200);
-  assert.equal(releasesAtEnd, 0);
-  assert.equal(releases, 1);
-});
-
-test('the callback route drains the listener after a failed callback too', async () => {
-  let releases = 0;
-  const handler = routes(service({
-    releaseCallback: async () => { releases += 1; },
-    handleCallback: async () => { throw new IamError('IAM_STATE_MISMATCH', 'state does not match'); },
-  }));
-  const failed = await call(handler, 'GET', '/iam/callback?code=x&state=y');
-  assert.equal(failed.statusCode, 400);
-  assert.equal(releases, 1);
+test('the callback completion signal waits for the response to finish or close', async () => {
+  for (const event of ['finish', 'close']) {
+    let drained = false;
+    const handler = routes(service({
+      handleCallback: async (_url, responseDone) => {
+        void responseDone.then(() => { drained = true; });
+      },
+    }));
+    const res = Object.assign(new EventEmitter(), response());
+    await handler(request('GET', '/iam/callback?code=x&state=y'), res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(drained, false);
+    res.emit(event);
+    await Promise.resolve();
+    assert.equal(drained, true);
+  }
 });
 
 test('the callback rejects a Host that differs from the live origin', async () => {
@@ -685,4 +679,36 @@ test('a model-access failure keeps its own code and status', async () => {
     assert.equal(hit.statusCode, status);
     assert.equal(hit.json().error.code, code);
   }
+});
+
+test('model settings only dispatch validated requests without eager token resolution', async () => {
+  const calls = [];
+  const handler = routes(service({
+    resolveToken: async () => { calls.push('token'); },
+    refreshGatewayModels: async () => { calls.push('catalogue'); return {}; },
+    updateModelOptions: async () => { calls.push('options'); return {}; },
+  }));
+  const path = '/api/forge-iam/models';
+  assert.equal((await call(handler, 'DELETE', path)).statusCode, 405);
+  assert.equal((await call(handler, 'PUT', path)).statusCode, 403);
+  assert.deepEqual(calls, []);
+  assert.equal((await call(handler, 'GET', path)).statusCode, 200);
+  assert.equal((await call(handler, 'PUT', path, {
+    'content-type': 'application/json', 'x-forge-iam-request': '1',
+  }, { options: {} })).statusCode, 200);
+  assert.deepEqual(calls, ['catalogue', 'options']);
+});
+
+test('callback and bridge admit the same loopback peers with the bridge capability', async () => {
+  const handler = routes(service({
+    getAccessToken: async () => 'synthetic-access',
+    getSession: async () => ({ accessExpiresAt: null }),
+  }), { getBridgeSecret: async () => 'synthetic-capability' });
+  for (const address of ['127.8.9.10', '0:0:0:0:0:0:0:1', '::FFFF:127.255.0.7', '::ffff:7f0a:1']) {
+    const res = await call(handler, 'POST', '/api/forge-iam/bridge/token',
+      { authorization: 'Bearer synthetic-capability' }, undefined, address);
+    assert.equal(res.statusCode, 200, address);
+  }
+  const res = await call(handler, 'POST', '/api/forge-iam/bridge/token', {}, undefined, '127.8.9.10');
+  assert.equal(res.statusCode, 401, 'a loopback caller still needs the capability');
 });

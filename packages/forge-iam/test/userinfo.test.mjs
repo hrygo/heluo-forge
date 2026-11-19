@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createIamService } from './support/trusted-service.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
@@ -68,6 +69,36 @@ test('no field mapping means no UserInfo request', async (t) => {
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
   assert.equal(mock.counts.userInfo, 0);
+});
+
+test('complete explicit login succeeds while optional UserInfo discovery is still in flight', { timeout: 4000 }, async (t) => {
+  const mock = await startMockOidc();
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const discoveryUrl = `${mock.issuer}/.well-known/openid-configuration`;
+  const service = createIamService(configFor(mock, { userInfoEndpoint: '', discoveryUrl }), {
+    credentials: new MemoryCredentials(),
+    profileFields: { workNo: 'work_no' },
+    async fetch(url, init) {
+      if (String(url) === discoveryUrl) {
+        entered.resolve();
+        await release.promise;
+        return Response.json({ issuer: mock.issuer, userinfo_endpoint: `${mock.issuer}/userinfo` });
+      }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { release.resolve(); await service.dispose(); await mock.close(); });
+  assert.equal(service.getView().state, 'signed-out');
+  const login = signIn(service);
+  await entered.promise;
+  assert.equal((await login).state, 'ready');
+  assert.equal(mock.counts.userInfo, 0);
+  release.resolve();
+  const deadline = Date.now() + 1500;
+  while (!service.getIdentityProfile() && Date.now() < deadline) await delay(10);
+  assert.deepEqual(service.getIdentityProfile(), { workNo: '10001234' });
+  assert.equal(mock.counts.userInfo, 1);
 });
 
 test('UserInfo failure degrades without failing login', async (t) => {

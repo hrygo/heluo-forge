@@ -5,8 +5,11 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCredentialStore, createJointStore, createKeychainProvider, namespacePrefixes } from '@heluo/forge-credentials-keychain';
+import { createManagedModelRuntime } from '../src/managed-models.mjs';
 import { createIamRoutes } from '../src/routes.mjs';
 import { createIamService } from '../src/service.mjs';
+import { refreshBaseId } from '../src/session-identity.mjs';
+import { createGrantStore } from '../src/store.mjs';
 
 const config = {
   issuer: 'https://iam.corp.example', authorizationEndpoint: 'https://iam.corp.example/authorize',
@@ -82,3 +85,108 @@ test('SQLite save does not wait for or publish a pre-commit gateway read', async
   assert.equal(await readFile(join(directory, 'credentials.json'), 'utf8'), 'synthetic-legacy-document');
   assert.equal(await readFile(join(directory, 'credentials.key'), 'utf8'), 'synthetic-legacy-key');
 });
+
+async function verifyColdModelCatalogue(t, { observesPending = false } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'forge-gateway-cold-models-'));
+  const backend = createCredentialStore({ directory });
+  const peerBackend = observesPending ? createCredentialStore({ directory }) : null;
+  const credentials = createKeychainProvider(backend);
+  const peer = peerBackend && createGrantStore(createKeychainProvider(peerBackend));
+  const adapter = createJointStore(backend, namespacePrefixes());
+  const baseURL = 'https://gateway.corp.example/v1';
+  const modelConfig = { ...config, defaultProvider: 'enterprise', managedModels: { baseURL } };
+  const key = 'synthetic-gateway-key';
+  const subject = 'synthetic-user';
+  let iamRequests = 0;
+  let catalogueReads = 0;
+  const sawPending = Promise.withResolvers();
+  let server, runtime, writer, service;
+  t.after(async () => {
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    await runtime?.dispose();
+    await service?.dispose();
+    await writer?.dispose();
+    await credentials.close();
+    await peerBackend?.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const options = {
+    credentials,
+    verifyAtomicStore: candidate => candidate === credentials,
+    getGatewayAtomicStore: () => adapter,
+    verifyGatewayAtomicStore: (candidate, current) => candidate === credentials && current === adapter,
+    async fetch() { iamRequests++; throw new Error('Unexpected IAM request for a fresh token'); },
+    logRenewal(event, fields) {
+      if (event === 'session-state' && fields.code === 'IAM_REAUTH_REQUIRED') sawPending.resolve();
+    },
+  };
+
+  const now = Date.now();
+  const grant = {
+    version: 1, sessionInstanceId: Buffer.alloc(32, 9).toString('base64url'),
+    issuer: config.issuer, clientId: config.clientId, subject, scope: 'openid',
+    accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 600_000).toISOString(),
+    refreshExpiresAt: new Date(now + 1_200_000).toISOString(),
+  };
+  await createGrantStore(credentials).write(grant);
+  writer = createIamService(modelConfig, options);
+  await writer.hydrate();
+  await writer.saveGatewayCredential({ key, baseURL });
+  await writer.dispose();
+  const operationId = Buffer.alloc(32, 12).toString('base64url');
+  const marker = { version: 1, id: operationId, base: refreshBaseId(grant, operationId) };
+  if (peer) await peer.write({ ...grant, refreshOperation: { ...marker, state: 'pending' } });
+
+  service = createIamService(modelConfig, { ...options, getManagedModelRuntime: () => runtime });
+  runtime = createManagedModelRuntime({
+    host: { llm: { registerAdapter() {} }, on() {}, emit() {} },
+    iam: service,
+    config: modelConfig,
+    createAdapter: async () => ({}),
+    requestHeaders: async () => ({}),
+    async fetch(input, init) {
+      assert.equal(input, `${baseURL}/models`);
+      const headers = new Headers(init.headers);
+      assert.equal(headers.get('authorization'), `Bearer ${key}`);
+      assert.equal(headers.has('x-iam-token'), false);
+      catalogueReads++;
+      return Response.json({ data: [{ id: 'cold-model' }] });
+    },
+  });
+  await runtime.ready;
+  assert.equal(service.getView().state, 'signed-out');
+  assert.equal(catalogueReads, 0);
+
+  const handler = createIamRoutes(service, { getConnection: () => ({ requestRejection: () => undefined }) });
+  server = createServer((req, res) => { handler(req, res).catch(() => res.destroy()); });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const request = fetch(`http://127.0.0.1:${server.address().port}/api/forge-iam/models`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (peer) {
+    await Promise.race([
+      sawPending.promise,
+      request.then(() => assert.fail('the catalogue returned before the durable refresh receipt')),
+    ]);
+    await peer.write({
+      ...grant,
+      accessToken: 'synthetic-rotated-access',
+      refreshToken: 'synthetic-rotated-refresh',
+      refreshOperation: { ...marker, state: 'complete' },
+    });
+  }
+  const response = await request;
+  const body = await response.json();
+  assert.equal(response.status, 200, body.error?.code);
+  assert.deepEqual(body.models.map(model => model.id), ['cold-model']);
+  assert.equal(body.view.principal, subject);
+  assert.equal(body.view.gatewayCredential.matchesAccount, true);
+  assert.equal(catalogueReads, 1);
+  assert.equal(iamRequests, 0);
+}
+
+test('a cold model catalogue GET adopts the saved session and gateway without renewing a fresh token', verifyColdModelCatalogue);
+
+test('a cold model catalogue GET waits for a same-login SQLite pending receipt without repeating refresh',
+  (t) => verifyColdModelCatalogue(t, { observesPending: true }));

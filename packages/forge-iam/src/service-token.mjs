@@ -1,4 +1,4 @@
-import { assertClientAuthCurrent, clientAuthDescriptor } from './client-auth.mjs';
+import { assertClientAuthCurrent, clientAuthDescriptor, isClientAuthReadUnavailable } from './client-auth.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { credentialReadError } from './error-contract.mjs';
@@ -68,6 +68,7 @@ export function createTokenResolver(env) {
   let renewal = null;
   let renewalSequence = 0;
   let lastBlockedReason;
+  const handedToSignOut = new IamError('IAM_DISPOSED', 'IAM session changed');
 
   function refusePending(grant) {
     refusedSessions.add(grant.sessionInstanceId);
@@ -130,6 +131,7 @@ export function createTokenResolver(env) {
     if (!exchange) return undefined;
     exchange.signOut = true;
     return (store, credentials) => exchange.store === store && exchange.credentials === credentials
+      && provider.atomicBinding(store, credentials) === exchange.binding
       ? { pending: exchange.pending, complete: exchange.complete } : undefined;
   }
 
@@ -329,8 +331,7 @@ export function createTokenResolver(env) {
     logRenewal?.('renewal-fired', { ...timing, state: ctx.state });
     const invalidReason = () => {
       const current = ctx.lastGrant;
-      const aged = !recovering && ctx.state === 'expired' && isAccessExpired(current, now()) && isRefreshUsable(current, now());
-      if (ctx.disposed || isSigningOut() || (!aged && ctx.state !== (recovering ? 'expired' : 'ready'))) return 'session-inactive';
+      if (ctx.disposed || isSigningOut() || !renewalStateMatches(recovering, now())) return 'session-inactive';
       if (!current || getAuthEpoch() !== auth || getSessionEpoch() !== session) return 'session-changed';
       if (deadlineOf(current, now(), recovering) !== expiry) return 'deadline-changed';
       if (current.refreshToken !== scheduled.refreshToken || !isDeepStrictEqual(grantIdentity(current), identity)) return 'session-changed';
@@ -349,9 +350,16 @@ export function createTokenResolver(env) {
       return;
     }
     void resolveToken(scheduled).catch((cause) => {
+      if (cause === handedToSignOut) return;
       logRenewal?.('renewal-failed', { ...timing, state: ctx.state, ...renewalErrorFields(cause) });
       if (cause?.code === 'IAM_UNREACHABLE') scheduleRenewal({ retry: true });
     });
+  }
+
+  function renewalStateMatches(recovering, at) {
+    const expired = isAccessExpired(ctx.lastGrant, at);
+    return (ctx.state === 'ready' && (!recovering || expired))
+      || (ctx.state === 'expired' && (recovering || expired));
   }
 
   function scheduledRenewalAt(grant, targetStore, targetCredentials) {
@@ -370,7 +378,7 @@ export function createTokenResolver(env) {
     // where a deadline that passed while asleep has to become a renewal.
     const jumpMs = resumeJumpMillis();
     const resumed = jumpMs > 0;
-    const recovering = ctx.state === 'expired';
+    const recovering = ctx.state === 'expired' || isAccessExpired(grant, currentTime);
     const refreshExpiry = Date.parse(grant?.refreshExpiresAt);
     const expiry = deadlineOf(grant, currentTime, recovering);
     if (ctx.disposed || !['ready', 'expired'].includes(ctx.state) || isSigningOut()) return blockRenewal('session-inactive', grant);
@@ -388,7 +396,7 @@ export function createTokenResolver(env) {
     const blocked = providerBlockReason(targetStore, targetCredentials);
     if (blocked) return blockRenewal(blocked, grant);
     if (ctx.lastGrant !== grant || ctx.disposed || isSigningOut()
-      || ctx.state !== (recovering ? 'expired' : 'ready')
+      || !renewalStateMatches(recovering, currentTime)
       || getAuthEpoch() !== auth || getSessionEpoch() !== session) {
       return blockRenewal('session-changed', grant);
     }
@@ -482,8 +490,7 @@ export function createTokenResolver(env) {
       if (!expected) return;
       // Publishing the old AT's expiry while the store read is pending does
       // not replace the session or invalidate its refresh claim.
-      const expectedState = ctx.state === (expected.recovering ? 'expired' : 'ready')
-        || (!expected.recovering && ctx.state === 'expired' && isAccessExpired(ctx.lastGrant, now()));
+      const expectedState = renewalStateMatches(expected.recovering, now());
       const current = ctx.lastGrant;
       if (ctx.disposed || isSigningOut() || getAuthEpoch() !== expected.auth || getSessionEpoch() !== expected.session
         || !current || !isDeepStrictEqual(grantIdentity(current), expected.identity)) {
@@ -833,8 +840,8 @@ export function createTokenResolver(env) {
             ctx.error = 'IAM_REAUTH_REQUIRED';
             ctx.notify();
           }
-          const deadline = performance.now() + REFRESH_TIMEOUT_MS;
-          const remaining = () => deadline - performance.now();
+          const deadline = monotonic() + REFRESH_TIMEOUT_MS;
+          const remaining = () => deadline - monotonic();
           while (remaining() > 0) {
             await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining())));
             checkAlive();
@@ -883,6 +890,10 @@ export function createTokenResolver(env) {
         const keys = await grants.jwks(meta.jwksUri);
         checkAlive();
         if (pendingRefused(initial)) return useRefusedGrant(initial);
+        const claimBinding = provider.atomicBinding(targetStore, targetCredentials);
+        if (!claimBinding) throw new IamError('IAM_ATOMIC_STORE_UNVERIFIED', safeMessage('IAM_ATOMIC_STORE_UNVERIFIED'));
+        pendingBinding = claimBinding;
+        checkAlive();
         const operationId = randomToken(32);
         const operation = { version: 1, state: 'pending', id: operationId, base: refreshBaseId(initial, operationId) };
         refreshPromisePending = { store: targetStore, credentials: targetCredentials,
@@ -959,22 +970,26 @@ export function createTokenResolver(env) {
         }
         trace('refresh-claimed');
         observePendingRotation(targetStore, targetCredentials, claimedRecord);
-        // Re-read the original pin for this POST, outside the provider lock.
-        stage = 'client-auth-recheck';
-        authentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
-        checkAlive();
         const pending = { ...claimedGrant, refreshOperation: operation };
         const restoreUnsent = async (cause) => {
-          checkAlive();
+          const checkOriginalBinding = () => {
+            checkAlive();
+            if (provider.atomicBinding(targetStore, targetCredentials) !== claimBinding) {
+              throw new IamError('IAM_ATOMIC_STORE_UNVERIFIED', safeMessage('IAM_ATOMIC_STORE_UNVERIFIED'));
+            }
+            checkAlive();
+            return true;
+          };
+          checkOriginalBinding();
           let restored = false;
           advance('restore', cause ? renewalErrorFields(cause) : { reason: 'refresh-unusable' });
           const result = await targetStore.mutate((current) => {
-            checkAlive();
+            checkOriginalBinding();
             if (!isDeepStrictEqual(current, pending)) return undefined;
             restored = true;
             return claimedGrant;
-          }, { guard: () => { checkAlive(); return true; } });
-          checkAlive();
+          }, { guard: checkOriginalBinding });
+          checkOriginalBinding();
           if (!restored || result.record?.kind !== 'grant' || !isDeepStrictEqual(result.record.payload, claimedGrant)) {
             return rejectSession(undefined, 'commit-unconfirmed', cause);
           }
@@ -982,26 +997,37 @@ export function createTokenResolver(env) {
           else if (isAccessExpired(claimedGrant, now())) return rejectSession(undefined, 'refresh-unusable');
           return useGrant(claimedGrant, Boolean(cause));
         };
+        // A read error before POST can be rolled back with the original
+        // still-current auth snapshot. A changed or unverified pin cannot.
+        stage = 'client-auth-recheck';
+        try {
+          authentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, {
+            grant: initial, expected: flightAuthentication.value, guard: checkLifecycle,
+          });
+        } catch (cause) {
+          if (!isClientAuthReadUnavailable(cause)) throw cause;
+          return await restoreUnsent(cause);
+        }
+        checkAlive();
         const timeoutMs = Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS);
         advance('token-endpoint', { timeoutMs });
         checkAlive();
         if (pendingRefused(initial)) throw pendingRefusal;
         // The claim and client-auth recheck can outlast the remaining refresh window.
         if (!isRefreshUsable(claimedGrant, now())) return await restoreUnsent();
-        const exchange = { store: targetStore, credentials: targetCredentials, pending, signOut: false, complete: undefined };
+        const exchange = { store: targetStore, credentials: targetCredentials, binding: claimBinding, pending, signOut: false, complete: undefined };
         refreshExchange = exchange;
         const ownsSignOut = () => !ctx.disposed && isSigningOut() && auth + 1 === getAuthEpoch()
           && epoch === getSessionEpoch() && ctx.state !== 'authenticating';
-        const checkResult = () => {
-          if (!exchange.signOut) return checkAlive();
+        const checkHandoff = () => {
           // The same Host can verify its dispatched result exclusively for
           // sign-out. It must never use normal token publication in that epoch.
           if (!ownsSignOut()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
           ctx.assertExclusive();
-          provider.assertAtomic(targetStore, targetCredentials);
-          assertClientAuthCurrent(authentication);
+          if (provider.atomicBinding(targetStore, targetCredentials) !== claimBinding) throw reauthenticationRequired();
           if (!ownsSignOut()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         };
+        const checkResult = () => exchange.signOut ? checkHandoff() : checkAlive();
         let token;
         try {
           token = await refreshTokens({
@@ -1036,6 +1062,15 @@ export function createTokenResolver(env) {
           }
         }
         checkResult();
+        if (exchange.signOut && authentication) {
+          // The POST still uses the original guard. Only its received response
+          // can be prepared for sign-out against that same authentication pin.
+          const handoffAuthentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, {
+            grant: initial, expected: flightAuthentication.value, guard: checkHandoff,
+          });
+          assertClientAuthCurrent(handoffAuthentication);
+          checkHandoff();
+        }
         if (claims && claims.sub !== claimedGrant.subject) {
           throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
         }
@@ -1043,6 +1078,10 @@ export function createTokenResolver(env) {
         if (claims) next.subject = claims.sub;
         next.refreshOperation = { ...operation, state: 'complete' };
         exchange.complete = next;
+        if (exchange.signOut) {
+          trace('refresh-handed-off', renewalDeadlines(next));
+          throw handedToSignOut;
+        }
         checkAlive();
         let committed = false;
         advance('commit');
@@ -1058,7 +1097,7 @@ export function createTokenResolver(env) {
         trace('refresh-committed', renewalDeadlines(next));
         return useGrant(next);
       } catch (cause) {
-        if (cause === pendingRefusal || cause === unsent || cause?.code === 'IAM_RENEWAL_UNCONFIRMED') throw cause;
+        if (cause === handedToSignOut || cause === pendingRefusal || cause === unsent || cause?.code === 'IAM_RENEWAL_UNCONFIRMED') throw cause;
         if (cause === staleSession) {
           reportFailure('IAM_NOT_SIGNED_IN', 'session-changed');
           throw cause;
@@ -1283,13 +1322,6 @@ export function createTokenResolver(env) {
 
     return Object.freeze({
       assertCurrent,
-      currentAccessToken() {
-        assertCurrent();
-        if (isAccessExpired(ctx.lastGrant, now())) throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
-        // This is only the SDK's header snapshot. The transport must read and
-        // authorize the durable grant again before it can use the network.
-        return ctx.lastGrant.accessToken;
-      },
       async waitForModelOutput(signal) {
         signal.throwIfAborted();
         assertCurrent();
