@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const workflow = readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8');
+const macosWorkflow = readFileSync(new URL('../.github/workflows/check-macos.yml', import.meta.url), 'utf8');
 
 // Keep each platform check context explicit so branch protection can match it.
 const platforms = new Map([
@@ -12,8 +13,8 @@ const platforms = new Map([
   ['native-win32-arm64', ['SQLite and IAM (win32-arm64, windows-11-arm)', 'windows-11-arm', 'sqlite']],
   ['native-linux-x64-next', ['SQLite and IAM (linux-x64, ubuntu-26.04)', 'ubuntu-26.04', 'sqlite']],
   ['native-win32-x64-next', ['SQLite and IAM (win32-x64, windows-2025)', 'windows-2025', 'sqlite']],
-  ['document-macos-15', ['SQLite and IAM (darwin-arm64, macos-15)', 'macos-15', 'sqlite']],
-  ['document-macos-15-intel', ['SQLite and IAM (darwin-x64, macos-15-intel)', 'macos-15-intel', 'sqlite']],
+  ['document-macos-15', ['SQLite and IAM (darwin-arm64, macos-15)', 'macos-15', 'sqlite', '2']],
+  ['document-macos-15-intel', ['SQLite and IAM (darwin-x64, macos-15-intel)', 'macos-15-intel', 'sqlite', '4']],
   ['sensitive-scan', ['sensitive scan and IAM callback (win32-x64)', 'windows-2022', 'sensitive']],
 ]);
 
@@ -283,7 +284,7 @@ function changesGuardProblems(steps, classifier, full, outputExpression) {
   return errors;
 }
 
-export function workflowProblems(source) {
+export function workflowProblems(source, { optionalMacOS = false } = {}) {
   const errors = [];
   const jobs = jobsOf(source);
   const events = /^on:[ \t]*\n([\s\S]*?)(?=^[^\s#]|$(?![\s\S]))/mu.exec(source)?.[1] ?? '';
@@ -327,7 +328,9 @@ export function workflowProblems(source) {
   }
 
   const verify = jobs.get('verify');
-  if (!verify) errors.push('verify: missing required job');
+  if (optionalMacOS) {
+    if (verify) errors.push('verify: must run in repository checks');
+  } else if (!verify) errors.push('verify: missing required job');
   else {
     if (valueWithoutQuotes(field(verify, 'name')) !== 'verify (ubuntu-x64)') errors.push('verify: required display name changed');
     if (!needsChanges(verify)) errors.push('verify: must depend on changes');
@@ -360,11 +363,22 @@ export function workflowProblems(source) {
     ['failure', 'false', true], ['failure', 'true', true], ['failure', 'FALSE', true], ['failure', 'True', true], ['', 'false', true],
     ['skipped', '', true], ['cancelled', '', true],
   ];
-  for (const [id, [name, runner, kind]] of platforms) {
+  for (const [id, [name, runner, kind, macosTimeout]] of platforms) {
     const job = jobs.get(id);
+    if ((macosTimeout !== undefined) !== optionalMacOS) {
+      if (job) errors.push(`${id}: platform job is in the wrong workflow`);
+      continue;
+    }
     if (!job) { errors.push(`${id}: missing platform job`); continue; }
     if (valueWithoutQuotes(field(job, 'name')) !== name) errors.push(`${id}: display name changed`);
     if (valueWithoutQuotes(field(job, 'runs-on')) !== runner) errors.push(`${id}: runner changed`);
+    const continueOnError = field(job, 'continue-on-error');
+    if (optionalMacOS) {
+      if (continueOnError !== 'true') errors.push(`${id}: macOS job must allow failure`);
+      if (field(job, 'timeout-minutes') !== macosTimeout) errors.push(`${id}: macOS execution timeout changed`);
+    } else if (continueOnError !== undefined && continueOnError !== 'false') {
+      errors.push(`${id}: only macOS jobs may allow failure`);
+    }
     for (const [key, expected] of Object.entries(platformEnvironment.get(id) ?? {})) {
       if (jobEnvironment(job, key) !== expected) errors.push(`${id}: FORGE_CI_${key} must match the runner`);
     }
@@ -414,6 +428,31 @@ test('workflow keeps platform contexts fixed and fails closed when classificatio
   assert.deepEqual(workflowProblems(workflow), []);
 });
 
+test('repository checks do not depend on macOS runner availability', () => {
+  for (const [id, job] of jobsOf(workflow)) {
+    assert.doesNotMatch(field(job, 'runs-on') ?? '', /^macos-/u, `${id} must run in the optional workflow`);
+  }
+});
+
+test('macOS keeps both optional checks with runner-specific execution timeouts', () => {
+  const options = { optionalMacOS: true };
+  assert.deepEqual(workflowProblems(macosWorkflow, options), []);
+
+  const cases = [
+    ['document-macos-15', 'continue-on-error: true', 'continue-on-error: false', /document-macos-15: macOS job must allow failure/u],
+    ['document-macos-15', 'timeout-minutes: 2', 'timeout-minutes: 1', /document-macos-15: macOS execution timeout changed/u],
+    ['document-macos-15-intel', 'timeout-minutes: 4', 'timeout-minutes: 2', /document-macos-15-intel: macOS execution timeout changed/u],
+    ['document-macos-15-intel', 'FORGE_CI_ARCH: x64', 'FORGE_CI_ARCH: arm64', /document-macos-15-intel: FORGE_CI_ARCH/u],
+  ];
+  for (const [id, before, after, problem] of cases) {
+    const mutated = replaceJob(macosWorkflow, id, (job) => job.replace(before, after));
+    assert.match(workflowProblems(mutated, options).join('\n'), problem);
+  }
+
+  const armJob = jobsOf(macosWorkflow).get('document-macos-15');
+  assert.match(workflowProblems(workflow + '\n' + armJob).join('\n'), /document-macos-15: platform job is in the wrong workflow/u);
+});
+
 test('workflow rejects legacy platform names and duplicate contexts', () => {
   const legacy = [
     ['native-linux-x64', 'native keychain (linux-x64)'],
@@ -424,9 +463,11 @@ test('workflow rejects legacy platform names and duplicate contexts', () => {
     ['document-macos-15-intel', 'document backend (macos-15-intel)'],
   ];
   for (const [id, oldName] of legacy) {
-    const [name] = platforms.get(id);
-    const mutated = replaceJob(workflow, id, (job) => job.replace(`name: ${name}`, `name: ${oldName}`));
-    assert.match(workflowProblems(mutated).join('\n'), new RegExp(`${id}: display name changed`, 'u'));
+    const [name, runner] = platforms.get(id);
+    const optionalMacOS = runner.startsWith('macos-');
+    const source = optionalMacOS ? macosWorkflow : workflow;
+    const mutated = replaceJob(source, id, (job) => job.replace(`name: ${name}`, `name: ${oldName}`));
+    assert.match(workflowProblems(mutated, { optionalMacOS }).join('\n'), new RegExp(`${id}: display name changed`, 'u'));
   }
   const [name] = platforms.get('native-linux-arm64');
   const [duplicate] = platforms.get('native-linux-x64');
@@ -454,7 +495,7 @@ test('workflow guards reject deleted gates, inverted conditions and missing clas
     ['runner', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('runs-on: ubuntu-24.04-arm', 'runs-on: ubuntu-24.04')), /native-linux-arm64: runner changed/u],
     ['platform OS', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_PLATFORM: linux', 'FORGE_CI_PLATFORM: darwin')), /native-linux-arm64: FORGE_CI_PLATFORM/u],
     ['platform arch', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_ARCH: arm64', 'FORGE_CI_ARCH: x64')), /native-linux-arm64: FORGE_CI_ARCH/u],
-    ['document arch', replaceJob(workflow, 'document-macos-15-intel', (job) => job.replace('FORGE_CI_ARCH: x64', 'FORGE_CI_ARCH: arm64')), /document-macos-15-intel: FORGE_CI_ARCH/u],
+    ['Windows job allowed to fail', replaceJob(workflow, 'native-win32-x64', (job) => job.replace('    timeout-minutes: 15\n', '    timeout-minutes: 15\n    continue-on-error: true\n')), /native-win32-x64: only macOS jobs may allow failure/u],
     ['installed SQLite smoke removed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('node scripts/probe/installed-credential-smoke.mjs', 'node missing.mjs')), /native-linux-x64: installed SQLite smoke must run unconditionally/u],
     ['sqlite tests skipped', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('      - name: Test credential storage\n', '      - name: Test credential storage\n        if: ${{ false }}\n')), /native-linux-x64: platform tests must run unconditionally/u],
     ['real IAM bridge removed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('packages/forge-iam/test/bridge-real-provider.test.mjs', 'packages/forge-iam/test/other.test.mjs')), /native-linux-x64: IAM read paths and CLI tests must run unconditionally/u],

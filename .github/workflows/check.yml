@@ -233,33 +233,6 @@ jobs:
     defaults: *bash_defaults
     steps: *native_steps
 
-  # The same synthetic SQLite and IAM tests run on each supported OS.
-  # A macOS arm64 leg that never receives a runner stays at zero steps and is
-  # reported as `cancelled` after the queue gives up, which fails the run
-  # although no test ran. Rerun the failed job before looking for a regression.
-  document-macos-15:
-    name: SQLite and IAM (darwin-arm64, macos-15)
-    needs: changes
-    if: *run_platforms
-    runs-on: macos-15
-    timeout-minutes: 10
-    env:
-      FORGE_CI_PLATFORM: darwin
-      FORGE_CI_ARCH: arm64
-    defaults: *bash_defaults
-    steps: *native_steps
-
-  document-macos-15-intel:
-    name: SQLite and IAM (darwin-x64, macos-15-intel)
-    needs: changes
-    if: *run_platforms
-    runs-on: macos-15-intel
-    timeout-minutes: 10
-    env:
-      FORGE_CI_PLATFORM: darwin
-      FORGE_CI_ARCH: x64
-    defaults: *bash_defaults
-    steps: *native_steps
   # Windows-specific scanner, patch paths and socket behavior: verify already runs these
   # suites on Ubuntu. Keep this job non-required and run all files together so
   # a failure in one suite does not prevent the other from executing.
