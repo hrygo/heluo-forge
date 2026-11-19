@@ -6,15 +6,15 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-019 |
 | 文档名称 | 企业研发工具套件详细设计 |
-| 版本 | V1.1.0 |
+| 版本 | V1.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | G2 |
-| 模块状态 | 可用（独立可预装企业研发组合包：`heluo-engineering-ui`、`enterprise-issue-delivery`、`@heluo/forge-devops`、`@heluo/forge-gitee` 与共享 `@heluo/forge-policy` 六动作目录；实现与验证见[设计索引 §2.2](../README.md#22-实现与验证入口)） |
+| 模块状态 | 可用（独立可预装企业研发组合包：`heluo-engineering-ui`、`enterprise-issue-delivery`、`@heluo/forge-devops`、`@heluo/forge-gitee` 与共享 `@heluo/forge-policy` 六动作目录；把宿主 `permission` 档位表覆写为三档全部 `approval: ask`、默认 `workspace-write`；实现与验证见[设计索引 §2.2](../README.md#22-实现与验证入口)） |
 
 > 编制依据：依据 [总体架构](../../architecture/platform-architecture.md)、[企业组合包详细设计](forge-enterprise.md)、[企业设置菜单统一与 Token 收敛详细设计](../enterprise-menu-and-token-unification.md)、[DevOps 接入设计](forge-devops.md) 与 [Gitee 接入设计](forge-gitee.md) 编制；双包同装与单包独立装配语义基于 DSH 宿主机清单与 `cordis-plugin-loader` 合并实测。真实企业 DevOps / Gitee CLI、OS 凭据库与双端 GUI 实机联调尚未完成。
 >
@@ -38,7 +38,7 @@
 |---|---|---|
 | 适用对象 | 所有企业终端用户（个人助理底座） | 需要 DevOps / Gitee / Issue 交付的研发人员 |
 | 包含组件 | `forge-credentials-keychain`、`forge-policy`、`forge-iam` | `forge-engineering`（容器 + 交付 Skill）、`forge-policy`、`forge-devops`、`forge-gitee` |
-| 官方行处理 | 禁用 7 个官方账号、模型与明文凭据行 | 不修改官方行（保持中性） |
+| 官方行处理 | 禁用 7 个官方账号、模型与明文凭据行 | 不修改官方行；只覆写宿主 `permission` 档位表（三档全部 `ask`、默认 `workspace-write`） |
 | 设置侧栏条目 | `企业账号`（`order: -10`）、`企业模型`（`order: 10`） | `企业研发工具`（`order: 30`，内含 `DevOps` 与 `Gitee` 标签页） |
 | 安装方式 | 可单独预装或通过插件市场安装 | 可单独预装、通过插件市场安装，或与 `forge-enterprise` 并行安装 |
 
@@ -77,9 +77,25 @@
 | `exports['./icon']` | `./icon.svg` | 套件 SVG 图标（逐字节复用官方 `forge-cli-app-icon.svg`） |
 | `dependencies` / `bundledDependencies` | `@heluo/forge-policy`、`@heluo/forge-devops`、`@heluo/forge-gitee` | 统一使用 `workspace:*` 并打入自包含 tarball 闭包 |
 
-### 3.2 `cordis.patch.yml` 插入行
+### 3.2 `cordis.patch.yml` 覆写与插入行
 
 ```yaml
+# 宿主权限档位：三档全部保留人工确认，默认 workspace-write（与底座包逐字一致）
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: ask
+    defaultPreset: workspace-write
+
 - insert:
     - id: heluo-policy
       name: '@heluo/forge-policy'
@@ -95,6 +111,8 @@
       name: '@heluo/forge-gitee'
       config: {}
 ```
+
+`permission` 是唯一的宿主行覆写。宿主审批服务是 DevOps / Gitee 受控写动作（C3 分类待批待验）唯一的确认通道，而 `approval: never` 会让 `dsh-user-approval` 在分发前就确定性拒绝，确认卡片永远到不了用户（机理见[《企业账号与模型组合包详细设计》§5.4](forge-enterprise.md#54-权限档位与审批可达性)）。因此本层的档位表不提供 `never`：三档都保留 `ask`，默认 `workspace-write`，表内容与底座包逐字节一致——单独安装任一包都得到同一份档位表，由 `tests/plugin-patch-layers.test.mjs` 的 D-6 门禁与 `packages/forge-engineering/test/client-and-patches.test.mjs` 守死。
 
 ## 4. 客户端设置界面与独立凭证归位
 
@@ -131,7 +149,7 @@ DevOps（`DEVOPS_API_KEY`）与 Gitee（`GITEE_TOKEN`）不再向「企业账号
 
 ## 7. 验证基线与未覆盖事项
 
-- **包结构与闭环门禁**：由 `pnpm check:repo`、`pnpm check:tarballs`、`node scripts/check-skills.mjs`、`tests/plugin-patch-layers.test.mjs`、`tests/ui-contract.test.mjs` 及 `packages/forge-engineering/test/*.test.mjs` 执行离线覆盖；
+- **包结构与闭环门禁**：由 `pnpm check:repo`、`pnpm check:tarballs`、`node scripts/check-skills.mjs`、`tests/plugin-patch-layers.test.mjs`（含 D-6：两层 `permission` 覆写逐字一致、三档均为 `ask`、默认 `workspace-write`、无 `never`）、`tests/ui-contract.test.mjs` 及 `packages/forge-engineering/test/*.test.mjs` 执行离线覆盖；
 - **真实装包与共存验证**：使用真实 `dsh` 构建 `@heluo/forge-engineering` tarball 并独立/联合安装至测试 Profile，核查 `--dump-config` 中 `heluo-policy` 单实例折叠、双包依赖闭环与元数据可读性；
 - **未联调外部项**：真实企业 DevOps CLI、Gitee 内网 `gh` CLI、企业 OS 凭据库联动及双端桌面 GUI 交互流程仍待外部环境实机联调。
 

@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.47.0 |
+| 版本 | V0.47.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -27,8 +27,8 @@
 |---|---|---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型隔离写入适配、调用失败自愈、内部码到用户码映射及安全本地诊断（离线测试覆盖，未实机）；禁用插件/独占冲突 fail closed 本地验证；新对话默认模型由用户选择，插件只读观察，不自动写入；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录与手动模型边界、七行禁用与回灌检查）本地实现，见 §2.2.1；Host watch 与 HTTP SSE 已接线，Client Remote 未接线） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（guard、异步确认、必要审计与命令共用屏障已实测；既有 32 项宿主探针中的辅助函数调用不等于真实恢复、分叉、子 Agent 的授权承接；确认/委托纯 API 与可信运行时接线分开验收；2026-11-16 判定模型改为动作分类 + 内容/流程规则 + 策略级批准（DESIGN-020），组织策略改为包内 `policy/` 数据目录的签名信封，企业分发内置首版信封（版本锚点，上限沿用内置默认），不单独成包，均未实现） | 审批注册与超时、`$DSH_HOME` 范围、内容规则阈值与流程事实源（子 Agent 模型自决调用与策略×沙箱叠加顺序已实测，见下方证据） |
-| `@heluo/forge-enterprise` | umbrella bundle（通用底座：企业账号与模型） | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测） | 版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile |
-| `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) | 草案（独立可预装研发组合包：`cordis.patch.yml` 插入 `heluo-policy`（共享 6 动作目录，无 `isolate`，单装独立就绪且与 `forge-enterprise` 同装自动单实例折叠）、`heluo-engineering-ui` 容器、`heluo-issue-delivery-skill` 按需交付 Skill、`@heluo/forge-devops` 与 `@heluo/forge-gitee`；不禁用官方行） | 双端、真实 DevOps/Gitee CLI 与企业 OSS 凭据库、`ai-publish`/`human-review` 业务行、角色 preset 粒度 |
+| `@heluo/forge-enterprise` | umbrella bundle（通用底座：企业账号与模型） | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测；另以顶格补丁覆写宿主 `permission` 档位表（三档全部 `approval: ask`、默认 `workspace-write`，不提供 `never`，由 D-6 静态门禁守死）） | 版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile |
+| `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) | 草案（独立可预装研发组合包：`cordis.patch.yml` 插入 `heluo-policy`（共享 6 动作目录，无 `isolate`，单装独立就绪且与 `forge-enterprise` 同装自动单实例折叠）、`heluo-engineering-ui` 容器、`heluo-issue-delivery-skill` 按需交付 Skill、`@heluo/forge-devops` 与 `@heluo/forge-gitee`；不禁用官方行，只覆写宿主 `permission` 档位表（三档全部 `approval: ask`、默认 `workspace-write`）） | 双端、真实 DevOps/Gitee CLI 与企业 OSS 凭据库、`ai-publish`/`human-review` 业务行、角色 preset 粒度 |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（路线 B 已选定） | 当前身份/用途、B 双因子承载、应用/IP、五分钟及单授权退出、C4 策略与容量联调；模块仍为规划入口，无清单、源码或测试 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | CLI 接入（工具面 + 设置页） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案（容器在场时挂入 `heluo.engineering.tab`/order 10，独立回退保留 `devops-readiness`/29 与 `devops`/60；凭据卡片内置于 DevOps 面板，`cli-runner.mjs` 使用 `ENV_ALLOWLIST` 与托管优先链；真实 `dop` 系统凭据库未联调） | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验；真实 `dop` 凭据库未联调 |
@@ -67,7 +67,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；10 个源文件 | 2026-10-26 `node --test packages/forge-policy/test/*.test.mjs` 141 例通过、无跳过；10 源文件原生覆盖率（行/分支/函数）96.01%/90.70%/94.44%；必要审计另有 65 例聚焦测试及 rc.2 实际组件独立复核 6 项通过；目标 rc.3 尚未复跑（D1 写动作登记负测：12 条登记动作默认全部被拒、执行体零调用；批准台账负测：`enabled` 的写/确认动作没有有效台账条目就拒绝挂载、过期条目不足以开放、台账动作不匹配不算批准、只读不受约束，见设计 §5.1.2）；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。委托路径面（`delegate` 模式：父模型调用 `subagent`、子 Agent 的 9 次 bash 调用全部被拦、零副作用）亦已实测，**委托不能绕开门禁**。**未完成/未测**：默认企业工具自动绑定、运行时批准范围复验、可信 principal/真实会话恢复与分叉承接仍须单独整改验收；企业环境、双端实机及目标 rc.3 未验，不以纯函数或旧探针泛化 |
-| [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与凭据/策略/IAM 三插件挂载；2 个源文件 | `node --test packages/forge-enterprise/test/*.test.mjs`、`tests/bundle-build`/`bundle-closure` 离线闭环；真机安装/升级/回滚/卸载与 `--from-default-profile` 历史实测（2026-10-24 五行口径）；七行扩行后仅由单测覆盖，未复测 DSH 组合层。**未验**：界面功能与角色 preset 粒度；`desktop` profile 在本机不可 dump，按 NOT RUN 记账 |
+| [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与凭据/策略/IAM 三插件挂载；2 个源文件 | `node --test packages/forge-enterprise/test/*.test.mjs`、`tests/bundle-build`/`bundle-closure` 离线闭环；真机安装/升级/回滚/卸载与 `--from-default-profile` 历史实测（2026-10-24 五行口径）；七行扩行后仅由单测覆盖，未复测 DSH 组合层；`permission` 档位表覆写由 `tests/plugin-patch-layers.test.mjs` D-6 与包内单测离线守死。**未验**：界面功能与角色 preset 粒度；`desktop` profile 在本机不可 dump，按 NOT RUN 记账 |
 | [forge-engineering](../../packages/forge-engineering/README.md) | 企业研发工具套件 bundle：研发设置容器（`forge-engineering` `order: 30`、`heluo.engineering.tab`）、按需 `issue-delivery` Skill、DevOps 与 Gitee、共享 `heluo-policy` 6 动作目录、五类开关与条款装配；4 个源文件 | `node --test packages/forge-engineering/test/*.test.mjs`、`tests/plugin-patch-layers`、`tests/ui-contract` 离线闭环；真实 DSH 单包与双包同装验证见对应实测结论 |
 | forge-sdd（已删除） | 历史 SDD 库与 CLI：freeze/verify 规则、清单校验；**非默认 Issue 交付要求**；4 个源文件；2026-11-03 按用户决定全量退役，包已删除 | 删除前 2026-10-26 单测 27 例通过、覆盖率（行/分支/函数）99.53%/93.06%/100%；**未联调**企业 CI；删除后无在库实现可复跑，历史结论不认证企业 CI |
 | [DSH 客户端标识](client-identification.md) | 使用宿主默认 UA，由网关匹配关键字；未实现网关规则，也不通过插件改写 UA | 2026-10-28 在本机 DSH `0.2.1-rc.3` 用 [`issue100-user-agent-probe.mjs`](../../scripts/probe/issue100-user-agent-probe.mjs) 测试 pi-ai 的 OpenAI-compatible 流式请求：宿主覆盖配置中的 UA，默认 UA 与可选合成诊断头到达本地模拟服务；探针退出成功只表示取证成功，不代表网关验收。真实网关及代理、Windows/麒麟、其他协议和 Coding Plan 均未验 |

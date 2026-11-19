@@ -7,7 +7,7 @@
 | 包名 | `@heluo/forge-engineering` |
 | 设计文档 | [CORP-DSH-DESIGN-019](../../docs/design/plugins/forge-engineering.md)（独立研发预装包） |
 | 兼容 DSH | `>=0.2.1-rc.2`（`engines.dsh`） |
-| 定位 | 独立预装研发组合包，与通用底座 `@heluo/forge-enterprise` 解耦并存；不禁用任何官方账号/模型/凭据行 |
+| 定位 | 独立预装研发组合包，与通用底座 `@heluo/forge-enterprise` 解耦并存；不禁用任何官方账号/模型/凭据行，只覆写宿主 `permission` 档位表（三档全部 `approval: ask`、默认 `workspace-write`） |
 | 状态 | 状态：可用（条款包加载、适用性选择、预算约束、五类开关判定、UI 工作台容器与补丁层已有离线单元测试验证；DevOps（DOP）与 Gitee 成员各自携带离线测试与本地探针证据；企业生产服务端、真实 `dop`/`gh` 密钥链与双端宿主 GUI 联调仍待实机验证） |
 
 ## 组合与能力
@@ -18,6 +18,7 @@
   - `heluo-issue-delivery-skill`（`@heluo/forge-engineering/issue-delivery-skill`）：注册用户显式触发的 [skills/issue-delivery/SKILL.md](skills/issue-delivery/SKILL.md)（资源与索引见 [skills/clauses.json](skills/clauses.json)）。
   - `forge-devops`（`@heluo/forge-devops`，`config: {}`）：提供 DevOps（DOP）工作流能力及内嵌在工具面板中的 `DEVOPS_API_KEY` 凭据条目。
   - `heluo-gitee`（`@heluo/forge-gitee`，`config: {}`）：提供 Gitee 代码托管与评审工作流能力及内嵌在工具面板中的 `GITEE_TOKEN` 凭据条目。
+- 另一处顶格补丁覆写宿主 `permission` 档位行：`read-only`、`workspace-write`、`danger-full-access` 三档全部 `approval: ask`，`defaultPreset: workspace-write`，不提供 `never`。宿主审批服务是 DevOps / Gitee 受控写动作唯一的确认通道，`never` 会在分发前确定性拒绝，确认卡片永远到不了用户；该表与 `@heluo/forge-enterprise` 逐字一致，单独安装任一包都得到同一份表，由 D-6 静态门禁守死（见[详细设计 §3.2](../../docs/design/plugins/forge-engineering.md)）。
 
 ## 验证与已知限制
 

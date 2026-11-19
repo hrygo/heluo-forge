@@ -6,15 +6,15 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.9.0 |
+| 版本 | V1.10.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | G2 |
-| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`） |
+| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`；把宿主 `permission` 档位表覆写为三档全部 `approval: ask`、默认 `workspace-write`） |
 
 > 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用官方行后 shell/onboarding 是否完整。
 >
@@ -294,7 +294,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 
 `dsh --profile <name> --from-default-profile <模板> --dump-config` 的**整体替换**语义（无需启动应用）：模板的四个文件逐字节恢复、profile 的 `cordis.patch.yml` 重建为模板空补丁、自定义普通文件与子目录被删除；若 profile 里已装插件，整体替换会一并删除 `node_modules/`、`pnpm-lock.yaml` 与 `.plugin-manager/`，只剩模板文件。**恢复边界是 profile**：home 级覆盖不会被这条命令删除，仍继续生效。
 
-模板里确实存在角色/权限配置（`agent-preset-registry.config.default`、`preset-standard/ptc/minimal/cordis` 及其 persona、`permission.config.presets` 三档）：profile 内对它们的修改会被整体替换重置；普通依赖安装不改动它们（安装器给"plain dependency, not a profile layer"警告），声明 `dsh.bundle.patch` 的角色/权限补丁包会改动它们，卸载后整份 dump 回到模板。这是 agent/persona/permission preset 层面的实证，**不等于**企业 IAM 角色/RBAC。
+模板里确实存在角色/权限配置（`agent-preset-registry.config.default`、`preset-standard/ptc/minimal/cordis` 及其 persona、`permission.config.presets` 三档，现行表见 §5.4）：profile 内对它们的修改会被整体替换重置；普通依赖安装不改动它们（安装器给"plain dependency, not a profile layer"警告），声明 `dsh.bundle.patch` 的角色/权限补丁包会改动它们，卸载后整份 dump 回到模板。这是 agent/persona/permission preset 层面的实证，**不等于**企业 IAM 角色/RBAC。
 
 **未验**：角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。真实 DSH 升级动作与 `dsh plugin` 的 profile 级安装/卸载路径已由真机安装实测覆盖，见 §11。
 
@@ -306,6 +306,33 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 
 **未验**：`desktop` profile 本机不存在同名 profile，其行 id 未核验；运行时"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"需要接了官方模型行的 desktop/web 运行时——探针 profile 的 LLM 提供方在禁用前后都是 0 个（基线对照同样为 0），因此该项在探针里以 `blocked` 记录，不用"0 个提供方"冒充已证明；当前正在使用的 GUI profile 未用补丁重启（会打断会话）。**禁用实验失败即暂停 O3**，不 patch 内核。
 
+### 5.4 权限档位与审批可达性
+
+宿主 `permission` 行（`@deepseek-ai/dsh-permission-presets`）把沙箱档位与审批策略绑成一个预设。组合模板的出厂表里 `danger-full-access` 配 `approval: never`，而 `@deepseek-ai/dsh-user-approval` 的 `decide()` 在进入 answerer 分发**之前**就按 `never` 直接返回 `rejected`：确认请求既不会产生 `approval/asked` 事件，也不会出现在确认 UI，Gitee / DevOps 的受控写动作（C3 分类待批待验）调用方只看到 `…: rejected`。`never` 的语义是“不问即拒”，不是“不打扰”，与[需求基线](../../requirements/requirements-baseline.md)的“approval policy为`never`、无确认UI、超时/异常均拒绝，不能把“不询问”解释为自动允许”和[审批通道排查表](../../operations/approval-channel-checklist.md)的“不为通过而把审批策略设为 `never`”一致。
+
+本组合包用补丁层顶格行覆写整张表（`config` 整体替换，必须重述每个键），三档全部保留人工确认：
+
+| 档位 | 沙箱 | 审批策略 | 适用 |
+|---|---|---|---|
+| `read-only` | `read-only` | `ask` | 只读查询；需要确认的动作照常发卡 |
+| `workspace-write`（默认） | `workspace-write` | `ask` | 常规研发：工作区内自由读写，越界与受控写动作发卡 |
+| `danger-full-access` | `danger-full-access` | `ask` | 全盘访问只放开沙箱，不关闭人工确认 |
+
+`defaultPreset: workspace-write` 让新会话默认落在常规研发档；档位表在插件生命周期内固定，既有会话保持事件流里的 `approval/policy`，换档只能由用户显式选择或 `/permission` 命令完成。不保留 `never` 档位：受控写动作的审批可达性优先于“零打扰”，静默失败不可接受。
+
+**覆盖边界**：组合包层先于 profile 层应用、后层整体替换，目标 profile 的 `cordis.patch.yml`、home 级 `$DSH_HOME/cordis.patch.yml` 与 `--patch` 仍可覆写整张表，运维须用 `dsh --profile <name> --dump-config` 确认三档仍是 `ask`。无人值守部署改用 profile 级 `dsh-user-approval` 行的 `policy: never` 显式声明静默并接受写动作被拒，而不是把档位改成 `never`。宿主基础行另有一条环境变量旁路（`DSH_PERMISSION_MODE=danger-full-access` 时 `approval` 行 `config.policy` 为 `never`），只对没有 preset 覆写的会话生效；本表的 `defaultPreset` 让新会话一律带覆写，不落入该旁路。
+
+**证据**：
+
+| 证据 | 结果 |
+|---|---|
+| `packages/forge-enterprise/test/bundle-patch.test.mjs` | 顶格行恰为七个官方停用行 + `permission` 覆写；三档 `approval: ask`、默认 `workspace-write`、无 `never`（8/8 通过） |
+| `tests/plugin-patch-layers.test.mjs` D-6 | 只有两个组合包层携带覆写且逐字一致；把 `ask` 改回 `never`、或把默认档改成全盘访问，判据均失败（9/9 通过） |
+| `packages/forge-engineering/test/client-and-patches.test.mjs` | 研发层与底座层的 `permission` 配置逐字相同，单独安装任一包都得到同一份表（8/8 通过） |
+| 源码核验（`dsh 0.2.1-rc.5`） | `never` 在 `decide()` 内先于 answerer 返回 `rejected`；`optionOf()` 省略 `name`/`description` 时客户端按预设 key 渲染本地化标签，因此本表不写显示名 |
+
+**未验**：`desktop` profile 不可 dump（Electron 独占），最终形态须在目标 profile 上用 `--dump-config` 复核；是否允许成员切到 `danger-full-access` 属组织策略，本包不代替该决定。
+
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
@@ -314,6 +341,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 | 策略配置 | 只读引入，不覆盖用户策略 | 随包版本 | 拒绝挂载 |
 | 本包配置 | 用户级，不含敏感值 | 随profile | 回退默认值 |
 | 组合日志 | 记录了哪些行、哪些被禁用 | 本机日志 | 不影响挂载 |
+| 权限档位 | 补丁层固定三档 `approval: ask`、默认 `workspace-write`，不提供 `never` | 随包版本 | 覆写未命中时告警，不静默降级 |
 
 ## 7. 流程
 
@@ -369,7 +397,7 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 装配 | 底座包 `forge-enterprise`（3 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于 12 条并集（6 读 + 6 写）、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| 装配 | 底座包 `forge-enterprise`（3 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于 12 条并集（6 读 + 6 写）、无 `isolate`、官方 7 行仍禁用；两层的 `permission` 覆写逐字一致、三档均为 `ask` 且默认 `workspace-write`（D-6） | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
 | Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-engineering/test/issue-delivery-skill.test.mjs` |
 | 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |

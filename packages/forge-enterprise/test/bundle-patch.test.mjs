@@ -17,11 +17,24 @@ function disabledIds(text) {
   for (let index = 0; index < lines.length; index += 1) {
     const match = /^- id: (.+)$/u.exec(lines[index]);
     if (match === null) continue;
-    const id = match[1].trim();
-    const next = lines[index + 1]?.trim();
-    disabled.set(id, next === 'disabled: true');
+    if (lines[index + 1]?.trim() !== 'disabled: true') continue;
+    disabled.set(match[1].trim(), true);
   }
   return disabled;
+}
+
+/** 顶格覆写块的正文：`- id: X` 起，到下一个顶格条目为止，去掉注释与空行。 */
+function overrideBody(text, id) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line === `- id: ${id}`);
+  if (start === -1) return undefined;
+  const body = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^- \S/u.test(line)) break;
+    if (line.trim() === '' || /^\s*#/u.test(line)) continue;
+    body.push(line);
+  }
+  return body.join('\n');
 }
 
 /** `insert:` 段里的 `id` → `name` 映射（缩进四级）。 */
@@ -52,6 +65,49 @@ test('the local credentials row is disabled rather than removed or re-enabled', 
   const disabled = disabledIds(text);
   assert.equal(disabled.get('credentials'), true, '官方 local 提供方必须命中并被禁用');
   assert.doesNotMatch(text, /^ {4}- id: credentials$/mu, '不得把官方 local 行复制进 insert 段');
+});
+
+test('the base patch only disables official rows and overrides the host permission row', async () => {
+  const text = await read(BASE_PATCH);
+  assert.deepEqual(
+    [...text.matchAll(/^- id: (\S+)$/gmu)].map((m) => m[1]).sort(),
+    [
+      'credentials',
+      'deepseek-account',
+      'llm-deepseek',
+      'llm-deepseek-account',
+      'llm-pi-ai',
+      'permission',
+      'ui-settings-account',
+      'ui-settings-models',
+    ],
+    '顶格行只能是七个官方停用行加宿主 permission 覆写行',
+  );
+});
+
+test('the base patch keeps every permission preset on human approval and defaults to workspace-write', async () => {
+  const body = overrideBody(await read(BASE_PATCH), 'permission');
+  assert.ok(body !== undefined, '缺 permission 覆写行：三档权限都必须保留人工确认');
+  assert.match(
+    body,
+    /^ {2}name: '@deepseek-ai\/dsh-permission-presets'$/mu,
+    'name 必须与基础组合里的 permission 行一致，否则补丁按 name 不匹配告警后跳过',
+  );
+  assert.match(body, /^ {4}defaultPreset: workspace-write$/mu);
+  assert.deepEqual(
+    [...body.matchAll(/^ {6}([a-z][a-z-]+):$/gmu)].map((m) => m[1]),
+    ['read-only', 'workspace-write', 'danger-full-access'],
+  );
+  assert.deepEqual(
+    [...body.matchAll(/^ {8}sandbox: ([a-z-]+)$/gmu)].map((m) => m[1]),
+    ['read-only', 'workspace-write', 'danger-full-access'],
+  );
+  assert.equal((body.match(/^ {8}approval: ask$/gmu) ?? []).length, 3, '三档都必须保留人工确认');
+  assert.doesNotMatch(
+    body,
+    /approval: never/u,
+    'never 会在分发前确定性拒绝，Gitee / DevOps 的确认卡片永远到不了用户',
+  );
 });
 
 test('the base bundle mounts only universal account, keychain, and policy rows with zero R&D surface', async () => {

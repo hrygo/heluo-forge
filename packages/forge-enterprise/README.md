@@ -6,14 +6,15 @@
 |---|---|
 | 包名 | `@heluo/forge-enterprise` |
 | 详细设计 | [详细设计](../../docs/design/plugins/forge-enterprise.md)（[CORP-DSH-DESIGN-004](../../docs/design/plugins/forge-enterprise.md)） |
-| 实现状态 | 状态：可用（组合骨架：官方 7 行禁用层与回灌检测 [reflow.mjs](src/reflow.mjs) 已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 仅装配通用底座三项成员：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`；不包含任何研发工具、研发面板或研发 Skill）；企业真实 IAM 端点与 OS 凭据集成待实机联调 |
+| 实现状态 | 状态：可用（组合骨架：官方 7 行禁用层与回灌检测 [reflow.mjs](src/reflow.mjs) 已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 装配通用底座三项成员（`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`），并把宿主 `permission` 档位表覆写为三档全部 `approval: ask`、默认 `workspace-write`；不包含任何研发工具、研发面板或研发 Skill）；企业真实 IAM 端点与 OS 凭据集成待实机联调 |
 | 运行时 | DSH 宿主装载 [cordis.patch.yml](cordis.patch.yml)；包根模块仅导出官方行回灌检测器，不包含客户端 UI 容器 |
 
 ## 核心组成与补丁边界
 
-- [cordis.patch.yml](cordis.patch.yml) 完成两件事：
+- [cordis.patch.yml](cordis.patch.yml) 完成三件事：
   1. 禁用 7 条官方旁路：`deepseek-account`、`ui-settings-account`、`llm-deepseek-account`、`llm-deepseek`、`llm-pi-ai`、`ui-settings-models`、`credentials`。
   2. 插入 3 个通用底座成员：`heluo-credentials-keychain`（`@heluo/forge-credentials-keychain`）、`heluo-policy`（`@heluo/forge-policy`，携带 12 条并集动作目录（6 读 + 6 写）与内存审计；登记不等于放行）与 `heluo-iam`（`@heluo/forge-iam`，提供「企业账号」`-10` 与「企业模型」`10` 设置入口）。
+  3. 覆写宿主 `permission` 档位表：`read-only`、`workspace-write`、`danger-full-access` 三档全部 `approval: ask`，`defaultPreset: workspace-write`，不提供 `never`。宿主审批服务是受控写动作唯一的确认通道，`never` 会在分发前确定性拒绝，确认卡片永远到不了用户；机理与覆盖边界见[详细设计 §5.4](../../docs/design/plugins/forge-enterprise.md#54-权限档位与审批可达性)。
 - [src/reflow.mjs](src/reflow.mjs) 提供官方行回灌检测器 `detectOfficialRowReflow()`，在 DSH 宿主升级后核对 `dsh --dump-config` 中官方 7 行是否仍维持 `disabled: true`。
 
 ## 验证

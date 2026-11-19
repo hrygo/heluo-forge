@@ -95,6 +95,32 @@ test('cordis.patch.yml mounts policy + workbench UI + skill + DevOps + Gitee wit
   assert.doesNotMatch(patch, /^\s*isolate:/mu);
 });
 
+test('the patch overrides the host permission row without disabling it or introducing never', () => {
+  const block = (text, label) => {
+    const lines = text.split('\n');
+    const start = lines.findIndex((line) => line === '- id: permission');
+    assert.notEqual(start, -1, `${label} 补丁层必须覆写宿主 permission 行`);
+    const body = [];
+    for (const line of lines.slice(start + 1)) {
+      if (/^- \S/u.test(line)) break;
+      if (line.trim() === '' || /^\s*#/u.test(line)) continue;
+      body.push(line);
+    }
+    return body.join('\n');
+  };
+  const patch = read('cordis.patch.yml');
+  const enterprise = readFileSync(join(REPO_ROOT, 'packages', 'forge-enterprise', 'cordis.patch.yml'), 'utf8');
+  const engineeringBody = block(patch, 'engineering');
+  assert.equal(
+    engineeringBody,
+    block(enterprise, 'enterprise'),
+    '两层必须逐字一致：单独安装任一包都要保留同一份档位表',
+  );
+  assert.match(engineeringBody, /^ {4}defaultPreset: workspace-write$/mu);
+  assert.equal((engineeringBody.match(/^ {8}approval: ask$/gmu) ?? []).length, 3, '三档都必须保留人工确认');
+  assert.doesNotMatch(engineeringBody, /approval: never/u, 'never 会让 DevOps / Gitee 的写确认在分发前被确定性拒绝');
+});
+
 test('every inserted package exists, is private, and resolves within the repo', () => {
   const patch = read('cordis.patch.yml');
   const names = [...patch.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);

@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-UAT-004 |
 | 文档名称 | 内网审批通道排查单（gitee.pr.write 范围确认） |
-| 版本 | V0.2 |
+| 版本 | V0.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-19 |
 | 门禁 | 内网实机验证（待回填） |
 
 > 编制依据：2026-11-18 内网测试轨迹（第 2 轮创建 PR，写动作被 `GUARD_POLICY_DENIED` 拦截，`remote_calls: 0`，全程无确认弹窗）；本仓库 `c889610` 的判定链源码（[gate.mjs](../../packages/forge-policy/src/gate.mjs) 的 `requestApproval`/`scopeAdmission`、[scope-ticket.mjs](../../packages/forge-policy/src/scope-ticket.mjs) 的 `verify`、[gitee-guard.mjs](../../packages/forge-gitee/src/gitee-guard.mjs) 的策略错误映射）；本机装配探针逐字复现同一信封；已安装 DSH 的审批子系统文档 `docs/subsystems/approval.zh.md`（`ctx.approval` 分发服务与 `approval/request` waterfall）。
@@ -42,7 +42,7 @@
 
 1. **运行形态**：桌面或 Web 交互式界面。headless 与 SDK 形态不含人工应答者；ACP 桥接只为它自己拥有的 agent 提供一次性机器决策，不覆盖交互会话。
 2. **装配**：profile 同时具备用户审批服务与提供人工确认界面的前端插件。服务缺失时任何审批事件都不会产生；只有服务而无界面时，询问会落到 `unavailable`。
-3. **策略**：保持默认 `ask`。不得为让本次调用通过而改成 `never`、也不得改成长期自动放行。
+3. **策略**：保持默认 `ask`。不得为让本次调用通过而改成 `never`、也不得改成长期自动放行。企业组合包（`@heluo/forge-enterprise`、`@heluo/forge-engineering`）的补丁层已把宿主 `permission` 档位表固定为 `read-only` / `workspace-write` / `danger-full-access` 三档全部 `approval: ask`、默认 `workspace-write`、不提供 `never`（机理与覆盖边界见[企业组合包设计 §5.4](../design/plugins/forge-enterprise.md#54-权限档位与审批可达性)）；部署后仍须用 `dsh --profile <name> --dump-config` 核对 `id: permission` 行的三档仍是 `ask`——profile 级与 home 级覆写在其后应用，会把整份 `config` 整体替换。
 4. **生效校验**：新开一个会话，触发 §2 嗅探里的普通确认操作，应看到确认卡片并能选“允许一次”。
 
 ## 4. 重跑验证（三个信号，缺一即未通过）

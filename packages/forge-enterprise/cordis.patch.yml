@@ -36,6 +36,27 @@
 - id: credentials
   disabled: true
 
+# 权限档位：宿主审批服务是 Gitee / DevOps 受控写动作（C3 分类待批待验）唯一的确认通道。
+# `approval: never` 在分发前就按 fail-closed 确定性拒绝，确认卡片永远不会到达用户，
+# 因此本层不提供任何 `never` 档位：三档都必须保留人工确认，新会话默认 workspace-write。
+# 组合包层先于 profile 层应用；确需静默的无人值守部署在 profile 的 dsh-user-approval 行
+# 显式声明 `policy: never` 并接受写动作被拒绝，而不是把档位改成 never。
+# `name` 必须与基础组合里的 permission 行一致，否则补丁按 name 不匹配告警后跳过。
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: ask
+    defaultPreset: workspace-write
+
 # 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 12 条动作目录
 # （6 读 + 6 写）与内存审计配置（无 isolate）；与 `@heluo/forge-engineering` 并存安装时由 Cordis
 # Loader 按 id 合并为单一策略实例，不依赖挂载顺序。

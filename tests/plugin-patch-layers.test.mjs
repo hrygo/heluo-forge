@@ -12,7 +12,10 @@
  *  3. 两侧都**不得**再出现 `isolate`（含 `heluo-policy-gitee` 这类派生 id）：单实例是设计，
  *     不是妥协——`isolate` 一回来就重新分裂服务域；
  *  4. 任何一层只要某行写了 `isolate`，同层的策略行与插件行就必须是同一个 label（历史回归项，
- *     防止未来的新 bundle 以「只隔插件不隔策略」的半套写法复活同一个缺陷）。
+ *     防止未来的新 bundle 以「只隔插件不隔策略」的半套写法复活同一个缺陷）；
+ *  5. 组合包层可以覆写宿主 `permission` 档位行，但三档必须全部保留人工确认（`approval: ask`）、
+ *     默认 `workspace-write`：`never` 在分发前就确定性拒绝，Gitee / DevOps 的确认卡片永远到不了
+ *     用户；两个组合包层必须逐字相同，单独安装任一包都得到同一份档位表。
  *
  * 全部静态：纯文件扫描，不装包不起进程。
  */
@@ -363,6 +366,81 @@ test('D-5: 企业 / devops / gitee 三层的策略目录逐字相同（企业层
     /逐字相同/u,
     '缺目录的企业层排在最后时必须能让门禁失败',
   );
+});
+
+const PERMISSION_ID = 'permission';
+const PERMISSION_NAME = '@deepseek-ai/dsh-permission-presets';
+const PERMISSION_PRESETS = ['read-only', 'workspace-write', 'danger-full-access'];
+
+/** 顶格 `permission` 覆写块的正文行（去注释与空行）；没有该块返回 undefined。 */
+function permissionBlock(text) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line === `- id: ${PERMISSION_ID}`);
+  if (start === -1) return undefined;
+  const body = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^- \S/u.test(line)) break;
+    if (line.trim() === '' || /^\s*#/u.test(line)) continue;
+    body.push(line.replace(/\s+$/u, ''));
+  }
+  return body;
+}
+
+/** 判据本体：正常用例与「门禁有牙」自证共用同一个谓词。 */
+function assertPermissionLayer({ name, body }) {
+  assert.ok(body !== undefined, `${name} 缺 permission 覆写块：宿主默认档位里保留着 never`);
+  assert.deepEqual(
+    body.filter((line) => line.startsWith('  name: ')),
+    [`  name: '${PERMISSION_NAME}'`],
+    `${name} 的覆写块必须用宿主行名 ${PERMISSION_NAME}，否则补丁按 name 不匹配告警后跳过`,
+  );
+  assert.deepEqual(
+    body.filter((line) => /^ {6}[a-z][a-z-]+:$/u.test(line)).map((line) => line.trim().slice(0, -1)),
+    PERMISSION_PRESETS,
+    `${name} 的档位表必须是 ${PERMISSION_PRESETS.join(' / ')}`,
+  );
+  assert.deepEqual(
+    body.filter((line) => /^ {8}approval: /u.test(line)).map((line) => line.trim()),
+    ['approval: ask', 'approval: ask', 'approval: ask'],
+    `${name} 的三档必须全部保留人工确认`,
+  );
+  assert.ok(
+    !body.some((line) => /approval: never/u.test(line)),
+    `${name} 不得提供 never 档位：拒绝发生在分发前，确认卡片永远到不了用户`,
+  );
+  assert.ok(
+    body.includes('    defaultPreset: workspace-write'),
+    `${name} 的默认档位必须是 workspace-write（全盘访问不等于关闭确认）`,
+  );
+}
+
+test('D-6: 组合包层把宿主权限档位固定为三档人工确认，默认 workspace-write 且不提供 never', () => {
+  const layers = mergedLayers();
+  const carrying = layers.filter((bundle) => permissionBlock(bundle.text) !== undefined);
+  assert.deepEqual(
+    carrying.map((bundle) => bundle.name).sort(),
+    ['forge-engineering', 'forge-enterprise'],
+    '只有两个组合包层可以覆写宿主权限档位；成员包单独安装也不得改宿主的默认审批策略',
+  );
+  for (const bundle of carrying) {
+    assertPermissionLayer({ name: bundle.name, body: permissionBlock(bundle.text) });
+  }
+  const [first, second] = carrying;
+  assert.deepEqual(
+    permissionBlock(first.text),
+    permissionBlock(second.text),
+    '两个组合包层的 permission 配置必须逐字相同：单独安装任一包都要得到同一份档位表',
+  );
+
+  // 门禁有牙：把一档改回 never、或把默认档换成全盘访问，判据必须失败（断言不是恒真）。
+  const enterprise = carrying.find((bundle) => bundle.name === 'forge-enterprise');
+  const neverBody = permissionBlock(enterprise.text)
+    .map((line) => (line === '        approval: ask' ? '        approval: never' : line));
+  assert.throws(() => assertPermissionLayer({ name: 'forge-enterprise', body: neverBody }), /人工确认/u);
+
+  const driftedBody = permissionBlock(enterprise.text)
+    .map((line) => (line === '    defaultPreset: workspace-write' ? '    defaultPreset: danger-full-access' : line));
+  assert.throws(() => assertPermissionLayer({ name: 'forge-enterprise', body: driftedBody }), /workspace-write/u);
 });
 
 test('D-2: 补丁层文档不得再写「同 id 会重复挂载 / 不要叠加」（安装者会因此回避正常同装）', () => {

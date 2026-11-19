@@ -7,6 +7,26 @@
 # 逐字一致的 12 条动作目录（6 读 + 6 写）与内存审计配置（无 isolate）；与 `@heluo/forge-enterprise`
 # 并存时，Cordis Loader 按 id 合并为同一实例，不依赖挂载顺序，也不强耦合两个 bundle。
 # `heluo-engineering-ui` 激活本包 `client.js`，提供「设置 → 企业研发工具」工作台分区。
+#
+# 本补丁层不禁用任何官方账号、模型或凭据行；唯一的宿主行覆写是把 `permission` 档位表固定为
+# 三档全部 `approval: ask`、默认 `workspace-write`（与 `@heluo/forge-enterprise` 逐字一致）。
+# 宿主审批服务是 DevOps / Gitee 受控写动作（C3 分类待批待验）唯一的确认通道：`approval: never` 在分发前就按
+# fail-closed 确定性拒绝，确认卡片永远不会到达用户，因此本层不提供任何 `never` 档位。
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: ask
+    defaultPreset: workspace-write
+
 - insert:
     - id: heluo-policy
       name: '@heluo/forge-policy'
