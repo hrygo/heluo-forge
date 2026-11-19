@@ -4,6 +4,7 @@ import { isEnterpriseSkillName, reservedSkillError } from "./skill-policy.js";
 import { writeFileAtomically } from "./file-writes.js";
 import { createManagerStateStore } from "./manager-state.js";
 import { isExpectedOperationError } from "./operation-errors.js";
+import { createPortablePathSet, isPortableFileSegment, isSafeAncestorDirectory } from "./filesystem-paths.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -1117,7 +1118,7 @@ function writableRootDefinition(root) {
 async function checkedUserRootAncestors(definition) {
   for (let path = resolve(definition.path); ; path = dirname(path)) {
     const st = await lstatOrNull(path);
-    if (st && (!st.isDirectory() || st.isSymbolicLink()))
+    if (st && !await isSafeAncestorDirectory(path, st))
       return { ok: false, error: `\u6280\u80FD\u76EE\u5F55\u4E0D\u5B89\u5168\uFF0C\u62D2\u7EDD\u5199\u5165: ${path}`, code: "error.root.unsafe", params: { path } };
     if (dirname(path) === path) break;
   }
@@ -3075,7 +3076,7 @@ function normalizeUploadPath(input) {
     (_part, index, all) => directory && index === all.length - 1 ? false : true
   );
   if (!parts.length || parts.length > MAX_SOURCE_DEPTH || parts.some(
-    (part) => !part || part === "." || part === ".." || part.length > MAX_ENTRY_NAME_LENGTH || WINDOWS_DEVICE_NAME_RE.test(part)
+    (part) => !isPortableFileSegment(part) || part.length > MAX_ENTRY_NAME_LENGTH
   )) {
     throw codedError(`\u4E0A\u4F20\u6761\u76EE\u8DEF\u5F84\u975E\u6CD5: ${raw}`, "error.upload.path", {
       path: raw
@@ -3124,17 +3125,15 @@ async function writeUploadedEntries(contentRoot, entries) {
       { limit: MAX_UPLOAD_ENTRIES }
     );
   let total = 0;
-  const seen = /* @__PURE__ */ new Set();
+  const seen = createPortablePathSet();
   for (const entry of entries) {
     const normalized = normalizeUploadPath(entry && entry.path);
-    const key = normalized.path.toLowerCase();
-    if (seen.has(key))
+    if (!seen.add(normalized.path))
       throw codedError(
         `\u4E0A\u4F20\u5185\u5BB9\u5305\u542B\u91CD\u590D\u8DEF\u5F84: ${normalized.path}`,
         "error.upload.duplicate",
         { path: normalized.path }
       );
-    seen.add(key);
     if (normalized.directory) continue;
     const bytes = decodeUploadBase64(
       entry && entry.data,
@@ -3167,10 +3166,13 @@ async function writeUploadedZip(contentRoot, encoded) {
   let count = 0;
   let total = 0;
   let files;
+  const seen = createPortablePathSet();
   try {
     files = unzipSync(archive, {
       filter(info) {
         const normalized = normalizeUploadPath(info.name);
+        if (!seen.add(normalized.path))
+          throw codedError(`\u4E0A\u4F20\u5185\u5BB9\u5305\u542B\u91CD\u590D\u8DEF\u5F84: ${normalized.path}`, "error.upload.duplicate", { path: normalized.path });
         count += 1;
         if (count > MAX_UPLOAD_ENTRIES)
           throw codedError(
