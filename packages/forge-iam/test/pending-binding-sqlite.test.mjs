@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createCredentialStore, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { createIamService } from '../src/service.mjs';
+import { REFRESH_TIMEOUT_MS } from '../src/service-helpers.mjs';
 import { refreshBaseId } from '../src/session-identity.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 
@@ -122,3 +123,83 @@ for (const adopted of [true, false]) {
     });
   }
 }
+
+test('concurrent token requests recover a peer receipt after cold hydration observed pending', { timeout: 10_000 }, async (t) => {
+  const host = await openHosts(t);
+  const { service, writer, pending, complete, posts, observerWrites } = host;
+  await writer.write(pending);
+  assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
+  assert.equal(service.getSession().signedIn, false);
+
+  const tokens = Promise.all([service.getAccessToken(), service.resolveToken()]);
+  void tokens.catch(() => {});
+  assert.deepEqual((await writer.read()).grant, pending);
+  await writer.write(complete);
+  await Promise.race([
+    host.readingReceipt,
+    tokens.then(() => assert.fail('token requests must wait for the durable receipt')),
+  ]);
+  assert.equal(service.getSession().signedIn, false);
+  host.releaseReceipt();
+
+  assert.deepEqual(await tokens, [complete.accessToken, complete.accessToken]);
+  assert.equal(service.getView().state, 'ready');
+  assert.deepEqual((await writer.read()).grant, complete);
+  assert.deepEqual(observerWrites, []);
+  assert.deepEqual(posts, []);
+});
+
+test('a cold observer accepts a distinct peer login after rejecting the old receipt', { timeout: 10_000 }, async (t) => {
+  const host = await openHosts(t);
+  const { service, writer, original, pending, complete, posts, observerWrites } = host;
+  await writer.write(pending);
+  assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
+
+  host.replaceTrust();
+  host.releaseReceipt();
+  await writer.write(complete);
+  await assert.rejects(() => service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(service.getSession().signedIn, false);
+
+  const replacement = {
+    ...original,
+    sessionInstanceId: Buffer.alloc(32, 11).toString('base64url'),
+    obtainedAt: new Date().toISOString(),
+    accessToken: 'synthetic-new-login-access',
+    refreshToken: 'synthetic-new-login-refresh',
+  };
+  await writer.write(replacement);
+
+  assert.equal(await service.getAccessToken(), replacement.accessToken);
+  assert.equal(service.getView().state, 'ready');
+  assert.deepEqual((await writer.read()).grant, replacement);
+  assert.deepEqual(observerWrites, []);
+  assert.deepEqual(posts, []);
+});
+
+test('a token request keeps the original pending observation deadline after cold hydration', { timeout: 10_000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const host = await openHosts(t);
+  const { service, writer, pending, complete, posts, observerWrites } = host;
+  await writer.write(pending);
+  assert.equal((await service.hydrate()).error, 'IAM_REAUTH_REQUIRED');
+
+  const elapsed = REFRESH_TIMEOUT_MS / 2;
+  t.mock.timers.tick(elapsed);
+  const rejection = assert.rejects(service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  void rejection.catch(() => {});
+  await writer.write(complete);
+  await Promise.race([
+    host.readingReceipt,
+    rejection.then(() => assert.fail('token request must wait within the original observation window')),
+  ]);
+  t.mock.timers.tick(REFRESH_TIMEOUT_MS - elapsed + 1);
+  host.releaseReceipt();
+
+  await rejection;
+  await assert.rejects(() => service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(service.getSession().signedIn, false);
+  assert.deepEqual((await writer.read()).grant, complete);
+  assert.deepEqual(observerWrites, []);
+  assert.deepEqual(posts, []);
+});

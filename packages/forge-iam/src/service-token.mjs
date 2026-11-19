@@ -49,7 +49,7 @@ function raceCancellation(promise, signal) {
 export function createTokenResolver(env) {
   const {
     config, ctx, provider, grants, now, monotonic = () => performance.now(), fetchImpl, isSigningOut,
-    getSessionEpoch, getAuthEpoch, clearObservation, beginConsumption, adoptConsumption, logRenewal, deferRead,
+    getSessionEpoch, getAuthEpoch, clearObservation, waitForPending, beginConsumption, adoptConsumption, logRenewal, deferRead,
   } = env;
 
   let refreshPromise = null;
@@ -61,11 +61,24 @@ export function createTokenResolver(env) {
   let refreshExchange = null;
   let modelRotation = null;
   let modelOutputRead = null;
+  let refusedSessionId = null;
   let lastBackgroundRefreshAt = 0;
   let backgroundRefreshBinding = null;
   let renewal = null;
   let renewalSequence = 0;
   let lastBlockedReason;
+
+  function refusePending(grant) {
+    refusedSessionId = grant.sessionInstanceId;
+  }
+
+  function confirmPending(grant) {
+    if (refusedSessionId === grant.sessionInstanceId) refusedSessionId = null;
+  }
+
+  function pendingRefused(grant) {
+    return refusedSessionId !== null && grant?.sessionInstanceId === refusedSessionId;
+  }
 
   function rememberBackgroundRefresh(at) {
     lastBackgroundRefreshAt = at;
@@ -271,6 +284,7 @@ export function createTokenResolver(env) {
     observation.result = Promise.resolve().then(confirm).catch(cause => {
       if (modelRotation === observation && ownsGrant()) {
         const code = cause instanceof IamError ? cause.code : credentialReadError(cause);
+        if (code === 'IAM_REAUTH_REQUIRED') refusePending(pending);
         ctx.lastGrant = null;
         ctx.state = code === 'IAM_NOT_SIGNED_IN' ? 'signed-out' : 'error';
         ctx.error = ctx.state === 'error' ? code : null;
@@ -314,7 +328,8 @@ export function createTokenResolver(env) {
     logRenewal?.('renewal-fired', { ...timing, state: ctx.state });
     const invalidReason = () => {
       const current = ctx.lastGrant;
-      if (ctx.disposed || ctx.state !== (recovering ? 'expired' : 'ready') || isSigningOut()) return 'session-inactive';
+      const aged = !recovering && ctx.state === 'expired' && isAccessExpired(current, now()) && isRefreshUsable(current, now());
+      if (ctx.disposed || isSigningOut() || (!aged && ctx.state !== (recovering ? 'expired' : 'ready'))) return 'session-inactive';
       if (!current || getAuthEpoch() !== auth || getSessionEpoch() !== session) return 'session-changed';
       if (deadlineOf(current, now(), recovering) !== expiry) return 'deadline-changed';
       if (current.refreshToken !== scheduled.refreshToken || !isDeepStrictEqual(grantIdentity(current), identity)) return 'session-changed';
@@ -383,6 +398,10 @@ export function createTokenResolver(env) {
       logRenewal?.('renewal-resume', { jumpMs: Math.round(jumpMs), ...renewalDeadlines(grant) });
       void resolveToken(undefined, 'resume').catch(() => {});
     }
+    // An expiry notification can run ahead of an already-due timer. Its
+    // original slot still works for this grant within the refresh deadline.
+    if (!retry && recovering && renewal?.recovering === false && renewal.runAt <= currentTime
+      && scheduledRenewalAt(grant, targetStore, targetCredentials) !== null) return;
     const remaining = expiry - currentTime;
     const lead = renewalLeadMillis(grant, expiry, currentTime, config.refreshSkewSeconds);
     let delay = retry || recovering
@@ -545,13 +564,12 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     const pendingRefusal = reauthenticationRequired();
-    const assertNoPendingRefusal = () => {
-      // A Host already observing pending owns the only recovery window for
-      // this rejected view. A new request cannot restart or bypass it.
-      if (ctx.state === 'error' && ctx.error === pendingRefusal.code) throw pendingRefusal;
+    const assertNoPendingRefusal = (grant) => {
+      // Only a confirmed outcome can unblock this login. A different durable
+      // login can go through the usual context and client authentication checks.
+      if (pendingRefused(grant) || (!grant && ctx.state === 'error' && ctx.error === pendingRefusal.code)) throw pendingRefusal;
     };
     if (refreshPromise) return useSharedRefresh();
-    assertNoPendingRefusal();
     const observed = activeModelRotation();
     if (observed) return useObservedRotation(observed);
     const epoch = getSessionEpoch();
@@ -561,6 +579,21 @@ export function createTokenResolver(env) {
     checkExpected();
     if (expected && (targetStore !== expected.targetStore || targetCredentials !== expected.targetCredentials)) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+    }
+    const observation = expected ? null : waitForPending(targetStore, targetCredentials);
+    if (observation) {
+      const result = await observation.flight;
+      ctx.assertExclusive();
+      if (!result) throw pendingRefusal;
+      assertClientAuthCurrent(result.authentication);
+      if (provider.atomicBinding(targetStore, targetCredentials) !== observation.atomicBinding) throw pendingRefusal;
+      if (ctx.disposed || isSigningOut() || !ctx.exclusive.ok || getAuthEpoch() !== auth || getSessionEpoch() !== epoch) throw changedSession();
+      const grant = result.grant;
+      if (pendingRefused(grant) || !isDeepStrictEqual(ctx.lastGrant, grant) || activeModelRotation()
+        || (refreshPromisePending?.store === targetStore && refreshPromisePending.grant.refreshToken === grant.refreshToken)) throw pendingRefusal;
+      if (isAccessExpired(grant, now())) throw new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
+      if (ctx.state !== 'ready') throw changedSession();
+      return grant.accessToken;
     }
     const grantAtStart = ctx.lastGrant;
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
@@ -592,6 +625,7 @@ export function createTokenResolver(env) {
         && alive() && current === targetStore && provider.storeCredentials === targetCredentials
         && (!ctx.lastGrant || ctx.lastGrant === grantAtStart
           || (operationGrant && sameGrantIgnoringRefreshMarker(ctx.lastGrant, operationGrant)))) {
+        if (code === 'IAM_REAUTH_REQUIRED' && operationGrant) refusePending(operationGrant);
         clearObservation();
         ctx.lastGrant = null;
         ctx.state = 'error';
@@ -619,6 +653,7 @@ export function createTokenResolver(env) {
       grants.assertGrantContext(grant, expectedIssuer);
       const expired = isAccessExpired(grant, now());
       if (grant.refreshOperation?.state === 'pending' || (expired && !(restored && isRefreshUsable(grant, now())))) return rejectSession();
+      if (waitingForPending) confirmPending(grant);
       publishGrant(grant, targetStore, authentication, consumption, { expired, restored });
       if (adoptionReason) trace('refresh-adopted', { reason: adoptionReason, ...renewalDeadlines(grant) });
       if (restored) scheduleRenewal({ retry: true, restored: true });
@@ -711,7 +746,7 @@ export function createTokenResolver(env) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
     if (refreshPromise) return useSharedRefresh();
-    assertNoPendingRefusal();
+    assertNoPendingRefusal(record.grant);
     refreshPromiseStore = targetStore;
     refreshPromiseCredentials = targetCredentials;
     refreshPromiseIssuer = expectedIssuer;
@@ -736,7 +771,7 @@ export function createTokenResolver(env) {
         stage = 'client-auth';
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
         checkAlive();
-        assertNoPendingRefusal();
+        assertNoPendingRefusal(initial);
         flightAuthentication.value = clientAuthDescriptor(authentication);
         const observed = activeModelRotation();
         if (observed) {
@@ -777,6 +812,7 @@ export function createTokenResolver(env) {
           if ((!ctx.lastGrant || ctx.lastGrant === grantAtStart || sameGrantIgnoringRefreshMarker(ctx.lastGrant, pending))
             && (ctx.state !== 'error' || ctx.error === 'IAM_REAUTH_REQUIRED')) {
             waitingForPending = true;
+            refusePending(pending);
             ctx.lastGrant = null;
             clearObservation();
             ctx.state = 'error';
@@ -1332,6 +1368,9 @@ export function createTokenResolver(env) {
     scheduleRenewal,
     scheduledRenewalAt,
     cancelRenewal,
+    refusePending,
+    confirmPending,
+    pendingRefused,
     ownedPendingFlight,
     observePendingRotation,
     hasObservedRotation: () => Boolean(activeModelRotation()),

@@ -32,7 +32,9 @@ const rotated = {
 };
 const shortRefresh = { ...original, refreshExpiresAt: new Date(start + 6000).toISOString() };
 
-async function startHost(t, initial = original, { refreshSkewSeconds = config.refreshSkewSeconds, getManagedModelRuntime } = {}) {
+async function startHost(t, initial = original, {
+  refreshSkewSeconds = config.refreshSkewSeconds, getManagedModelRuntime, hydratedState = 'ready',
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'forge-iam-read-lock-'));
   const directory = join(root, 'store');
   // A zero wait budget still exercises the actual SQLite busy error.
@@ -76,7 +78,7 @@ async function startHost(t, initial = original, { refreshSkewSeconds = config.re
     await rm(root, { recursive: true, force: true });
   });
   await store.write(initial);
-  assert.equal((await service.hydrate()).state, 'ready');
+  assert.equal((await service.hydrate()).state, hydratedState);
   blocker = new DatabaseSync(join(directory, 'credentials.sqlite'));
   const handler = createIamRoutes(service, { getConnection: () => ({ requestRejection: () => undefined }) });
   function openPeerStore() {
@@ -269,6 +271,44 @@ test('a recovered grant renews before its refresh deadline while the gateway sum
   releaseGateway.resolve();
   await waitForView(service, (current) => current.gatewayCredential?.state === 'invalid');
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
+});
+
+test('a late gateway summary leaves a due renewal able to run before refresh expiry', async (t) => {
+  const initial = { ...shortRefresh, accessExpiresAt: new Date(start + 5000).toISOString() };
+  const { blocker, store, service, credentials, posts, events, handler } = await startHost(t, initial, { refreshSkewSeconds: 0 });
+  const { dueAtMs } = scheduledRenewal(events);
+  assert.equal(dueAtMs, Date.parse(initial.accessExpiresAt));
+  const releaseGateway = Promise.withResolvers();
+  t.after(releaseGateway.resolve);
+  const readRecord = credentials.readRecord.bind(credentials);
+  let holdingGateway = false;
+  t.mock.method(credentials, 'readRecord', async (key) => {
+    const record = await readRecord(key);
+    if (key === GATEWAY_RECORD_KEY && !holdingGateway) {
+      holdingGateway = true;
+      await releaseGateway.promise;
+    }
+    return record;
+  });
+
+  t.mock.timers.tick(2000);
+  blocker.exec('BEGIN EXCLUSIVE');
+  assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
+  blocker.exec('COMMIT');
+  t.mock.timers.tick(1000);
+  await waitForView(service, () => holdingGateway);
+  assert.deepEqual(posts, []);
+
+  // Let the summary publish after access expiry, before dispatching due timers.
+  t.mock.timers.setTime(dueAtMs + 100);
+  releaseGateway.resolve();
+  await waitForView(service, (view) => view.gatewayCredential?.state === 'unconfigured');
+  const refreshExpiry = Date.parse(initial.refreshExpiresAt);
+  t.mock.timers.tick(refreshExpiry - Date.now() - 1);
+  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  assert.ok(Date.now() < refreshExpiry);
+  assert.deepEqual(posts, [initial.refreshToken]);
+  assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
 });
 
 for (const [replacementHasGrant, readAgain] of [[false, false], [true, false], [false, true], [true, true]]) {
@@ -580,6 +620,29 @@ for (const state of ['ready', 'expired']) {
     assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
   });
 }
+
+test('a peer-restored expired grant renews within a short refresh window without a prior timer', async (t) => {
+  const initial = { ...original, accessExpiresAt: new Date(start + 1500).toISOString(),
+    refreshExpiresAt: new Date(start + 3800).toISOString() };
+  const pending = pendingPeerGrant(initial);
+  const { service, store, posts, events, openPeerStore } = await startHost(t, pending, { hydratedState: 'error' });
+  assert.equal(service.getView().error, 'IAM_REAUTH_REQUIRED');
+  assert.equal(events.some((row) => row.event === 'renewal-scheduled'), false);
+
+  const refreshExpiry = Date.parse(initial.refreshExpiresAt);
+  t.mock.timers.tick(refreshExpiry - Date.now() - 600);
+  await openPeerStore().mutate((current) => {
+    assert.deepEqual(current, pending);
+    return initial;
+  });
+  assert.equal((await service.syncFromStore()).state, 'expired');
+  assert.deepEqual(posts, []);
+  t.mock.timers.tick(refreshExpiry - Date.now() - 1);
+  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== initial.accessExpiresAt);
+  assert.ok(Date.now() < refreshExpiry);
+  assert.deepEqual(posts, [initial.refreshToken]);
+  assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
+});
 
 test('an unmatched peer receipt after lock recovery cannot authorize the session', async (t) => {
   const { service, peerStore, complete, posts, events } = await observePeerPendingAfterReadTimeout(t);

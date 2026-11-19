@@ -63,6 +63,30 @@ export function createReconciler(env) {
       observation, grant: retry.grant, renewAt: retry.renewAt, polling: true }, Math.min(PENDING_POLL_MS, pendingTimeLeft(observation)));
   }
 
+  function waitForPending(store, credentials) {
+    const observation = getObservation();
+    if (!observation || ctx.state !== 'error' || ctx.error !== 'IAM_REAUTH_REQUIRED') return null;
+    const canWait = observation.store === store && observation.credentials === credentials
+      && observation.authEpoch === getAuthEpoch() && pendingTimeLeft(observation) > 0
+      && provider.atomicBinding(store, credentials) === observation.atomicBinding;
+    if (getObservation() !== observation) return null;
+    if (!canWait) {
+      setObservation(null);
+      return null;
+    }
+    // Token readers share the reconciler's existing observation and deadline.
+    observation.flight ??= Promise.resolve().then(async () => {
+      while (getObservation() === observation && pendingTimeLeft(observation) > 0) {
+        await syncFromStore();
+        const remaining = pendingTimeLeft(observation);
+        if (getObservation() !== observation || remaining <= 0) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(PENDING_POLL_MS, remaining)));
+      }
+      return observation.result;
+    });
+    return observation;
+  }
+
   // All callers share one deferred read. Only a fresh durable read can restore
   // the view or put a renewal back on the timer after a storage timeout.
   function deferRead({ targetStore, targetCredentials, authEpoch, grant, renewalDue = false, observation = null }, previous = null) {
@@ -178,7 +202,7 @@ export function createReconciler(env) {
         return readRetry.polling ? runReadRetry(readRetry) : ctx.view();
       }
     }
-    if (!targetStore || (observation && targetStore !== observation.store)) {
+    if (!targetStore || (observation && (targetStore !== observation.store || targetCredentials !== observation.credentials))) {
       if (!targetStore) discardIdentity('credentials-unavailable');
       setObservation(null);
       return ctx.view();
@@ -261,6 +285,7 @@ export function createReconciler(env) {
         }
         return ctx.view();
       }
+      if (!observation && token.pendingRefused(record.grant)) return ctx.view();
       grants.assertGrantContext(record.grant, expectedIssuer);
       const authentication = await beforeDeadline(grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: () => {
         if (!isCurrent()) throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
@@ -314,9 +339,11 @@ export function createReconciler(env) {
         const atomicBinding = provider.atomicBinding(targetStore, targetCredentials);
         if (!isCurrent()) return ctx.view();
         const observed = atomicBinding ? { version: marker.version, id: marker.id, base: marker.base,
-          identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch: getAuthEpoch(), store: targetStore, atomicBinding,
+          identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch: getAuthEpoch(),
+          store: targetStore, credentials: targetCredentials, atomicBinding,
           deadline: now() + REFRESH_TIMEOUT_MS, monotonicDeadline: monotonic() + REFRESH_TIMEOUT_MS } : null;
         setObservation(observed);
+        token.refusePending(record.grant);
         ctx.lastGrant = null;
         ctx.state = 'error';
         ctx.error = 'IAM_REAUTH_REQUIRED';
@@ -336,6 +363,8 @@ export function createReconciler(env) {
       grants.rememberAuthentication(authentication, record.grant);
       grants.own(record.grant, targetStore);
       if (fromObservation) {
+        observation.result = { grant: record.grant, authentication };
+        token.confirmPending(record.grant);
         setObservation(null);
         observation = null;
       }
@@ -369,11 +398,12 @@ export function createReconciler(env) {
         || previousExpiry !== (ctx.lastGrant.accessExpiresAt ?? null)
         || previousRefreshExpiry !== (ctx.lastGrant.refreshExpiresAt ?? null)
         || previousRefreshToken !== (ctx.lastGrant.refreshToken ?? null)) ctx.notify();
-      // Restore the timer's deadline only for the exact grant read back.
-      if (retry?.renewAt != null && (ctx.state === 'ready' || (restored && ctx.state === 'expired'))
-        && isDeepStrictEqual(retry.grant, record.grant) && isCurrent()) {
-        if (restored && retry.renewAt <= now()) token.scheduleRenewal({ retry: true, restored: true });
-        else token.scheduleRenewal({ resumeAt: retry.renewAt });
+      const renewAt = retry?.renewAt != null && isDeepStrictEqual(retry.grant, record.grant) ? retry.renewAt : null;
+      // A cold observer can confirm an unsent attempt with no saved timer.
+      if (restored && (renewAt === null || renewAt <= now()) && isCurrent()) {
+        token.scheduleRenewal({ retry: true, restored: true });
+      } else if (renewAt !== null && (ctx.state === 'ready' || restored) && isCurrent()) {
+        token.scheduleRenewal({ resumeAt: renewAt });
       }
       // A normal account switch also returns the updated gateway match. The
       // session and its timer are already published before this display read.
@@ -416,5 +446,5 @@ export function createReconciler(env) {
     return ctx.view();
   }
 
-  return { syncFromStore, hydrate, deferRead, cancelReadRetry };
+  return { syncFromStore, hydrate, deferRead, cancelReadRetry, waitForPending };
 }
