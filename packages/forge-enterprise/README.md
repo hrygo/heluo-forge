@@ -13,7 +13,7 @@
 
 - [cordis.patch.yml](cordis.patch.yml) 完成两件事：
   1. 禁用 7 条官方旁路：`deepseek-account`、`ui-settings-account`、`llm-deepseek-account`、`llm-deepseek`、`llm-pi-ai`、`ui-settings-models`、`credentials`。
-  2. 插入 4 个通用底座成员：`heluo-credentials-keychain`（`@heluo/forge-credentials-keychain`）、`heluo-policy`（`@heluo/forge-policy`，携带 12 条并集动作目录（6 读 + 6 写）与内存审计；登记不等于放行）与 `heluo-iam`（`@heluo/forge-iam`，提供「企业账号」`-10` 与「企业模型」`10` 设置入口），以及 `skills-manager`（`@heluo/forge-skills-manager`，提供本地技能管理与可选 Nacos 只读发现）。
+  2. 插入 4 个通用底座成员：`heluo-credentials-keychain`（`@heluo/forge-credentials-keychain`）、`heluo-policy`（`@heluo/forge-policy`，携带 12 条并集动作目录（6 读 + 6 写）与内存审计；登记不等于放行）与 `heluo-iam`（`@heluo/forge-iam`，提供「企业账号」`-10` 与「企业模型」`10` 设置入口），以及 `heluo-skills-manager`（`@heluo/forge-skills-manager`，提供本地技能管理与可选 Nacos 只读发现）。
 - [src/reflow.mjs](src/reflow.mjs) 提供官方行回灌检测器 `detectOfficialRowReflow()`，在 DSH 宿主升级后核对 `dsh --dump-config` 中官方 7 行是否仍维持 `disabled: true`。
 
 ## 验证

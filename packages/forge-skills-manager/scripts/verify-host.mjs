@@ -78,7 +78,7 @@ await new Promise(accept => nacos.listen(0, '127.0.0.1', accept));
 const config = { nacos: { serverUrl: `http://127.0.0.1:${nacos.address().port}/nacos`, namespaceId: 'public',
   usernameEnv: 'FORGE_NACOS_USERNAME', passwordEnv: 'FORGE_NACOS_PASSWORD', allowInsecureHttp: true } };
 const patch = join(profile, 'cordis.patch.yml');
-const writePatch = disabled => fs.writeFile(patch, `- id: skills-manager\n  disabled: ${disabled}\n  config: ${JSON.stringify(config)}\n`);
+const writePatch = disabled => fs.writeFile(patch, `- id: heluo-skills-manager\n  disabled: ${disabled}\n  config: ${JSON.stringify(config)}\n`);
 
 async function start() {
   child = spawn(process.execPath, ['--expose-internals', cli, '--profile', 'manager-probe', '--host', '127.0.0.1', '--port', '0', '--no-open'], {

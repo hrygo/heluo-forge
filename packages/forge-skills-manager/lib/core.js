@@ -1635,7 +1635,7 @@ function defaultManagerState() {
     disabledSkills[root.key] = [];
     enabledSkills[root.key] = [];
   }
-  return { version: 1, sources, disabledSkills, enabledSkills, entryLocation: "settings", sidebarEntry: false, categories: /* @__PURE__ */ Object.create(null), categoryMembers: /* @__PURE__ */ Object.create(null), categoryOrder: /* @__PURE__ */ Object.create(null), customNotes: /* @__PURE__ */ Object.create(null) };
+  return { version: 1, sources, disabledSkills, enabledSkills, entryLocation: "both", sidebarEntry: true, categories: /* @__PURE__ */ Object.create(null), categoryMembers: /* @__PURE__ */ Object.create(null), categoryOrder: /* @__PURE__ */ Object.create(null), customNotes: /* @__PURE__ */ Object.create(null) };
 }
 function validStateSkillName(name) {
   return validDiscoveryName(name);
