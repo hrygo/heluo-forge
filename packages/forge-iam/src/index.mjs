@@ -79,6 +79,11 @@ export function apply(ctx, rawConfig = {}) {
       return false;
     }
   };
+  const getAtomicStoreBinding = (instance) => {
+    if (!hasDynamicInjection) return trustedJointStore() ?? null;
+    // The scope owner changes even if Cordis reinjects the same trust object.
+    return current.credentials === instance && current.atomicStore ? atomicStoreOwner ?? null : null;
+  };
   const getGatewayAtomicStore = (instance) => {
     const trust = trustedJointStore();
     if (trust === undefined || !verifyAtomicStore(instance) || trustedJointStore() !== trust) {
@@ -112,6 +117,7 @@ export function apply(ctx, rawConfig = {}) {
     credentials: readCredentials(),
     getCredentials: () => readCredentials(),
     verifyAtomicStore,
+    getAtomicStoreBinding,
     getGatewayAtomicStore,
     verifyGatewayAtomicStore,
     logRenewal,

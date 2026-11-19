@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { apply } from '../src/index.mjs';
+import { refreshBaseId } from '../src/session-identity.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
@@ -253,6 +254,45 @@ test('trust revoked after a refresh POST leaves pending and never resends it', a
   assert.equal(countPosts(), 1);
   assert.deepEqual((await createGrantStore(credentials).read()).grant, pending);
   assert.equal(ctx.service().getView().state, 'error');
+});
+
+test('hydration cannot adopt a pending receipt after the same trust object is rebound', async (t) => {
+  const credentials = new MemoryCredentials();
+  const initial = await seed(credentials, { expired: false });
+  const store = createGrantStore(credentials);
+  const id = Buffer.alloc(32, 6).toString('base64url');
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(initial, id) };
+  await store.write({ ...initial, refreshOperation: operation });
+  const countPosts = mockIssuer(t);
+  const trust = trustedStore(credentials);
+  const ctx = host({ credentials, 'iam-atomic-store': trust });
+  const dispose = apply(ctx.ctx, config);
+  const release = Promise.withResolvers();
+  t.after(async () => { release.resolve(); await dispose(); });
+  await waitFor(() => ctx.service().getView().error === 'IAM_REAUTH_REQUIRED', 'hydration must see the pending record');
+
+  await store.write({ ...initial, accessToken: 'new-access', refreshToken: 'new-refresh',
+    refreshOperation: { ...operation, state: 'complete' } });
+  let held = false;
+  const readRecord = credentials.readRecord.bind(credentials);
+  credentials.readRecord = async (key) => {
+    const record = await readRecord(key);
+    if (key === GRANT_KEY && !held) {
+      held = true;
+      await release.promise;
+    }
+    return record;
+  };
+
+  const sync = ctx.service().syncFromStore();
+  await waitFor(() => held, 'reconciliation must read the completed record');
+  ctx.unmount('iam-atomic-store');
+  ctx.mount('iam-atomic-store', trust);
+  release.resolve();
+
+  assert.equal((await sync).error, 'IAM_REAUTH_REQUIRED');
+  assert.equal(ctx.service().getView().error, 'IAM_REAUTH_REQUIRED');
+  assert.equal(countPosts(), 0);
 });
 
 test('repeated binding and provider replacement do not refresh the old session', async (t) => {

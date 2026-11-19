@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once, on } from 'node:events';
+import { appendFile, link, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -40,6 +42,74 @@ async function until(read, accept, message) {
 }
 
 const parseRows = (content) => content.split('\n').slice(0, -1).map(JSON.parse);
+const loggerUrl = new URL('../src/session-renewal-log.mjs', import.meta.url).href;
+const lockSuffix = '.lock.sqlite';
+const maxFileBytes = 1024 * 1024;
+const seedRow = '{"event":"host-start"}\n';
+const fullGeneration = seedRow.repeat(Math.floor(maxFileBytes / Buffer.byteLength(seedRow)));
+
+function logProcess(home, role) {
+  const source = `
+    import fs, { appendFile } from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { DatabaseSync } from 'node:sqlite';
+    const [home, role] = process.argv.slice(1);
+    process.on('message', (message) => {
+      if (message === 'stop') process.disconnect();
+      if (Number.isInteger(message)) log('renewal-fired', { renewalId: message });
+    });
+    // Both branches use real IO. The messages expose the competing write at
+    // the point where a writer can first reach rename or hit the kernel lock.
+    const rename = fs.rename;
+    fs.rename = async (...args) => {
+      const released = new Promise((resolve) => process.once('message', resolve));
+      process.send('rotate');
+      await released;
+      await rename(...args);
+    };
+    syncBuiltinESMExports();
+    const exec = DatabaseSync.prototype.exec;
+    let contentionReported = false;
+    DatabaseSync.prototype.exec = function (sql) {
+      try { return exec.call(this, sql); }
+      catch (error) {
+        if (!contentionReported && sql === 'BEGIN IMMEDIATE' && error.errcode === 5) {
+          contentionReported = true;
+          process.send('contended');
+        }
+        throw error;
+      }
+    };
+    const { createSessionRenewalLogger } = await import(${JSON.stringify(loggerUrl)});
+    const log = createSessionRenewalLogger({
+      home,
+      async append(...args) {
+        await appendFile(...args);
+        process.send('appended');
+      },
+      warn: () => process.send('warned'),
+    });
+    log('renewal-fired', { renewalId: role === 'first' ? 1 : 2 });
+  `;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source, home, role], {
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  const closed = once(child, 'close');
+  const messages = on(child, 'message', { close: ['close'] });
+  return {
+    child, closed,
+    async next() {
+      const { value, done } = await messages.next();
+      assert.equal(done, false, `${role} process exited before reporting its next phase`);
+      return value[0];
+    },
+    async stop() {
+      child.send('stop');
+      assert.deepEqual(await closed, [0, null]);
+    },
+  };
+}
+
 async function readLog(path) {
   return readFile(path, 'utf8').catch((cause) => {
     if (cause.code === 'ENOENT') return '';
@@ -49,14 +119,25 @@ async function readLog(path) {
 
 async function isolatedLog(t) {
   const home = await mkdtemp(join(tmpdir(), 'forge-iam-log-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  const children = [];
+  t.after(async () => {
+    for (const { child } of children) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    try { await Promise.all(children.map(({ closed }) => closed)); }
+    finally { await rm(home, { recursive: true, force: true }); }
+  });
   const directory = join(home, 'logs');
   const name = 'forge-iam-session-renewal.jsonl';
   const path = join(directory, name);
   const waitFor = (renewalId) => until(() => readLog(path), (content) => (
     parseRows(content).some((row) => row.renewalId === renewalId)
   ), `expected log entry ${renewalId}`);
-  return { home, directory, name, path, waitFor };
+  return { home, directory, name, path, waitFor, startProcess(role) {
+    const writer = logProcess(home, role);
+    children.push(writer);
+    return writer;
+  } };
 }
 
 test('the shared log rotates to one bounded archive and preserves complete recent lines', async (t) => {
@@ -76,19 +157,108 @@ test('the shared log rotates to one bounded archive and preserves complete recen
   }
   const retained = [...parseRows(previous), ...parseRows(current)].map((row) => row.renewalId);
   assert.deepEqual(retained, Array.from({ length: retained.length }, (_, i) => 25 - retained.length + i));
-  assert.deepEqual((await readdir(directory)).sort(), [name, `${name}.1`]);
+  assert.deepEqual((await readdir(directory)).sort(), [name, `${name}.1`, `${name}${lockSuffix}`]);
 });
 
-test('an oversized legacy log cannot become an oversized archive', async (t) => {
+test('oversized legacy active and archived logs are discarded before appending', async (t) => {
   const { home, directory, name, path, waitFor } = await isolatedLog(t);
   await mkdir(directory);
-  await writeFile(path, '{"event":"legacy"}\n'.repeat(1000));
+  const legacy = '{"event":"legacy"}\n'.repeat(1000);
+  await writeFile(path, legacy);
+  await writeFile(`${path}.1`, legacy);
   const log = createSessionRenewalLogger({ home, maxFileBytes: 512 });
   log('renewal-fired', { renewalId: 1 });
   const current = await waitFor(1);
   assert.ok(Buffer.byteLength(current) <= 512);
   assert.deepEqual(parseRows(current).map((row) => row.renewalId), [1]);
-  assert.deepEqual(await readdir(directory), [name]);
+  assert.deepEqual((await readdir(directory)).sort(), [name, `${name}${lockSuffix}`]);
+});
+
+test('two processes preserve the same full generation when both approach rollover', { timeout: 15_000 }, async (t) => {
+  const { directory, name, path, startProcess } = await isolatedLog(t);
+  await mkdir(directory);
+  await writeFile(path, fullGeneration);
+  await writeFile(`${path}.1`, seedRow);
+
+  const first = startProcess('first');
+  assert.equal(await first.next(), 'rotate');
+  const second = startProcess('second');
+  const phase = await second.next();
+  assert.ok(['rotate', 'contended'].includes(phase), `unexpected second process phase: ${phase}`);
+  first.child.send('release');
+  assert.equal(await first.next(), 'appended');
+  if (phase === 'rotate') second.child.send('release');
+  assert.equal(await second.next(), 'appended');
+  await Promise.all([first.stop(), second.stop()]);
+
+  const archive = await readLog(`${path}.1`);
+  assert.equal(Buffer.byteLength(archive), Buffer.byteLength(fullGeneration));
+  assert.ok(archive === fullGeneration);
+  const current = await readLog(path);
+  assert.ok(Buffer.byteLength(current) <= maxFileBytes);
+  assert.deepEqual(parseRows(current).map((row) => row.renewalId), [1, 2]);
+  assert.equal(new Set(parseRows(current).map((row) => row.pid)).size, 2);
+  assert.deepEqual((await readdir(directory)).sort(), [name, `${name}.1`, `${name}${lockSuffix}`]);
+  assert.equal((await readFile(`${path}${lockSuffix}`)).length, 0);
+});
+
+test('a busy writer drops a diagnostic and a killed lock owner allows later appends', { timeout: 15_000 }, async (t) => {
+  const { directory, path, startProcess } = await isolatedLog(t);
+  await mkdir(directory);
+  await writeFile(path, fullGeneration);
+  const first = startProcess('first');
+  assert.equal(await first.next(), 'rotate');
+  const second = startProcess('second');
+  assert.equal(await second.next(), 'contended');
+  assert.equal(await second.next(), 'warned');
+  assert.ok(await readLog(path) === fullGeneration);
+  assert.equal(await readLog(`${path}.1`), '');
+
+  assert.equal(first.child.kill('SIGKILL'), true);
+  assert.deepEqual(await first.closed, [null, 'SIGKILL']);
+  second.child.send(3);
+  assert.equal(await second.next(), 'rotate');
+  second.child.send('release');
+  assert.equal(await second.next(), 'appended');
+  await second.stop();
+  assert.ok(await readLog(`${path}.1`) === fullGeneration);
+  assert.deepEqual(parseRows(await readLog(path)).map((row) => row.renewalId), [3]);
+});
+
+test('aliased log files are preserved and block logging until the path is repaired', async (t) => {
+  const { home, directory, path, waitFor } = await isolatedLog(t);
+  await mkdir(directory);
+  const target = join(home, 'ordinary-file');
+  const content = 'synthetic file';
+  await writeFile(target, content);
+  for (const suffix of [lockSuffix, '', '.1']) {
+    const alias = `${path}${suffix}`;
+    await link(target, alias);
+    let warned = false;
+    const log = createSessionRenewalLogger({ home, warn: () => { warned = true; } });
+    log('renewal-fired', { renewalId: 1 });
+    await until(() => warned, Boolean, 'expected invalid log path warning');
+    assert.equal(await readLog(path), suffix ? '' : content);
+    assert.equal(await readLog(alias), content);
+    await rm(alias);
+  }
+  createSessionRenewalLogger({ home })('renewal-fired', { renewalId: 2 });
+  assert.deepEqual(parseRows(await waitFor(2)).map((row) => row.renewalId), [2]);
+  assert.equal(await readLog(target), content);
+});
+
+test('an unexpected SQLite journal is preserved and prevents log writes', async (t) => {
+  const { home, directory, path } = await isolatedLog(t);
+  await mkdir(directory);
+  const journal = `${path}${lockSuffix}-journal`;
+  await writeFile(journal, 'synthetic unexpected journal');
+  let warned = false;
+  const log = createSessionRenewalLogger({ home, warn: () => { warned = true; } });
+  log('renewal-fired', { renewalId: 1 });
+  await until(async () => warned || await readLog(path), Boolean, 'expected the diagnostic or path warning');
+  assert.equal(await readLog(journal), 'synthetic unexpected journal');
+  assert.equal(await readLog(path), '');
+  assert.equal(warned, true);
 });
 
 test('Hosts sharing a path drop new events while the bounded write queue is full and recover after draining', async (t) => {

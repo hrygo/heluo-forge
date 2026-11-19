@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { constants, writeFileSync } from 'node:fs';
 import { appendFile, lstat, mkdir, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import manifest from '../package.json' with { type: 'json' };
 import { ERROR_STATUS } from './error-contract.mjs';
 import { OAUTH_ERROR_CODES, OidcError } from './oidc.mjs';
@@ -9,6 +11,11 @@ import { STATES } from './state.mjs';
 
 const MAX_LOG_FILE_BYTES = 1024 * 1024;
 const MAX_PENDING_WRITES = 128;
+const LOCK_WAIT_MS = 250;
+const LOCK_RETRY_MS = 10;
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+const APPEND_FLAGS = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0);
 const pendingByPath = new Map();
 
 const events = new Set([
@@ -78,15 +85,64 @@ async function drainWrites(path, pending) {
   pendingByPath.delete(path);
 }
 
-async function rotateIfNeeded(path, bytes, maxFileBytes) {
-  const current = await lstat(path).catch((cause) => {
+async function regularFile(path) {
+  const file = await lstat(path).catch((cause) => {
     if (cause.code !== 'ENOENT') throw cause;
   });
-  if (!current) return;
-  if (!current.isFile()) throw new Error('invalid renewal log file type');
+  if (file && (!file.isFile() || file.nlink !== 1)) throw new Error('invalid renewal log file type');
+  return file;
+}
+
+async function withWriteLock(lockPath, write) {
+  const { DatabaseSync } = await import('node:sqlite');
+  // SQLite can remove an unexpected journal or WAL during open. This
+  // coordinator never writes pages, so refuse to touch any such files.
+  const [existing, ...companions] = await Promise.all(
+    ['', '-journal', '-wal', '-shm'].map((suffix) => regularFile(`${lockPath}${suffix}`)),
+  );
+  if (companions.some(Boolean)) throw new Error('invalid renewal log coordinator');
+  let marker = existing;
+  if (!marker) {
+    // Publish a private, empty file using an exclusive create. Open and close
+    // together to avoid a pending file close releasing SQLite's POSIX locks.
+    try { writeFileSync(lockPath, '', { flag: 'wx', mode: 0o600 }); }
+    catch (cause) { if (cause.code !== 'EEXIST') throw cause; }
+    marker = await regularFile(lockPath);
+  }
+  if (!marker || marker.size !== 0) throw new Error('invalid renewal log coordinator');
+
+  // The file is a stable OS locking target. SQLite initializes the empty
+  // database in memory and rolls it back on close. Process exit releases the lock.
+  const db = new DatabaseSync(lockPath, { timeout: 0 });
+  try {
+    db.exec('PRAGMA journal_mode = MEMORY');
+    const deadline = performance.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try { db.exec('BEGIN IMMEDIATE'); break; }
+      catch (cause) {
+        const primaryCode = cause.errcode & 0xff;
+        if (primaryCode !== SQLITE_BUSY && primaryCode !== SQLITE_LOCKED) throw cause;
+        const wait = Math.min(LOCK_RETRY_MS, deadline - performance.now());
+        if (wait <= 0) throw cause;
+        await sleep(wait, undefined, { ref: false });
+        if (performance.now() >= deadline) throw cause;
+      }
+    }
+    await write();
+  } finally {
+    db.close();
+  }
+}
+
+async function rotateIfNeeded(path, bytes, maxFileBytes) {
+  const archive = `${path}.1`;
+  const current = await regularFile(path);
+  const previous = await regularFile(archive);
   // Logs created before retention was enabled may already exceed the limit.
+  if (previous?.size > maxFileBytes) await unlink(archive);
+  if (!current) return;
   if (current.size > maxFileBytes) await unlink(path);
-  else if (current.size + bytes > maxFileBytes) await rename(path, `${path}.1`);
+  else if (current.size + bytes > maxFileBytes) await rename(path, archive);
 }
 
 export function createSessionRenewalLogger({
@@ -126,8 +182,11 @@ export function createSessionRenewalLogger({
       pending.push(async () => {
         try {
           await mkdir(directory, { recursive: true, mode: 0o700 });
-          await rotateIfNeeded(path, bytes, maxFileBytes);
-          await append(path, line, { encoding: 'utf8', mode: 0o600 });
+          if (!(await lstat(directory)).isDirectory()) throw new Error('invalid renewal log directory');
+          await withWriteLock(`${path}.lock.sqlite`, async () => {
+            await rotateIfNeeded(path, bytes, maxFileBytes);
+            await append(path, line, { encoding: 'utf8', flag: APPEND_FLAGS, mode: 0o600 });
+          });
           warned = false;
         } catch {
           // Filesystem and rotation failures only affect diagnostics.

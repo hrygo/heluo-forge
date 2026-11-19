@@ -7,9 +7,9 @@ import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { createCredentialStore, createJointStore, createKeychainProvider, namespacePrefixes } from '@heluo/forge-credentials-keychain';
 import { createIamRoutes } from '../src/routes.mjs';
+import { createIamService } from '../src/service.mjs';
 import { refreshBaseId } from '../src/session-identity.mjs';
 import { createGrantStore, GATEWAY_RECORD_KEY, GATEWAY_REF, GRANT_KEY } from '../src/store.mjs';
-import { createIamService } from './support/trusted-service.mjs';
 
 const start = Date.parse('2030-01-01T00:00:00.000Z');
 const accessLifetimeMs = 300_000;
@@ -39,6 +39,7 @@ async function startHost(t, initial = original, { refreshSkewSeconds = config.re
   const backend = createCredentialStore({ directory, lockTimeoutMs: 0 });
   const credentials = createKeychainProvider(backend);
   let activeCredentials = credentials;
+  let atomicStoreBinding = {};
   const joint = createJointStore(backend, namespacePrefixes());
   const store = createGrantStore(credentials);
   const posts = [];
@@ -47,8 +48,11 @@ async function startHost(t, initial = original, { refreshSkewSeconds = config.re
   const service = createIamService({ ...config, refreshSkewSeconds }, {
     credentials,
     getCredentials: () => activeCredentials,
+    getOrigin: () => new URL(config.redirectUri).origin,
     getManagedModelRuntime,
     monotonic: () => Date.now(),
+    verifyAtomicStore: (candidate) => candidate === activeCredentials && atomicStoreBinding !== null,
+    getAtomicStoreBinding: (candidate) => candidate === activeCredentials ? atomicStoreBinding : null,
     getGatewayAtomicStore: (candidate) => candidate === credentials ? joint : undefined,
     verifyGatewayAtomicStore: (candidate, adapter) => candidate === credentials && adapter === joint,
     logRenewal: (event, fields) => events.push({ event, ...fields }),
@@ -82,9 +86,13 @@ async function startHost(t, initial = original, { refreshSkewSeconds = config.re
   function replaceCredentials() {
     replacement = createCredentialStore({ directory: join(root, 'replacement'), lockTimeoutMs: 0 });
     activeCredentials = createKeychainProvider(replacement);
+    atomicStoreBinding = {};
     return createGrantStore(activeCredentials);
   }
-  return { blocker, store, service, credentials, posts, events, handler, openPeerStore, replaceCredentials };
+  function setAtomicStoreBinding(binding) {
+    atomicStoreBinding = binding;
+  }
+  return { blocker, store, service, credentials, posts, events, handler, openPeerStore, replaceCredentials, setAtomicStoreBinding };
 }
 
 function scheduledRenewal(events) {
@@ -263,6 +271,54 @@ test('a recovered grant renews before its refresh deadline while the gateway sum
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
+for (const replacementHasGrant of [false, true]) {
+  const scenario = replacementHasGrant ? 'a newer adopted grant' : 'an empty provider';
+  test(`a provider switch to ${scenario} fences /view after an ordinary account switch`, async (t) => {
+    const { credentials, store, service, handler, replaceCredentials, posts } = await startHost(t);
+    const accountSwitch = {
+      ...original, subject: 'synthetic-second-subject', sessionInstanceId: Buffer.alloc(32, 10).toString('base64url'),
+    };
+    const replacementGrant = {
+      ...original, subject: 'synthetic-third-subject', sessionInstanceId: Buffer.alloc(32, 11).toString('base64url'),
+    };
+    await store.write(accountSwitch);
+    const releaseGateway = Promise.withResolvers();
+    const readingGateway = Promise.withResolvers();
+    t.after(releaseGateway.resolve);
+    const readRecord = credentials.readRecord.bind(credentials);
+    t.mock.method(credentials, 'readRecord', async (key) => {
+      const record = await readRecord(key);
+      if (key === GATEWAY_RECORD_KEY) {
+        readingGateway.resolve();
+        await releaseGateway.promise;
+      }
+      return record;
+    });
+
+    const panel = callRoute(handler, 'GET', 'view');
+    await readingGateway.promise;
+    assert.equal(service.getView().principal, accountSwitch.subject);
+    const replacement = replaceCredentials();
+    if (replacementHasGrant) {
+      await replacement.write(replacementGrant);
+      assert.equal((await service.syncFromStore()).principal, replacementGrant.subject);
+    }
+    releaseGateway.resolve();
+    const response = await panel;
+    const expectedSubject = replacementHasGrant ? replacementGrant.subject : null;
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body.principal, expectedSubject);
+    assert.equal(response.body.signedIn, replacementHasGrant);
+    const session = service.getSession();
+    assert.equal(session.signedIn, replacementHasGrant);
+    assert.equal(session.principal?.subject ?? null, expectedSubject);
+    assert.equal(service.getPrincipal()?.subject ?? null, expectedSubject);
+    assert.deepEqual((await replacement.read()).grant, replacementHasGrant ? replacementGrant : null);
+    assert.deepEqual((await store.read()).grant, accountSwitch);
+    assert.deepEqual(posts, []);
+  });
+}
+
 test('panel lock recovery keeps the renewal that became due during the read backoff', async (t) => {
   const { blocker, service, posts, events, handler } = await startHost(t, shortRefresh, { refreshSkewSeconds: 3 });
   const { dueAtMs } = scheduledRenewal(events);
@@ -281,8 +337,9 @@ test('panel lock recovery keeps the renewal that became due during the read back
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-test('a delayed timer read timeout re-arms renewal after panel recovery adopted the same grant', async (t) => {
-  const { blocker, store, service, credentials, posts, events, handler } = await startHost(t, shortRefresh, { refreshSkewSeconds: 3 });
+async function beginPanelRecoveryWhileTimerFailureIsHeld(t) {
+  const host = await startHost(t, shortRefresh, { refreshSkewSeconds: 3 });
+  const { blocker, service, credentials, events, handler } = host;
   const { renewalId } = scheduledRenewal(events);
   const releaseTimeout = Promise.withResolvers();
   t.after(releaseTimeout.resolve);
@@ -305,33 +362,77 @@ test('a delayed timer read timeout re-arms renewal after panel recovery adopted 
   fireRenewal(t, events);
   await waitForView(service, () => actualTimeout !== undefined);
   assert.equal(actualTimeout.code, 'CRED_LOCK_TIMEOUT');
+  assert.equal(Date.now(), start + 3000);
+  t.mock.timers.tick(800);
   assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
   blocker.exec('COMMIT');
+  return { ...host, renewalId, releaseTimeout: releaseTimeout.resolve };
+}
+
+test('a delayed timer read timeout preserves the due renewal when panel recovery is still reading', async (t) => {
+  const { service, credentials, posts, events, renewalId, releaseTimeout } = await beginPanelRecoveryWhileTimerFailureIsHeld(t);
+  const releaseRead = Promise.withResolvers();
+  t.after(releaseRead.resolve);
+  const readRecord = credentials.readRecord.bind(credentials);
+  let reading = false;
+  t.mock.method(credentials, 'readRecord', async (key) => {
+    const record = await readRecord(key);
+    if (key === GRANT_KEY && !reading) {
+      reading = true;
+      await releaseRead.promise;
+    }
+    return record;
+  });
+  t.mock.timers.tick(1000);
+  await waitForView(service, () => reading);
+  releaseTimeout();
+  await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
+  releaseRead.resolve();
+  await waitForView(service, (view) => view.state === 'ready');
+  t.mock.timers.tick(1);
+  await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== shortRefresh.accessExpiresAt);
+  assert.deepEqual(posts, [shortRefresh.refreshToken]);
+});
+
+test('a delayed timer read timeout keeps the newly armed renewal after panel recovery adopted the same grant', async (t) => {
+  const { store, service, posts, events, renewalId, releaseTimeout } = await beginPanelRecoveryWhileTimerFailureIsHeld(t);
   t.mock.timers.tick(1000);
   const restored = await waitForView(service, (view) => view.state === 'ready');
   assert.equal(restored.accessExpiresAt, shortRefresh.accessExpiresAt);
   assert.deepEqual((await store.read()).grant, shortRefresh);
   assert.deepEqual(posts, []);
+  const recoveredRenewal = scheduledRenewal(events);
+  assert.equal(recoveredRenewal.dueAtMs, start + 5400);
 
-  releaseTimeout.resolve();
+  t.mock.timers.tick(400);
+  const publications = events.length;
+  releaseTimeout();
   await waitForView(service, () => events.some((row) => row.event === 'renewal-failed' && row.renewalId === renewalId));
-  assert.ok(events.some((row) => row.event === 'refresh-retry' && row.renewalId === renewalId
-    && row.reason === 'read-lock-timeout'), 'late timeout must retain the due renewal for the equal grant');
-  t.mock.timers.tick(1000);
-  await waitForView(service, (view) => view.state === 'ready');
-  t.mock.timers.tick(1);
+  assert.equal(service.getView().state, 'ready');
+  assert.equal(service.getSession().signedIn, true);
+  assert.equal(events.slice(publications).some((row) => row.event === 'session-state' && row.state === 'unreachable'), false);
+  const dueAt = scheduledRenewal(events).dueAtMs;
+  assert.ok(dueAt <= recoveredRenewal.dueAtMs, 'the old failure must not postpone renewal');
+  t.mock.timers.tick(Math.max(1, dueAt - Date.now()));
   await waitForView(service, (view) => view.state === 'ready' && view.accessExpiresAt !== shortRefresh.accessExpiresAt);
+  assert.ok(Date.now() < Date.parse(shortRefresh.refreshExpiresAt));
   t.mock.timers.tick(Date.parse(shortRefresh.refreshExpiresAt) - Date.now());
   await setImmediate();
   assert.deepEqual(posts, [shortRefresh.refreshToken]);
 });
 
-async function observePeerPendingAfterReadTimeout(t) {
+async function observePeerPendingAfterReadTimeout(t, beforeDueMs = 0) {
   const host = await startHost(t);
-  const { blocker, service, events, openPeerStore } = host;
+  const { blocker, service, events, handler, openPeerStore } = host;
+  const originalDueAt = scheduledRenewal(events).dueAtMs;
   blocker.exec('BEGIN EXCLUSIVE');
-  fireRenewal(t, events);
-  assertUnavailable(service, await waitForView(service, (view) => view.state !== 'ready'));
+  if (beforeDueMs > 0) {
+    t.mock.timers.tick(originalDueAt - Date.now() - beforeDueMs);
+    assertUnavailable(service, (await callRoute(handler, 'GET', 'view')).body);
+  } else {
+    fireRenewal(t, events);
+    assertUnavailable(service, await waitForView(service, (view) => view.state !== 'ready'));
+  }
   blocker.exec('COMMIT');
 
   const id = Buffer.alloc(32, 9).toString('base64url');
@@ -351,7 +452,7 @@ async function observePeerPendingAfterReadTimeout(t) {
     refreshExpiresAt: new Date(Date.now() + 180_000).toISOString(),
     refreshOperation: { ...pending.refreshOperation, state: 'complete' },
   };
-  return { ...host, peerStore, pending, complete };
+  return { ...host, peerStore, pending, complete, originalDueAt };
 }
 
 test('a scheduled read retry observes a peer pending marker without replaying its refresh token', async (t) => {
@@ -363,7 +464,7 @@ test('a scheduled read retry observes a peer pending marker without replaying it
 });
 
 test('a matching peer receipt after lock recovery is adopted in the background', async (t) => {
-  const { service, handler, peerStore, pending, complete, posts } = await observePeerPendingAfterReadTimeout(t);
+  const { service, handler, peerStore, pending, complete, posts, events } = await observePeerPendingAfterReadTimeout(t);
   await peerStore.mutate((current) => {
     assert.deepEqual(current, pending);
     return complete;
@@ -375,8 +476,34 @@ test('a matching peer receipt after lock recovery is adopted in the background',
   const panel = await callRoute(handler, 'GET', 'view');
   assert.equal(panel.body.state, 'ready');
   assert.equal(panel.body.accessExpiresAt, complete.accessExpiresAt);
+  assert.ok(scheduledRenewal(events).dueAtMs > Date.now() + 30_000, 'a rotated grant gets its own renewal deadline');
   assert.deepEqual(posts, []);
 });
+
+for (const beforeDueMs of [3000, 0]) {
+  const scenario = beforeDueMs > 0 ? 'before its renewal is due' : 'after its renewal is due';
+  test(`a peer that restores the exact grant ${scenario} preserves the due renewal`, async (t) => {
+    const { service, store, peerStore, posts, events, originalDueAt } = await observePeerPendingAfterReadTimeout(t, beforeDueMs);
+    assert.equal(originalDueAt, start + 150_000);
+    await peerStore.write(original);
+    t.mock.timers.tick(1000);
+    const view = await waitForView(service, (current) => current.state === 'ready');
+    assert.equal(view.accessExpiresAt, original.accessExpiresAt);
+    assert.deepEqual((await store.read()).grant, original);
+    const retryAt = scheduledRenewal(events).dueAtMs;
+    if (beforeDueMs > 0) {
+      assert.equal(retryAt, originalDueAt);
+    } else {
+      assert.ok(retryAt >= originalDueAt && retryAt <= Date.now() + 30_000,
+        `expected the unsent renewal within its normal backoff, got +${retryAt - Date.now()}ms`);
+    }
+
+    t.mock.timers.tick(Math.max(1, retryAt - Date.now()));
+    await waitForView(service, (current) => current.state === 'ready' && current.accessExpiresAt !== original.accessExpiresAt);
+    assert.deepEqual(posts, [original.refreshToken]);
+    assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
+  });
+}
 
 test('an unmatched peer receipt after lock recovery cannot authorize the session', async (t) => {
   const { service, peerStore, complete, posts, events } = await observePeerPendingAfterReadTimeout(t);
@@ -455,6 +582,25 @@ async function holdMatchingPeerReceipt(t, { service, credentials, peerStore, com
   t.mock.timers.tick(1000);
   await waitForView(service, () => holdingReceipt);
   return releaseReceipt.resolve;
+}
+
+for (const [scenario, binding] of [['withdrawn', null], ['replaced', {}]]) {
+  test(`a matching peer receipt is fenced when same-provider atomic trust is ${scenario}`, async (t) => {
+    const host = await observePeerPendingAfterReadTimeout(t);
+    const { service, store, complete, posts, handler, setAtomicStoreBinding } = host;
+    const releaseReceipt = await holdMatchingPeerReceipt(t, host);
+    setAtomicStoreBinding(binding);
+    releaseReceipt();
+    await setImmediate();
+    const panel = await callRoute(handler, 'GET', 'view');
+    assert.equal(panel.body.error, 'IAM_REAUTH_REQUIRED');
+    assert.equal(panel.body.principal, null);
+    assert.equal(service.getSession().signedIn, false);
+    assert.equal(service.getSession().principal, undefined);
+    assert.equal(service.getPrincipal(), undefined);
+    assert.deepEqual((await store.read()).grant, complete);
+    assert.deepEqual(posts, []);
+  });
 }
 
 test('sign-out fences a matching peer receipt already read by lock recovery', async (t) => {

@@ -38,6 +38,8 @@ const iamReadTestPaths = [
   'packages/forge-iam/test/bridge-real-provider.test.mjs',
   'packages/forge-iam/test/gateway-save-confirmation.test.mjs',
   'packages/forge-iam/test/gateway-sqlite-regression.test.mjs',
+  'packages/forge-iam/test/session-read-lock-recovery.test.mjs',
+  'packages/forge-iam/test/session-renewal-log.test.mjs',
 ];
 
 const platformEnvironment = new Map([
@@ -480,6 +482,12 @@ const executionMutations = [
   ['gateway SQLite regression test removed',
     workflow.replace(' packages/forge-iam/test/gateway-sqlite-regression.test.mjs', ''),
     /native-linux-x64: IAM read paths and CLI tests must run unconditionally/u],
+  ['SQLite session recovery test removed',
+    workflow.replace(' packages/forge-iam/test/session-read-lock-recovery.test.mjs', ''),
+    /native-win32-x64: IAM read paths and CLI tests must run unconditionally/u],
+  ['cross-process renewal log test removed',
+    workflow.replace(' packages/forge-iam/test/session-renewal-log.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
   ['IAM read paths moved to a comment',
     workflow.replace('node --test packages/forge-iam/test/read-paths-matrix.test.mjs ', 'node --test ')
       .replace('        run: node --test packages/forge-iam/test/cli-session.test.mjs', '        # packages/forge-iam/test/read-paths-matrix.test.mjs\n        run: node --test packages/forge-iam/test/cli-session.test.mjs'),
