@@ -30,15 +30,12 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test",
+    "test:compat": "node scripts/verify-runtime.mjs",
     "verify": "node scripts/check-generated.mjs && npm run typecheck && node --test"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-scope": "0.2.1-rc.3",
     "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-skill-filesystem": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-tool-skill": "0.2.1-rc.3",
     "@types/node": "22.20.4",
     "@types/react": "18.3.31",
     "esbuild": "0.25.0",
