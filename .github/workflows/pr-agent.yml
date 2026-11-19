@@ -1,4 +1,5 @@
 name: 洛神 (PR-Agent)
+run-name: '洛神 · PR #${{ github.event.pull_request.number || github.event.issue.number }}'
 
 # Automated PR review through PR-Agent (https://github.com/The-PR-Agent/pr-agent).
 # The Action reads the pull request through the GitHub API and sends only the
@@ -34,12 +35,19 @@ name: 洛神 (PR-Agent)
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, review_requested, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
 
-# `issues: write` and `pull-requests: write` allow PR-Agent to publish comments.
+# Serialize automatic reviews and authorized /review requests for the same PR.
+# Let earlier runs finish before checking for a completed review.
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type == 'Bot' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/review')) && 'other-comment' || 'review' }}
+  queue: max
+
+# Read completed review runs and let PR-Agent publish comments.
 permissions:
+  actions: read
   contents: read
   issues: write
   pull-requests: write
@@ -61,14 +69,10 @@ jobs:
          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
         (github.event_name == 'pull_request' &&
          (github.event.sender.type != 'Bot' || github.event.action == 'synchronize') &&
+         (github.event.action != 'synchronize' || !github.event.before || github.event.before != github.event.after) &&
          github.event.pull_request.draft == false &&
          github.event.pull_request.head.repo.full_name == github.repository)
       )
-    concurrency:
-      # All comments containing /review share the review group, even with
-      # leading whitespace. Comment events wait; newer PR pushes cancel runs.
-      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type == 'Bot' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/review')) && 'other-comment' || github.event.action == 'review_requested' && github.event.pull_request.created_at != '' && github.event.pull_request.created_at == github.event.pull_request.updated_at && 'initial-request' || 'review' }}
-      cancel-in-progress: ${{ github.event_name != 'issue_comment' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -77,16 +81,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
         run: &capture_revision |
           node --input-type=module <<'NODE'
           import { appendFile } from 'node:fs/promises';
 
-          const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, PR_NUMBER, EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
+          const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, GITHUB_RUN_ID, PR_NUMBER, EVENT_HEAD,
+            EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
           if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '')) throw new Error('Invalid PR number');
-          const response = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}`, {
-            headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` },
-            signal: AbortSignal.timeout(15000),
-          });
+          const api = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}`;
+          const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` };
+          const githubGet = (url) => fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+          const response = await githubGet(`${api}/pulls/${PR_NUMBER}`);
           if (!response.ok) throw new Error(`Cannot read PR revision (HTTP ${response.status})`);
           const pr = await response.json();
           const head = pr.head?.sha;
@@ -99,11 +105,37 @@ jobs:
           if ((EXPECTED_HEAD && head !== EXPECTED_HEAD) || (EXPECTED_BASE_REF && baseRef !== EXPECTED_BASE_REF)) {
             throw new Error('PR revision changed before retry');
           }
+          if (EVENT_HEAD) {
+            if (head !== EVENT_HEAD || pr.state !== 'open' || pr.draft) {
+              console.log('Skipping an outdated or ineligible automatic review event.');
+              process.exit(0);
+            }
+            // The run name records the exact PR even if GitHub omits pull_requests
+            // from the run listing. Only an actual validated review counts.
+            const query = new URLSearchParams({ event: 'pull_request', head_sha: head, status: 'success', per_page: '100' });
+            for (let page = 1; page <= 10; page++) {
+              query.set('page', String(page));
+              const history = await githubGet(`${api}/actions/workflows/pr-agent.yml/runs?${query}`);
+              if (!history.ok) throw new Error(`Cannot read prior automatic reviews (HTTP ${history.status})`);
+              const { workflow_runs: runs } = await history.json();
+              if (!Array.isArray(runs)) throw new Error('Invalid automatic review history');
+              for (const run of runs) {
+                if (String(run.id) === GITHUB_RUN_ID || run.display_title !== `洛神 · PR #${PR_NUMBER}`) continue;
+                const details = await githubGet(`${api}/actions/runs/${run.id}/jobs?per_page=100`);
+                if (!details.ok) throw new Error(`Cannot verify prior automatic review (HTTP ${details.status})`);
+                const { jobs } = await details.json();
+                if (!Array.isArray(jobs)) throw new Error('Invalid automatic review jobs');
+                if (jobs.some((job) => job.conclusion === 'success' && job.steps?.some((step) =>
+                  step.name === 'Confirm completed automatic review' && step.conclusion === 'success'))) {
+                  console.log(`Skipping automatic review already completed by run ${run.id}.`);
+                  process.exit(0);
+                }
+              }
+              if (runs.length < 100) break;
+            }
+          }
           // The PR's base.sha can remain at the merge base after the target branch advances.
-          const baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(baseRef)}`, {
-            headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` },
-            signal: AbortSignal.timeout(15000),
-          });
+          const baseResponse = await githubGet(`${api}/git/ref/heads/${encodeURIComponent(baseRef)}`);
           if (!baseResponse.ok) throw new Error(`Cannot read target branch (HTTP ${baseResponse.status})`);
           const reference = await baseResponse.json();
           const base = reference.object?.sha;
@@ -116,6 +148,7 @@ jobs:
 
       - name: Run PR-Agent
         id: pr_agent
+        if: ${{ steps.revision.outputs.head != '' }}
         uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
         env: &pr_agent_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -162,6 +195,7 @@ jobs:
       # finding merits a formal request or whether an existing request is resolved.
       - name: Validate PR-Agent review
         id: validation
+        if: ${{ steps.revision.outputs.head != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -169,8 +203,6 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
-          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
-          PR_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
           REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
           REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.revision.outputs.base }}
@@ -182,14 +214,13 @@ jobs:
           import { appendFile } from 'node:fs/promises';
 
           const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, COMMENT_BODY,
-            PR_TITLE, PR_CREATED_AT, PR_UPDATED_AT, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEWED_BASE_REF,
+            PR_TITLE, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEWED_BASE_REF,
             REVIEW_STARTED_AT, PR_AGENT_ALLOW_RETRY, PR_AGENT_CHECK_REFRESH, GITHUB_OUTPUT } = process.env;
           if (!REVIEW_RESULT) {
             // Match the upstream ignored-title and incremental-review skips.
             const ignoredTitle = /^\[Auto\]/.test(PR_TITLE ?? '');
-            const initialRequest = EVENT_ACTION === 'review_requested' && PR_CREATED_AT && PR_CREATED_AT === PR_UPDATED_AT;
             const incremental = EVENT_NAME === 'issue_comment' && /^\s*\/review\s+-i(?:\s|$)/i.test(COMMENT_BODY ?? '');
-            const expected = !ignoredTitle && ((EVENT_NAME === 'pull_request' && !initialRequest) ||
+            const expected = !ignoredTitle && (EVENT_NAME === 'pull_request' ||
               (EVENT_NAME === 'issue_comment' && !incremental && /^\s*\/review(?:\s|$)/i.test(COMMENT_BODY ?? '')));
             if (!expected) {
               if (incremental && !ignoredTitle) {
@@ -322,8 +353,6 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
-          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
-          PR_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
           REVIEW_RESULT: ${{ steps.pr_agent_retry.outputs.review }}
           REVIEWED_HEAD: ${{ steps.retry_revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.retry_revision.outputs.base }}
@@ -331,3 +360,7 @@ jobs:
           REVIEW_STARTED_AT: ${{ steps.retry_revision.outputs.started }}
           PR_AGENT_CHECK_REFRESH: "true"
         run: *validate_review
+
+      - name: Confirm completed automatic review
+        if: ${{ github.event_name == 'pull_request' && (steps.pr_agent_retry.outputs.review != '' || (steps.validation.outputs.retry != 'true' && steps.pr_agent.outputs.review != '')) }}
+        run: echo 'Automatic review completed for this PR head.'
