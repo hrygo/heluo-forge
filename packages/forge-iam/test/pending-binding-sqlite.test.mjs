@@ -3,7 +3,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { setImmediate } from 'node:timers/promises';
 import { createCredentialStore, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { createIamService } from '../src/service.mjs';
 import { REFRESH_TIMEOUT_MS } from '../src/service-helpers.mjs';
@@ -16,6 +15,15 @@ const config = {
   tokenEndpoint: `${issuer}/token`, jwksUri: `${issuer}/jwks`, refreshSkewSeconds: 1,
   redirectUri: 'http://127.0.0.1:4567/iam/callback',
 };
+// The watchdog covers real SQLite I/O. Protocol deadlines advance on the
+// test clock in scenarios that exercise receipt ordering or expiry.
+const sqliteTestOptions = { timeout: 60_000 };
+
+function mockClock(t) {
+  const start = Date.now();
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
+  return { start, monotonic: () => Date.now() - start };
+}
 
 async function openHosts(t, {
   refreshSkewSeconds = config.refreshSkewSeconds, fetchJwks, fetchToken, monotonic,
@@ -91,14 +99,13 @@ async function openHosts(t, {
 
 for (const refreshUsable of [true, false]) {
   const outcome = refreshUsable ? 'schedules a retry' : 'cannot renew again';
-  test(`a warm peer rollback after access expiry ${outcome}`, { timeout: 5000 }, async (t) => {
-    const start = Date.now();
-    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
+  test(`a warm peer rollback after access expiry ${outcome}`, sqliteTestOptions, async (t) => {
+    const { start, monotonic } = mockClock(t);
     const { service, writer, original, pending, posts, renewals, releaseReceipt } = await openHosts(t, {
       refreshSkewSeconds: 0,
       accessLifetimeMs: 1000,
       refreshLifetimeMs: 1500,
-      monotonic: () => Date.now() - start,
+      monotonic,
       fetchJwks: () => Response.json({ keys: [] }),
       fetchToken: () => Response.json({
         access_token: 'synthetic-rotated-access', refresh_token: 'synthetic-rotated-refresh',
@@ -130,10 +137,16 @@ for (const refreshUsable of [true, false]) {
     assert.equal(service.getView().renewal, 'available');
     const dueAt = renewals.at(-1)?.dueAtMs;
     assert.ok(dueAt > Date.now() && dueAt < Date.parse(original.refreshExpiresAt));
-    t.mock.timers.tick(dueAt - Date.now());
-    const deadline = performance.now() + 1500;
-    while (service.getView().state !== 'ready' && performance.now() < deadline) await setImmediate();
-    assert.equal(service.getView().state, 'ready');
+    const views = service.watch(t.signal);
+    try {
+      await views.next();
+      t.mock.timers.tick(dueAt - Date.now());
+      let update = await views.next();
+      while (update.value?.state === 'expired') update = await views.next();
+      assert.equal(update.value?.state, 'ready');
+    } finally {
+      await views.return();
+    }
     releaseReceipt();
     assert.equal(await service.getAccessToken(), 'synthetic-rotated-access');
     assert.deepEqual(posts, [config.tokenEndpoint]);
@@ -150,8 +163,9 @@ async function persistSignOutPending(writer, grant) {
 
 for (const adopted of [true, false]) {
   const scenario = adopted ? 'a warm observer' : 'a cold token waiter';
-  test(`${scenario} retains explicit sign-out after its receipt read finds a sign-out marker`, { timeout: 5000 }, async (t) => {
-    const { service, writer, original, pending, complete, posts, observerWrites, pendingObserved, releaseReceipt } = await openHosts(t);
+  test(`${scenario} retains explicit sign-out after its receipt read finds a sign-out marker`, sqliteTestOptions, async (t) => {
+    const { monotonic } = mockClock(t);
+    const { service, writer, original, pending, complete, posts, observerWrites, pendingObserved, releaseReceipt } = await openHosts(t, { monotonic });
     if (adopted) {
       await writer.write(original);
       assert.equal((await service.hydrate()).state, 'ready');
@@ -160,9 +174,15 @@ for (const adopted of [true, false]) {
     if (adopted) assert.equal((await service.syncFromStore()).state, 'ready');
     const result = assert.rejects(service.getAccessToken(), { code: adopted ? 'IAM_INVALID_GRANT' : 'IAM_REAUTH_REQUIRED' });
     void result.catch(() => {});
-    if (!adopted) await pendingObserved;
+    if (!adopted) {
+      await Promise.race([
+        pendingObserved,
+        result.then(() => assert.fail('the cold waiter must observe the pending refresh before the sign-out marker is written')),
+      ]);
+    }
     await persistSignOutPending(writer, complete);
     releaseReceipt();
+    t.mock.timers.tick(50);
     await result;
     assert.equal(service.getView().error, 'IAM_REVOCATION_UNKNOWN');
     assert.equal(service.getView().canSignOut, true);
@@ -175,7 +195,7 @@ for (const adopted of [true, false]) {
 
 for (const duringClaim of [true, false]) {
   const scenario = duringClaim ? 'during its SQLite mutation' : 'after losing its SQLite mutation';
-  test(`a refresh claim that discovers a sign-out marker ${scenario} retains explicit sign-out`, { timeout: 5000 }, async (t) => {
+  test(`a refresh claim that discovers a sign-out marker ${scenario} retains explicit sign-out`, sqliteTestOptions, async (t) => {
     const readingJwks = Promise.withResolvers();
     const releaseJwks = Promise.withResolvers();
     t.after(releaseJwks.resolve);
@@ -227,7 +247,7 @@ for (const adopted of [true, false]) {
   const entry = adopted ? 'an adopted session observer' : 'a cold token request';
   for (const replaceTrust of [true, false]) {
     const outcome = replaceTrust ? 'rejects a receipt across trust replacement' : 'adopts a receipt under the same trust binding';
-    test(`${entry} ${outcome}`, { timeout: 10_000 }, async (t) => {
+    test(`${entry} ${outcome}`, sqliteTestOptions, async (t) => {
       const host = await openHosts(t);
       const { service, writer, pending, complete, posts, observerWrites } = host;
       if (adopted) {
@@ -265,7 +285,7 @@ for (const adopted of [true, false]) {
   }
 }
 
-test('concurrent token requests recover a peer receipt after cold hydration observed pending', { timeout: 10_000 }, async (t) => {
+test('concurrent token requests recover a peer receipt after cold hydration observed pending', sqliteTestOptions, async (t) => {
   const host = await openHosts(t);
   const { service, writer, pending, complete, posts, observerWrites } = host;
   await writer.write(pending);
@@ -291,7 +311,7 @@ test('concurrent token requests recover a peer receipt after cold hydration obse
 });
 
 for (const replaceTrust of [false, true]) {
-  test(`a cold observer accepts a distinct peer login ${replaceTrust ? 'after rejecting a rebound receipt' : 'during the original observation window'}`, { timeout: 10_000 }, async (t) => {
+  test(`a cold observer accepts a distinct peer login ${replaceTrust ? 'after rejecting a rebound receipt' : 'during the original observation window'}`, sqliteTestOptions, async (t) => {
     const host = await openHosts(t);
     const { service, writer, original, pending, complete, posts, observerWrites } = host;
     await writer.write(pending);
@@ -322,7 +342,7 @@ for (const replaceTrust of [false, true]) {
   });
 }
 
-test('a token request keeps the original pending observation deadline after cold hydration', { timeout: 10_000 }, async (t) => {
+test('a token request keeps the original pending observation deadline after cold hydration', sqliteTestOptions, async (t) => {
   let elapsed = 0;
   const host = await openHosts(t, { monotonic: () => elapsed });
   const { service, writer, pending, complete, posts, observerWrites } = host;
@@ -348,7 +368,7 @@ test('a token request keeps the original pending observation deadline after cold
   assert.deepEqual(posts, []);
 });
 
-test('a wall-clock jump does not spend the original SQLite pending observation budget', { timeout: 10_000 }, async (t) => {
+test('a wall-clock jump does not spend the original SQLite pending observation budget', sqliteTestOptions, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   let elapsed = 0;
   const host = await openHosts(t, { monotonic: () => elapsed });
@@ -373,7 +393,7 @@ const preflightOutcomes = [
   ['replacement', 'keeps its original login when another Host signs in'],
 ];
 for (const [outcome, description] of preflightOutcomes) {
-  test(`a request in preflight ${description}`, { timeout: 10_000 }, async (t) => {
+  test(`a request in preflight ${description}`, sqliteTestOptions, async (t) => {
     let elapsed = 0;
     const readingJwks = Promise.withResolvers();
     const releaseJwks = Promise.withResolvers();
