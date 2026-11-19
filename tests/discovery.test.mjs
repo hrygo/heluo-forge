@@ -10,7 +10,6 @@ import {
 
 const BASE = {
   discoveryUrl: 'https://iam.example.test/.well-known/openid-configuration',
-  issuer: 'https://iam.example.test',
   clientId: 'DSH',
   allowInsecureHttp: false,
 };
@@ -54,7 +53,7 @@ test('a matching document is accepted and reports which fields matched, without 
   const result = await verifyDiscovery(BASE, { fetchImpl });
   // The verdict is redacted by construction: field names and a source label,
   // never an issuer or endpoint value (issue #254 item 10).
-  assert.deepEqual(result, { checked: true, matched: ['issuer'], revocationEndpoint: 'missing' });
+  assert.deepEqual(result, { checked: true, matched: [], revocationEndpoint: 'missing' });
   assert.equal(JSON.stringify(result).includes('iam.example.test'), false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.redirect, 'error');
@@ -71,67 +70,73 @@ test('configured endpoints that match are reported by name only', async () => {
     },
     { fetchImpl },
   );
-  assert.deepEqual(result, { checked: true, matched: ['issuer', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri'], revocationEndpoint: 'missing' });
+  assert.deepEqual(result, { checked: true, matched: ['authorizationEndpoint', 'tokenEndpoint', 'jwksUri'], revocationEndpoint: 'missing' });
   assert.equal(JSON.stringify(result).includes('iam.example.test'), false);
 });
 
-test('the maker refuses to package a discovery URL without an explicit issuer', () => {
+test('a discovery URL alone is enough to package and reports login-ready', () => {
   const entries = parseEnvConfig([
+    'HELUO_IAM_DISCOVERY_URL=https://iam.example.test/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_SCOPES=openid profile',
+  ].join('\n'));
+  const config = buildConfig(entries);
+  assert.equal(config.iam.discoveryUrl, 'https://iam.example.test/.well-known/openid-configuration');
+  assert.equal('issuer' in config.iam, false, 'the generated config must not pin a second issuer');
+  assert.equal(config.keys.includes('iam.issuer'), false);
+  assert.equal(isLoginConfigured({ ...BASE }), true);
+});
+
+test('the maker refuses a pinned issuer alongside a discovery URL', () => {
+  const entries = parseEnvConfig([
+    'HELUO_IAM_ISSUER=https://iam.example.test',
     'HELUO_IAM_DISCOVERY_URL=https://iam.example.test/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=DSH',
     'HELUO_IAM_SCOPES=openid profile',
   ].join('\n'));
   assert.throws(
     () => buildConfig(entries),
-    (error) => error.code === 'CONFIG_INVALID' && /HELUO_IAM_ISSUER is required/u.test(error.message),
-  );
-  // `isLoginConfigured` is what the previews report as `loginReady`; it must not
-  // call a bundle ready when the only trust anchor would be the document itself.
-  assert.equal(
-    isLoginConfigured({ clientId: 'DSH', discoveryUrl: 'https://iam.example.test/.well-known/openid-configuration' }),
-    false,
-  );
-  assert.equal(
-    isLoginConfigured({
-      clientId: 'DSH',
-      issuer: 'https://iam.example.test',
-      discoveryUrl: 'https://iam.example.test/.well-known/openid-configuration',
-    }),
-    true,
+    (error) => error.code === 'CONFIG_INVALID'
+      && /HELUO_IAM_ISSUER must not be set together with HELUO_IAM_DISCOVERY_URL/u.test(error.message),
   );
 });
 
-test('a discovery URL alone is not a trust anchor: the issuer is required', async () => {
-  for (const issuer of [undefined, '', '   ']) {
-    const error = await rejected(verifyDiscovery({ ...BASE, issuer }, { fetchImpl: () => assert.fail('must not fetch') }));
-    assert.equal(error.code, 'DISCOVERY_ISSUER_REQUIRED');
-    assert.equal(error.message.includes('iam.example.test'), false);
+test('explicit endpoints still require an issuer', () => {
+  const entries = parseEnvConfig([
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_AUTHORIZATION_ENDPOINT=https://iam.example.test/authorize',
+    'HELUO_IAM_TOKEN_ENDPOINT=https://iam.example.test/token',
+    'HELUO_IAM_JWKS_URI=https://iam.example.test/jwks',
+    'HELUO_IAM_SCOPES=openid profile',
+  ].join('\n'));
+  assert.throws(
+    () => buildConfig(entries),
+    (error) => error.code === 'CONFIG_INVALID'
+      && /HELUO_IAM_ISSUER is required when HELUO_IAM_DISCOVERY_URL is not set/u.test(error.message),
+  );
+});
+
+test('the discovery document must still declare an allowed issuer', async () => {
+  for (const issuer of [undefined, '', '   ', 'ftp://sensitive.example.test']) {
+    const error = await rejected(verifyDiscovery(BASE, { fetchImpl: stub({ ...DOCUMENT, issuer }).fetchImpl }));
+    assert.equal(error.code, 'DISCOVERY_INVALID');
+    assert.equal(error.message.includes('sensitive.example.test'), false);
   }
 });
 
-// packages/forge-iam/src/oidc.mjs compares `config.issuer !== document.issuer`
-// exactly, so a tolerated trailing slash here produced a bundle that installed
-// and then failed login with IAM_DISCOVERY_ISSUER_MISMATCH (issue #254 item 9).
-test('a trailing slash on either issuer is a mismatch, exactly like the runtime', async () => {
-  const { fetchImpl } = stub({ ...DOCUMENT, issuer: 'https://iam.example.test/' });
-  const error = await rejected(verifyDiscovery(BASE, { fetchImpl }));
-  assert.equal(error.code, 'DISCOVERY_ISSUER_MISMATCH');
-  assert.equal(error.message.includes('iam.example.test'), false);
-
-  const reverse = await rejected(
-    verifyDiscovery({ ...BASE, issuer: 'https://iam.example.test/' }, { fetchImpl: stub(DOCUMENT).fetchImpl }),
-  );
-  assert.equal(reverse.code, 'DISCOVERY_ISSUER_MISMATCH');
-  assert.equal(reverse.message.includes('iam.example.test'), false);
+test('a different document issuer is adopted instead of rejected', async () => {
+  const { fetchImpl } = stub({ ...DOCUMENT, issuer: 'https://other.example.test' });
+  const result = await verifyDiscovery(BASE, { fetchImpl });
+  assert.deepEqual(result, { checked: true, matched: [], revocationEndpoint: 'missing' });
+  assert.equal(JSON.stringify(result).includes('other.example.test'), false);
 });
 
 test('failure messages never echo a configured or discovered URL', async () => {
-  const mismatch = await rejected(
-    verifyDiscovery(BASE, { fetchImpl: stub({ ...DOCUMENT, issuer: 'https://other.example.test' }).fetchImpl }),
+  const invalidIssuer = await rejected(
+    verifyDiscovery(BASE, { fetchImpl: stub({ ...DOCUMENT, issuer: 'ftp://other.example.test' }).fetchImpl }),
   );
-  assert.equal(mismatch.code, 'DISCOVERY_ISSUER_MISMATCH');
-  assert.equal(mismatch.message.includes('other.example.test'), false);
-  assert.equal(mismatch.message.includes('iam.example.test'), false);
+  assert.equal(invalidIssuer.code, 'DISCOVERY_INVALID');
+  assert.equal(invalidIssuer.message.includes('other.example.test'), false);
 
   const invalid = await rejected(
     verifyDiscovery(BASE, { fetchImpl: stub({ ...DOCUMENT, jwks_uri: 'http://iam.example.test/jwks' }).fetchImpl }),
@@ -147,12 +152,6 @@ test('failure messages never echo a configured or discovered URL', async () => {
   assert.equal(unreachable.code, 'DISCOVERY_UNREACHABLE');
   assert.equal(unreachable.message.includes('iam.example.test'), false);
   assert.match(unreachable.message, /ECONNREFUSED/u);
-});
-
-test('an issuer mismatch is rejected', async () => {
-  const { fetchImpl } = stub({ ...DOCUMENT, issuer: 'https://other.example.test' });
-  const error = await rejected(verifyDiscovery(BASE, { fetchImpl }));
-  assert.equal(error.code, 'DISCOVERY_ISSUER_MISMATCH');
 });
 
 test('a non-2xx response is rejected', async () => {
@@ -241,7 +240,7 @@ test('plaintext endpoints are rejected unless insecure HTTP is allowed', async (
   const error = await rejected(verifyDiscovery(BASE, { fetchImpl }));
   assert.equal(error.code, 'DISCOVERY_INVALID');
   const allowed = await verifyDiscovery(
-    { ...BASE, allowInsecureHttp: true, issuer: 'http://iam.example.test', discoveryUrl: 'http://iam.example.test/.well-known/openid-configuration' },
+    { ...BASE, allowInsecureHttp: true, discoveryUrl: 'http://iam.example.test/.well-known/openid-configuration' },
     { fetchImpl: stub({ ...DOCUMENT, issuer: 'http://iam.example.test', authorization_endpoint: 'http://iam.example.test/authorize', token_endpoint: 'http://iam.example.test/token', jwks_uri: 'http://iam.example.test/jwks' }).fetchImpl },
   );
   assert.equal(allowed.checked, true);

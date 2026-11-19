@@ -38,11 +38,11 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 |---|---|---|---|
 | 公版 `.tgz` 路径 | 是 | — | 存在、文件名含版本 |
 | 公版 SHA-256 | 是 | — | 64 位 hex，与本地文件一致；来源可信 |
-| IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认。它是本包的信任锚：Discovery 文档里的 `issuer` 必须与之逐字符相同（大小写与结尾斜杠都算不同），maker 不采用文档自称的 issuer |
+| IAM issuer | 仅显式端点模式必填 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认。使用 Discovery URL 时不要提供本项：issuer 由 Discovery 文档提供，制作器拒绝两者并存，固定 issuer 与文档不一致会导致登录无法跳转 |
 | IAM client_id | 是 | — | 非空，不含空白 |
 | IAM scopes | 否 | `openid profile offline_access` | 空格或逗号分隔；必须包含 `openid`，插件缺它会拒绝加载 |
 | 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾；内网 http 需显式安全确认 |
-| IAM Discovery URL | 条件必填 | issuer + `/.well-known/openid-configuration` | 优先提供。maker 请求并检查 `issuer`、授权、token 与 JWKS 端点；`issuer` 必须与配置**逐字符相同**（结尾斜杠或大小写不同都按不一致拒绝），工具不会采用 Discovery 文档自称的 issuer 作为信任锚。不用 Discovery 时须显式提供 issuer 和三个端点，并记录未执行 Discovery 核验 |
+| IAM Discovery URL | 与 issuer 二选一（优先） | — | 优先提供；提供后 issuer 由文档声明，运行时以 ID Token 的 `iss` 与之精确比对。maker 请求并检查文档 issuer 及授权、token、JWKS 端点；未显式指定时也校验发现的撤销、登出和用户信息端点格式。此时不要另配 `HELUO_IAM_ISSUER`。不用 Discovery 时须显式提供 issuer 和三个端点，并记录未执行 Discovery 核验 |
 | IAM 访问令牌撤销端点 | 默认退出需要 | 空 | 显式提供 D1 的完整端点地址，不带查询参数；核验其 GET 回执。Discovery 检查不会保证此端点存在或兼容 D1 |
 | 网关 provider | 配置网关时必填 | — | 企业网关的准确模型路由标识；不确定时确认，不编造 |
 | 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
@@ -59,8 +59,8 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 
 ```dotenv
 HELUO_IAM_AUTH_MODE=public
-HELUO_IAM_ISSUER=<issuer>
 HELUO_IAM_DISCOVERY_URL=<discovery url>
+# HELUO_IAM_ISSUER=<issuer>  # 仅显式端点模式；不要与 Discovery URL 同时启用
 HELUO_IAM_CLIENT_ID=<client_id>
 HELUO_IAM_SCOPES=openid profile offline_access
 HELUO_IAM_REVOCATION_ENDPOINT=<D1 revocation endpoint>
@@ -72,7 +72,7 @@ HELUO_IAM_ALLOW_INSECURE_HTTP=<true 仅内网 http 且已确认>
 HELUO_GITEE_HOST=<gitee host>
 ```
 
-`HELUO_IAM_DEFAULT_PROVIDER` 使用企业网关的模型路由标识；不确定时向打包人员确认，不要编造。Gitee 未提供时删掉该行。未配置 Discovery 时，以 `HELUO_IAM_AUTHORIZATION_ENDPOINT`、`HELUO_IAM_TOKEN_ENDPOINT` 和 `HELUO_IAM_JWKS_URI` 显式给出端点。当前实现用同一个 `tokenEndpoint` 换票和刷新；企业刷新是否使用同一端点须联调确认。只有制包端验证使用 `HELUO_IAM_ALLOW_INSECURE_HTTP`，运行时不依靠此字段阻止 HTTP。
+`HELUO_IAM_DEFAULT_PROVIDER` 使用企业网关的模型路由标识；不确定时向打包人员确认，不要编造。Gitee 未提供时删掉该行。使用 Discovery URL 时 issuer 由文档提供，私版不写入 `issuer`；未配置 Discovery 时，须同时提供 `HELUO_IAM_ISSUER`、`HELUO_IAM_AUTHORIZATION_ENDPOINT`、`HELUO_IAM_TOKEN_ENDPOINT` 和 `HELUO_IAM_JWKS_URI`。当前实现用同一个 `tokenEndpoint` 换票和刷新；企业刷新是否使用同一端点须联调确认。只有制包端验证使用 `HELUO_IAM_ALLOW_INSECURE_HTTP`，运行时不依靠此字段阻止 HTTP。
 
 提供现有文件路径给 `config`，并在 macOS 制包机上检查忽略规则、设置文件权限；检查失败时停止：
 
@@ -124,9 +124,9 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 | `PUBLIC_DIGEST_MISMATCH` | 停止。重新取得公版与可信摘要，不猜测文件 |
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续，报告命中的类别 |
 | `PUBLIC_INCOMPLETE` | 公版自身没通过制品闭包校验（例如缺平台原生 addon、夹带测试文件、`workspace:` 依赖未闭合）。重新取得正确的公版制品；不要重算摘要把缺件包当成新公版 |
-| `CONFIG_*` | 按字段回显修正；未知键不写入。出现 `IAM login is incomplete` 时补 Discovery URL（或 issuer + 三个端点），不要删掉 issuer 绕过 |
+| `CONFIG_*` | 按字段回显修正；未知键不写入。出现 `IAM login is incomplete` 时补 Discovery URL（或 issuer + 三个端点）；出现 `HELUO_IAM_ISSUER must not be set together with HELUO_IAM_DISCOVERY_URL` 时删除 issuer 行，只保留 Discovery URL |
 | `IAM_VALIDATOR_MISMATCH` | 公版与制作工具链中的 IAM 校验模块不一致或缺失；使用配套版本并重新核对来源与摘要 |
-| `DISCOVERY_*` | 打包机到 IAM 的网络不可达，或 Discovery 文档与配置不一致（`issuer`/端点必须逐字符相同，尾斜杠也算不同）。配置了 Discovery URL 时仍须提供 `issuer`，缺失即 `DISCOVERY_ISSUER_REQUIRED`，不能只靠 Discovery 文档自称的值。先修网络或配置；确实只能离线制作时才用 `--skip-discovery-check`，并在报告里列为未验证项 |
+| `DISCOVERY_*` | 打包机到 IAM 的网络不可达，或 Discovery 文档不合规：文档必须声明合法 `issuer`，`authorization_endpoint`/`token_endpoint`/`jwks_uri` 必须存在，显式配置过的端点必须与文档一致。Discovery 模式不以单独的 issuer 配置做比对，文档声明的 issuer 即运行期来源。先修网络或配置；确实只能离线制作时才用 `--skip-discovery-check`，并在报告里列为未验证项 |
 | 安装后向导显示"凭据存储不可用" | 检查目标平台的 SQLite、目录权限、磁盘空间与配套 keyring；目标平台行为须实测，不以平台名称推定后端不可用 |
 | `BUNDLE_SECRET_EMBED_UNSUPPORTED` | public + PKCE 不使用 `client_secret`；不要把密钥写入配置或交付物，修正专用配置后重新预览 |
 | `OUTPUT_*` | 换仓库外的新目录；不要删除已有文件 |

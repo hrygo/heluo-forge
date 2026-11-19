@@ -116,54 +116,41 @@ const GITEE_WRAPPER_SUFFIXES = Object.freeze(['.cmd', '.bat', '.ps1', '.com', '.
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
 
 /**
- * Mirror of `isConfigured` in packages/forge-iam/src/config.mjs, plus the one
- * deliberate difference issue #254 requires: the private bundle must pin its
- * trust anchor, so a discovery URL alone is not "configured" here. Without an
- * explicit issuer the maker would adopt whatever the discovery document claims,
- * which is the trust decision this artifact exists to fix in advance.
+ * Mirror of `isConfigured` in packages/forge-iam/src/config.mjs. The plugin's
+ * own validator decides whether the rest of the config is usable at load time;
+ * re-implementing that rule here is what let the maker ship a bundle the plugin
+ * refused (issue #254 item 7). A discovery URL without a pinned issuer is ready:
+ * the runtime adopts the document's issuer, and enterprise environments broke
+ * when the maker also baked in a second, possibly different issuer.
  */
 export function isLoginConfigured(iam) {
   if (typeof iam?.clientId !== 'string' || iam.clientId.trim() === '') return false;
-  // The plugin's own validator decides whether the rest of the config is usable
-  // at load time; re-implementing that rule here is what let the maker ship a
-  // bundle the plugin refused (issue #254 item 7).
   const validated = validateConfig(iam);
-  if (validated.issues || !isConfigured(validated.value).ok) return false;
-  // On top of the runtime contract, the private bundle pins its trust anchor:
-  // a discovery URL alone is "configured" for the plugin but never "ready" for
-  // this artifact, because the only issuer would be the document itself
-  // (issue #254 item 8).
-  return typeof validated.value.issuer === 'string' && validated.value.issuer.trim() !== '';
+  return !validated.issues && isConfigured(validated.value).ok;
 }
 
 export const DISCOVERY_TIMEOUT_MS = 15_000;
 
 /**
- * Fetch the IAM Discovery document and check that it agrees with the enterprise
- * config the maker is about to bake into the private bundle.
+ * Fetch the IAM Discovery document and check that the enterprise config the
+ * maker is about to bake into the private bundle is internally consistent.
  *
- * Two rules come from the runtime, not from taste:
+ * The discovery document is the issuer source for this mode: the bundle carries
+ * no pinned `issuer`, and `packages/forge-iam/src/oidc.mjs` adopts
+ * `document.issuer` at runtime. The maker therefore validates that the document
+ * declares an allowed issuer (the runtime still needs one) but does not compare
+ * it with a second configured value. Enterprise environments proved that a
+ * pinned issuer which disagrees with the document breaks login with
+ * `IAM_DISCOVERY_ISSUER_MISMATCH`, so `buildConfig` refuses both fields
+ * together rather than letting the maker ship that contradiction.
  *
- *   - the configured issuer is the trust target. `packages/forge-iam/src/oidc.mjs`
- *     compares `config.issuer !== document.issuer` strictly, so the maker uses
- *     the same exact comparison; tolerating a trailing slash here produced a
- *     bundle that installed and then failed login with
- *     `IAM_DISCOVERY_ISSUER_MISMATCH` (issue #254 item 9);
- *   - a missing issuer is a refusal, never "nothing to check" (item 8): the
- *     discovery document is data, not an authority.
- *
- * The result is redacted on purpose (item 10). It is printed into terminals,
- * assistant context and `private-release.json`, so it carries no issuer and no
- * endpoint value: only whether the check ran, which configured fields matched,
- * and where revocation came from (`configured` / `discovered` / `missing`).
+ * The result is redacted on purpose (issue #254 item 10). It is printed into
+ * terminals, assistant context and `private-release.json`, so it carries no
+ * issuer and no endpoint value: only whether the check ran, which configured
+ * fields matched, and where revocation came from (`configured` / `discovered` /
+ * `missing`).
  */
 export async function verifyDiscovery(iam, { fetchImpl = globalThis.fetch, timeoutMs = DISCOVERY_TIMEOUT_MS } = {}) {
-  if (typeof iam?.issuer !== 'string' || iam.issuer.trim() === '') {
-    fail(
-      'DISCOVERY_ISSUER_REQUIRED',
-      'HELUO_IAM_ISSUER must be configured: the discovery document is not a trust anchor, so the private bundle pins the trusted issuer explicitly',
-    );
-  }
   if (typeof iam.discoveryUrl !== 'string' || iam.discoveryUrl.trim() === '') {
     return { checked: false, reason: 'no-discovery-url' };
   }
@@ -205,14 +192,7 @@ export async function verifyDiscovery(iam, { fetchImpl = globalThis.fetch, timeo
   if (!isHttpUrl(document.issuer, { allowInsecureHttp: iam.allowInsecureHttp === true })) {
     fail('DISCOVERY_INVALID', 'discovery issuer is not an allowed URL');
   }
-  // Exact comparison, same as the runtime (`config.issuer !== document.issuer` in
-  // packages/forge-iam/src/oidc.mjs): a trailing-slash difference is a real
-  // mismatch, not something to normalize away (issue #254 item 9). The guard
-  // above already refused an empty configured issuer (item 8).
-  if (document.issuer !== iam.issuer) {
-    fail('DISCOVERY_ISSUER_MISMATCH', 'discovery issuer does not exactly match the configured issuer');
-  }
-  const matched = ['issuer'];
+  const matched = [];
   const endpoints = {};
   for (const key of ['authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
     const value = document[key];
@@ -421,10 +401,14 @@ export function buildConfig(entries) {
     const problem = redirectPathProblem(iam.redirectPath);
     if (problem !== null) problems.push(problem);
   }
-  // The trust anchor is not optional (issue #254 item 8): with a discovery URL
-  // alone the maker would have to adopt whatever issuer the document claims.
-  if (typeof iam.issuer !== 'string' || iam.issuer.trim() === '') {
-    problems.push('HELUO_IAM_ISSUER is required: the private bundle pins the trusted issuer instead of adopting the discovery document');
+  // Discovery supplies the issuer at runtime; carrying a second pinned issuer
+  // creates the contradiction that broke enterprise login. Explicit-endpoint
+  // mode has no discovery document, so there the issuer stays mandatory.
+  if (iam.issuer !== undefined && iam.discoveryUrl !== undefined) {
+    problems.push('HELUO_IAM_ISSUER must not be set together with HELUO_IAM_DISCOVERY_URL: the discovery document supplies the issuer, and a second pinned issuer breaks login when the values differ');
+  }
+  if (iam.discoveryUrl === undefined && (typeof iam.issuer !== 'string' || iam.issuer.trim() === '')) {
+    problems.push('HELUO_IAM_ISSUER is required when HELUO_IAM_DISCOVERY_URL is not set: explicit endpoints need the trusted issuer');
   }
   if (iam.callbackAddress !== undefined && !CALLBACK_ADDRESSES.has(iam.callbackAddress)) {
     problems.push('HELUO_IAM_CALLBACK_ADDRESS must be auto, 127.0.0.1 or ::1 (localhost and [::1] are not accepted)');
@@ -449,7 +433,7 @@ export function buildConfig(entries) {
   }
   if (problems.length > 0) fail('CONFIG_INVALID', `configuration is invalid:\n- ${problems.join('\n- ')}`);
   if (!isLoginConfigured(iam)) {
-    fail('CONFIG_INVALID', 'configuration is invalid:\n- IAM login is incomplete: set HELUO_IAM_ISSUER plus HELUO_IAM_DISCOVERY_URL (preferred) or HELUO_IAM_AUTHORIZATION_ENDPOINT, HELUO_IAM_TOKEN_ENDPOINT and HELUO_IAM_JWKS_URI');
+    fail('CONFIG_INVALID', 'configuration is invalid:\n- IAM login is incomplete: set HELUO_IAM_DISCOVERY_URL (preferred) or HELUO_IAM_ISSUER plus HELUO_IAM_AUTHORIZATION_ENDPOINT, HELUO_IAM_TOKEN_ENDPOINT and HELUO_IAM_JWKS_URI');
   }
 
   return {

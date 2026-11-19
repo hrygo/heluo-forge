@@ -73,7 +73,6 @@ function fixture(t) {
     configPath,
     [
       'HELUO_IAM_AUTH_MODE=public',
-      'HELUO_IAM_ISSUER=https://iam.corp.example',
       'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
       'HELUO_IAM_CLIENT_ID=test-client',
       'HELUO_IAM_SCOPES=openid profile',
@@ -113,7 +112,8 @@ test('dry-run prints the redacted plan and writes nothing', (t) => {
   });
   assert.equal(result.written, false);
   assert.equal(result.plan.configValues, 'redacted');
-  assert.equal(result.plan.configKeys.includes('iam.issuer'), true);
+  assert.equal(result.plan.configKeys.includes('iam.discoveryUrl'), true);
+  assert.equal(result.plan.configKeys.includes('iam.issuer'), false);
   assert.equal(result.plan.loginReady, true);
   assert.equal(result.plan.gatewayConfigured, true);
   assert.equal(result.plan.revocationConfigured, false);
@@ -198,7 +198,6 @@ test('both packaging CLIs redact discovery on success and failure', async (t) =>
   const issuer = `${base}/${marker}`;
   document = { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks`, revocation_endpoint: `${issuer}/revoke` };
   writeFileSync(configPath, [
-    `HELUO_IAM_ISSUER=${issuer}`,
     `HELUO_IAM_DISCOVERY_URL=${base}/private-discovery-marker`,
     'HELUO_IAM_CLIENT_ID=client-marker',
     `HELUO_IAM_MANAGED_MODELS_BASE_URL=${base}/private-gateway-marker`,
@@ -227,11 +226,11 @@ test('both packaging CLIs redact discovery on success and failure', async (t) =>
   assert.match(maker.stderr, /CONFIRM_REQUIRED/u);
   assert.doesNotMatch(maker.stderr, /private-(issuer|discovery|gateway)-marker/u);
 
-  document = { ...document, issuer: `${base}/private-mismatch-marker` };
+  document = { ...document, jwks_uri: 'ftp://private-mismatch-marker/jwks' };
   for (const [script, args] of [['release-delivery.mjs', [...deliveryArgs, '--dry-run']], ['make-private-bundle.mjs', makerArgs]]) {
     const failed = await runCli(script, args);
     assert.equal(failed.code, 1);
-    assert.match(failed.stderr, /DISCOVERY_ISSUER_MISMATCH/u);
+    assert.match(failed.stderr, /DISCOVERY_INVALID/u);
     assert.doesNotMatch(failed.stdout + failed.stderr, /private-(issuer|discovery|gateway|mismatch)-marker/u);
   }
 });
