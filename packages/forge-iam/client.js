@@ -1478,6 +1478,9 @@ window.__ModuleLoader__.load({
       if (ui.authenticating) {
         return { kind: 'authenticating', dotClass: 'authenticating', label: '等待登录完成', tooltip: '正在等待浏览器授权' };
       }
+      if (ui.storageRecovering) {
+        return { kind: 'unreachable', dotClass: 'warn', label: '正在恢复企业会话', tooltip: STORAGE_RECOVERY_NOTICE };
+      }
       if (ui.unreachable) {
         return { kind: 'unreachable', dotClass: 'warn', label: '连接登录受阻', tooltip: '暂时无法连接登录服务，现有授权保留至到期' };
       }
@@ -1630,6 +1633,7 @@ window.__ModuleLoader__.load({
       unreachable: { label: '暂时无法连接登录服务', badge: 'error' },
       error: { label: '需要处理', badge: 'error' },
     };
+    const STORAGE_RECOVERY_NOTICE = '本地凭据存储繁忙，正在自动重试';
 
     // §4.1 会话状态派生
     // view.state 只在这里读一次：其余代码用布尔量判断，新增状态时只改这里。
@@ -1647,6 +1651,7 @@ window.__ModuleLoader__.load({
         renewable: view?.renewal !== 'unavailable',
         expiredUnrenewable: state === 'expired' && view?.renewal === 'unavailable',
         unreachable: state === 'unreachable',
+        storageRecovering: state === 'unreachable' && view?.error === 'IAM_CREDENTIALS_UNAVAILABLE',
         failed: state === 'error',
         unconfigured: state === 'unconfigured',
       };
@@ -2284,7 +2289,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'fiam-card-subtitle' }, ui.ready ? '已登录企业账号' : '单点登录至企业账号'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${statusBadge(ui.state)}` },
+          h('span', { className: `fiam-badge fiam-badge-${ui.storageRecovering ? 'warn' : statusBadge(ui.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
             label,
           ),
@@ -2814,6 +2819,7 @@ window.__ModuleLoader__.load({
       const catalogue = deriveModelUi(view);
       const step1Done = ui.ready;
       const step1Warn = ui.expired || ui.failed || ui.unconfigured || ui.unreachable;
+      const unreachableStatus = ui.storageRecovering ? '正在恢复' : '连接受阻';
       const step2Done = step1Done && gatewayUi.configured && gateway.matchesAccount !== false;
       const step2Warn = step1Done && (gatewayUi.ownerMismatch || gatewayUi.invalid || gatewayUi.unknown);
       const step3Loading = step2Done && catalogue.loading;
@@ -2824,7 +2830,7 @@ window.__ModuleLoader__.load({
           num: '1',
           title: '身份',
           targetId: 'fiam-section-account',
-          status: step1Done ? '已认证' : (ui.authenticating ? '认证中' : (ui.unconfigured ? '待配置登录' : (ui.unreachable ? '连接受阻' : (step1Warn ? '需重新登录' : '待认证')))),
+          status: step1Done ? '已认证' : (ui.authenticating ? '认证中' : (ui.unconfigured ? '待配置登录' : (ui.unreachable ? unreachableStatus : (step1Warn ? '需重新登录' : '待认证')))),
           done: step1Done,
           warn: step1Warn,
           active: !step1Done && !step1Warn,
@@ -4198,7 +4204,7 @@ window.__ModuleLoader__.load({
 
       const view = state.view ?? {};
       const sessionUi = deriveSessionUi(state.view);
-      const label = sessionUi.known
+      const label = sessionUi.storageRecovering ? '正在恢复会话' : sessionUi.known
         ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state))
         : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
@@ -4233,10 +4239,10 @@ window.__ModuleLoader__.load({
       // The server reports the exclusive-config conflict twice: as the issue
       // reason and as view.error. Render the issue line only, so the page does
       // not also show a generic 操作未完成 for a condition already explained.
-      const hostErrorText = view.error ? errorNotice(view.error) : null;
+      const hostErrorText = sessionUi.storageRecovering ? STORAGE_RECOVERY_NOTICE : view.error ? errorNotice(view.error) : null;
       const hostErrorDuplicatesIssue = Boolean(conflictIssue) && hostErrorText === '登录设置有冲突，请联系管理员。';
       const hostError = hostErrorText && !hostErrorDuplicatesIssue
-        ? h('div', { className: 'fiam-notice fiam-notice-error' }, hostErrorText)
+        ? h('div', { className: `fiam-notice fiam-notice-${sessionUi.storageRecovering ? 'warn' : 'error'}` }, hostErrorText)
         : null;
       const notice = state.notice && (!hostErrorText || state.notice !== hostErrorText)
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, state.notice) : null;
@@ -4880,6 +4886,7 @@ window.__ModuleLoader__.load({
       };
 
       if (!state.visible) return null;
+      const sessionUi = deriveSessionUi(state.view);
       const dotColor = state.reason === 'gateway'
         ? 'var(--dsw-alias-state-warn-primary)'
         : state.sessionState === 'authenticating'
@@ -4904,9 +4911,9 @@ window.__ModuleLoader__.load({
               : state.gateway.invalid ? '个人访问凭证信息需要检查，已保留'
                 : state.gateway.unknown ? '无法确认个人访问凭证状态'
                   : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
-            : (deriveSessionUi(state.view).expiredUnrenewable
-              ? SESSION_LABEL.expiredUnrenewable
-              : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
+            : (sessionUi.storageRecovering ? STORAGE_RECOVERY_NOTICE
+              : sessionUi.expiredUnrenewable ? SESSION_LABEL.expiredUnrenewable
+                : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
         ),
         state.reason === 'gateway'
           ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway.ownerMismatch || state.gateway.invalid || state.gateway.unknown
@@ -4916,7 +4923,7 @@ window.__ModuleLoader__.load({
         state.reason !== 'gateway' && state.view?.canSignIn
           ? h('button', { type: 'button', className: 'forge-iam-primary', style: { ...primaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: login }, '登录')
           : null,
-        deriveSessionUi(state.view).authenticating
+        sessionUi.authenticating
           ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: cancelLogin }, '取消')
           : null,
         state.authorizationUrl

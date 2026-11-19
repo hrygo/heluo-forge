@@ -2,6 +2,7 @@ import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { createView, transition } from './state.mjs';
 import { isAccessExpired, isRefreshUsable, summarizeGrant } from './record.mjs';
+import { renewalDeadlines } from './session-renewal-log.mjs';
 
 /**
  * Session state, owned in one place.
@@ -24,6 +25,7 @@ export function createServiceState(env) {
     options,
     configured,
     now,
+    logRenewal,
     getGatewaySummary,
     getMetadataIssuer,
     scheduleReconcile,
@@ -39,6 +41,8 @@ export function createServiceState(env) {
   // Non-secret provenance/pin and the last authenticated session identity only.
   let sessionAuthentication = null;
   let disposed = false;
+  let publishedState;
+  let publishedError;
   const listeners = new Set();
 
   function recheckExclusive() {
@@ -70,7 +74,7 @@ export function createServiceState(env) {
     // access token lapsed or whose revocation check is offline) so the panel
     // can mark it stale instead of erasing the model list.
     const renewable = Boolean(lastGrant) && isRefreshUsable(lastGrant, now());
-    const recoverable = state === 'ready' || state === 'unreachable'
+    const recoverable = state === 'ready' || (state === 'unreachable' && error !== 'IAM_CREDENTIALS_UNAVAILABLE')
       || (state === 'expired' && renewable);
     return createView(state, {
       configured,
@@ -102,6 +106,11 @@ export function createServiceState(env) {
       error = null;
     }
     const snapshot = view();
+    if (logRenewal && (publishedState !== state || publishedError !== error)) {
+      logRenewal('session-state', { previousState: publishedState, state, code: error, ...renewalDeadlines(lastGrant) });
+      publishedState = state;
+      publishedError = error;
+    }
     for (const listener of listeners) {
       try {
         listener(snapshot);

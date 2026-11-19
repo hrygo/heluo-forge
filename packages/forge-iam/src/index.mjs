@@ -1,5 +1,6 @@
 import { createManagedModelRuntime } from './managed-models.mjs';
 import { createModelFailureLogger } from './model-failure-log.mjs';
+import { createSessionRenewalLogger, renewalErrorFields } from './session-renewal-log.mjs';
 import { createCallbackManager } from './callback-listener.mjs';
 import { Config, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
@@ -41,6 +42,12 @@ export function apply(ctx, rawConfig = {}) {
   // runs when the service appears and its disposer clears the binding when the
   // service goes away, so a replaced provider can never satisfy the gate.
   const current = { credentials: undefined, atomicStore: undefined };
+  const logRenewal = createSessionRenewalLogger({
+    warn: () => ctx.logger?.warn?.('forge-iam: session renewal diagnostic could not be written'),
+  });
+  const logBindingChange = (reason) => logRenewal('binding-changed', {
+    reason, credentialsBound: Boolean(current.credentials), atomicStoreBound: Boolean(current.atomicStore),
+  });
   const hasDynamicInjection = typeof ctx.inject === 'function';
   // Cordis throws for a mounted service read without injection, while plain
   // embeddings (tests, CLI hosts) expose services as properties or through
@@ -107,6 +114,7 @@ export function apply(ctx, rawConfig = {}) {
     verifyAtomicStore,
     getGatewayAtomicStore,
     verifyGatewayAtomicStore,
+    logRenewal,
     logGatewayStage: (stage, elapsedMs) => {
       // Only fixed stage names and monotonic elapsed time cross this boundary.
       try { return ctx.logger?.debug?.(`forge-iam: gateway-save ${stage} ${elapsedMs}ms`); } catch { /* optional diagnostic */ }
@@ -155,6 +163,7 @@ export function apply(ctx, rawConfig = {}) {
     // Dispose first: a sign-in waiting on the callback bind must observe the
     // service as gone, not receive a URL for a listener that is about to close.
     await service.dispose();
+    logRenewal('host-stop');
     await callbackManager?.close();
     currentWebServer = undefined;
     currentConnection = undefined;
@@ -206,13 +215,15 @@ export function apply(ctx, rawConfig = {}) {
     if (hydratedBinding?.credentials === credentials && hydratedBinding.atomicStore === atomicStore) return;
     const binding = { credentials, atomicStore };
     hydratedBinding = binding;
+    logBindingChange('trusted-binding');
     void service.hydrate().then(() => {
       // Rebinding the same record may not produce a state transition, but its
       // previous timer may have stopped while the trust service was absent.
       if (!tornDown && hydratedBinding === binding && hasTrustedBinding()) service.notifyView();
-    }).catch(() => {});
+    }).catch((cause) => logRenewal('store-sync', { reason: 'hydration-failed', ...renewalErrorFields(cause) }));
   };
 
+  logRenewal('host-start', { authMode: result.value.authMode, issuerPinned: Boolean(result.value.issuer) });
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
     disposeBrokerProvide = ctx.provide('forgeIamCredentialBroker', service.extCredentialBroker);
@@ -313,6 +324,7 @@ export function apply(ctx, rawConfig = {}) {
         const owner = {};
         credentialsOwner = owner;
         current.credentials = binding;
+        logBindingChange('credentials-bound');
         prepareBridge();
         hydrateBinding();
         return () => {
@@ -320,7 +332,10 @@ export function apply(ctx, rawConfig = {}) {
           credentialsOwner = undefined;
           current.credentials = undefined;
           hydratedBinding = undefined;
-          if (!tornDown) service.notifyView();
+          if (!tornDown) {
+            logBindingChange('credentials-unbound');
+            service.notifyView();
+          }
         };
       });
       offAtomicStore = ctx.inject(['iam-atomic-store'], (host) => {
@@ -328,6 +343,7 @@ export function apply(ctx, rawConfig = {}) {
         const owner = {};
         atomicStoreOwner = owner;
         current.atomicStore = binding;
+        logBindingChange('atomic-store-bound');
         prepareBridge();
         hydrateBinding();
         return () => {
@@ -335,7 +351,10 @@ export function apply(ctx, rawConfig = {}) {
           atomicStoreOwner = undefined;
           current.atomicStore = undefined;
           hydratedBinding = undefined;
-          if (!tornDown) service.notifyView();
+          if (!tornDown) {
+            logBindingChange('atomic-store-unbound');
+            service.notifyView();
+          }
         };
       });
       offConnection = ctx.inject(['connection'], (host) => {
@@ -391,7 +410,7 @@ export function apply(ctx, rawConfig = {}) {
 
   prepareBridge();
   if (hasDynamicInjection) hydrateBinding();
-  else void service.hydrate().catch(() => {});
+  else void service.hydrate().catch((cause) => logRenewal('store-sync', { reason: 'hydration-failed', ...renewalErrorFields(cause) }));
 
   // Returned for direct callers (tests, non-Cordis embeddings); Cordis owns
   // the same idempotent teardown through the effect above.

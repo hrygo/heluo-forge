@@ -3,7 +3,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
-import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
+import { AUTO_REFRESH_BACKOFF_MS, CREDENTIAL_READ_BACKOFF_MS, grantIdentity, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
+import { renewalDeadlines, renewalErrorFields } from './session-renewal-log.mjs';
 
 /**
  * The reconciler between the stored record and the live view.
@@ -17,7 +18,7 @@ export function createReconciler(env) {
   const {
     ctx, provider, grants, gateway, token, now,
     configured, hasSignInAttempt, isSigningOut, getAuthEpoch, getObservation, setObservation,
-    getPublications, bumpPublications, beginConsumption, adoptConsumption, resolveToken,
+    getPublications, bumpPublications, beginConsumption, adoptConsumption, resolveToken, logRenewal,
   } = env;
   // A discovery-only process resolves the document issuer at most once. The
   // shared promise also makes concurrent cold syncs wait for the same fetch
@@ -25,7 +26,47 @@ export function createReconciler(env) {
   // this process, so background syncs do not become probes.
   let issuerResolution = null;
 
-  async function syncFromStore() {
+  let readRetry = null;
+
+  function cancelReadRetry() {
+    if (!readRetry) return;
+    clearTimeout(readRetry.timer);
+    readRetry = null;
+  }
+
+  // All callers share one deferred read. Only a fresh durable read can restore
+  // the view or put a renewal back on the timer after a storage timeout.
+  function deferRead({ targetStore, targetCredentials, authEpoch, grant, renewGrant = null, observation = null }, previous = null) {
+    if (ctx.disposed || !configured || !ctx.exclusive.ok || isSigningOut() || hasSignInAttempt()
+      || ctx.state === 'authenticating' || getAuthEpoch() !== authEpoch || ctx.lastGrant !== grant
+      || (observation ? getObservation() !== observation || now() >= observation.deadline : ctx.state === 'error')) return false;
+    if (readRetry && readRetry !== previous) {
+      return readRetry.store === targetStore && readRetry.credentials === targetCredentials && readRetry.authEpoch === authEpoch;
+    }
+    const delay = observation ? Math.min(CREDENTIAL_READ_BACKOFF_MS, observation.deadline - now()) : CREDENTIAL_READ_BACKOFF_MS;
+    const next = { store: targetStore, credentials: targetCredentials, authEpoch, observation, renewGrant, timer: null };
+    readRetry = next;
+    next.timer = setTimeout(() => {
+      void syncFromStore(next).finally(() => {
+        if (readRetry === next) cancelReadRetry();
+      }).catch(() => {});
+    }, delay);
+    next.timer.unref?.();
+    if (!observation && (ctx.state !== 'unreachable' || ctx.error !== 'IAM_CREDENTIALS_UNAVAILABLE')) {
+      setObservation(null);
+      ctx.lastGrant = null;
+      ctx.state = 'unreachable';
+      ctx.error = 'IAM_CREDENTIALS_UNAVAILABLE';
+      bumpPublications();
+      ctx.notify();
+    }
+    logRenewal?.('store-sync', { stage: 'store-read', reason: 'read-lock-timeout',
+      causeCode: 'CRED_LOCK_TIMEOUT', delayMs: delay, state: ctx.state });
+    return true;
+  }
+
+  async function syncFromStore(retry = null) {
+    if (retry && readRetry !== retry) return ctx.view();
     if (ctx.disposed || isSigningOut()) return ctx.view();
     if (!configured || !ctx.exclusive.ok) return ctx.view();
     // A user-triggered sign-in owns the state machine until its callback,
@@ -35,6 +76,7 @@ export function createReconciler(env) {
     const observation = ctx.state === 'error' ? getObservation() : null;
     if (ctx.state === 'error' && (!observation || ctx.error !== 'IAM_REAUTH_REQUIRED'
       || observation.authEpoch !== getAuthEpoch() || now() >= observation.deadline)) {
+      if (observation) logRenewal?.('store-sync', { reason: 'pending-window-ended', state: ctx.state, code: ctx.error });
       setObservation(null);
       return ctx.view();
     }
@@ -51,10 +93,11 @@ export function createReconciler(env) {
       publication = bumpPublications();
       expectedGrant = ctx.lastGrant;
     };
-    const discardIdentity = () => {
+    const discardIdentity = (reason) => {
       // Store lookups can be rebound independently. Clear only the adopted
       // identity this sync still owns, never a later publication (even null).
       if (expectedGrant && ctx.lastGrant === expectedGrant && grants.had(expectedGrant)) {
+        logRenewal?.('store-sync', { reason, ...renewalDeadlines(expectedGrant) });
         ctx.lastGrant = null;
         ctx.state = 'signed-out';
         ctx.error = null;
@@ -76,12 +119,21 @@ export function createReconciler(env) {
     }
     const targetStore = provider.ensure();
     if (!isActive()) return ctx.view();
+    const targetCredentials = provider.storeCredentials;
+    if (readRetry) {
+      const current = readRetry.store === targetStore && readRetry.credentials === targetCredentials
+        && readRetry.authEpoch === syncEpoch && readRetry.observation === observation
+        && (observation || (ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE'));
+      if (!current) {
+        cancelReadRetry();
+        if (retry) return ctx.view();
+      } else if (!retry) return ctx.view();
+    }
     if (!targetStore || (observation && targetStore !== observation.store)) {
-      if (!targetStore) discardIdentity();
+      if (!targetStore) discardIdentity('credentials-unavailable');
       setObservation(null);
       return ctx.view();
     }
-    const targetCredentials = provider.storeCredentials;
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
     // Re-read the live provider after each await; the lookup itself may also
     // synchronously dispose this service or start a newer auth operation.
@@ -90,15 +142,19 @@ export function createReconciler(env) {
       const currentStore = provider.ensure();
       if (!isActive()) return false;
       if (currentStore === targetStore && provider.storeCredentials === targetCredentials) return true;
-      discardIdentity();
+      discardIdentity('provider-changed');
       if (observation && getObservation() === observation) setObservation(null);
       return false;
     };
+    let reading = true;
     try {
       const record = await targetStore.read();
+      reading = false;
       ctx.recheckExclusive();
       if (!isCurrent()) return ctx.view();
+      if (retry) logRenewal?.('store-sync', { stage: 'store-read', reason: 'store-read-recovered' });
       if (!record.ok) {
+        logRenewal?.('store-sync', { reason: 'grant-invalid', code: 'IAM_GRANT_INVALID' });
         setObservation(null);
         ctx.lastGrant = null;
         ctx.error = 'IAM_GRANT_INVALID';
@@ -116,6 +172,7 @@ export function createReconciler(env) {
         ctx.lastGrant = null;
         published();
         if (changed) {
+          logRenewal?.('store-sync', { reason: 'grant-missing' });
           ctx.error = null;
           ctx.state = 'signed-out';
           ctx.notify();
@@ -141,6 +198,7 @@ export function createReconciler(env) {
       if (observation && !restored) {
         if (!marker || marker.version !== observation.version || marker.id !== observation.id
           || marker.base !== observation.base || !isDeepStrictEqual(identity, observation.identity)) {
+          logRenewal?.('store-sync', { reason: 'pending-result-unmatched' });
           setObservation(null);
           return ctx.view();
         }
@@ -148,6 +206,7 @@ export function createReconciler(env) {
         if (marker.state === 'pending' && sameRefresh) return ctx.view();
         if (marker.state !== 'complete' || sameRefresh
           || isAccessExpired(record.grant, now()) || !isRefreshUsable(record.grant, now())) {
+          logRenewal?.('store-sync', { reason: 'pending-result-unmatched' });
           setObservation(null);
           return ctx.view();
         }
@@ -163,7 +222,10 @@ export function createReconciler(env) {
           ]).finally(() => clearTimeout(timer));
           if (!isCurrent() || finished) return ctx.view();
         }
-        if (!ownFlight && token.observePendingRotation(targetStore, targetCredentials, record.grant)) return ctx.view();
+        const observing = !ownFlight && token.observePendingRotation(targetStore, targetCredentials, record.grant);
+        logRenewal?.('store-sync', { reason: ownFlight ? 'local-pending-timeout' : 'peer-pending',
+          code: observing ? undefined : 'IAM_REAUTH_REQUIRED', ...renewalDeadlines(record.grant) });
+        if (observing) return ctx.view();
         setObservation({ version: marker.version, id: marker.id, base: marker.base,
           identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch: getAuthEpoch(), store: targetStore,
           deadline: now() + REFRESH_TIMEOUT_MS });
@@ -174,6 +236,7 @@ export function createReconciler(env) {
         ctx.notify();
         return ctx.view();
       }
+      const previousGrant = ctx.lastGrant;
       const previousSubject = ctx.lastGrant?.subject ?? null;
       const previousExpiry = ctx.lastGrant?.accessExpiresAt ?? null;
       const previousRefreshExpiry = ctx.lastGrant?.refreshExpiresAt ?? null;
@@ -183,7 +246,7 @@ export function createReconciler(env) {
       grants.own(record.grant, targetStore);
       published();
       // An adopted subject changes the displayed match, not the stored key.
-      if (observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
+      if (retry || observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
         await gateway.load({ force: true });
         if (!isCurrent()) {
           if (ctx.lastGrant === record.grant) ctx.lastGrant = null;
@@ -199,6 +262,11 @@ export function createReconciler(env) {
       ctx.state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
       ctx.error = null;
       adoptConsumption(consumption, record.grant);
+      if (logRenewal && (observation || (marker?.state === 'complete' && previousGrant
+        && previousRefreshToken !== record.grant.refreshToken && isDeepStrictEqual(grantIdentity(previousGrant), identity)))) {
+        logRenewal('store-sync', { reason: restored ? 'peer-restored' : 'peer-complete',
+          state: ctx.state, ...renewalDeadlines(record.grant) });
+      }
       if (restored) token.lastBackgroundRefreshAt = now();
       // With a usable refresh token an expired session is recoverable; without
       // this, the interim client would only ever offer a full re-login.
@@ -207,18 +275,28 @@ export function createReconciler(env) {
         && provider.atomicVerified(targetCredentials)) {
         if (!isCurrent()) return ctx.view();
         token.lastBackgroundRefreshAt = now();
+        logRenewal?.('store-sync', { reason: 'expired-recovery', state: ctx.state, ...renewalDeadlines(record.grant) });
         void resolveToken().catch(() => {});
       }
       if (previous !== `${ctx.state}|${ctx.error}|${ctx.lastGrant.subject ?? ''}`
         || previousExpiry !== (ctx.lastGrant.accessExpiresAt ?? null)
         || previousRefreshExpiry !== (ctx.lastGrant.refreshExpiresAt ?? null)
         || previousRefreshToken !== (ctx.lastGrant.refreshToken ?? null)) ctx.notify();
+      // A due timer that failed before reading can renew immediately after its
+      // exact grant is read back. A replacement follows its own cadence.
+      if (retry?.renewGrant && ctx.state === 'ready' && isDeepStrictEqual(retry.renewGrant, record.grant) && isCurrent()) {
+        token.scheduleRenewal({ immediate: true });
+      }
     } catch (cause) {
       if (!isCurrent()) return ctx.view();
+      if (reading && cause?.code === 'CRED_LOCK_TIMEOUT' && deferRead({ targetStore, targetCredentials,
+        authEpoch: syncEpoch, grant: expectedGrant, renewGrant: retry?.renewGrant, observation }, retry)) return ctx.view();
       setObservation(null);
       ctx.lastGrant = null;
       ctx.error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)
         ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
+      logRenewal?.('store-sync', { reason: reading ? 'store-read-failed' : 'rejected',
+        code: ctx.error, ...renewalErrorFields(cause) });
       ctx.state = 'error';
       published();
       ctx.notify();
@@ -233,5 +311,5 @@ export function createReconciler(env) {
     return ctx.view();
   }
 
-  return { syncFromStore, hydrate };
+  return { syncFromStore, hydrate, deferRead, cancelReadRetry };
 }

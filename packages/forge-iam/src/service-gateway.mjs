@@ -66,6 +66,9 @@ export function createServiceGateway(env) {
     // Cache hits and singleflight reuse must belong to the live provider too.
     const targetStore = provider.ensure();
     if (ctx.disposed || !targetStore || !provider.gatewayStore) return null;
+    // Panel polling shares the session's storage backoff. Its recovery read
+    // reloads this summary against the newly adopted grant.
+    if (!force && ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') return provider.gatewaySummary;
     if (!force && provider.gatewayLoadedAt > 0 && now() - provider.gatewayLoadedAt < GATEWAY_RELOAD_MS) return provider.gatewaySummary;
     if (provider.gatewayLoading) return provider.gatewayLoading;
     const targetGatewayStore = provider.gatewayStore;

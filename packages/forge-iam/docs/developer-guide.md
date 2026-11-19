@@ -220,7 +220,9 @@ Host 为登录尝试生成 state、nonce 和 PKCE S256；授权码只兑换一�
 
 等待阶段采用单调时钟的 5 秒截止；只对无副作用的读取竞速超时，底层 I/O 不会被取消。首次读取、claim/写入、事件循环阻塞及退出自身 I/O 不在这一总等待界限内。迟到读取结果不能更新该次等待的视图。
 
-Host 在运行期间按较早的已知令牌期限调度续期，并在退出或卸载时取消计时。前置元数据或 JWKS 网络检查不可达、且尚未尝试写入 pending 时，仍有效的会话保持不变，Host 在期限内退避重试。claim 写锁超时且回调尚未进入时，使该次回调失效，并对未变的可刷新会话按同一退避策略重试；本次调用仍返回 `IAM_REAUTH_REQUIRED`。超时时回调已进入，或提交结果未知时，失败关闭；请求已发送或结果不确定时不得重试原 refresh token。停止 Host、设备休眠或断网超过刷新令牌期限后，须重新登录。普通 `/view` 对无标记、可刷新的过期会话仍可触发后台刷新，使用 30 秒退避。读取本 Host 自己正在执行的 pending 时，最多等待 5 秒取得结果；其他 pending 或等待超时进入 error，仅本实例明确观察并绑定的操作，才可在本地时钟 5 秒观察窗内由轮询采用匹配的合法 complete。记录或会话变化、过期、其他错误、读取失败、退出、卸载或新登录都会阻止该恢复；恢复后的视图仍不是服务端授权或强一致证明。
+Host 在运行期间按较早的已知令牌期限调度续期，并在退出或卸载时取消计时。前置元数据或 JWKS 网络检查不可达、且尚未尝试写入 pending 时，仍有效的会话保持不变，Host 在期限内退避重试。claim 写锁超时且回调尚未进入时，使该次回调失效，并对未变的可刷新会话按同一退避策略重试；本次调用仍返回 `IAM_REAUTH_REQUIRED`。超时时回调已进入，或提交结果未知时，失败关闭；请求已发送或结果不确定时不得重试原 refresh token。停止 Host、设备休眠或断网超过刷新令牌期限后，须重新登录。普通 `/view` 对无标记、可刷新的过期会话仍可触发后台刷新，使用 30 秒退避。
+
+读取本 Host 自己正在执行的 pending 时，最多等待 5 秒取得结果。其他 pending 或等待超时进入 error，仅本实例明确观察并绑定的操作，才可在本地时钟 5 秒观察窗内采用匹配的合法 complete。首次读取遇到 `CRED_LOCK_TIMEOUT` 可在剩余窗口内退避重读。记录或会话变化、观察窗口到期、其他错误、退出、卸载或新登录都会终止该恢复。恢复后的视图仍不是服务端授权或强一致证明。
 
 未知版本、状态或损坏操作标记拒绝使用。无刷新操作标记且带 `sessionInstanceId` 的有效 grant 可由遵守协议的进程在事务内声明刷新；旧客户端混跑不享有这些保证。
 
@@ -335,6 +337,20 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 - 观察采用单飞，进行中再次触发只补跑一次；会话或模型上下文失效时不采纳旧结果。
 - `modelAccess.hostDefaultModel` 保留固定结果代码：`kept` 表示选择未被更改，不证明模型可用；`no-target`、`unsupported`、`unknown`、`stale`、`failed` 表示无法完成观察的不同原因。旧代码 `aligned` 为兼容保留，不再由该路径产生。结果不含选择原文、主体或 SDK 异常。
 - `modelAccess.defaultModelId` 是企业目录启用集的首选项，不是宿主新对话默认模型。首次同步可自动启用目录中的一个模型，但不代替用户在宿主中选择。
+
+## 会话续期诊断
+
+自动续期和面板同步遇到 SQLite 首次读锁 `CRED_LOCK_TIMEOUT` 时，Host 暂停令牌消费并安排一次 1 秒后的凭据重读。面板轮询共享该重试，持续锁争用时每次失败后继续退避。重读确认同一绑定中的有效授权后恢复视图并安排续期。原后台计时器已到期且授权记录未变化时，重读后直接安排续期。重读发现 `pending` 时按原操作绑定和观察窗口处理。读取后的 claim、Token 端点和提交继续遵守防重放协议。
+
+Host 将会话续期事件写入 `$DSH_HOME/logs/forge-iam-session-renewal.jsonl`。`DSH_HOME` 为空时使用 `~/.dsh/logs/forge-iam-session-renewal.jsonl`。按故障时间查找对应记录，使用 `hostId` 区分插件运行实例，使用 `renewalId` 关联同一实例的后台计时器与刷新尝试。每条记录包含 UTC 时间和插件版本，到期时间和计时器截止时间使用 Unix 毫秒值。
+
+| 事件 | 排查内容 |
+|---|---|
+| `host-start`、`host-stop`、`binding-changed`、`session-state`、`store-sync` | 插件装卸、凭据与原子存储绑定、会话状态、读库与跨 Host 轮换观察 |
+| `renewal-scheduled`、`renewal-fired`、`renewal-blocked`、`renewal-cancelled`、`renewal-failed` | 计划时间、实际触发延迟、退避以及跳过、取消或失败原因 |
+| `refresh-stage`、`refresh-retry`、`refresh-failed`、`refresh-committed`、`refresh-adopted` | 凭据读取、Discovery/JWKS、刷新占位、Token 请求与校验、条件提交、同一会话的已确认轮换 |
+
+`refresh-failed` 的 `code` 表示 Host 对调用方返回的错误分类，`causeCode` 记录已登记的内部错误。IAM 响应可附 `httpStatus` 和标准 `oauthError`。`timedOut` 表示观察到本地请求超时，`requestUnsent` 表示传输层已确认请求未送出。`refresh-committed` 在存储确认新令牌后记录，可用新的到期时间核对授权是否延长。日志字段使用白名单，凭据、账号标识、地址、请求和响应原文及异常堆栈均不采集。日志写入失败由 Host 报固定警告，认证按正常路径执行。
 
 ## 限制与生产门禁
 

@@ -9,6 +9,12 @@ import {
 import { assertClientAuthCurrent, buildClientAuthRequest } from './client-auth.mjs';
 import { parseHttpUrl } from './http-url.mjs';
 
+export const OAUTH_ERROR_CODES = Object.freeze([
+  'invalid_request', 'invalid_client', 'invalid_grant', 'unauthorized_client',
+  'unsupported_grant_type', 'invalid_scope', 'unsupported_token_type',
+  'access_denied', 'unsupported_response_type', 'server_error', 'temporarily_unavailable',
+]);
+
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
     super(message);
@@ -241,7 +247,8 @@ function requireString(value, name) {
 
 export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, clientAuthentication } = {}) {
   if (typeof fetchImpl !== 'function') throw new OidcError('IAM_HTTP_UNAVAILABLE', 'fetch is unavailable');
-  const signals = [AbortSignal.timeout(timeoutMs)];
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signals = [timeout];
   if (signal) signals.push(signal);
   let response;
   // Local invalidation is not a network failure. Nothing awaits between this
@@ -260,7 +267,10 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
     // can catch and rethrow a later failure, so its cause cannot prove delivery.
     const refused = method === 'POST' && fetchImpl === globalThis.fetch
       && cause?.cause?.code === 'ECONNREFUSED' && cause.cause.syscall === 'connect';
-    throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable', refused ? { requestUnsent: true } : {});
+    throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable', {
+      ...(refused ? { requestUnsent: true } : {}),
+      ...(timeout.aborted ? { timedOut: true } : {}),
+    });
   }
   if (!response.ok) {
     let oauthError;
@@ -268,11 +278,7 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
       const payload = await response.json();
       const candidate = payload?.error;
       // Copy only exact standard codes, never provider text that may echo credentials.
-      if (typeof candidate === 'string' && [
-        'invalid_request', 'invalid_client', 'invalid_grant', 'unauthorized_client',
-        'unsupported_grant_type', 'invalid_scope', 'unsupported_token_type',
-        'access_denied', 'unsupported_response_type', 'server_error', 'temporarily_unavailable',
-      ].includes(candidate)) oauthError = candidate;
+      if (OAUTH_ERROR_CODES.includes(candidate)) oauthError = candidate;
     } catch {
       // Non-JSON error bodies are intentionally not surfaced.
     }
@@ -291,7 +297,8 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
   try {
     return await response.json();
   } catch {
-    throw new OidcError('IAM_INVALID_RESPONSE', 'IAM endpoint returned invalid JSON');
+    throw new OidcError('IAM_INVALID_RESPONSE', 'IAM endpoint returned invalid JSON',
+      timeout.aborted ? { timedOut: true } : {});
   }
 }
 

@@ -64,6 +64,9 @@ export const REFRESH_TIMEOUT_MS = 5000;
 // A background refresh that just ran must not be retried by the next sync.
 export const AUTO_REFRESH_BACKOFF_MS = 30000;
 
+// SQLite has already waited for the lock before reporting a read timeout.
+export const CREDENTIAL_READ_BACKOFF_MS = 1000;
+
 // A wall clock that moved further than the monotonic clock by more than this is
 // the signature of a suspended host, not of normal scheduling jitter.
 export const RESUME_JUMP_MS = 30000;
