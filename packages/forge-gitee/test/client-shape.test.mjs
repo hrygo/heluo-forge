@@ -539,7 +539,7 @@ const tick = async () => {
  * 装一次分区：GET 同步回 `SNAPSHOT`，POST 交给用例控制（要复现"回包还没到"的窗口）。
  * `render()` 重新执行组件——假 hooks 不做调度，状态变化后要手动再渲染一遍。
  */
-async function mountGitee({ post }) {
+async function mountGitee({ post, translate }) {
   const calls = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -548,7 +548,7 @@ async function mountGitee({ post }) {
     if (method === 'POST') return post(url, init);
     return { ok: true, status: 200, json: async () => SNAPSHOT };
   };
-  const t = (key, values) => (values === undefined ? key : `${key}:${JSON.stringify(values)}`);
+  const t = translate ?? ((key, values) => (values === undefined ? key : `${key}:${JSON.stringify(values)}`));
   runtime.resetAll();
   const render = () => {
     runtime.reset();
@@ -579,6 +579,29 @@ async function stageCliPath(mount, nextPath) {
   assert.ok(input !== undefined, '进入编辑态后要出现输入框');
   input.props.onChange({ target: { value: nextPath } });
   return mount.render();
+}
+
+for (const [language, labels] of [['zh', ['保存', '应用']], ['en', ['Save', 'Apply']]]) {
+  test(`保存回执显示对应语言的标签（${language}）`, async () => {
+    const copy = copyTables()[language];
+    const translate = (key) => copy[key] ?? key;
+    const mount = await mountGitee({
+      translate,
+      post: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, applied: { ok: true }, snapshot: SNAPSHOT }) }),
+    });
+    try {
+      findButton(mount.render(), translate('card.action.auto')).props.onClick();
+      findButton(mount.render(), translate('action.save')).props.onClick();
+      await tick();
+
+      const receiptLabels = collectNodes(mount.render())
+        .filter((node) => node.props.className === 'fge-receipt-key')
+        .map((node) => flatten(node).join(''));
+      assert.deepEqual(receiptLabels, labels);
+    } finally {
+      mount.teardown();
+    }
+  });
 }
 
 test('AC-13: 保存进行中输入框与动作按钮冻结——回包前不接受新输入', async () => {

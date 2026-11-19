@@ -608,16 +608,20 @@ test('the bridge admits only a loopback caller holding the capability', async ()
     { getBridgeSecret: async () => 'placeholder-capability' },
   );
 
-  const ok = await call(handler, 'POST', '/api/forge-iam/bridge/token',
-    { authorization: 'Bearer placeholder-capability' });
-  assert.equal(ok.statusCode, 200);
-  assert.deepEqual(ok.json(), { token: 'placeholder-bridge-token', expiresAt: '2026-11-04T02:00:00.000Z' });
-  assert.equal(ok.headers['cache-control'], 'no-store');
+  for (const scheme of ['Bearer', 'bearer', 'bEaReR']) {
+    const ok = await call(handler, 'POST', '/api/forge-iam/bridge/token',
+      { authorization: `${scheme} placeholder-capability` });
+    assert.equal(ok.statusCode, 200, scheme);
+    assert.deepEqual(ok.json(), { token: 'placeholder-bridge-token', expiresAt: '2026-11-04T02:00:00.000Z' });
+    assert.equal(ok.headers['cache-control'], 'no-store');
+  }
 
-  const wrong = await call(handler, 'POST', '/api/forge-iam/bridge/token',
-    { authorization: 'Bearer wrong-capability' });
-  assert.equal(wrong.statusCode, 401);
-  assert.equal(wrong.json().error.code, 'IAM_BRIDGE_UNAUTHORIZED');
+  for (const capability of ['wrong-capability', 'placeholder-Capability']) {
+    const wrong = await call(handler, 'POST', '/api/forge-iam/bridge/token',
+      { authorization: `bEaReR ${capability}` });
+    assert.equal(wrong.statusCode, 401);
+    assert.equal(wrong.json().error.code, 'IAM_BRIDGE_UNAUTHORIZED');
+  }
 
   const remote = await call(handler, 'POST', '/api/forge-iam/bridge/token',
     { authorization: 'Bearer placeholder-capability' }, undefined, '203.0.113.7');

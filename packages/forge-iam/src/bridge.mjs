@@ -20,8 +20,8 @@ export function isLoopbackAddress(address) {
 
 export function bearerMatches(header, secret) {
   if (typeof header !== 'string' || typeof secret !== 'string' || secret.length === 0) return false;
-  const prefix = 'Bearer ';
-  if (!header.startsWith(prefix)) return false;
+  const prefix = 'bearer ';
+  if (header.slice(0, prefix.length).toLowerCase() !== prefix) return false;
   const presented = Buffer.from(header.slice(prefix.length), 'utf8');
   const expected = Buffer.from(secret, 'utf8');
   // A length difference is not a secret-dependent branch worth hiding here:
