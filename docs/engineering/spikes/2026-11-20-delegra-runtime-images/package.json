@@ -1,0 +1,8 @@
+{
+  "name": "heluo-forge-codex-runtime-probe",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@openai/codex": "0.167.1"
+  }
+}
