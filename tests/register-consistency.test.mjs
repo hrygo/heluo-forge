@@ -1,26 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { checkDocs } from '../scripts/lib/doc-rules.mjs';
 
-test('every register row carries the version its document declares', async () => {
-  const register = await readFile(join(root, 'docs/DOCUMENT-REGISTER.md'), 'utf8');
-  const rows = [...register.matchAll(/\[([^\]]+)\]\(<?([^)>]+)>?\)\s*\|\s*(V[\d.]+)\s*\|/g)];
-  assert.ok(rows.length >= 8, `expected register rows, saw ${rows.length}`);
-  const drift = [];
-  for (const [, , path, listed] of rows) {
-    if (!path.endsWith('.md')) continue;
-    let text;
-    try {
-      text = await readFile(join(root, 'docs', path), 'utf8');
-    } catch {
-      continue; // 同目录链接由 check-docs 负责，这里只比版本。
-    }
-    const declared = /\|\s*版\s*本\s*\|\s*(V[\d.]+)\s*\|/.exec(text)?.[1];
-    if (declared && declared !== listed) drift.push(`${path}: 登记 ${listed} / 文档 ${declared}`);
+const root = fileURLToPath(new URL('..', import.meta.url));
+
+test('catalog CLI renders every validated ID in order, including historical reservations', () => {
+  const { catalog, errors } = checkDocs(root);
+  assert.deepEqual(errors, []);
+  const output = execFileSync(process.execPath, [resolve(root, 'scripts/check-docs.mjs'), '--catalog', root], { encoding: 'utf8' });
+  const ids = [...output.matchAll(/^\| (CORP-DSH-[^ ]+) \|/gmu)].map((match) => match[1]);
+  assert.deepEqual(ids, catalog.map((entry) => entry.id));
+  assert.deepEqual(ids, [...ids].sort());
+  assert.match(output, /CORP-DSH-PLAN-017A/u);
+  assert.match(output, /CORP-DSH-UAT-001.*docs\/operations\/enterprise-uat-2026-11\/README\.md/u);
+  for (const id of ['CORP-DSH-CONF-003', 'CORP-DSH-SDD-001']) {
+    const retired = catalog.find((entry) => entry.id === id);
+    assert.equal(retired?.status, '已废止');
+    assert.equal(retired.path, null);
+    assert.ok(retired.gate);
   }
-  assert.deepEqual(drift, [], `version drift:\n${drift.join('\n')}`);
 });

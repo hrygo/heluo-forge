@@ -10,6 +10,7 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-16 |
@@ -439,3 +440,15 @@ flowchart TD
 | 把策略内容也放进本包 | 一处配置 | 与策略包职责重叠，审计边界模糊 | 不采用 |
 
 以上五项都不影响主链路；若后续确认增益，再单独评估并更新本设计。
+
+## 实现与验证记录
+
+**实现边界**：企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与凭据/策略/IAM 三插件挂载；2 个源文件。
+
+**验证结果与限制**：`node --test packages/forge-enterprise/test/*.test.mjs`、`tests/bundle-build`/`bundle-closure` 离线闭环；真机安装/升级/回滚/卸载与 `--from-default-profile` 历史实测（2026-10-24 五行口径）；七行扩行后仅由单测覆盖，未复测 DSH 组合层。**未验**：界面功能与角色 preset 粒度；`desktop` profile 在本机不可 dump，按 NOT RUN 记账。
+
+## 准入核对要点
+
+**设计与接入边界**：通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测。
+
+**准入关注点**：版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile。

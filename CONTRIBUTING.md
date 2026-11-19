@@ -29,7 +29,7 @@
 1. 用 `git status --short` 和目标差异确认工作区；保留已有改动，发现同一处并行编辑时先协调。
 2. 确认范围及内容归属。新模块先设计，契约字段先改对应契约；重大未决选择保留待确认，不代替团队批准。
 3. 需要创建分支时从适当基线建立短分支，常规命名见[开发约定](docs/engineering/development-conventions.md)；agent 宿主明确规定前缀时遵循宿主要求，不擅自切换已有工作分支。
-4. 修改文件并同步受影响的登记与引用；移动文件使用 `git mv`，同一变更更新全部引用。
+4. 修改事实所属的文件；移动文件使用 `git mv`，同一变更更新全部受影响的引用。
 5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；前者已包含自动发现的历史市场包契约、索引校验与归档安装用例。推送前再运行 `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD`，结果必须全部 verified；不跑就推，PR 上的 `sensitive-attestation-verify` 会直接变红，即使代码本身没有问题。签名绑定钩子扫描时的基线 tree。安装完整包后，`post-rewrite` 钩子会在 amend、rebase 后自动重扫重签，无需手工逐条重签；`reset` 和 `cherry-pick` 不触发重签，需人工确认。不要在其他会话改写这条分支的父提交：父提交被换掉且未经重签时会出现 `parent-tree does not match`，步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。更新 PR 分支只用本地 `git fetch origin` 与 `git rebase --force-rebase origin/main`（分支已基于基线时普通 rebase 是空操作，不会重签）：网页的 Update branch 和 Update with rebase 都在服务端重写提交，本地钩子无法重签，前者留下无法签名的合并提交、后者让父树绑定失效，两种做法都会让该检查变红；rebase 后仍需重跑 `pnpm check`，重签不解决内容冲突，操作序列见[更新 PR 分支](<scripts/sensitive-scan/README.md#updating-a-pull-request-branch>)。变更需要企业接口或实机证据时另行验证，已有完整有效测试不重复运行。失败须修复或明确阻塞，不能以跳过宣称通过。
 6. 在相应授权范围内提交或发起 PR，一次提交只做一件事。按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)填写关联依据、验证结果、未验项与风险；正文单独一行填写 `Closes #编号`（完整解决）或 `Part of #编号`（部分解决），关联至少一个本仓库已有 Issue。关闭关键字仅在 PR 目标为默认分支且仓库启用自动关闭时生效；部分解决请说明本次范围。CI 会核验 Issue 存在，正文修改后重新检查；Dependabot PR 同样需要维护者补填关联；`@dependabot recreate` 会覆盖正文修改，须重新补填；本地编辑完成不自动触发推送、合并或发布。
 
@@ -46,7 +46,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 
 ## 5. 文档规则
 
-文档类型、元数据、状态、升版与历史保留统一按[文档治理规则](docs/README.md#6-编写约定)执行。正文元数据与[文档清单](docs/DOCUMENT-REGISTER.md)必须一致，出现差异时查明并修正，不让任一副本自动覆盖另一处。
+文档类型、元数据、状态、升版与历史保留统一按[文档治理规则](docs/README.md#6-编写约定)执行。正文是元数据来源，[文档清单](docs/DOCUMENT-REGISTER.md)只保留导航与无正文的编号记录；普通新增或升版不更新公共清单。
 
 修改范围或决策时沿关联关系同步下游设计、契约、计划和验收；入口保留摘要与链接。文档检查验证结构及一致性，语义正确性仍需评审。
 
@@ -67,7 +67,8 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 | 命令 | 验证范围 |
 |---|---|
 | `pnpm check` | 依次执行文档检查、仓库检查与 Node 自动发现的全部测试 |
-| `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
+| `pnpm check:docs` | 文档元数据、编号唯一性、保留记录、本地链接与锚点、表格及询问问题序列 |
+| `pnpm docs:catalog` | 只读输出按编号排序的文档清单，不写仓库文件 |
 | `pnpm check:repo` | 工程结构、根目录入口面、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
 | `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
 | `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
@@ -106,5 +107,5 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 ## 9. 评审
 
 - 评审关注：设计一致性、失败模式、权限边界、测试是否覆盖负向路径。
-- 文档变更同时检查登记与链接，不把“格式正确”当作内容正确。
+- 文档变更同时检查编号与链接，不把“格式正确”当作内容正确。
 - 未经确认的接口、性能和恢复能力标注为未验，不写成既定事实。

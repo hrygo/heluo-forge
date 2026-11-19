@@ -10,6 +10,7 @@
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-16 |
@@ -425,3 +426,9 @@ slot 类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在 bu
 ### A.9 参考测试
 
 `node --test packages/forge-market/test/*.test.mjs` 覆盖排序、版本选择、路径/摘要/patch、旧 API 字段、失败码、策略接线与包形态；`tests/integration/` 覆盖本地归档安装。它们只证明旧参考实现，不证明 npm 目标。
+
+## 准入核对要点
+
+**设计与接入边界**：`dsh plugin` 转发 pnpm 的安装/卸载参数已真机实测。
+
+**准入关注点**：AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；模式与当前状态见[索引契约 §1](<../services/market-index.md#1-一页速览>)。

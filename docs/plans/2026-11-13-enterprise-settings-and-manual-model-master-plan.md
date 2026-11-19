@@ -10,10 +10,12 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-16 |
 | 门禁 | Wave 0–5 为历史统筹路线；当前包职责、手动模型及后续取证边界见 §0 |
+| 交付门禁 | Wave 0–4 代码、UI 契约、文档与 Wave 5 合成探针已在分支离线闭环（正式签批仍待定）；真实企业网关、OS 凭据库与双端实机未联调 |
 | 文档层级 | L2 统筹实施计划；字段、接口与安全边界以设计文档、契约和已批准方案为准 |
 
 > 编制依据：2026-11-13 已生效的[企业设置菜单统一与 Token 收敛详细设计](../design/enterprise-menu-and-token-unification.md)（CORP-DSH-DESIGN-018 V2.0.0）、[根 README](../../README.md)「企业级智能研发平台 × 智能个人助理」双定位、同日工作区方案[企业模型设置手动添加模型实施方案](2026-11-13-enterprise-manual-model-add-luna-guide.md)（CORP-DSH-PLAN-021 V0.3.0，针对 GitHub issue #273）、`main` 基线 `f8f7a29` 源码与 `packages/forge-iam/test/client-structure.test.mjs`、`packages/forge-enterprise` / `forge-devops` / `forge-gitee` 实核。当时方案未提供真实企业网关、OS 凭据库或双端实机专项证据；后续取证边界见 §0。

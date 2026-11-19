@@ -10,6 +10,7 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-16 |
@@ -333,3 +334,15 @@ flowchart LR
 - **更强模型交叉审查**：AI 意见与人工确认分开留痕并绑定版本；不让模型自填确认人，不把聊天"同意"冒充 Gitee 的正式批准。
 
 **与 `@heluo/forge-devops` 的分流与受控重复（R-2）**：r10 按平台切库之后，同一个事实只有一份实现——提交信息校验在 `src/git-message.mjs`、关闭就绪判定在 `src/gitee-delivery.mjs`、仓库/Issue/PR 的读写都在本包；devops 的 `commit-message`/`report`/`review`/`gh-adapter`/`actions`/`repo-ref`/`repository-resolver` 七个模块连同其用例一起删除（删除清单与理由逐条登记在交付说明与 `delivery-selfcheck.test.mjs` 的文件清单里，不静默减少覆盖）。**刻意保留**的受控重复只有两条：失败面脱敏（devops 的 `failure-face.mjs` 与本包出口的 `scrubSecrets`）与策略目标准入（`policy-guard` 与本包 `gitee-guard`）——两者 egress/confirm 语义不同，合并会把两类平台的写语义搅在一起；AGENTS.md §4 也要求包间不跨源码导入。守门：`test/adapter.test.mjs` 断言 `src/` 零 GitHub 语义标识与字段分表、`test/cli.test.mjs` 断言出口唯一性（`execFile` 只出现在 `gitee-cli.mjs`，git 复用同文件的 `runGit` 而不是新起一个出口）、`test/session.test.mjs` 断言幂等键逐字一致（`sha256(changeId|action|objectType|target|title)` 前 16 位）；`test/actions.test.mjs` 另断言 `review.publish` 与 `review.record` 同变更同提交时键不同，防止跨对象误判 `reused`。
+
+## 实现与验证记录
+
+**实现边界**：独立 CLI 接入包（单安装单元）：11 个 `forge_gitee_*` 工具（3 读 + 4 受控写 + 1 只读判定 + 1 版本快照 + 2 git；判定随包默认登记可用、六条写随包登记但按分类受控（研发/评审写受规则约束、push 逐次确认、review.record 恒拒））、`gitee.*` 动作命名空间、`GITEE_*` 白名单字段子集（`GITEE_PLATFORM`）、唯一 `execFile` 出口（`run()`/`runGit()` 共用）、幂等台账、`review.md` 渲染与关闭条件判定；14 个源模块 + `cordis.patch.yml`（策略行 `heluo-policy` + 插件行 `forge-gitee`，与 devops 补丁层同 id、目录逐字相同、无 `isolate`）。
+
+**验证结果与限制**：2026-10-29 `node --test "packages/forge-gitee/test/*.test.mjs"` 171 例、`node --test tests/bundle-gitee.test.mjs tests/plugin-patch-layers.test.mjs` 8 例离线通过（覆盖只读信封降级、写动作四状态与回读、默认禁用零调用、宿主 `register()` 判据、真实补丁层装载、共存形态与跨包策略行一致性、`buildBundle` 闭包与产物逐字节一致）；**未验**企业 Gitee CLI 联调、aarch64 产物、真实 profile 装入与 `--json` 字段稳定性；r10 增删模块后的条数与结果以本需求 QA 实测为准，明细见包 README 证据表与 NOT RUN 清单。
+
+## 准入核对要点
+
+**设计与接入边界**：容器在场时挂入 `heluo.engineering.tab`/order 20，独立回退保留 `gitee`/50；前端「高级」表单已移除，凭据与明文风险提示内置于 Gitee 面板；后端保留 `runtime-config.mjs` 契约和托管优先链。
+
+**准入关注点**：aarch64 产物、鉴权注入与 `--json` 字段稳定性（企业 CLI 未联调）；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验；设置页实机与真实 `gh` 凭据库未验证。
