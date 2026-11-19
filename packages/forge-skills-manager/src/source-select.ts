@@ -61,11 +61,11 @@ export function createSourceSelect(react: typeof React) {
           align: "end",
           portal: true,
           anchor: h(Button, {
-            variant: "outline",
+            variant: props.showLabel ? "primary" : "outline",
             size: "sm",
             disabled: props.disabled,
-            className: props.icon ? "dssm-icon-action" : undefined,
-            style: props.icon ? { width: 22, minWidth: 22, height: 22, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--dsw-radius-sm, 8px)" } : undefined,
+            className: props.showLabel ? "dssm-add-action" : props.icon ? "dssm-icon-action" : undefined,
+            style: props.icon && !props.showLabel ? { width: 22, minWidth: 22, height: 22, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--dsw-radius-sm, 8px)" } : undefined,
             "aria-label": props.ariaLabel || props.label,
             "aria-haspopup": "menu",
             "aria-expanded": open,
@@ -74,7 +74,7 @@ export function createSourceSelect(react: typeof React) {
               if (!props.disabled) setOpen(function (prev) { return !prev; });
             },
             icon: props.icon,
-          }, props.icon ? null : props.label),
+          }, props.icon && !props.showLabel ? null : props.label),
           items: items,
         })
       );

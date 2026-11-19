@@ -1,5 +1,12 @@
 export const managementLocales = {
   "zh": {
+    "layout.add": "添加技能",
+    "layout.sources": "技能来源",
+    "layout.count": "数量",
+    "layout.manage": "管理",
+    "layout.enabled": "启用",
+    "layout.category": "分类",
+    "layout.tokens": "Token 共计",
     "mutation.pending": "操作结果尚待确认，请先核对结果，不要重复提交。",
     "mutation.check": "核对操作结果",
     "mutation.confirmed": "操作已确认，已读取当前状态。",
@@ -16,6 +23,13 @@ export const managementLocales = {
     "token.detailLine": "简介 ≈{description} token · 正文 ≈{body} token"
   },
   "en": {
+    "layout.add": "Add skill",
+    "layout.sources": "Skill sources",
+    "layout.count": "Count",
+    "layout.manage": "Manage",
+    "layout.enabled": "Enabled",
+    "layout.category": "Category",
+    "layout.tokens": "Total tokens",
     "mutation.pending": "The operation is awaiting confirmation. Check its result before submitting again.",
     "mutation.check": "Check operation result",
     "mutation.confirmed": "The operation is confirmed and current state has been loaded.",

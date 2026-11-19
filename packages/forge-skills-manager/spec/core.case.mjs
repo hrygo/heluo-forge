@@ -365,8 +365,8 @@ ok(
 const filterRow = clientSource.slice(clientSource.indexOf('className: "dssm-filters"'));
 ok(
   filterRow.indexOf('className: "dssm-source-filter"') < filterRow.indexOf('className: "dssm-status-filter"') &&
-    filterRow.indexOf('className: "dssm-status-filter"') < filterRow.indexOf('className: "dssm-search"'),
-  "search sits on the same row after the compact source and status menus",
+    filterRow.indexOf('className: "dssm-search"') < filterRow.indexOf('className: "dssm-source-filter"'),
+  "search precedes the compact source and status menus on the same row",
 );
 ok(
   clientSource.includes("SegmentedTabs") &&

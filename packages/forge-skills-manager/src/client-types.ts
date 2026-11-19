@@ -70,6 +70,7 @@ export interface SourceSelectProps {
     ariaLabel?: string;
     disabled?: boolean;
     action?: boolean;
+    showLabel?: boolean;
     icon?: React.ReactNode;
     options: SourceSelectOption[];
     onChange: (value: string) => void;

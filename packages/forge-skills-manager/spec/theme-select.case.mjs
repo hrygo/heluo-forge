@@ -38,8 +38,8 @@ assert.match(
 );
 const repository = await readFile(new URL("../src/nacos-ui.ts", import.meta.url), "utf8");
 const destination = await readFile(new URL("../src/destination-picker.ts", import.meta.url), "utf8");
-assert.match(source, /\.dssm-source\{[^}]*border-radius:var\(--dsw-radius-xl/, "独立来源卡片采用官方卡片档位");
-assert.match(source, /\.dssm-summary\{[^}]*background:var\(--dsw-alias-bg-layer-1\)/, "统计条直接使用当前作用域的背景层，不能用 body 上已解析成实色的设置卡片填充");
+assert.match(source, /\.dssm-source-list\{[^}]*border:1px solid var\(--dsw-alias-border-l1\)/, "来源列表使用宿主主题边框");
+assert.match(source, /\.dssm-summary\{[^}]*background:transparent/, "统计区域使用透明背景");
 assert.doesNotMatch(source, /\.dssm-summary\{[^}]*settings-card-fill/, "统计条不能回退到实心设置卡片填充");
 assert.match(destination, /\.dssm-destination-path\{[^}]*border-radius:var\(--dsw-radius-lg/, "路径预览与嵌套内容使用同一档位");
 assert.ok(!/background:var\(--dsw-alias-bg-layer-\d,#[\da-f]+\)/i.test(source + repository + destination), "背景不再引入独立的深色实心兜底");

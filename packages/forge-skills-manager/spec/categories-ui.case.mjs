@@ -173,8 +173,19 @@ try {
   assert.ok(more.props.options.some((option) => option.value === "detail"), "查看详情放进更多");
   assert.ok(more.props.options.some((option) => option.value === "trash" && option.danger), "删除技能放进更多");
   const create = nodes(dsh).find((node) => node.props["aria-label"] === t("category.create"));
-  assert.ok(create && create.props.icon, "新建分类是图标");
-  assert.equal((create.children || []).includes(t("category.create")), false);
+  assert.ok(create && nodes(create).some(node => node.type === "svg"), "分类使用带无障碍标签的图标入口");
+  assert.equal(create.props.title, t("category.create"), "图标悬浮说明新建分类");
+  const dshSlots = nodes(dsh).filter(node => node.props.className === "dssm-source-action-slot");
+  const codexSlots = nodes(codex).filter(node => node.props.className === "dssm-source-action-slot");
+  assert.equal(dshSlots.length, 2, "可写来源仍保留两个固定操作位置");
+  assert.equal(dshSlots[1].children.length, 0, "不支持改目录时留空，不提供无效按钮");
+  assert.equal(codexSlots.length, 2, "各来源使用相同操作位置");
+  assert.ok(nodes(codexSlots[0]).some(node => node.props["aria-label"] === t("category.create")), "左侧固定新建分类");
+  assert.equal(codexSlots[1].children.length, 0, "可写来源不提供改目录按钮");
+  create.props.onClick(); render();
+  const createModal = find(node => node.props.title === t("category.create") && node.props.role === "dialog");
+  assert.ok(createModal, "图标入口仍打开新建分类弹窗");
+  nodes(createModal).find(node => node.children.includes(t("btn.cancel"))).props.onClick(); render();
   const rename = nodes(work).find((node) => node.props["aria-label"] === t("category.rename"));
   const remove = nodes(work).find((node) => node.props["aria-label"] === t("category.delete"));
   assert.ok(rename && rename.props.icon && remove && remove.props.icon, "重命名和删除分类是图标");
@@ -288,7 +299,7 @@ try {
   assert.match(css, /\.dssm-icon-action:not\(:disabled\):not\(\.dssm-icon-danger\):hover\{[^}]*color:var\(--dsw-alias-link/, "普通图标悬停优先使用宿主链接色，危险按钮排除");
   assert.doesNotMatch(css, /ant-btn|ant-select|ant-collapse|dssm-antd-select|dssm-icon-btn/, "样式不再保留 ant 选择器或旧图标按钮类");
   assert.doesNotMatch(css, /#1677ff\b|rgba?\(\s*22\s*[, ]\s*119\s*[, ]\s*255\b/i, "禁止重新引入 antd 默认蓝色");
-  assert.match(css, /\.dssm-stat\{[^}]*padding:4px 10px/, "顶部统计格子更矮");
+  assert.ok(find(node => node.props.className === "dssm-overview"), "统计与 token 摘要位于同一概览区");
 
   await tab("项目技能");
   const picker = find(node => node.props["aria-label"] === t("filter.workspace"));
