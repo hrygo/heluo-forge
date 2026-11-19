@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.88.4 |
+| 版本 | V1.89.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.88.4 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.89.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.49.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.47.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.48.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.6.0 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.1.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V3.5.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
@@ -43,6 +43,7 @@
 | CORP-DSH-DESIGN-018 | 企业设置菜单统一与 Token 收敛详细设计 | [design/enterprise-menu-and-token-unification.md](<design/enterprise-menu-and-token-unification.md>) | V2.2.0 | 生效 | 平台组（代拟） | 不改 DSH；双独立预装包拆分、四包源码、双定位 UI 契约与合成探针离线闭环；容器级汇总属后续项，企业网关/OS 凭据库/双端 GUI 与联邦换票未联调 |
 | CORP-DSH-DESIGN-019 | 企业研发工具套件详细设计 | [design/plugins/forge-engineering.md](<design/plugins/forge-engineering.md>) | V1.1.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-020 | 策略判定模型设计 | [design/policy-model.md](<design/policy-model.md>) | V0.1.0 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-021 | 员工个人记忆插件详细设计 | [design/plugins/forge-hindsight.md](<design/plugins/forge-hindsight.md>) | V0.5 | 草案 | 平台组（代拟） | 范围基线同步；宿主事件与上游版本核验；企业身份接入验收 |
 | CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
 | CORP-DSH-IAM-003 | IAM 模型与工具隔离消费契约草案 | [contracts/iam-consumer-isolated.md](<contracts/iam-consumer-isolated.md>) | V0.8.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；见证/许可/合成工具与模型已分段验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
 | CORP-DSH-IAM-004 | IAM 只读状态订阅隔离契约 | [contracts/iam-view-observer-isolated.md](<contracts/iam-view-observer-isolated.md>) | V0.4.0 | 草案 | 平台组（代拟） | 私有接缝已实现并定向验收；真实注册关闭 |
