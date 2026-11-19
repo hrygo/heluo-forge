@@ -25,8 +25,6 @@ export const inject = Object.freeze(['skills']);
 /** Skill 名 = `enterprise-issue-delivery`（与条款 id `issue-delivery` 组合）。 */
 export const SKILL_PREFIX = 'enterprise';
 
-export const TRUSTED_SKILL_RANK = -100;
-
 /** 包内实体资源根：`packages/forge-engineering/skills/`（打包后仍在同一相对位置）。 */
 export const RESOURCE_BASE = fileURLToPath(new URL('../skills/', import.meta.url));
 
@@ -87,7 +85,6 @@ export function apply(ctx) {
     systems: SYSTEMS.map((system) => ({ name: system })),
     namePrefix: SKILL_PREFIX,
     invocation: INVOCATION,
-    rank: TRUSTED_SKILL_RANK,
   });
 
   let disposed = false;

@@ -13,12 +13,12 @@ mkdirSync(protectedRoot, { recursive: true });
 mkdirSync(outside, { recursive: true });
 writeFileSync(join(protectedRoot, 'secret.txt'), 'canary-value');
 writeFileSync(join(outside, 'readme.txt'), 'ok');
-symlinkSync(protectedRoot, join(base, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+symlinkSync(protectedRoot, join(base, 'alias'), 'dir');
 const roots = [{ raw: protectedRoot, root: protectedRoot }];
 
 test('a protected root template resolves from the environment', () => {
-  const resolved = resolveProtectedRoots(['$DSH_HOME/**'], { DSH_HOME: protectedRoot });
-  assert.deepEqual(resolved, [{ raw: '$DSH_HOME/**', root: protectedRoot }]);
+  const resolved = resolveProtectedRoots(['$DSH_HOME/**'], { DSH_HOME: '/var/empty/dsh-home' });
+  assert.deepEqual(resolved, [{ raw: '$DSH_HOME/**', root: '/var/empty/dsh-home' }]);
   assert.deepEqual(resolveProtectedRoots([], {}), []);
 });
 
@@ -74,13 +74,11 @@ test('relative paths and unverifiable paths raise instead of passing', () => {
 
 test('case folding follows the platform, not the filesystem', () => {
   const lexical = { resolve: (value) => value };
-  const upper = join(base, 'MixedCaseRoot').toUpperCase();
-  const lower = upper.toLowerCase();
-  assert.equal(canonicalize(upper, { platform: 'darwin', ...lexical }), lower);
-  assert.equal(canonicalize(upper, { platform: 'linux', ...lexical }), upper);
-  const mixed = { raw: lower, root: lower };
-  assert.equal(matchProtected(join(upper, '.env'), [mixed], { platform: 'darwin', ...lexical }).protected, true);
-  assert.equal(matchProtected(join(upper, '.env'), [mixed], { platform: 'linux', ...lexical }).protected, false);
+  assert.equal(canonicalize('/VAR/EMPTY/DSH', { platform: 'darwin', ...lexical }), '/var/empty/dsh');
+  assert.equal(canonicalize('/VAR/EMPTY/DSH', { platform: 'linux', ...lexical }), '/VAR/EMPTY/DSH');
+  const mixed = { raw: '/var/empty/dsh', root: '/var/empty/dsh' };
+  assert.equal(matchProtected('/VAR/EMPTY/DSH/.env', [mixed], { platform: 'darwin', ...lexical }).protected, true);
+  assert.equal(matchProtected('/VAR/EMPTY/DSH/.env', [mixed], { platform: 'linux', ...lexical }).protected, false);
 });
 
 test('dot-dot after a symlink follows the link target, not the link name', () => {
@@ -91,7 +89,7 @@ test('dot-dot after a symlink follows the link target, not the link name', () =>
   const base = mkdtempSync(join(tmpdir(), 'policy-symlink-'));
   try {
     mkdirSync(join(base, 'data', 'sub'), { recursive: true });
-    symlinkSync(join(base, 'data', 'sub'), join(base, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(join(base, 'data', 'sub'), join(base, 'link'));
     const roots = [{ raw: join(base, 'data'), root: join(base, 'data') }];
     const throughLink = matchProtected(`${base}/link/../secret.txt`, roots);
     assert.equal(throughLink.protected, true);

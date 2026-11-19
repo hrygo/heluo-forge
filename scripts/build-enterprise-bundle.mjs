@@ -7,7 +7,6 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
-import { writeBundleTarball } from './lib/bundle-write.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
 import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
 import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
@@ -119,26 +118,8 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     const packedDir = join(work, 'packed');
     mkdirSync(packedDir);
     const stdout = execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    let packed = parsePackOutput(stdout);
+    const packed = parsePackOutput(stdout);
     if (packed === null) fail('npm returned no packed file list');
-    const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
-    if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
-    if (process.platform === 'win32') {
-      // npm does not apply executable modes to nested bundled-package bins on
-      // Windows. Normalize declared bins only, using the existing archive writer;
-      // re-read the finished bytes before auditing their actual modes and content.
-      const bins = new Set();
-      for (const name of members.keys()) {
-        const prefix = name === manifest.name ? '' : `node_modules/${name}/`;
-        const member = readManifest(prefix ? join(stage, 'node_modules', name) : stage);
-        for (const target of Object.values(member.bin ?? {})) bins.add(prefix + target.replace(/^\.\//, ''));
-      }
-      const tarball = join(packedDir, tarballs[0]);
-      const entries = readBundleEntries(tarball, { withContent: true });
-      const files = entries.map(item => ({ path: item.path, body: item.content, mode: Number.parseInt(item.mode, 8) | (bins.has(item.path) ? 0o111 : 0) }));
-      writeFileSync(tarball, writeBundleTarball(files));
-      packed = readBundleEntries(tarball).map(item => ({ ...item, mode: Number.parseInt(item.mode, 8) }));
-    }
     const errors = auditTarball({ label: manifest.name, manifest, packed });
     for (const name of members.keys()) {
       if (name === manifest.name) continue;
@@ -149,6 +130,8 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
       errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })) }));
     }
     if (errors.length > 0) fail(errors.join('; '));
+    const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
+    if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
     if (requireNativeResources && nativeRecords.length > 0) {
       // npm may exclude files after preflight. Judge the archive's actual bytes
       // against the staged record before creating anything in the destination.

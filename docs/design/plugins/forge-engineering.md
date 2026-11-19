@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-019 |
 | 文档名称 | 企业研发工具套件详细设计 |
-| 版本 | V1.1.1 |
+| 版本 | V1.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -28,7 +28,7 @@
 
 1. **统一研发设置入口（`heluo-engineering-ui`）**：在 DSH「设置」导航注册独立分区 `forge-engineering`（`order: 30`，中文「企业研发工具」），声明子槽位 `heluo.engineering.tab`，收纳 `DevOps`（`order: 10`）与 `Gitee`（`order: 20`）两个工具面板，并注册矢量分区图标。
 2. **企业平台工具能力闭合**：Bundled 并插入 `@heluo/forge-devops`、`@heluo/forge-gitee` 与共享策略门禁 `@heluo/forge-policy`（固定六动作默认目录），支持开箱完成单包就绪检查、本地命令行配置、Token 独立指定与受控研发操作。
-3. **按需 Issue 交付技能（`heluo-issue-delivery-skill`）**：导出 `./issue-delivery-skill`、`./skills`、`./switches` 与标准 Agent Skill 资源 `skills/issue-delivery/`，以 `enterprise-issue-delivery` 向 DSH 注册显式触发的 Issue 交付工作流与条款装配能力。 正式流程候选使用 `rank: -100`，优先于原生个人与项目副本；技能管理器拒绝创建、导入及提供 `enterprise-*` 个人候选，既有文件保留。该选择规则不构成同权插件隔离。
+3. **按需 Issue 交付技能（`heluo-issue-delivery-skill`）**：导出 `./issue-delivery-skill`、`./skills`、`./switches` 与标准 Agent Skill 资源 `skills/issue-delivery/`，以 `enterprise-issue-delivery` 向 DSH 注册显式触发的 Issue 交付工作流与条款装配能力。正式流程沿用宿主随包技能的 `rank: 600`；技能管理器在自己的创建、导入及 provider 路径拒绝 `enterprise-*` 个人候选，既有文件保留。管理器不改变原生 provider 的同名候选选择规则，也不提供同权插件隔离。
 
 **不越界边界**：`@heluo/forge-engineering` 不禁用任何 DSH 官方账号、模型或凭据行，可单独安装运行，也可与 `@heluo/forge-enterprise` 并发安装在同一 DSH Profile 中；不侵入「设置 → 企业账号」页面，DevOps 与 Gitee 的 Token 配置及状态提示全部内置于各自设置面板中。
 

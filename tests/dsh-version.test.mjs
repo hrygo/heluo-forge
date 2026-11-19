@@ -22,24 +22,24 @@ import {
   readDshVersion,
   rewriteCanonical,
   rewriteEngineFloors,
-  checkSkillsDevelopmentHosts,
+  checkDevelopmentHosts,
 } from '../scripts/lib/dsh-version.mjs';
 
 const ROOT = process.cwd();
 const BASELINE = readDshVersion(ROOT);
 
-test('skills-manager development SDK pins follow the root baseline; stale pins are rejected', () => {
+test('development SDK pins follow the root baseline for any package; stale pins are rejected', () => {
   const root = fixtureRoot();
-  const file = join(root, 'packages/forge-skills-manager/package.json');
+  const file = join(root, 'packages/fixture-plugin/package.json');
   mkdirSync(dirname(file), { recursive: true });
   try {
     writeFileSync(file, JSON.stringify({ devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } }, null, 2));
-    assert.deepEqual(checkSkillsDevelopmentHosts(root), []);
+    assert.deepEqual(checkDevelopmentHosts(root), []);
     assert.ok(listCodeOccurrences(root).every(item => item.kind === 'code-allowed'));
     writeFileSync(file, JSON.stringify({ dependencies: { '@deepseek-ai/dsh-skill': BASELINE } }, null, 2));
     assert.ok(listCodeOccurrences(root).some(item => item.kind === 'code-forbidden'), 'runtime dependencies cannot use the development exemption');
     writeFileSync(file, JSON.stringify({ devDependencies: { '@deepseek-ai/dsh-skill': sibling(BASELINE) } }, null, 2));
-    assert.equal(checkSkillsDevelopmentHosts(root).length, 1);
+    assert.equal(checkDevelopmentHosts(root).length, 1);
     assert.ok(listCodeOccurrences(root).some(item => item.kind === 'code-forbidden'));
     writeFileSync(join(root, 'pnpm-lock.yaml'), `version: ${BASELINE}\n`);
     writeFileSync(join(root, 'scripts/bad.mjs'), `const dshVersion = '${BASELINE}';\n`);

@@ -17,7 +17,7 @@ importers:
         version: link:../forge-policy
       react:
         specifier: '>=18'
-        version: 18.3.1
+        version: 19.3.1
 
   packages/forge-engineering:
     dependencies:
@@ -32,7 +32,7 @@ importers:
         version: link:../forge-policy
       react:
         specifier: '>=18'
-        version: 18.3.1
+        version: 19.3.1
 
   packages/forge-enterprise:
     dependencies:
@@ -56,7 +56,7 @@ importers:
         version: link:../forge-policy
       react:
         specifier: '>=18'
-        version: 18.3.1
+        version: 19.3.1
 
   packages/forge-iam:
     dependencies:
@@ -834,6 +834,10 @@ packages:
     resolution: {integrity: sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==}
     engines: {node: '>=0.10.0'}
 
+  react@19.3.1:
+    resolution: {integrity: sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==}
+    engines: {node: '>=0.10.0'}
+
   readdirp@5.1.1:
     resolution: {integrity: sha512-Kko+Y5XQ6fM+Ce3dq3m9YGxnacYZYl9cA1wZjaF3Vbry2L3i1qVg8+CAgNPsXRArPMUMCaOR7oa9Nqntc43JKA==}
     engines: {node: '>= 20.19.0'}
@@ -919,6 +923,8 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  react@19.3.1: {}
 
   '@deepseek-ai/cordis@4.1.0':
     dependencies:

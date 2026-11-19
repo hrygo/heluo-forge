@@ -106,9 +106,9 @@ test('buildBundle 以指定安装单元为根闭包构建，默认入口仍是�
 test('build refuses source symlinks and accidentally declared test/cache resources', (t) => {
   const root = fixture(t);
   const source = join(root, 'packages/forge-member/src');
-  symlinkSync(process.platform === 'win32' ? source : join(source, 'index.mjs'), join(source, 'linked.mjs'), process.platform === 'win32' ? 'junction' : 'file');
+  symlinkSync(join(source, 'index.mjs'), join(source, 'linked.mjs'));
   assert.throws(() => buildEnterpriseBundle({ root, destination: join(root, 'release') }), /symlink is not a release resource/u);
-  rmSync(join(source, 'linked.mjs'), { recursive: true });
+  rmSync(join(source, 'linked.mjs'));
   put(source, 'nested/test/fixture.mjs', 'test fixture\n');
   assert.throws(() => buildEnterpriseBundle({ root, destination: join(root, 'release') }), /non-release resource: test/u);
 });
@@ -122,7 +122,7 @@ test('release audits reject missing/wrong member, workspace references, undeclar
   let errors = auditReleaseClosure(released);
   assert.ok(errors.some((message) => message.includes('missing member @heluo/forge-member')), errors.join('\n'));
   put(released, 'node_modules/@heluo/forge-member/package.json', member);
-  symlinkSync(process.platform === 'win32' ? released : join(released, 'package.json'), join(released, 'source-link'), process.platform === 'win32' ? 'junction' : 'file');
+  symlinkSync(join(released, 'package.json'), join(released, 'source-link'));
   errors = auditReleaseClosure(released);
   for (const expected of ['install-time script', 'unclosed peerDependencies', 'identity/version mismatch', 'not declared bundled', 'unclosed runtime dependency', 'undeclared member', 'symlink', 'does not exist']) assert.ok(errors.some((message) => message.includes(expected)), `${expected}: ${errors.join('\n')}`);
   put(released, 'node_modules/@heluo/forge-member/package.json', 'not-json');
