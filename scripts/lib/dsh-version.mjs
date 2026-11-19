@@ -371,7 +371,8 @@ export function listDocOccurrences(root = process.cwd(), baseline = readDshVersi
 
 /** 代码与脚本中出现版本号的位置：全仓扫描，按允许清单与清单精确规则分类。 */
 export function listCodeOccurrences(root = process.cwd(), baseline = readDshVersion(root)) {
-  const targets = walk(root, (rel) => CODE_EXT.test(rel) && !rel.startsWith('docs/'), root);
+  const targets = walk(root, (rel) =>
+    CODE_EXT.test(rel) && !rel.startsWith('docs/') && !/(?:^|\/)package-lock\.json$/.test(rel), root);
   const found = [];
   for (const abs of targets) {
     const rel = relative(root, abs).split(sep).join('/');

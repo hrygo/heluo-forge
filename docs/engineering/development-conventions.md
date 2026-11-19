@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.9.5 |
+| 版本 | V0.9.6 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-19 |
+| 最后更新 | 2026-11-20 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：仓库结构、`package.json`、`pnpm-workspace.yaml`、检查脚本、测试与 GitHub Actions 工作流；工具链版本以 `.node-version` 和 `package.json` 为准。托管平台的实际执行结果以对应工作流记录为准。
@@ -134,7 +134,7 @@
 - 下限口径：`engines.dsh` 写**已核验过**的最小 DSH。当前 6 个包停在 `>=0.2.1-rc.2`（预发布在比较上小于同号正式版，
   `check` 会逐条提示但不算失败）：rc.3 只跑过安装/升级/回退/卸载循环，兼容性套件尚未开跑，故不提升下限；
   提限与兼容套件结果同批处理。`forge-market` 按基础版本写 `>=0.2.0`（2026-10-25 复核：预发布比较上小于基础版本，写 `-rc.N` 会让基础版本宿主自判不兼容），是登记在 `ENGINE_FLOOR_EXCEPTIONS` 的例外。
-- 代码扫描面是全仓（跳过 `node_modules`/`.git`/`dist`/`build`/`coverage` 等，排除 `docs/`），覆盖
+- 代码扫描面是全仓（跳过 `node_modules`/`.git`/`dist`/`build`/`coverage` 等，排除 `docs/` 和 npm 生成的 `package-lock.json`），覆盖
   `.mjs/.cjs/.js/.ts/.json/.yml/.yaml/.sh`；带 `v` 前缀与清单里的版本都会被解析。清单只放行 `engines.dsh`
   里实际写的那个版本，`dependencies` 里钉死的 DSH 版本仍算硬编码。测试夹具若确需写死版本（模拟旧宿主或
   第三方包形状），登记在 `TEST_FIXTURE_EXCEPTIONS` 并在 `report`/`check` 里逐条列出，不做静默放行。

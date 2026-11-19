@@ -355,6 +355,24 @@ test('CLI check：扫描面覆盖 deploy/、根清单以外的扩展名与 v 前
   });
 });
 
+test('CLI check：npm 依赖锁文件不误报，部署配置仍检查 DSH 版本', () => {
+  const lock = JSON.stringify({
+    lockfileVersion: 3,
+    packages: { 'node_modules/example': { version: sibling(BASELINE) } },
+  }, null, 2);
+  const files = { 'deploy/tool/package-lock.json': lock };
+  withCorpus({ files }, (root) => {
+    const result = runCli(root, ['check']);
+    assert.equal(result.status, 0, result.stderr);
+  });
+  withCorpus({ files: { ...files, 'deploy/tool/config.json': JSON.stringify({ dshVersion: BASELINE }) } }, (root) => {
+    const result = runCli(root, ['check']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /deploy\/tool\/config\.json/);
+    assert.doesNotMatch(result.stderr, /package-lock\.json/);
+  });
+});
+
 test('CLI check/report：排除 Paperclip 本地工作副本，仍检查相近名称目录与 CI 配置', () => {
   const pin = `DSH_VERSION="${BASELINE}"\n`;
   withCorpus({ files: { '.paperclip/worktrees/demo/packages/demo/pin.mjs': pin } }, (root) => {
