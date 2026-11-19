@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import { dirname,join,resolve } from "node:path";
 import type { indexRegisteredWorkspaces } from "./core.js";
 import type { InstallationRecordPort } from "./local-ports.js";
+import { createPortablePathSet,isPortableFileSegment,isSafeAncestorDirectory } from "./filesystem-paths.js";
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const repositoryInstallKeys = new Set(["dsh", "agents"]);
@@ -60,12 +61,12 @@ export const fileIndex = (entries: Archive) => Object.entries(entries!).map(([pa
 export const signature = (files: FileDigest[]) => hash(JSON.stringify([...files].map(({ path, hash }) => ({ path, hash })).sort((a, b) => a.path.localeCompare(b.path, "en"))));
 function failure(message: string, code = "error.repo.invalid") { return Object.assign(new Error(message), { code, statusCode: 400 }); }
 function safePath(path: string) {
-  if (typeof path !== "string" || !path || path.length > 512 || path.split("/").length > 64 || path.split("/").some(p => !p || p === "." || p === ".." || /[\\:<>"|?*\x00-\x1f]/.test(p) || /[. ]$/.test(p) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p))) throw failure("技能文件路径无效");
+  if (typeof path !== "string" || !path || path.length > 512 || path.split("/").length > 64 || path.split("/").some(p => !isPortableFileSegment(p))) throw failure("技能文件路径无效");
 }
 async function safeDirectory(root: string) {
   for (let p = root; ; p = dirname(p)) {
     const info = await fs.lstat(p);
-    if (info.isSymbolicLink() || !info.isDirectory()) throw failure("技能或备份目录包含链接");
+    if (!(await isSafeAncestorDirectory(p, info))) throw failure("技能或备份目录包含链接");
     if (dirname(p) === p) break;
   }
 }
@@ -73,9 +74,11 @@ async function safeDirectory(root: string) {
 export async function readSkillTree(root: string) {
   await safeDirectory(root);
   const result: Archive = Object.create(null); let size = 0, count = 0;
+  const seen = createPortablePathSet();
   async function walk(dir: string, prefix = "") {
     for (const entry of await fs.readdir(dir)) {
       const path = prefix + entry; safePath(path);
+      if (!seen.add(path)) throw failure("技能包含重复路径");
       if (++count > 2000) throw failure("技能目录数量超限");
       const target = join(dir, entry), info = await fs.lstat(target);
       if (info.isSymbolicLink()) throw failure("技能包含链接，拒绝更新");
