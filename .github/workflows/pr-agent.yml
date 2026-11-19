@@ -134,8 +134,8 @@ jobs:
           # tool aborts before it calls the model. Environment values take
           # precedence; keep the two in sync when changing either.
           CONFIG__MODEL: "openai/muse-spark-1.3-contributor"
-          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "120000"
-          CONFIG__MAX_MODEL_TOKENS: "120000"
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"
+          CONFIG__MAX_MODEL_TOKENS: "256000"
           # Expose structured review data and mirror the repository policy.
           GITHUB_ACTION_CONFIG__ENABLE_OUTPUT: "true"
           PR_REVIEWER__REQUIRE_MERGE_RECOMMENDATION: "true"
