@@ -25,6 +25,8 @@ import {
 import { ConfigStandard, ENV_KEYS } from '../src/runtime-config.mjs';
 import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS } from '../src/cli-config.mjs';
 import { CLI_API_PREFIX, CLI_REQUEST_HEADER, CLI_ROUTE_PATH } from '../src/http.mjs';
+import { CHANGES_ROUTE_PATH } from '../src/changes-api.mjs';
+import { PROMPT_ROUTE_PATH } from '../src/prompt-api.mjs';
 
 const EXE = process.platform === 'win32' ? 'dop.exe' : 'dop';
 
@@ -279,9 +281,11 @@ test('同源端点：webServer 在 → prefix /api/forge-devops，GET 200 + no-s
         },
       };
       const { service } = mount({ webServer, configEditor: editor() });
-      assert.equal(routes.length, 1);
+      assert.equal(routes.length, 3, '配置端点 + 变更清单端点 + 提示词模板端点');
       assert.equal(routes[0].kind, 'prefix');
       assert.equal(routes[0].path, CLI_API_PREFIX);
+      assert.equal(routes[1].path, CHANGES_ROUTE_PATH);
+      assert.equal(routes[2].path, PROMPT_ROUTE_PATH);
       assert.equal(service.cliStatus().route, 'registered');
 
       const res = fakeRes();
@@ -341,9 +345,9 @@ test('可选服务：webServer 缺失/晚到/前缀冲突都不塌装配，注�
       const webServer = { register: (route) => (routes.push(route), () => {}) };
       const late = { get: (key) => (key === 'webServer' ? webServer : undefined) };
       webInjection.callback(late);
-      assert.equal(routes.length, 1);
+      assert.equal(routes.length, 3, '三条前缀一次注册');
       webInjection.callback(late);
-      assert.equal(routes.length, 1, '注册必须幂等');
+      assert.equal(routes.length, 3, '注册必须幂等');
       assert.equal(first.service.cliStatus().route, 'registered');
 
       // 3) 前缀冲突：别的插件已占了同一段 → 不抛，状态记 conflict（页面显示端点不可用）。

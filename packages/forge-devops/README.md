@@ -136,6 +136,47 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 
 **值两侧的一层成对引号不算值**：`set VAR='值'`（Windows 启动脚本里引号会写进值本身）与资源管理器「复制文件地址」给出的带双引号全路径，都在校验前剥掉一层，四个键因此照常可用。剥完仍带引号的（单边、或两层）判 `CONFIG_INVALID`——环境变量层不读盘，一个带引号的 `dopBin` 会一路活到 `execFile` 才报 `ENOENT`，错得晚且难归因，所以在装配期就挡住。
 
+## 新会话起始变更选择器（r19）
+
+新会话编辑框上方的工具栏行依次是「工作区 → 模式（Agent 预设） → 变更」。本包在宿主选项槽 `conversation.hero.options` 注册 `devops.change-picker`（order -10），并按工具栏行几何把触发器贴到模式选择器之后（该槽容器右对齐，靠 `position:relative` 平移，不改动宿主节点）；箭头与工作区/模式选择器用同一条 chevron 图标。点开才读一次当前登录人的变更清单（`GET /api/forge-devops/changes`，只读、不缓存），条目显示「变更号 + 概要」；选中后按当前模板**整体替换**当前草稿（连选多次不叠加，只留最后一次），**不提交、不发送**：
+
+```text
+读取devops 平台变更号为{code}的变更内容，分析需求及验收标准，创建关联 issue。使用 issue-delivery（企业问题交付规范）处理issue，在当前工作区做一份可信的待验收交付。完成创建 pr 关联任务 issue。
+```
+
+`{code}` 只替换为所选变更号；模板不随界面语言切换。清单最多 100 条，超出显示「仅显示前 N 条」；读取失败只提示类别（未就绪 / 不可达 / 失败），面板头部可「刷新」。插入失败（编辑器正在发送或装配已卸载）就地报错，**不回写** `setDraft` 覆盖用户草稿。
+
+## 变更提示词模板（r20）
+
+模板是选中变更后写进编辑器的那段文字，属于**项目维护者**的口径配置，页面不提供编辑入口（用户自配容易漏掉「缺验收标准先问我」「不以 `#` 开头」这类关键约束，反而制造风险）。改模板只有一个入口：编辑活动 profile 补丁层本插件条目的 `config.promptTemplate`，然后重载 profile；不写就用内置默认值。
+
+- 校验：装配期只看类型（非字符串拒绝激活）；内容规则（非空、含 `{code}`、≤4000 字、CRLF 归一、剪首尾空白）在使用时判定——不合法就回落内置默认模板，并在下发体里带 `warning`，用 `curl` 一眼看到原因。写错一个模板不该让整包停在原地。
+- 下发：`GET /api/forge-devops/prompt` → `{ok:true, template, source:'config'|'default', placeholder:'{code}'}`，配置内容不合法时另带 `warning`；响应头与 `/cli` 同口径（`no-store`、`nosniff`、无 CORS）；只支持 GET/HEAD，其他方法 405 + `allow: GET`。
+- 客户端：选择器打开面板时取一次模板，取不到就用内置默认值，不阻塞清单。
+
+```yaml
+- id: forge-devops
+  name: "@heluo/forge-devops"
+  config:
+    promptTemplate: |
+      变更 {code}：先读变更详情，提炼需求与验收标准；
+      缺验收标准时列缺口问我，不要编造。
+```
+
+默认模板（未配置时生效，`{code}` 为变更号占位符）：
+
+```text
+变更 {code}：用 forge_devops_change_context 读取详情，提炼需求与验收标准；
+变更单缺少验收标准时，列出缺口问我，不要编造。
+
+1) 在仓库建 issue：标题含 {code}，正文含需求摘要、验收标准、影响范围；
+   已有同编号 open issue 则复用，不重复创建。
+2) 用 issue-delivery 处理该 issue：先 git status --short 查工作区，脏则问我；
+   按 feat/{code} 分支交付，只改变更范围内代码，补齐测试并跑 pnpm check。
+3) 建 PR 关联该 issue：标题含 {code}，描述附交付报告（改动概览/验证命令与结果/未验证项/回滚方式）。
+约束：提交说明不以 # 开头；不伪造验证结果。
+```
+
 ## 回滚
 
 1. **页面回滚（推荐）**：在「设置 → 企业 DevOps」里对改过的入口点「重置为自动发现」、把超时输入框清空，再点「保存」。这两项会从补丁层里删除，各自回落（环境变量 → 自动发现 / 缺省 `20000`）；`dopEndpoint` / `sourceType` 页面不展示、保存时逐字保留，要一并回滚就按第 2 步手工删掉整段 `config:`。
@@ -208,6 +249,8 @@ r15 的设置页另有仓库根级校验：`node scripts/check-client-module.mjs
 - **宿主组合**：当前插件在目标宿主版本下的 `configEditor` 写面与写后热调和未联调；配置页未走宿主表单面，改由同源路由 + profile 补丁写入。
 - **企业前提**：dop 是否随附原生 Windows 可执行文件、是否提供离线身份探针、真实安装目录分布均未知。发现规则不依赖这些；未命中时页面显示已查类别与全部候选，由用户指定位置。
 - **`change list` 扩展参数**：清单读取的主路径（`change list --json`）有适配器与离线用例；`--state` 已按 2026-11-04 的 spec 修正（`--status` 不存在），分页/搜索/team 未接入；真实输出样例仍待企业实测。
+- **会话起始变更选择器**：2026-11-19 在隔离 profile `heluo-r15-uat`（DSH 0.2.1-rc.5，未触碰日常 `desktop` profile）实机验证：选择器紧贴「模式」选择器右侧（与模式选择器间距 2px、箭头与宿主同款 chevron、文案加粗，切换工作区后自动重算位置）、点开读到真实 `dop change list` 的 12 条「变更号 + 概要」、连选两条后编辑器只保留后一条模板且不自动发送；端点实测 `GET` 200（`cache-control:no-store`、`nosniff`、无 CORS 头）、`POST` 405 + `allow: GET`。**未验**：与企业身份/网关同装时的准入表现、真实企业端点下的清单规模与超时，以及官方「基于 main / 新建工作树」同时在场的相邻布局（该 profile 未装官方面板）。
+- **变更提示词模板（r20）**：2026-11-19 在同一隔离 profile 实机验证：补丁层写入 `config.promptTemplate` 后 `GET /api/forge-devops/prompt` 返回 `source: config` 与该正文，页面选中变更后写入的正是配置值；未配置时 `source: default`；`POST`/`PUT`/`DELETE` 均 405 + `allow: GET`。**未验**：多 profile 并发编辑补丁层时的装配冲突表现。
 - **`change update` 写回**：`--summary/--description/--ai-ac` 三个 flag 由用户 2026-11-04 口头给出，`--help` 与输出样例仍无**企业**样本（mock CLI 1.0.4 的 `--help` 与写后回读已实测）。
   `--ai-ac` 的落点在 mock 上实测为变更级 `aiAcceptanceCriteria`，而 UAT 形状是故事 `userStory.storyAC`；回读按「变更级优先、故事兜底」两处都认，并用 `readback.aiAc_source` 说明本次按哪一处判定。
   企业环境真实落点仍属未验：若真实平台两处都不写，回读会判 `absent` → `unknown`（不重放），这是期望的保守行为。

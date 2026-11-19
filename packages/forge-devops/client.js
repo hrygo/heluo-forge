@@ -47,6 +47,45 @@ window.__ModuleLoader__.load({
     /** 样式标签去重键（重复挂载不产生第二个 style）。 */
     const CSS_TAG_ID = '@heluo/forge-devops/client.css';
 
+    /** r19 变更选择器：只读清单端点（与宿主 `/api/forge-devops/changes` 逐字一致）。 */
+    const CHANGES_ENDPOINT = '/api/forge-devops/changes';
+    /** 新会话工具栏行的选项区：条目的 `order` 决定它排在官方「基于 main / 新建工作树」之前还是之后。 */
+    const PICKER_SLOT = 'conversation.hero.options';
+    const PICKER_ID = 'devops.change-picker';
+    /**
+     * 宿主工作区/模式选择器同款箭头路径（`viewBox 0 0 16 16`、描边 1、`currentColor`）。
+     * 不复刻 `▾` 文字符号：同一行里两个官方选择器都是矢量 chevron，混排会显得字形不一致。
+     */
+    const PICKER_CHEVRON_PATH = 'M4 6L7.29289 9.29289C7.68342 9.68342 8.31658 9.68342 8.70711 9.29289L12 6';
+    /** 与宿主 `.heroWorkspaceRow` 的工具栏行 gap 一致：贴到模式选择器右侧时留同样 2px。 */
+    const PICKER_ROW_GAP = 2;
+    /**
+     * 提示词模板：产品口径**逐字固定**（用例逐字比对），只把 `{code}` 换成变更号。
+     * 换号用 `split/join`：变更平台里的字符可能包含 `$&`、`$1`，交给 `replace` 会被当成替换模式。
+     */
+    /** 提示词模板占位符：与宿主 `prompt-template.mjs` 同一字面量。 */
+    const PROMPT_PLACEHOLDER = '{code}';
+    /** 同源模板端点（读取 / 保存）。 */
+    const PROMPT_ENDPOINT = '/api/forge-devops/prompt';
+    /** 模板长度上界：与宿主 `prompt-template.mjs` 的 `PROMPT_MAX_LENGTH` 同值。 */
+    const PROMPT_MAX_LENGTH = 4000;
+    /**
+     * 默认模板（r20）：与 `src/prompt-template.mjs` 的 `DEFAULT_PROMPT_TEMPLATE` **逐字一致**。
+     * 浏览器侧不能 import 包内源码（P1 装载形态），因此这里保留一份同字面量常量，
+     * 由 `test/prompt-template.test.mjs` 静态比对；服务端读到配置值时以下发值为准。
+     */
+    const DEFAULT_PROMPT_TEMPLATE = [
+      '变更 {code}：用 forge_devops_change_context 读取详情，提炼需求与验收标准；',
+      '变更单缺少验收标准时，列出缺口问我，不要编造。',
+      '',
+      '1) 在仓库建 issue：标题含 {code}，正文含需求摘要、验收标准、影响范围；',
+      '   已有同编号 open issue 则复用，不重复创建。',
+      '2) 用 issue-delivery 处理该 issue：先 git status --short 查工作区，脏则问我；',
+      '   按 feat/{code} 分支交付，只改变更范围内代码，补齐测试并跑 pnpm check。',
+      '3) 建 PR 关联该 issue：标题含 {code}，描述附交付报告（改动概览/验证命令与结果/未验证项/回滚方式）。',
+      '约束：提交说明不以 # 开头；不伪造验证结果。',
+    ].join('\n');
+
     /** 四个配置键（与服务端 CLI_FIELDS 同名同序；页面只用到其中两个，契约仍是四个）。 */
     const CLI_FIELDS = ['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs'];
     /** 需要「发现」的可执行文件字段：只读展示 + 候选展开 + 手动指定。 */
@@ -357,6 +396,28 @@ window.__ModuleLoader__.load({
 @keyframes fdv-breathe{0%,100%{opacity:1}50%{opacity:.55}}
 @keyframes fdv-reveal{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
 @container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}.fdv-row-label{flex-basis:100%}}
+.fdv-picker{position:relative;display:flex;align-items:center;min-width:0}
+.fdv-picker-trigger{box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;height:${METRICS.compactButtonHeight}px;padding:0 8px;border:${METRICS.separator}px solid transparent;border-radius:${METRICS.radiusMd};background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:1;white-space:nowrap;transition:background-color ${METRICS.fast}ms ${METRICS.ease},color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-picker-trigger:hover,.fdv-picker-trigger[aria-expanded="true"]{background:var(--dsw-alias-button-floating-hover);color:var(--dsw-alias-label-primary)}
+.fdv-picker-trigger:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+.fdv-picker-trigger:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
+.fdv-picker-label{font-weight:${METRICS.titleWeight}}
+.fdv-picker-chevron{flex:none;opacity:0.7}
+.fdv-picker-panel{position:absolute;top:calc(100% + 8px);right:0;z-index:60;box-sizing:border-box;display:flex;flex-direction:column;width:320px;max-height:320px;padding:6px;border-radius:${METRICS.radiusLg};background:var(--dsw-alias-bg-layer-1);border:${METRICS.separator}px solid var(--dsw-alias-border-l3);box-shadow:0 12px 32px color-mix(in srgb,var(--dsw-alias-label-primary) 18%,transparent)}
+.fdv-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 4px 6px 8px}
+.fdv-picker-head-title{font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};color:var(--dsw-alias-label-primary)}
+.fdv-picker-refresh{box-sizing:border-box;display:inline-flex;align-items:center;height:${METRICS.compactButtonHeight}px;padding:0 8px;border:0;border-radius:${METRICS.radiusSm};background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;line-height:1;white-space:nowrap}
+.fdv-picker-refresh:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover);color:var(--dsw-alias-label-primary)}
+.fdv-picker-refresh:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
+.fdv-picker-list{display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto}
+.fdv-picker-item{box-sizing:border-box;display:flex;align-items:baseline;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:${METRICS.radiusSm};background:transparent;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-picker-item:hover{background:var(--dsw-alias-button-floating-hover)}
+.fdv-picker-item:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
+.fdv-picker-code{flex:none;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.fdv-picker-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fdv-picker-empty{padding:12px 8px;color:var(--dsw-alias-label-secondary);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-picker-note{padding:6px 8px;color:var(--dsw-alias-label-secondary);font-size:${METRICS.tagSize}px;line-height:${METRICS.tagLine}px}
+.fdv-picker-note-error{color:var(--dsw-alias-state-error-primary)}
 @media (prefers-reduced-motion:reduce){.fdv-skeleton-group,.fdv-skeleton-row{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-primary,.fdv-btn,.fdv-link{transition:none}}
 `;
 
@@ -368,6 +429,17 @@ window.__ModuleLoader__.load({
       nav: 'DevOps',
       title: 'DevOps',
       intro: '插件会自己找 dop；只有找不到时才需要指定。',
+      'picker.trigger': '变更',
+      'picker.title': '插入变更提示词',
+      'picker.refresh': '刷新',
+      'picker.loading': '正在读取变更…',
+      'picker.empty': '没有可选的变更',
+      'picker.failed': '变更清单读取失败',
+      'picker.unavailable': '服务尚未就绪，暂不能读取变更',
+      'picker.unreachable': '无法连接本机端点',
+      'picker.truncated': '仅显示前 {n} 条',
+      'picker.insert.failed': '插入失败：编辑器正在发送，请稍后重试',
+      'picker.insert.blocked': '当前编辑器不可用，无法插入',
       'status.ready': 'dop 已自动找到',
       'status.checking': '正在检测命令行位置',
       'status.unchanged': '位置未变',
@@ -604,6 +676,17 @@ window.__ModuleLoader__.load({
       nav: 'DevOps',
       title: 'DevOps',
       intro: 'The plugin locates dop by itself; you only point at a path when it fails.',
+      'picker.trigger': 'Change',
+      'picker.title': 'Insert change prompt',
+      'picker.refresh': 'Refresh',
+      'picker.loading': 'Loading changes…',
+      'picker.empty': 'No change to pick',
+      'picker.failed': 'Could not load the change list',
+      'picker.unavailable': 'Service not ready, cannot list changes yet',
+      'picker.unreachable': 'Cannot reach the local endpoint',
+      'picker.truncated': 'Showing the first {n} only',
+      'picker.insert.failed': 'Insert failed: the composer is busy, try again',
+      'picker.insert.blocked': 'The composer is unavailable right now',
       'status.ready': 'dop found automatically',
       'status.checking': 'Detecting command-line locations',
       'status.unchanged': 'locations unchanged',
@@ -2901,6 +2984,434 @@ window.__ModuleLoader__.load({
       );
     }
 
+
+    /* ------------------------------------------------------------------ *
+     * r19 会话起始变更选择器（DESIGN §5.3）                                *
+     * ------------------------------------------------------------------ */
+
+    /** 模板填空：`split/join` 而不是 `replace`，变更号里的 `$&`、`$1` 原样保留。 */
+    function buildChangePrompt(code, template) {
+      const id = typeof code === 'string' ? code.trim() : '';
+      const base = typeof template === 'string' && template.trim() !== '' ? template : DEFAULT_PROMPT_TEMPLATE;
+      return base.split(PROMPT_PLACEHOLDER).join(id);
+    }
+
+    /** 从本组件往上找第一个真有盒子的祖先（跳过宿主 `display:contents` 的槽位壳）。 */
+    function anchorHolder(node) {
+      let holder = node !== null && node !== undefined ? node.parentElement : null;
+      while (holder !== null && holder !== undefined && elementBox(holder) === null) {
+        holder = holder.parentElement;
+      }
+      return holder === undefined ? null : holder;
+    }
+
+    /** 元素的盒矩形；`display:contents` 的槽位壳没有盒（全 0），据此判空。 */
+    function elementBox(node) {
+      if (node === null || node === undefined || typeof node.getBoundingClientRect !== 'function') return null;
+      const box = node.getBoundingClientRect();
+      if (!Number.isFinite(box.left) || !Number.isFinite(box.right)) return null;
+      return box.width > 0 || box.height > 0 ? box : null;
+    }
+
+    /**
+     * 取「模式选择器」右缘：从容器往前找第一个真有盒子的兄弟；兄弟本身是 `display:contents`
+     * 壳（官方预设槽就是这样）时，先下钻到它第一个有盒子的子元素。
+     */
+    function hostEdgeRight(holder) {
+      let node = holder !== null && holder !== undefined ? holder.previousElementSibling : null;
+      while (node !== null && node !== undefined) {
+        const box = elementBox(node);
+        if (box !== null) return box.right;
+        let child = node.firstElementChild;
+        while (child !== null && child !== undefined) {
+          const childBox = elementBox(child);
+          if (childBox !== null) return childBox.right;
+          child = child.nextElementSibling;
+        }
+        node = node.previousElementSibling;
+      }
+      return null;
+    }
+
+    /**
+     * 把横向位置换算成相对位移（px）。
+     *
+     * 槽位事实：`conversation.hero.options` 的容器 `.heroOptions` 是 `margin-left:auto` 的右对齐
+     * flex 盒，条目天然落在行尾；而宿主把「工作区 / 模式」两个选择器渲染在同一行、且
+     * `conversation.hero.agentPreset` 是 `single` 槽（已被官方占满），没有第二个贴边的 list 座位。
+     * 因此本组件留在 options 槽里，用 `position:relative` 向左平移，视觉上贴到模式选择器之后；
+     * 位移只依赖「容器左缘 − 模式按钮右缘」，容器与按钮都不在本组件内，不会被自身位移反过来影响。
+     *
+     * 纯函数，方便用例直接喂矩形；任何一边缺失或容器已经贴边时返回 0。
+     */
+    function pickerRowShift(anchorLeft, presetRight, gap = PICKER_ROW_GAP) {
+      if (!Number.isFinite(anchorLeft) || !Number.isFinite(presetRight)) return 0;
+      const delta = Math.round(anchorLeft - presetRight - gap);
+      return delta > 0 ? delta : 0;
+    }
+
+    /**
+     * 把提示词整体写进编辑器：**替换**当前草稿，不在光标处追加。
+     *
+     * 连续切换变更时编辑器里只保留最后一次的模板——追加会让多条模板首尾相接，用户还得手工删。
+     * 宿主 `inputActions` 没有草稿读取面（只有 `captureInsertion` 给当前光标位点，拿不到全文长度，
+     * 构造不出覆盖全段的 span），因此整段写入只能走 `setDraft`。
+     * 返回 `{ok:true}` 或 `{ok:false, reason:'no-composer'|'locked'}`，不抛。
+     */
+    function insertPrompt(actions, prompt) {
+      if (actions === null || actions === undefined) return { ok: false, reason: 'no-composer' };
+      if (typeof actions.setDraft === 'function') {
+        try {
+          actions.setDraft(prompt);
+          if (typeof actions.persistDraft === 'function') actions.persistDraft();
+          return { ok: true };
+        } catch {
+          // 宿主正在发送 / 装配已卸载：`setDraft` 可能直接抛，交给调用方提示，不重试。
+          return { ok: false, reason: 'locked' };
+        }
+      }
+      // 没有整段写入面的宿主（或测试替身）：退回光标位点插入，至少不让能力整体失效。
+      if (typeof actions.captureInsertion !== 'function' || typeof actions.insertText !== 'function') {
+        return { ok: false, reason: 'no-composer' };
+      }
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const span = actions.captureInsertion();
+          if (actions.insertText(prompt, span) === true) return { ok: true };
+        }
+        return { ok: false, reason: 'locked' };
+      } catch {
+        return { ok: false, reason: 'locked' };
+      }
+    }
+
+    async function fetchChangeList(options = {}) {
+      const fetchImpl =
+        typeof options.fetchImpl === 'function' ? options.fetchImpl : typeof fetch === 'function' ? fetch : null;
+      if (fetchImpl === null) return { ok: false, code: 'unreachable' };
+      let response;
+      try {
+        response = await fetchImpl(CHANGES_ENDPOINT, {
+          method: 'GET',
+          headers: { accept: 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: options.signal,
+        });
+      } catch (error) {
+        return { ok: false, code: error && error.name === 'AbortError' ? 'aborted' : 'unreachable' };
+      }
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+      if (response.status === 503 && payload !== null && payload.code === 'PICKER_UNAVAILABLE') {
+        return { ok: false, code: 'unavailable' };
+      }
+      if (!response.ok) return { ok: false, code: 'failed', status: response.status };
+      if (payload === null || typeof payload !== 'object' || payload.ok !== true || !Array.isArray(payload.items)) {
+        return { ok: false, code: 'malformed' };
+      }
+      const items = [];
+      for (const row of payload.items) {
+        if (row === null || typeof row !== 'object') continue;
+        const id = typeof row.id === 'string' ? row.id.trim() : '';
+        const summary = typeof row.summary === 'string' ? row.summary.trim() : '';
+        if (id === '' || summary === '') continue;
+        items.push({ id, summary });
+      }
+      return {
+        ok: true,
+        items,
+        count: items.length,
+        total: typeof payload.total === 'number' ? payload.total : items.length,
+        truncated: payload.truncated === true,
+      };
+    }
+
+    /**
+     * 读服务端下发的模板（r20）：配置层改过就用配置值，没配就用宿主默认值。
+     *
+     * 失败**不阻断选择器**：模板缺失只影响"用哪段话"，用内置默认值即可；错误码给调用方
+     * 决定是否提示，绝不把异常文本当模板插进编辑器。
+     */
+    async function fetchPromptTemplate(options) {
+      const settings = options !== null && typeof options === 'object' ? options : {};
+      const fetchImpl =
+        typeof settings.fetchImpl === 'function' ? settings.fetchImpl : typeof fetch === 'function' ? fetch : null;
+      if (fetchImpl === null) return { ok: false, code: 'unreachable' };
+      let response;
+      try {
+        response = await fetchImpl(PROMPT_ENDPOINT, {
+          method: 'GET',
+          headers: { accept: 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: settings.signal,
+        });
+      } catch (error) {
+        return { ok: false, code: error && error.name === 'AbortError' ? 'aborted' : 'unreachable' };
+      }
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+      if (!response.ok) return { ok: false, code: 'failed', status: response.status };
+      const template = payload !== null && typeof payload === 'object' && typeof payload.template === 'string'
+        ? payload.template
+        : '';
+      if (payload === null || typeof payload !== 'object' || payload.ok !== true || template.trim() === '') {
+        return { ok: false, code: 'malformed' };
+      }
+      return { ok: true, template, source: payload.source === 'config' ? 'config' : 'default' };
+    }
+
+    /** 原因词 → 页面文案（未知原因落到通用失败词，不把技术细节写给人看）。 */
+    function pickerFailureText(code, t) {
+      if (code === 'unavailable') return t('picker.unavailable');
+      if (code === 'unreachable') return t('picker.unreachable');
+      return t('picker.failed');
+    }
+
+    /**
+     * 新会话工具栏行上的变更选择器（r19）。
+     *
+     * 行为契约：首次打开才读清单（新会话页不为一个可能不用的下拉多打一次 CLI）；同一时刻
+     * 只允许一笔在途请求；选中即用模板**整体替换**当前草稿并收起（连续切换不叠加）；
+     * 写入失败只提示，不动草稿。
+     * 键盘：Tab 进入条目、Escape 收起，`mousedown` 落在外面收起（宿主无 portal，面板是
+     * 本组件的绝对定位子节点）。
+     */
+    function ChangePicker(props) {
+      const t = props.t;
+      const actions = props.inputActions;
+      const [open, setOpen] = React.useState(false);
+      const [phase, setPhase] = React.useState('idle');
+      const [items, setItems] = React.useState([]);
+      const [truncated, setTruncated] = React.useState(false);
+      const [failed, setFailed] = React.useState('');
+      const [notice, setNotice] = React.useState('');
+      const mounted = React.useRef(true);
+      const inFlight = React.useRef(false);
+      const wrap = React.useRef(null);
+      // 服务端下发过模板就用它；没下发（离线/端点未装配）用内置默认值，选择器照常工作。
+      const templateRef = React.useRef(DEFAULT_PROMPT_TEMPLATE);
+      const [shift, setShift] = React.useState(0);
+
+      React.useEffect(() => {
+        // 与同文件其他区块一致：StrictMode 的“卸载→重挂”里重新置真，否则迟到的回包全被丢弃。
+        mounted.current = true;
+        return () => {
+          mounted.current = false;
+        };
+      }, []);
+
+      const load = () => {
+        if (inFlight.current) return;
+        inFlight.current = true;
+        setPhase('loading');
+        setFailed('');
+        // 模板一起读：它决定"选中后插什么"，与清单不是同一次读，失败也各自降级。
+        Promise.resolve(fetchPromptTemplate()).then((prompt) => {
+          if (prompt.ok && typeof prompt.template === 'string' && prompt.template.trim() !== '') {
+            templateRef.current = prompt.template;
+          }
+        });
+        Promise.resolve(fetchChangeList()).then((result) => {
+          inFlight.current = false;
+          if (!mounted.current) return;
+          if (result.ok) {
+            setItems(result.items);
+            setTruncated(result.truncated);
+            setPhase('ready');
+            return;
+          }
+          if (result.code === 'aborted') {
+            setPhase('idle');
+            return;
+          }
+          setItems([]);
+          setTruncated(false);
+          setFailed(result.code);
+          setPhase('error');
+        });
+      };
+
+      const toggle = () => {
+        if (open) {
+          setOpen(false);
+          return;
+        }
+        setOpen(true);
+        setNotice('');
+        // 每次展开都取一份新清单（企业侧可能刚建变更），在飞请求由 `inFlight` 串行化。
+        if (phase !== 'loading') load();
+      };
+
+      React.useEffect(() => {
+        // 贴靠：容器左缘减去模式按钮右缘就是「选项区离行首有多远」，向右平移的负值即这个差值。
+        // 只读宿主 DOM 的几何，不移动、不包裹、不复制宿主的节点；容器与按钮都在本组件之外，
+        // 因此自身位移不会反馈进下一次测量。
+        if (typeof window === 'undefined') return undefined;
+        const measure = () => {
+          const node = wrap.current;
+          if (node === null || node === undefined) return;
+          // 宿主的槽位壳是 `display:contents`（`<div data-slot=...>`），它没有盒模型；
+          // 往上找到第一个真有矩形（也就是 `.heroOptions` 容器）的祖先，才是横向锚点。
+          const holder = anchorHolder(node);
+          if (holder === null || holder === undefined) return;
+          const presetRight = hostEdgeRight(holder);
+          if (presetRight === null) return;
+          setShift(pickerRowShift(elementBox(holder).left, presetRight));
+        };
+        measure();
+        // 首帧之后布局还会走一拍（字体、侧栏宽度、宿主对行高的二次测量），再量一次。
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(measure);
+        window.addEventListener('resize', measure);
+        let observer = null;
+        const holder = anchorHolder(wrap.current);
+        if (typeof ResizeObserver === 'function' && holder !== null && holder !== undefined) {
+          observer = new ResizeObserver(measure);
+          observer.observe(holder);
+          const row = holder.parentElement;
+          if (row !== null && row !== undefined) observer.observe(row);
+        }
+        // 官方「模式选择器」是后挂上来的（首帧还是空槽），它一出现右缘就变了；行上其它控件
+        // （官方「基于 main / 新建工作树」）晚到时同理。只观察子节点增删，不观察属性，避免自扰。
+        let mutations = null;
+        if (typeof MutationObserver === 'function' && holder !== null && holder !== undefined) {
+          const row = holder.parentElement;
+          if (row !== null && row !== undefined) {
+            mutations = new MutationObserver(measure);
+            mutations.observe(row, { childList: true, subtree: true });
+          }
+        }
+        return () => {
+          window.removeEventListener('resize', measure);
+          if (observer !== null) observer.disconnect();
+          if (mutations !== null) mutations.disconnect();
+        };
+      }, []);
+
+      React.useEffect(() => {
+        if (!open || typeof document === 'undefined') return undefined;
+        const onPointerDown = (event) => {
+          const node = wrap.current;
+          if (node !== null && node !== undefined && typeof node.contains === 'function' && node.contains(event.target)) {
+            return;
+          }
+          setOpen(false);
+        };
+        const onKeyDown = (event) => {
+          if (event && event.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('mousedown', onPointerDown);
+        document.addEventListener('keydown', onKeyDown);
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown);
+          document.removeEventListener('keydown', onKeyDown);
+        };
+      }, [open]);
+
+      const pick = (code) => {
+        const result = insertPrompt(actions, buildChangePrompt(code, templateRef.current));
+        if (result.ok) {
+          setOpen(false);
+          setNotice('');
+          return;
+        }
+        setNotice(result.reason === 'no-composer' ? t('picker.insert.blocked') : t('picker.insert.failed'));
+      };
+
+      const rows = [];
+      if (phase === 'loading' || phase === 'idle') {
+        rows.push(h('div', { key: 'loading', className: 'fdv-picker-empty' }, t('picker.loading')));
+      } else if (phase === 'error') {
+        rows.push(h('div', { key: 'error', className: 'fdv-picker-empty fdv-picker-note-error' }, pickerFailureText(failed, t)));
+      } else if (items.length === 0) {
+        rows.push(h('div', { key: 'empty', className: 'fdv-picker-empty' }, t('picker.empty')));
+      } else {
+        for (const item of items) {
+          rows.push(
+            h(
+              'button',
+              {
+                key: item.id,
+                type: 'button',
+                role: 'option',
+                className: 'fdv-picker-item',
+                title: `${item.id} ${item.summary}`,
+                onClick: () => pick(item.id),
+              },
+              h('span', { className: 'fdv-picker-code' }, item.id),
+              h('span', { className: 'fdv-picker-summary' }, item.summary),
+            ),
+          );
+        }
+        if (truncated) {
+          rows.push(h('div', { key: 'truncated', className: 'fdv-picker-note' }, t('picker.truncated', { n: items.length })));
+        }
+      }
+      if (notice !== '') rows.push(h('div', { key: 'notice', className: 'fdv-picker-note fdv-picker-note-error' }, notice));
+
+      return h(
+        'div',
+        { className: 'fdv-picker', ref: wrap, style: { left: -shift } },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'fdv-picker-trigger',
+            'aria-haspopup': 'listbox',
+            'aria-expanded': open,
+            title: t('picker.title'),
+            onClick: toggle,
+          },
+          h('span', { className: 'fdv-picker-label' }, t('picker.trigger')),
+          h(
+            'svg',
+            {
+              className: 'fdv-picker-chevron',
+              width: 14,
+              height: 14,
+              viewBox: '0 0 16 16',
+              fill: 'none',
+              strokeWidth: 1,
+              'aria-hidden': 'true',
+            },
+            h('path', { d: PICKER_CHEVRON_PATH, stroke: 'currentColor' }),
+          ),
+        ),
+        open
+          ? h(
+              'div',
+              { className: 'fdv-picker-panel' },
+              h(
+                'div',
+                { className: 'fdv-picker-head' },
+                h('span', { className: 'fdv-picker-head-title' }, t('picker.title')),
+                h(
+                  'button',
+                  { type: 'button', className: 'fdv-picker-refresh', disabled: phase === 'loading', onClick: load },
+                  t('picker.refresh'),
+                ),
+              ),
+              h('div', { className: 'fdv-picker-list', role: 'listbox' }, rows),
+            )
+          : null,
+      );
+    }
+
+
+    /* ------------------------------------------------------------------ *
+     * r20 提示词模板设置（DESIGN §5.3 / §5.4）                             *
+     * ------------------------------------------------------------------ */
+
+    /** 保存一份模板：POST 同源端点，返回 `{ok, template}` 或 `{ok:false, message}`。 */
     const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
 
     function apply(ctx) {
@@ -3003,10 +3514,22 @@ window.__ModuleLoader__.load({
         }),
         'forge-devops: settings section',
       );
+      // r19：新会话工具栏行的变更选择器。槽位由会话壳声明（`conversation.hero.options` 是
+      // 会话作用域列表槽），`inject` 里只给这一条；`inputActions` 由会话壳 provide，条目直接取用。
+      ctx.effect(
+        () => ctx.slots.inject(PICKER_SLOT, () => ctx.slots.register({
+          name: PICKER_SLOT,
+          id: PICKER_ID,
+          order: -10,
+          locale: NS,
+          inject: () => ({}),
+        }, ChangePicker)),
+        'forge-devops: change picker',
+      );
     }
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, DevopsSection, ReadinessSection, DevopsEngineeringTab, DevopsCredentialItem, CliEntryField, StatusLine, CandidateList };
+    return { apply, inject, DevopsSection, ReadinessSection, DevopsEngineeringTab, DevopsCredentialItem, CliEntryField, StatusLine, CandidateList, ChangePicker, buildChangePrompt, insertPrompt, fetchChangeList, fetchPromptTemplate, DEFAULT_PROMPT_TEMPLATE, pickerRowShift, elementBox, hostEdgeRight, anchorHolder, PICKER_CHEVRON_PATH };
   },
 });

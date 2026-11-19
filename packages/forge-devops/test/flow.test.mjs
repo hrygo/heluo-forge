@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createDevopsFlow } from '../src/flow.mjs';
 import { apply, FLOW_KEY, READ_ACTIONS, READ_REASONS, SERVICE_KEY } from '../src/index.mjs';
 import { CLI_PAGE_HINT, CLI_REASONS } from '../src/cli-config.mjs';
-import { CLI_ROUTE_PATH } from '../src/http.mjs';
+import { CLI_API_PREFIX, CLI_ROUTE_PATH } from '../src/http.mjs';
 import { ENV_KEYS } from '../src/runtime-config.mjs';
 
 /**
@@ -302,7 +302,9 @@ test('重建抛错：结构化 500 + 明确降级，与下一次工具调用同�
     await withEnv({ PATH: empty, Path: empty }, async () => {
       const { routes, webServer } = webHost();
       const { provided, flags, service } = mount({ webServer });
-      assert.equal(routes.length, 1, 'route 已注册：页面走的就是它');
+      // r19/r20：`/cli`、`/changes`、`/prompt` 三条前缀一起注册，页面走的是第一条（配置端点）。
+      assert.equal(routes.length, 3, 'route 已注册：页面走的就是它');
+      assert.equal(routes[0].path, CLI_API_PREFIX);
 
       flags.failFlowProvide = true;
       assert.throws(() => service.cliSnapshot({ refresh: true }), (error) => {

@@ -32,7 +32,7 @@
 | `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) |
-| `@heluo/forge-devops` | CLI 接入（工具面 + 设置页） | [plugins/forge-devops.md](plugins/forge-devops.md) |
+| `@heluo/forge-devops` | CLI 接入（工具面 + 设置页 + 新会话变更选择器） | [plugins/forge-devops.md](plugins/forge-devops.md) |
 | `@heluo/forge-gitee` | CLI 接入（工具面 + 设置页） | [plugins/forge-gitee.md](plugins/forge-gitee.md) |
 | `@heluo/forge-sdd` | 已退役（包与 CLI 已删除；非 Host） | [plugins/forge-sdd.md](plugins/forge-sdd.md) |
 | 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) |
