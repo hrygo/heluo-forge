@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.10.2 |
+| 版本 | V0.10.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -95,10 +95,10 @@
 - 需要链接的原因：根工程未声明各成员运行时依赖，而包内测试按裸包名 import 同仓兄弟包（如 `@heluo/forge-policy`），没有链接即 `ERR_MODULE_NOT_FOUND`。该步只补解析路径，不替代 `pnpm install`：本地装过依赖时已有同指向链接，脚本计为 kept 且不重写；被占位时只报告、不覆盖。
 - 需要缩小范围定位时使用[贡献指南的按模块命令](../../CONTRIBUTING.md#7-检查命令)；全量检查已覆盖的有效结果无需重复执行。真实仓库归档检查与 DSH/企业实机操作不进入离线 CI。
 - `check:docs` 校验正文元数据、编号唯一性、无正文保留记录、链接与锚点、表格列数、禁写修订记录与询问函问题序列；派生目录与检查共用正文扫描。
-- `check:skills-manager` 先在临时目录重建并逐文件比对技能管理器生成物，再执行 TypeScript 类型检查；不反向覆盖已提交生成物。开发 SDK 精确版本须等于根 `.dsh-version`，更新基线时同步清单与锁文件。fflate 仅在构建期内联，运行制品不携带开发依赖。
+- `check:skills-manager` 先由插件自己的 `scripts/check-sdk.mjs` 校验其开发 SDK 精确版本与根 `.dsh-version` 一致，再在临时目录重建并逐文件比对生成物，最后执行 TypeScript 类型检查；不反向覆盖已提交生成物，也不扫描其他插件的 SDK。更新基线时同步清单与锁文件。fflate 仅在构建期内联，运行制品不携带开发依赖。
 - `check:repo` 校验必需文件、根目录入口面（未登记的一级文件与目录，含未提交的未忽略文件）、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径，以及包体闭包（清单/入口/workspace 依赖/补丁层/locale）。
 - `check:tarballs` 校验真实 tarball 内容与模式位。Windows 源码可执行入口校验解释器声明，组合构建对清单声明的嵌套 bin 写入执行位后重新读取最终归档审计；POSIX 源码与最终归档的执行位校验保留。
-- `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。包内 DSH 开发依赖精确版本须等于基线，运行时依赖不获开发期豁免；生成的 `pnpm-lock.yaml` 由冻结安装核验。
+- `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。清单仅在 `engines.dsh` 值及与基线精确一致的顶层 DSH 开发依赖值中允许版本字面量，按 JSON 字段和原文位置识别，不依赖缩进或换行；运行时、可选、peer 依赖及嵌套同名字段不获开发期豁免。生成的 `pnpm-lock.yaml` 由冻结安装核验。
 - CI 的 `repository checks` 工作流使用 `.github/workflows/check.yml` 的 `verify (ubuntu-x64)` 作业执行 `node --run check`，是全量离线检查与全部用例的唯一执行点；默认 `contents: read`、`issues: read` 与 `pull-requests: read`，PR 正文须引用本仓库已有 Issue（`Closes #编号` 或 `Part of #编号`），正文编辑时重新检查。常规检查不使用 `pull_request_target`。该作业在检出 PR 代码前拒绝 head 仓库不是本仓库的 fork PR：审查、重签与强制重放收敛在仓库内分支，fork 分支不在分支保护与提交钩子的约束范围内；判定只作用于 `pull_request`，`main` 推送、合并队列与手动运行不受影响。与分类同理，该判定在工作流内执行且工作流定义取自 PR 合并提交，不构成防止恶意 PR 修改工作流的安全边界；不可绕过的是基线加载的 `sensitive-attestation` 与 CODEOWNERS 评审。触发与依赖固定策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
 - `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增白名单内的隔离路径——即 `docs/` 中普通 Markdown、根 `README.md` / `CONTRIBUTING.md` / `SECURITY.md`、`.agents/skills/`、`deploy/`、`services/forge-desktop/` 及桌面打包/运行时暂存/图标派生相关脚本与用例（不触及 `packages/`、`scripts/sensitive-scan/`、企业包构建链路、`.github/workflows/`、`.node-version` 与 `package.json`）——时允许跳过平台作业；`verify (ubuntu-x64)` 仍全量运行。新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
 - 平台作业运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。`repository checks` 的必需平台检查为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、`SQLite and IAM (win32-x64, windows-2022)` 和 `SQLite and IAM (win32-arm64, windows-11-arm)`。

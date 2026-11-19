@@ -3,19 +3,15 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
-const sdk = createRequire(new URL('../packages/forge-skills-manager/package.json', import.meta.url));
-const { Context } = await import(pathToFileURL(sdk.resolve('@deepseek-ai/cordis')).href);
-const { SkillRegistry } = await import(pathToFileURL(sdk.resolve('@deepseek-ai/dsh-skill')).href);
-import { apply as enterprise } from '../packages/forge-engineering/src/issue-delivery-skill.mjs';
+import { Context } from '@deepseek-ai/cordis';
+import { SkillRegistry } from '@deepseek-ai/dsh-skill';
 
-test('manager rejects reserved skills while preserving the host native candidate selection', async () => {
+test('manager rejects reserved skills and preserves Host selection with synthetic providers', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'forge-manager-policy-'));
   const before = { ...process.env };
   process.env.DSH_HOME = join(directory, 'dsh');
   process.env.HOME = process.env.USERPROFILE = join(directory, 'user');
-  const local = await import('../packages/forge-skills-manager/lib/core.js');
+  const local = await import('../lib/core.js');
   const root = local.userRoots().find(root => root.key === 'dsh');
   const document = '---\nname: enterprise-issue-delivery\ndescription: personal copy\n---\npersonal workflow';
   const ctx = new Context();
@@ -30,15 +26,18 @@ test('manager rejects reserved skills while preserving the host native candidate
     registry = ctx.plugin(SkillRegistry);
     await registry.await();
     fixture = ctx.plugin({ name: 'policy-integration', inject: ['skills'], apply(host) {
-      enterprise(host);
+      host.skills.registerProvider(() => ({ name: 'formal-fixture', list: async () => [{
+        name: 'enterprise-issue-delivery', description: 'formal fixture', source: 'bundled', rank: 600,
+        provider: 'formal-fixture', locator: {}, invocation: { modelInvocable: false, userInvocable: true },
+      }], get: async candidate => ({ ...candidate, content: 'formal workflow fixture' }) }));
     } });
     await fixture.await();
     const summary = (await ctx.skills.list()).find(item => item.name === 'enterprise-issue-delivery');
-    assert.equal(summary.provider, 'enterprise-clauses');
+    assert.equal(summary.provider, 'formal-fixture');
     assert.equal(summary.invocation.modelInvocable, false);
     assert.equal(summary.invocation.userInvocable, true);
     const full = await ctx.skills.get(summary.name);
-    assert.match(full.content, /单 Issue 可信待验收交付/);
+    assert.equal(full.content, 'formal workflow fixture');
     const unregister = ctx.skills.registerProvider(() => ({ name: 'native-fixture', list: async () => [100, 400].map(rank => ({
       name: 'enterprise-issue-delivery', description: 'personal', source: 'filesystem', rank,
       provider: 'native-fixture', locator: { rank }, invocation: { modelInvocable: true, userInvocable: true },

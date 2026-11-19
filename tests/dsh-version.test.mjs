@@ -22,25 +22,55 @@ import {
   readDshVersion,
   rewriteCanonical,
   rewriteEngineFloors,
-  checkDevelopmentHosts,
 } from '../scripts/lib/dsh-version.mjs';
 
 const ROOT = process.cwd();
 const BASELINE = readDshVersion(ROOT);
 
-test('development SDK pins follow the root baseline for any package; stale pins are rejected', () => {
+test('manifest version exemptions follow JSON fields in pretty, compact and shared-line layouts', () => {
   const root = fixtureRoot();
   const file = join(root, 'packages/fixture-plugin/package.json');
   mkdirSync(dirname(file), { recursive: true });
   try {
-    writeFileSync(file, JSON.stringify({ devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } }, null, 2));
-    assert.deepEqual(checkDevelopmentHosts(root), []);
-    assert.ok(listCodeOccurrences(root).every(item => item.kind === 'code-allowed'));
-    writeFileSync(file, JSON.stringify({ dependencies: { '@deepseek-ai/dsh-skill': BASELINE } }, null, 2));
-    assert.ok(listCodeOccurrences(root).some(item => item.kind === 'code-forbidden'), 'runtime dependencies cannot use the development exemption');
-    writeFileSync(file, JSON.stringify({ devDependencies: { '@deepseek-ai/dsh-skill': sibling(BASELINE) } }, null, 2));
-    assert.equal(checkDevelopmentHosts(root).length, 1);
-    assert.ok(listCodeOccurrences(root).some(item => item.kind === 'code-forbidden'));
+    for (const indentation of [undefined, 2, '\t']) {
+      const manifest = {
+        engines: { dsh: '>=' + BASELINE },
+        devDependencies: { '@deepseek-ai/dsh-skill': BASELINE },
+        dependencies: { '@deepseek-ai/dsh-host-webserver': BASELINE },
+        optionalDependencies: { '@deepseek-ai/dsh-scope': BASELINE },
+        peerDependencies: { '@deepseek-ai/dsh-skill': BASELINE },
+        metadata: { devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } },
+      };
+      writeFileSync(file, JSON.stringify(manifest, null, indentation));
+      const rows = listCodeOccurrences(root);
+      assert.equal(rows.filter(item => item.kind === 'code-allowed').length, 2);
+      assert.equal(rows.filter(item => item.kind === 'code-forbidden').length, 4);
+    }
+    const sharedLine = [
+      '{',
+      '  "devDependencies": {"@deepseek-ai/dsh-skill": "' + BASELINE + '"}, "dependencies": {"@deepseek-ai/dsh-host-webserver": "' + BASELINE + '"}',
+      '}',
+    ];
+    writeFileSync(file, sharedLine.join('\r\n'));
+    const sharedRows = listCodeOccurrences(root);
+    assert.deepEqual(sharedRows.map(item => item.kind), ['code-allowed', 'code-forbidden']);
+    assert.ok(sharedRows.every(item => item.line === 2));
+    writeFileSync(file, JSON.stringify({
+      devDependencies: {
+        '@deepseek-ai/dsh-skill': sibling(BASELINE),
+        'unrelated-library': BASELINE,
+      },
+    }));
+    assert.equal(listCodeOccurrences(root).filter(item => item.kind === 'code-forbidden').length, 2);
+    writeFileSync(file, JSON.stringify({
+      description: 'devDependencies: {"@deepseek-ai/dsh-skill": "' + BASELINE + '"}',
+      nested: [{ devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } }],
+      devDependencies: { '@deepseek-ai/dsh-skill': BASELINE },
+    }));
+    assert.deepEqual(listCodeOccurrences(root).map(item => item.kind), ['code-forbidden', 'code-forbidden', 'code-allowed']);
+    writeFileSync(file, '{"devDependencies":{"@deepseek-ai/dsh-skill":"' + BASELINE + '"}');
+    assert.deepEqual(listCodeOccurrences(root).map(item => item.kind), ['code-forbidden']);
+    writeFileSync(file, '{}');
     writeFileSync(join(root, 'pnpm-lock.yaml'), `version: ${BASELINE}\n`);
     writeFileSync(join(root, 'scripts/bad.mjs'), `const dshVersion = '${BASELINE}';\n`);
     const occurrences = listCodeOccurrences(root);

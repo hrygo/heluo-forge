@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { buildPlugin, packageRoot } from './build.mjs';
+import { verifyDevelopmentSdk } from './check-sdk.mjs';
 
 async function inventory(root, dir = root) {
   const files = [];
@@ -15,6 +16,7 @@ async function inventory(root, dir = root) {
   return files.sort();
 }
 
+verifyDevelopmentSdk();
 const temporary = await mkdtemp(join(tmpdir(), 'forge-skills-generated-'));
 try {
   await buildPlugin(temporary);
