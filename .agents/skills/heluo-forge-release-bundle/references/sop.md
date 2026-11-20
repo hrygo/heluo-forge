@@ -88,7 +88,9 @@ heluo-forge client-secret set --issuer https://iam.corp.example \
 node node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs client-secret set --issuer https://iam.corp.example --client-id forge-console --method client_secret_post --ref enterprise-oidc
 ```
 
-由获准的密钥分发工具通过管道或重定向向命令的标准输入发送原始 UTF-8 字节。禁止交互输入、回显、将值放入参数或环境变量；只有密钥原文包含尾部换行时保留该换行。内置 provider 单独保存值级加密的 `iam-client-secret/<ref>`，并绑定 issuer、client ID 和方法。轮换使用相同命令更新绑定一致的记录；轮换后须重新登录。由公开模式切换到机密模式时也须新登录，V1 和 V2 会话彼此隔离。
+由获准的密钥分发工具通过管道或重定向向命令的标准输入发送原始 UTF-8 字节。禁止交互输入、回显、将值放入参数或环境变量；只有密钥原文包含尾部换行时保留该换行。内置 provider 单独保存值级加密的 `iam-client-secret/<ref>`，并绑定 issuer、client ID 和方法。
+
+轮换使用 `client-secret set` 更新绑定一致的记录。更正同一引用的预置错误时，使用 `client-secret replace`，按私版填写目标参数，再用 `--old-issuer`、`--old-client-id`、`--old-method` 精确提供旧绑定，密钥仍由标准输入提供。公开与机密模式分别使用 V1 和 V2 会话。轮换或切换登录模式后，若 Host 正在运行，在「设置 → 企业账号」点击「刷新」核验会话，再点击「登录企业账号」。
 
 ## 6. 允许的输出与证据
 

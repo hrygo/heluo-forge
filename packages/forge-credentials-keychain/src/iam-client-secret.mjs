@@ -8,6 +8,8 @@ const validBinding = ({ issuer, clientId, ref, method }) =>
   && typeof issuer === 'string' && issuer.length > 0 && typeof clientId === 'string' && clientId.length > 0;
 const matches = (payload, scope) => payload?.issuer === scope.issuer && payload.clientId === scope.clientId
   && payload.method === scope.method;
+const bindingMismatch = () => Object.assign(new Error('stored IAM client secret does not match the expected binding'),
+  { code: 'IAM_CLIENT_SECRET_BINDING_MISMATCH' });
 
 export function createIamClientSecretSource(backend, { recordPrefix }) {
   const snapshots = new WeakMap();
@@ -34,18 +36,24 @@ export function createIamClientSecretSource(backend, { recordPrefix }) {
   });
 }
 
-export async function storeIamClientSecret(provider, scope, value) {
-  const issuer = typeof scope.issuer === 'string' && URL.canParse(scope.issuer) ? new URL(scope.issuer) : undefined;
-  if (!validBinding(scope) || !issuer || !['https:', 'http:'].includes(issuer.protocol)
-    || issuer.username || issuer.password || /[?#]/u.test(issuer.href)) {
+export async function storeIamClientSecret(provider, scope, value, previousBinding) {
+  const { issuer, clientId, method, ref } = scope;
+  const binding = { issuer, clientId, method, ref };
+  const url = typeof issuer === 'string' && URL.canParse(issuer) ? new URL(issuer) : undefined;
+  const replacing = previousBinding !== undefined;
+  const expected = replacing ? { ...previousBinding, ref } : binding;
+  if (!validBinding(binding) || !url || !['https:', 'http:'].includes(url.protocol)
+    || url.username || url.password || /[?#]/u.test(url.href)
+    || (replacing && !validBinding(expected))) {
     throw Object.assign(new Error('invalid IAM client secret binding'), { code: 'IAM_CLIENT_SECRET_CONFIG_INVALID' });
   }
   assertCredentialValue(value);
-  await provider.modifyRecord(recordKey(scope.ref), (record) => {
-    if (record !== undefined && (record.kind !== 'grant' || !matches(record.payload, scope))) {
-      throw Object.assign(new Error('IAM client secret reference already has a different binding'),
-        { code: 'IAM_CLIENT_SECRET_BINDING_MISMATCH' });
-    }
-    return { kind: 'grant', payload: { issuer: scope.issuer, clientId: scope.clientId, method: scope.method, value } };
+  const key = recordKey(ref);
+  // A failed repair must not initialize a new store. Recheck the binding under the write lock.
+  if (replacing && (await provider.readRecord(key)) === undefined) throw bindingMismatch();
+  await provider.modifyRecord(key, (record) => {
+    if ((replacing || record !== undefined)
+      && (record?.kind !== 'grant' || !matches(record.payload, expected))) throw bindingMismatch();
+    return { kind: 'grant', payload: { issuer, clientId, method, value } };
   });
 }

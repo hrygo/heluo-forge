@@ -210,10 +210,10 @@ export async function openCredentialReader({ directory, service, accountPrefix }
 }
 
 /** Provision only the dedicated IAM client record in the built-in store. */
-export async function setIamClientSecret(scope, value, { directory, service, accountPrefix } = {}) {
+export async function setIamClientSecret(scope, value, { directory, service, accountPrefix, previousBinding } = {}) {
   const { backend } = createDefaultBackend({ directory: storeDirectory(directory) });
   const provider = createKeychainProvider(backend, { service, accountPrefix });
-  try { await storeIamClientSecret(provider, scope, value); }
+  try { await storeIamClientSecret(provider, scope, value, previousBinding); }
   finally { await provider.close(); }
 }
 

@@ -19,6 +19,9 @@ const USAGE = `用法：
   heluo-forge auth token             输出当前可用的访问令牌（CLI 不直接刷新）
   heluo-forge client-secret set --issuer URL --client-id ID --method METHOD --ref REF
                                      从标准输入读取密钥并写入专用凭据记录
+  heluo-forge client-secret replace --issuer URL --client-id ID --method METHOD --ref REF
+                                     --old-issuer URL --old-client-id ID --old-method METHOD
+                                     从标准输入读取密钥，按旧绑定更正同一引用
 
 环境变量：
   HELUO_FORGE_IAM_URL                 运行中的 DSH 地址（如 http://127.0.0.1:49196）；设置后
@@ -60,15 +63,21 @@ function storeOptions() {
   };
 }
 
-async function provisionClientSecret(args) {
+async function provisionClientSecret(operation, args) {
+  const replacing = operation === 'replace';
+  const stringOption = { type: 'string' };
+  const options = { issuer: stringOption, 'client-id': stringOption, method: stringOption, ref: stringOption };
+  if (replacing) Object.assign(options, { 'old-issuer': stringOption, 'old-client-id': stringOption, 'old-method': stringOption });
+  const requiredCount = Object.keys(options).length;
   let scope;
+  let previousBinding;
   try {
-    const { values, tokens } = parseArgs({
-      args, tokens: true,
-      options: { issuer: { type: 'string' }, 'client-id': { type: 'string' }, method: { type: 'string' }, ref: { type: 'string' } },
-    });
-    if (tokens.length === 4 && Object.keys(values).length === 4) {
+    const { values, tokens } = parseArgs({ args, tokens: true, options });
+    if (tokens.length === requiredCount && Object.keys(values).length === requiredCount) {
       scope = { issuer: values.issuer, clientId: values['client-id'], method: values.method, ref: values.ref };
+      if (replacing) {
+        previousBinding = { issuer: values['old-issuer'], clientId: values['old-client-id'], method: values['old-method'] };
+      }
     }
   } catch { /* Only the fixed usage is shown. */ }
   if (!scope || process.stdin.isTTY) {
@@ -80,16 +89,16 @@ async function provisionClientSecret(args) {
     for await (const chunk of process.stdin) chunks.push(chunk);
     const value = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks));
     const { setIamClientSecret } = await import('@heluo/forge-credentials-keychain');
-    await setIamClientSecret(scope, value, storeOptions());
+    await setIamClientSecret(scope, value, { ...storeOptions(), previousBinding });
   } catch (error) {
     if (error.code === 'IAM_CLIENT_SECRET_BINDING_MISMATCH') {
-      fail(error.code, '该凭据引用已绑定其他 IAM 客户端配置', false);
+      fail(error.code, replacing ? '未找到与旧绑定一致的 IAM 客户端密钥记录' : '该凭据引用已绑定其他 IAM 客户端配置', false);
     } else {
       fail('IAM_CLIENT_SECRET_PROVISION_FAILED', '无法预置密钥，请核对输入、客户端登记与凭据存储', false);
     }
     return EXIT.UNAVAILABLE;
   }
-  process.stdout.write('已预置 IAM 客户端密钥。\n');
+  process.stdout.write(replacing ? '已更正 IAM 客户端密钥绑定。\n' : '已预置 IAM 客户端密钥。\n');
   return EXIT.OK;
 }
 
@@ -141,7 +150,9 @@ async function tokenFromHost(reader, baseUrl) {
 
 async function main(argv) {
   const args = argv.slice(2);
-  if (args[0] === 'client-secret' && args[1] === 'set') return provisionClientSecret(args.slice(2));
+  if (args[0] === 'client-secret' && ['set', 'replace'].includes(args[1])) {
+    return provisionClientSecret(args[1], args.slice(2));
+  }
   const json = args.includes('--json');
   if (args[0] !== 'auth' || (args[1] !== 'whoami' && args[1] !== 'token')) {
     process.stderr.write(USAGE);

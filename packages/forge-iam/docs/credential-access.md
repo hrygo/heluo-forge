@@ -293,7 +293,16 @@ node node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/helu
 
 由获准的密钥分发工具通过管道或重定向将原始 UTF-8 字节送入上述命令的标准输入。禁止在终端交互输入或回显密钥。末尾换行只有在属于密钥原文时才保留。原值不得进入命令参数、环境变量、配置补丁、制品或日志。内置 provider 将其单独写入值级加密的 SQLite `iam-client-secret/<ref>` 记录，绑定 issuer、client ID 和方法；Host 通过独立受信端口读取。
 
-在 IAM 管理端轮换后，通过同一命令更新绑定一致的记录。每次写入产生新的修订版本。切换公开／机密模式、修改方法或引用、轮换密钥后，均须重新登录；两种模式的 V1／V2 会话隔离。首次部署与每次轮换均须在目标 IAM 核对实际生效时间，以新会话验证计划续期提交成功（`refresh-committed`）并继续处于 `ready`。
+在 IAM 管理端轮换后，使用 `client-secret set` 更新绑定一致的记录。若首次预置填错绑定，使用 `client-secret replace` 更正同一引用。目标参数取自私版配置，`--old-issuer`、`--old-client-id`、`--old-method` 填入上次预置的值，密钥仍经标准输入提供。记录缺失或旧绑定不符时，命令中止更新并报告 `IAM_CLIENT_SECRET_BINDING_MISMATCH`。
+
+```sh
+heluo-forge client-secret replace --issuer https://iam.corp.example \
+  --client-id forge-console --method client_secret_post --ref enterprise-oidc \
+  --old-issuer https://iam.corp.example/.well-known/openid-configuration \
+  --old-client-id forge-console --old-method client_secret_post
+```
+
+每次写入产生新的修订版本。公开与机密模式分别使用 V1 和 V2 会话。切换模式、修改方法或引用、轮换密钥后，均须重新登录。若 Host 正在运行，在「设置 → 企业账号」点击「刷新」，等待 Host 重新核验会话，再点击「登录企业账号」。首次部署与每次轮换均须在目标 IAM 核对实际生效时间，以新会话验证计划续期提交成功（`refresh-committed`）并继续处于 `ready`。
 
 ## 附录 A：存储目录与命名空间
 

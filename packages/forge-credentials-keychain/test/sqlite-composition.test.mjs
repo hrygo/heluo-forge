@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { apply, openCredentialReader, validateConfig } from '../src/index.mjs';
+import { apply, openCredentialReader, setIamClientSecret, validateConfig } from '../src/index.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
+import { createCredentialStore } from '../src/credential-store.mjs';
 import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 function ownDirectory(t, directory) {
@@ -50,6 +51,62 @@ test('plugin and read-only reader use the same namespace and durable store', asy
   assert.equal(ctx.provided.get('iam-atomic-store').verify(credentials), true);
   assert.equal(ctx.provided.get('iam-atomic-store').verify({}), false);
   await reader.close();
+});
+
+test('a pinned IAM client secret is unavailable while its keyring cannot be read', async (t) => {
+  const root = await outsideRepositoryTmpAsync('heluo-iam-client-secret-pin-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
+  const scope = { issuer: 'https://iam.corp.example', clientId: 'fixture', method: 'client_secret_post', ref: 'fixture-oidc' };
+  const provision = () => setIamClientSecret(scope, 'synthetic-secret', { directory });
+  await provision();
+  const ctx = context();
+  own(apply(ctx, { storeDirectory: directory }));
+  const source = ctx.provided.get('iam-client-secret-source');
+  const pinned = await source.read(scope);
+  assert.equal(source.isCurrent(pinned), true);
+
+  const keyring = join(`${directory}.keys`, 'keyring.json');
+  const savedKeyring = join(root, 'saved-keyring.json');
+  await rename(keyring, savedKeyring);
+  try {
+    await assert.rejects(() => source.read(scope), { code: 'CRED_KEY_UNAVAILABLE' });
+    assert.equal(source.isCurrent(pinned), false);
+    await writeFile(keyring, '{', { mode: 0o600, flag: 'wx' });
+    await assert.rejects(() => source.read(scope), { code: 'CRED_KEY_INVALID' });
+    assert.equal(source.isCurrent(pinned), false);
+  } finally {
+    await rm(keyring, { force: true });
+    await rename(savedKeyring, keyring);
+  }
+
+  assert.equal(source.isCurrent(pinned), true);
+  assert.equal((await source.read(scope)).revision, pinned.revision);
+
+  const store = createCredentialStore({ directory });
+  try { await store.rotate('k2'); }
+  finally { await store.close(); }
+  const activeScope = { ...scope, ref: 'fixture-with-current-key' };
+  await setIamClientSecret(activeScope, 'synthetic-secret', { directory });
+  const activePin = await source.read(activeScope);
+  const restoredKeyring = await readFile(keyring, 'utf8');
+  const withoutOldKey = JSON.parse(restoredKeyring);
+  delete withoutOldKey.keys.k1;
+  await writeFile(keyring, JSON.stringify(withoutOldKey));
+  try {
+    assert.equal(source.isCurrent(activePin), true);
+    await assert.rejects(() => source.read(scope), { code: 'CRED_KEY_UNAVAILABLE' });
+    assert.equal(source.isCurrent(pinned), false);
+  } finally {
+    await writeFile(keyring, restoredKeyring);
+  }
+  assert.equal(source.isCurrent(pinned), true);
+
+  await provision();
+  assert.equal(source.isCurrent(pinned), false);
+  const current = await source.read(scope);
+  assert.notEqual(current.revision, pinned.revision);
+  assert.equal(source.isCurrent(current), true);
 });
 
 test('a backend cannot grant itself trust by claiming atomic capabilities', async (t) => {

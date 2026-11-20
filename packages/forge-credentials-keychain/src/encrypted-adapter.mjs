@@ -3,6 +3,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertCredentialValue, assertWellFormed } from './text.mjs';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
+const PIN_READ_FAILURES = new Set([
+  'CRED_DECRYPT_FAILED', 'CRED_KEY_INVALID', 'CRED_KEY_PERMISSIONS', 'CRED_KEY_UNAVAILABLE',
+  'CRED_LEGACY_STORE', 'CRED_STORE_PATH_CONFLICT', 'CRED_STORE_PERMISSIONS', 'CRED_STORE_UNAVAILABLE',
+  'EACCES', 'EIO', 'ELOOP', 'EMFILE', 'ENFILE', 'ENOENT', 'ENOTDIR', 'EPERM',
+]);
 
 function kindOf(id) {
   if (typeof id !== 'string' || id.length === 0 || id.includes('|')) throw error('CRED_STORE_INVALID', 'invalid credential key');
@@ -88,9 +93,17 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
           value,
           revision,
           isCurrent() {
-            const current = backend.get(id);
-            return current?.kind === row.kind && current.owner === row.owner && current.kid === row.kid
-              && current.revision === row.revision && envelope.equals(current.envelope);
+            try {
+              if (!backend.open()) return false;
+              const current = backend.get(id);
+              // A retained row does not prove its historical key is still available.
+              return current?.kind === row.kind && current.owner === row.owner && current.kid === row.kid
+                && current.revision === row.revision && envelope.equals(current.envelope)
+                && read(id, current) !== undefined;
+            } catch (cause) {
+              if (PIN_READ_FAILURES.has(cause?.code)) return false;
+              throw cause;
+            }
           },
         };
       });

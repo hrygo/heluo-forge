@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -129,6 +129,62 @@ test('the enterprise endpoint rejects a public session at its first scheduled re
   assert.equal(app.mock.counts.refresh, 0);
 });
 
+test('an administrator can replace the exact misbound client secret before first login', async (t) => {
+  const method = 'client_secret_post';
+  const app = await deployment(t, { method, authMode: 'confidential' });
+  const mistakenIssuer = `${app.mock.issuer}/.well-known/openid-configuration`;
+  const misbound = app.args.map((arg) => arg === app.mock.issuer ? mistakenIssuer : arg);
+  const replacement = [
+    'client-secret', 'replace', ...app.args.slice(2),
+    '--old-issuer', mistakenIssuer, '--old-client-id', app.mock.clientId, '--old-method', method,
+  ];
+
+  const provisioned = await app.setSecret(secret, misbound);
+  assert.equal(provisioned.code, 0, provisioned.stderr);
+  await assert.rejects(() => app.service.startSignIn(), { code: 'IAM_CLIENT_AUTH_UNVERIFIED' });
+  const ordinaryWrite = await app.setSecret(secret);
+  assert.equal(ordinaryWrite.code, 4);
+  assert.match(ordinaryWrite.stderr, /IAM_CLIENT_SECRET_BINDING_MISMATCH/);
+
+  for (const [option, value] of [['--old-client-id', 'other-client'], ['--old-method', 'client_secret_basic']]) {
+    const mismatched = [...replacement];
+    mismatched[mismatched.indexOf(option) + 1] = value;
+    const refused = await app.setSecret(secret, mismatched);
+    assert.equal(refused.code, 4);
+    assert.match(refused.stderr, /IAM_CLIENT_SECRET_BINDING_MISMATCH/);
+  }
+
+  const attempts = await Promise.all([
+    app.setSecret(secret, replacement),
+    app.setSecret(secret, replacement),
+  ]);
+  assert.deepEqual(attempts.map(({ code }) => code).sort(), [0, 4], attempts.map(({ stderr }) => stderr).join('\n'));
+  assert.match(attempts.find(({ code }) => code === 4).stderr, /IAM_CLIENT_SECRET_BINDING_MISMATCH/);
+  assert.ok(attempts.every(({ stdout, stderr }) => !stdout.includes(secret) && !stderr.includes(secret)));
+  await signIn(app);
+  assert.equal(app.service.getView().state, 'ready');
+  assert.equal(app.mock.counts.token, 1);
+});
+
+test('client secret replacement refuses an absent record and an incomplete old binding', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'forge-iam-client-secret-replace-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const directory = join(home, 'credentials');
+  const issuer = 'https://iam.corp.example';
+  const clientId = 'fixture-client';
+  const method = 'client_secret_basic';
+  const replacement = [
+    'client-secret', 'replace', '--issuer', issuer, '--client-id', clientId, '--method', method, '--ref', ref,
+    '--old-issuer', issuer, '--old-client-id', clientId, '--old-method', method,
+  ];
+  assert.equal((await command(directory, replacement.slice(0, -2), secret)).code, 64);
+  const absent = await command(directory, replacement, secret);
+  assert.equal(absent.code, 4);
+  assert.match(absent.stderr, /IAM_CLIENT_SECRET_BINDING_MISMATCH/);
+  await assert.rejects(() => stat(directory), { code: 'ENOENT' });
+  await assert.rejects(() => stat(`${directory}.keys`), { code: 'ENOENT' });
+});
+
 for (const method of ['client_secret_basic', 'client_secret_post']) {
   test(`the composed confidential Host uses ${method} at both grants and completes scheduled renewal`, async (t) => {
     const app = await deployment(t, { method, authMode: 'confidential' });
@@ -173,7 +229,12 @@ for (const method of ['client_secret_basic', 'client_secret_post']) {
     assert.equal(outdated.code, 3);
     assert.equal(outdated.stdout, '');
     assert.match(outdated.stderr, /IAM_REAUTH_REQUIRED/);
+    const refreshed = await app.service.syncFromStore();
+    assert.equal(refreshed.canSignIn, true);
     await assert.rejects(() => app.service.getAccessToken());
     assert.equal(app.mock.counts.token, 2);
+    await signIn(app);
+    assert.equal(app.service.getView().state, 'ready');
+    assert.equal(app.mock.counts.token, 3);
   });
 }

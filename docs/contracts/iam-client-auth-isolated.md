@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
 | 文档名称 | IAM 客户端认证契约 |
-| 版本 | V1.1.0 |
+| 版本 | V1.1.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -63,11 +63,11 @@ verifyClientSecretSource?: (
 - 仅内置加密 SQLite 凭据组合注册 `iam-client-secret-source`，并按身份核对同一 `credentials` 实例。Host 在 confidential 模式注入该端口，为同一绑定返回稳定 source；端口解绑或重绑使已捕获的来源失效。
 - verifier 在当前注入作用域检查具体 credentials、source、配置的 clientId/ref/method；记录读取再精确核对 issuer/clientId/method。只有同步字面 `true` 通过。凭据的来源证明独立于 IAM grant 单记录及网关联合写入能力。
 - binding 冻结且不交给来源修改。read 只捕获一次完整内存快照，缺失不查找第二来源；service 独立核对五字段类型、精确 binding、非空 revision/value，不 trim secret。
-- 内置来源读取当前凭据命名空间的 `iam-client-secret/<ref>`，记录为 `{ kind: 'grant', payload: { issuer, clientId, method, value } }`。复用值级加密与单记录提交。每次写入产生新加密信封。`revision` 取已认证信封的摘要。同步 `isCurrent` 按原快照核对当前行，删除、重写或不可读时失效。隔离 fixture 同样提供不可变快照和同步检查。
+- 内置来源读取当前凭据命名空间的 `iam-client-secret/<ref>`，记录为 `{ kind: 'grant', payload: { issuer, clientId, method, value } }`。复用值级加密与单记录提交。每次写入产生新加密信封。`revision` 取已认证信封的摘要。同步 `isCurrent` 确认当前存储可读，并按原快照核对当前行。密钥文件不可用、记录删除或重写时，快照失效。隔离 fixture 同样提供不可变快照和同步检查。
 - service 保留原快照仅用于身份检查，另取私有字段副本用于请求与 pin；每个使用边界检查原数据仍匹配副本，不能让来源改写调用方的秘密或比较基准。
 - secret 原值仅进入管理员标准输入、加密记录的读写及必要 HTTP 操作；attempt、会话 grant、pending、view、诊断、错误、日志、argv 和交付物均不携带原值。
 
-管理员使用 `heluo-forge client-secret set` 在目标 Host 使用的目录和命名空间预置或轮换。写入已存在的引用须匹配原 issuer/clientId/method。来源直接读专用加密记录，任何环境变量、配置值和其他凭据引用都不能提供 secret。运维步骤见 [IAM 凭据接入指南](../../packages/forge-iam/docs/credential-access.md)。
+管理员使用 `heluo-forge client-secret set` 在目标 Host 使用的目录和命名空间预置或轮换。该命令更新已有引用时须匹配原 issuer/clientId/method。更正同一引用的绑定使用 `client-secret replace`，从标准输入读取密钥，在同一次单记录更新中检查原 issuer/clientId/method 并写入新绑定。记录缺失或旧绑定不符时中止更新并返回 `IAM_CLIENT_SECRET_BINDING_MISMATCH`。来源直接读专用加密记录，任何环境变量、配置值和其他凭据引用都不能提供 secret。运维步骤见 [IAM 凭据接入指南](../../packages/forge-iam/docs/credential-access.md)。
 
 ## 3. HTTP 认证
 
