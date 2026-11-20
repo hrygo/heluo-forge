@@ -186,12 +186,17 @@ test('a foreign error from an awaited owned handler is CHANGED after the origina
   assert.equal(h.counts.send, 0);
 });
 
-test('an unowned command cannot alias the private action through public service registration', async (t) => {
+test('an unowned command still goes through the unified identity gate', async (t) => {
   const h = toolFixture(t); let sends = 0;
-  h.policy.registerCommand(h.ctx, { name: 'foreign', description: 'Unowned alias', action: 'gitee.repository.read',
-    resolveArguments: () => ({ target: 'repo-A', payload: 'body' }),
+  h.ctx.provide('iam', undefined);
+  h.policy.registerCommand(h.ctx, { name: 'foreign', description: 'Unowned alias', action: 'gitee.issue.write',
+    resolveArguments: () => ({ target: 'issue-A', payload: 'body' }),
     handler: async () => { sends++; return { kind: 'success', text: 'unexpected' }; } });
-  fixed(await h.command('foreign')); assert.equal(sends, 0); assert.equal(h.counts.source, 0);
+  const result = await h.command('foreign');
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /IAM_CONSUMPTION_UNVERIFIED|IAM 身份/);
+  assert.equal(sends, 0);
+  assert.equal(h.counts.source, 0);
 });
 
 test('command caller cancellation during its actual handler wait never reaches the sender', async (t) => {
@@ -207,7 +212,7 @@ test('ordinary apply and isolated module import do not discover sources or regis
   assert.equal(typeof testing.installIamConsumerTools, 'function');
   assert.equal(host.definitions.size, 0); assert.equal(host.commands.size, 0); assert.equal(host.guards.length, 0);
   const { apply } = await import('../src/index.mjs');
-  const config = { audit: { sink: 'memory', allowNonDurable: true }, catalog: [] };
+  const config = { audit: { sink: 'memory' }, catalog: [] };
   Object.defineProperty(config, 'getSources', { get() { assert.fail('ordinary config probed a private source'); } });
   const dispose = apply(host.ctx, config);
   assert.equal(host.definitions.size, 0); assert.equal(host.commands.size, 0); dispose();

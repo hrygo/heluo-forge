@@ -3,83 +3,96 @@ import test from 'node:test';
 
 import { compileCatalog, composeDecision, decideAction, PolicyCatalogError } from '../src/catalog.mjs';
 
-const READ = { action: 'gitee.repository.read', target: 'repository', enabled: true };
-const WRITE = { action: 'gitee.issue.write', target: 'issue', enabled: true };
-const PUSH = { action: 'gitee.git.push', target: 'repository', enabled: true };
-const HUMAN = { action: 'gitee.review.record', target: 'pull-request', enabled: true };
+const ISSUE = { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' };
+const PUSH = { action: 'gitee.git.push', target: 'repository', category: 'remote-write' };
+const HUMAN = { action: 'gitee.review.record', target: 'pull-request', category: 'human-record' };
 
-test('compiling a valid catalog attaches classification and default decision', () => {
-  const catalog = compileCatalog([READ, { ...WRITE, enabled: false }, HUMAN]);
-  const read = catalog.get('gitee.repository.read');
-  assert.equal(read.category, 'read');
-  assert.equal(read.decision, 'allow');
-  assert.equal(read.contentGate, false);
-  assert.equal(read.confirmation, 'none');
-  assert.ok(Object.isFrozen(read));
+test('compiling valid writes attaches classification and default decision', () => {
+  const catalog = compileCatalog([ISSUE, PUSH, HUMAN]);
+  const issue = catalog.get('gitee.issue.write');
+  assert.equal(issue.category, 'dev-write');
+  assert.equal(issue.decision, 'allow');
+  assert.ok(Object.isFrozen(issue));
+  assert.deepEqual(Object.keys(issue).sort(), ['action', 'category', 'decision', 'target']);
 
-  const write = catalog.get('gitee.issue.write');
-  assert.equal(write.enabled, false);
-  assert.equal(write.category, 'dev-write');
-  assert.equal(write.contentGate, true);
-  assert.equal(write.confirmation, 'scope');
+  const push = catalog.get('gitee.git.push');
+  assert.equal(push.category, 'remote-write');
+  assert.equal(push.decision, 'confirm');
 
   assert.equal(catalog.get('gitee.review.record').decision, 'deny');
-  assert.equal(compileCatalog([PUSH]).get('gitee.git.push').confirmation, 'each');
 });
 
-test('the target shape is fixed by the action classification, not by the entry', () => {
-  assert.throws(
-    () => compileCatalog([{ action: 'gitee.repository.read', target: 'issue', enabled: true }]),
-    (error) => error instanceof PolicyCatalogError && error.code === 'POLICY_CATALOG_TARGET_MISMATCH',
-  );
-  assert.throws(
-    () => compileCatalog([{ action: 'gitee.issue.write', enabled: true }]),
-    (error) => error.code === 'POLICY_CATALOG_TARGET_MISMATCH',
-    'a missing target is a mismatch, not a default',
-  );
-});
-
-test('an invalid catalog throws instead of silently shrinking', () => {
+test('the target and category are fixed by the action classification, not by the entry', () => {
   const cases = [
-    [[{ action: 'not.registered', target: 'repository', enabled: true }], 'POLICY_CATALOG_UNKNOWN_ACTION'],
-    [[{ action: 'gitee.repository.read', target: 'repository', enabled: true, kind: 'read' }], 'POLICY_CATALOG_UNKNOWN_FIELD'],
-    [[{ action: 'gitee.repository.read', target: 'repository', enabled: true, egress: 'allow' }], 'POLICY_CATALOG_UNKNOWN_FIELD'],
-    [[{ action: 'gitee.repository.read', target: 'repository', enabled: 'true' }], 'POLICY_CATALOG_INVALID'],
-    [[{ action: 'gitee.repository.read', target: 'repository', enabled: true, revision: 'r' }], 'POLICY_CATALOG_INVALID'],
-    [[{ action: 'gitee.repository.read', target: 'repository' }], 'POLICY_CATALOG_INVALID'],
-    [[READ, { ...READ }], 'POLICY_CATALOG_DUPLICATE'],
-    [['nope'], 'POLICY_CATALOG_INVALID'],
+    { action: 'gitee.issue.write', target: 'repository', category: 'dev-write' },
+    { action: 'gitee.issue.write', target: 'issue', category: 'remote-write' },
+    { action: 'gitee.issue.write', category: 'dev-write' },
+    { action: 'gitee.issue.write', target: 'issue' },
   ];
-  for (const [entries, code] of cases) {
-    assert.throws(() => compileCatalog(entries), (error) => error instanceof PolicyCatalogError && error.code === code, code);
+  for (const entry of cases) {
+    assert.throws(
+      () => compileCatalog([entry]),
+      (error) => error instanceof PolicyCatalogError && error.code === 'POLICY_CATALOG_INVALID',
+      JSON.stringify(entry),
+    );
+  }
+});
+
+test('an invalid catalog throws once with every issue located by key path', () => {
+  const cases = [
+    [[{ action: 'not.registered', target: 'repository', category: 'dev-write' }], /not a classified action/],
+    [[{ ...ISSUE, enabled: true }], /catalog\[0\]\.enabled: unknown field/],
+    [[{ ...ISSUE, revision: 'r' }], /catalog\[0\]\.revision: unknown field/],
+    [[{ ...ISSUE, egress: 'allow' }], /catalog\[0\]\.egress: unknown field/],
+    [[{ action: 'gitee.repository.read', target: 'repository', category: 'read' }], /read action "gitee.repository.read" is out of scope/],
+    [[ISSUE, { ...ISSUE }], /duplicate action/],
+    [['nope'], /must be an object/],
+  ];
+  for (const [entries, pattern] of cases) {
+    assert.throws(
+      () => compileCatalog(entries),
+      (error) => error instanceof PolicyCatalogError && error.code === 'POLICY_CATALOG_INVALID' && pattern.test(error.message),
+      JSON.stringify(entries),
+    );
   }
   assert.throws(() => compileCatalog('nope'), (error) => error.code === 'POLICY_CATALOG_INVALID');
 });
 
 test('an uncompiled catalog denies every action', () => {
-  const decision = decideAction({ catalog: undefined, action: 'gitee.repository.read', target: 'r' });
-  assert.deepEqual(decision, { action: 'deny', reason: 'policy catalog is not compiled', rule: 'policy-unavailable' });
+  const decision = decideAction({ catalog: undefined, action: 'gitee.issue.write', target: 'r' });
+  assert.equal(decision.action, 'deny');
+  assert.equal(decision.rule, 'policy-unavailable');
 });
 
-test('unregistered, disabled, human and target-less actions are denied', () => {
-  const catalog = compileCatalog([READ, { ...WRITE, enabled: false }, HUMAN]);
-  assert.equal(decideAction({ catalog, action: 'change.read', target: 'C-1' }).rule, 'unregistered-action');
-  assert.equal(decideAction({ catalog, action: 'gitee.issue.write', target: 'acme/demo!1' }).rule, 'action-disabled');
-  assert.equal(decideAction({ catalog, action: 'gitee.repository.read' }).rule, 'target-required');
-  assert.equal(decideAction({ catalog, action: 'gitee.repository.read', target: '   ' }).rule, 'target-required');
-  assert.equal(decideAction({ catalog, action: 'gitee.review.record', target: 'acme/demo!2' }).rule, 'human-record-action');
+test('the default rules let unregistered actions, human records and pushes pass', () => {
+  const catalog = compileCatalog([ISSUE, PUSH, HUMAN]);
+  const rules = {};
+  assert.equal(decideAction({ catalog, rules, action: 'change.read', target: 'C-1' }).action, 'allow');
+  assert.equal(decideAction({ catalog, rules, action: 'change.read', target: 'C-1' }).rule, 'out-of-scope');
+  assert.equal(decideAction({ catalog, rules, action: 'gitee.issue.write', target: 'acme/demo!1' }).rule, 'registered-write');
+  assert.equal(decideAction({ catalog, rules, action: 'gitee.git.push', target: 'acme/demo' }).action, 'allow');
+  assert.equal(decideAction({ catalog, rules, action: 'gitee.review.record', target: 'acme/demo!2' }).action, 'allow');
 });
 
-test('a registered read is allowed, a registered push asks for confirmation', () => {
-  const catalog = compileCatalog([READ, PUSH]);
-  assert.equal(decideAction({ catalog, action: 'gitee.repository.read', target: 'acme/demo' }).action, 'allow');
-  const confirm = decideAction({ catalog, action: 'gitee.git.push', target: 'acme/demo' });
-  assert.equal(confirm.action, 'confirm');
-  assert.equal(confirm.rule, 'confirm-required');
+test('an enabled rule tightens exactly its own actions', () => {
+  const catalog = compileCatalog([ISSUE, PUSH, HUMAN]);
+  const rules = { denyUnknownAction: true, denyHumanRecord: true, confirmPush: true, confirmDopWrite: true };
+  assert.equal(decideAction({ catalog, rules, action: 'change.read', target: 'C-1' }).rule, 'unregistered-action');
+  assert.equal(decideAction({ catalog, rules, action: 'gitee.review.record', target: 'acme/demo!2' }).rule, 'human-record-action');
+  const push = decideAction({ catalog, rules, action: 'gitee.git.push', target: 'acme/demo' });
+  assert.equal(push.action, 'confirm');
+  assert.equal(push.rule, 'confirm-required');
+  assert.equal(decideAction({ catalog, rules, action: 'gitee.issue.write', target: 'acme/demo!1' }).action, 'allow');
 });
 
-test('a self-reported read-only claim cannot turn a write into something else', () => {
-  const catalog = compileCatalog([WRITE]);
+test('a controlled action needs a business target whatever the rules say', () => {
+  const catalog = compileCatalog([ISSUE]);
+  assert.equal(decideAction({ catalog, action: 'gitee.issue.write' }).rule, 'target-required');
+  assert.equal(decideAction({ catalog, action: 'gitee.issue.write', target: '   ' }).rule, 'target-required');
+});
+
+test('self-reported read-only claims cannot change a write decision', () => {
+  const catalog = compileCatalog([ISSUE]);
   const plain = decideAction({ catalog, action: 'gitee.issue.write', target: 'acme/demo!1' });
   const claimed = decideAction({
     catalog,
@@ -89,7 +102,6 @@ test('a self-reported read-only claim cannot turn a write into something else', 
   });
   assert.deepEqual(claimed, plain);
   assert.equal(plain.action, 'allow');
-  assert.equal(plain.rule, 'registered-action');
 });
 
 test('decision composition takes the strictest of its inputs', () => {

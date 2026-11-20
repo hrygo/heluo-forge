@@ -47,11 +47,15 @@ try {
 } catch {
   aliasReady = false;
 }
+// P0（TECH-CHANGE §3.1）：目录只认六条受控写；探针用的 probe.* 动作已不可登记，
+// 一律按 out-of-scope 透传。下面的 tools 映射保留为"宿主工具名 → 动作 id"形状示意。
 const gatewayCatalog = [
-  "{ action: 'probe.read', kind: 'read', target: 'probe-target', enabled: true }",
-  "{ action: 'probe.write', kind: 'write', target: 'probe-target' }",
-  "{ action: 'probe.confirm', kind: 'confirm', target: 'probe-target' }",
-  "{ action: 'probe.fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' }",
+  "{ action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }",
+  "{ action: 'gitee.pr.write', target: 'pull-request', category: 'dev-write' }",
+  "{ action: 'change.clarification.write', target: 'change', category: 'dev-write' }",
+  "{ action: 'gitee.review.publish', target: 'pull-request', category: 'review-write' }",
+  "{ action: 'gitee.git.push', target: 'repository', category: 'remote-write' }",
+  "{ action: 'gitee.review.record', target: 'pull-request', category: 'human-record' }",
 ];
 writeFileSync(
   patch,
@@ -64,7 +68,8 @@ writeFileSync(
     ...gatewayCatalog.map((entry) => `          - ${entry}`),
     '        audit:',
     '          sink: memory',
-    '          allowNonDurable: true',
+    '          buffer: 1000',
+    '          keepDays: 7',
     '        protectedPaths:',
     `          - '${protectedDir}/**'`,
     '        tools:',

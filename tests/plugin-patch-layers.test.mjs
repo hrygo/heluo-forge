@@ -119,22 +119,25 @@ function catalogLines(text) {
 const POLICY_NAME = '@heluo/forge-policy';
 const SHARED_POLICY_ID = 'heluo-policy';
 /**
- * 并集目录：devops 的两条 dop 变更读 + gitee 的三条读 + 交付判定 + 六条写动作。
+ * 并集目录只有六条受控写动作：只读动作不登记（TECH-CHANGE §3.1）。
  * 登记只决定动作是否可见；放行由内置分类决定（研发/评审写 allow、push confirm、review.record deny）。
  */
 const UNION_ACTIONS = [
-  'change.read',
-  'change.list',
-  'gitee.repository.read',
-  'gitee.issue.read',
-  'gitee.pr.read',
-  'gitee.delivery.judge',
   'gitee.issue.write',
   'gitee.pr.write',
   'change.clarification.write',
   'gitee.review.publish',
   'gitee.git.push',
   'gitee.review.record',
+];
+/** 只读动作一律不登记：登记了会在挂载期被策略拒绝（read action is out of scope）。 */
+const READ_ACTIONS = [
+  'change.read',
+  'change.list',
+  'gitee.repository.read',
+  'gitee.issue.read',
+  'gitee.pr.read',
+  'gitee.delivery.judge',
 ];
 const layersByName = () => new Map(bundles().map((bundle) => [bundle.name, rowsOf(bundle.text)]));
 const textsByName = () => new Map(bundles().map((bundle) => [bundle.name, bundle.text]));
@@ -171,8 +174,15 @@ function assertSharedPolicyRow({ devops, gitee, devopsText, giteeText }) {
   assert.deepEqual(
     devopsCatalog.map((line) => /\{ action: '([^']+)'/u.exec(line)[1]),
     UNION_ACTIONS,
-    `策略目录必须是 12 条并集（${UNION_ACTIONS.join(' / ')}）；登记只决定动作可见，放行由内置分类承担（push confirm、review.record deny）`,
+    `策略目录必须是 6 条受控写（${UNION_ACTIONS.join(' / ')}）；只读动作不登记，放行由内置分类承担`,
   );
+  for (const line of devopsCatalog) {
+    assert.match(
+      line,
+      /^ {10}- \{ action: '[^']+', target: '[^']+', category: '(?:dev-write|review-write|remote-write|human-record)' \}$/u,
+      `策略目录条目只允许 action/target/category 三键：${line}`,
+    );
+  }
   // 文本口径也要守：单行没有 isolate 还不够，注释里写回 isolate 同样会被下一步照抄成真实配置
   // （r4 的隔离域形态就是从示例里长出来的），所以这段文本级断言必须落在同一个谓词里。
   for (const [name, text] of [['forge-devops', devopsText], ['forge-gitee', giteeText]]) {
@@ -242,7 +252,7 @@ test('D-2 门禁有牙: 单边改一条目录或加回 isolate，判据必须失
   const giteeText = texts.get('forge-gitee');
 
   const driftedCatalog = giteeText.replace(
-    "          - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }\n",
+    "          - { action: 'gitee.pr.write', target: 'pull-request', category: 'dev-write' }\n",
     '',
   );
   assert.notEqual(driftedCatalog, giteeText, '自证前提：样例改写必须真的删掉一行目录');
@@ -320,7 +330,7 @@ function assertUniformPolicyCatalogs(layers) {
   assert.deepEqual(
     expected.map((line) => /\{ action: '([^']+)'/u.exec(line)[1]),
     UNION_ACTIONS,
-    `基准目录必须是 12 条并集（${UNION_ACTIONS.join(' / ')}）`,
+    `基准目录必须是 6 条受控写（${UNION_ACTIONS.join(' / ')}）`,
   );
   for (const layer of policyLayers) {
     assert.deepEqual(
@@ -379,4 +389,37 @@ test('D-2: 补丁层文档不得再写「同 id 会重复挂载 / 不要叠加�
   }
   // 门禁有牙：缺陷原文必须能被同一判据识别（断言不是恒真）。
   assert.match('若同一 profile 已 apply 企业层，不要再叠加本层，否则同一个 id 会被重复挂载。', forbidden);
+});
+
+/**
+ * P0 反向断言（TECH-CHANGE §3.1/§3.4）：补丁层不得再写权限覆盖、规则开关或旧登记字段。
+ * 这些事实在旧实现里存在过——`permission`/`sandbox` 覆盖宿主权限表，`rules` 打开策略规则，
+ * 目录条目带 `enabled`/`revision`。P0 把三层口径都收回：补丁层只给目录与审计配置。
+ */
+test('P0: 补丁层不写 permission/sandbox、不写 rules、目录不带 enabled/revision', () => {
+  const layers = mergedLayers().filter((bundle) => rowsOf(bundle.text).some((row) => row.name === POLICY_NAME));
+  assert.equal(layers.length, 4, '企业 / devops / engineering / gitee 四层携带策略行');
+  for (const layer of layers) {
+    assert.doesNotMatch(layer.text, /^\s+(permission|sandbox):/mu, `${layer.name} 补丁层仍写宿主权限键`);
+    assert.doesNotMatch(layer.text, /^\s+rules:/mu, `${layer.name} 补丁层仍写 rules：P0 八开关全关，规则只能由策略默认值给出`);
+    const catalog = catalogLines(layer.text);
+    assert.equal(catalog.length, UNION_ACTIONS.length, `${layer.name} 目录条目数必须是 ${UNION_ACTIONS.length}`);
+    for (const line of catalog) {
+      assert.doesNotMatch(line, /\b(enabled|revision):/u, `${layer.name} 目录条目仍带旧登记字段：${line}`);
+      const action = /\{ action: '([^']+)'/u.exec(line)[1];
+      assert.equal(READ_ACTIONS.includes(action), false, `${layer.name} 仍登记只读动作 ${action}`);
+      assert.equal(UNION_ACTIONS.includes(action), true, `${layer.name} 登记了未预期的动作 ${action}`);
+    }
+    assert.match(layer.text, /sink: memory\n/u, `${layer.name} 策略行必须显式给审计 sink`);
+    assert.match(layer.text, /buffer: 1000\n/u, `${layer.name} 策略行必须声明环形缓冲容量`);
+    assert.match(layer.text, /keepDays: 7\n/u, `${layer.name} 策略行必须声明文件轮转保留天数`);
+    assert.doesNotMatch(layer.text, /allowNonDurable/u, `${layer.name} 仍写 allowNonDurable：内存 sink 已是 P0 默认`);
+  }
+  // 门禁有牙：把旧字段写回一层文本，判据必须命中（断言不是恒真）。
+  const sample = layers[0].text
+    .replace("        catalog:\n", "        rules:\n          confirmPush: true\n        catalog:\n")
+    .replace("          - { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }", "          - { action: 'gitee.issue.write', target: 'issue', category: 'dev-write', enabled: true }");
+  assert.match(sample, /^\s+rules:/mu);
+  assert.match(catalogLines(sample)[0], /enabled/u);
+  assert.match("        permission:\n          default: allow", /^\s+(permission|sandbox):/mu);
 });

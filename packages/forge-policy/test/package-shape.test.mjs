@@ -43,11 +43,17 @@ test('bilingual plugin intro metadata, detail docs, and branding icon conform to
   assert.equal(actualIcon, canonicalIcon);
 });
 
-test('the README claims only the gate skeleton and its boundaries', async () => {
+test('the README claims only the P0 gate and no removed mechanism', async () => {
   const text = await read('README.md');
-  assert.match(text, /状态：可用（动作分类与内置词表/);
+  assert.match(text, /状态：可用（P0 受控写最小门禁/);
   assert.match(text, /不提供 fail-open/);
+  assert.match(text, /## 目标能力（P1–P3，尚未实现）/);
   assert.doesNotMatch(text, /已联调/);
+  assert.doesNotMatch(
+    text,
+    /范围票据|逐次确认|confirmations\.mjs|delegation\.mjs|approvals\.mjs/,
+    'README must not describe mechanisms removed by the P0 rewrite',
+  );
 });
 
 test('the gate keeps the hard-denial seam and offers no fail-open switch', async () => {

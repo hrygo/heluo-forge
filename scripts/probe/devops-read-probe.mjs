@@ -44,11 +44,15 @@ const dir = mkdtempSync(join(tmpdir(), `forge-devops-read-${mode}-`));
 const readerLog = join(dir, 'reader-calls.jsonl');
 const patch = join(dir, 'devops-read.patch.yml');
 
-const readActions = [
-  "          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }",
-  "          - { action: 'repository.read', kind: 'read', target: 'repository', enabled: true }",
-  "          - { action: 'issue.read', kind: 'read', target: 'issue', enabled: true }",
-  "          - { action: 'pr.read', kind: 'read', target: 'pull-request', enabled: true }",
+// P0（TECH-CHANGE §3.1）：目录只登记六条受控写；只读动作不登记，devops 的读调用
+// 通过 policy.executeAction 按 out-of-scope 透传（本探针验的就是这条执行链）。
+const catalogEntries = [
+  "          - { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }",
+  "          - { action: 'gitee.pr.write', target: 'pull-request', category: 'dev-write' }",
+  "          - { action: 'change.clarification.write', target: 'change', category: 'dev-write' }",
+  "          - { action: 'gitee.review.publish', target: 'pull-request', category: 'review-write' }",
+  "          - { action: 'gitee.git.push', target: 'repository', category: 'remote-write' }",
+  "          - { action: 'gitee.review.record', target: 'pull-request', category: 'human-record' }",
 ];
 const mountReader = mode === 'with-reader';
 const rows = [
@@ -63,10 +67,11 @@ const rows = [
   `      name: '${pathToFileURL(policyPackage).href}'`,
   '      config:',
   '        catalog:',
-  ...readActions,
+  ...catalogEntries,
   '        audit:',
   '          sink: memory',
-  '          allowNonDurable: true',
+  '          buffer: 1000',
+  '          keepDays: 7',
   '        tools:',
   "          forge_devops_change_read: 'change.read'",
   "          forge_devops_repository_read: 'repository.read'",

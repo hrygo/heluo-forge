@@ -5,38 +5,60 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createGate } from '../src/gate.mjs';
+import { createAuditBarrier, createMemorySink } from '../src/audit.mjs';
+import { resolveConfig } from '../src/config.mjs';
 
-// 内置分类里没有任何动作绑定路径参数，所以编译出来的目录条目都不带 `path`；
-// 受保护路径检查因此不会自动触发（见文档「受保护路径检查是目标能力」）。
-// 这里直接构造带 `path` 绑定的目录条目，锁定门禁在该绑定存在时的行为：
-// 命中受保护根即拒，没有配置根也拒，绝不降级为放行。
-const ACTION = 'demo.path.write';
-const ROOT = tmpdir();
-const CATALOG = new Map([[ACTION, Object.freeze({ action: ACTION, path: 'target' })]]);
+// P0 的受保护路径规则没有实现：目录只登记写动作，门禁里也不存在路径阶段。
+// 这里锁定两点——关闭时路径参数被完全忽略；开启时挂载直接拒绝（fail closed）。
+const ACTION = 'gitee.issue.write';
+const CATALOG = new Map([[ACTION, Object.freeze({ action: ACTION, target: 'issue', category: 'dev-write', decision: 'allow' })]]);
 
-function gateWith(protectedRoots) {
-  return createGate({ catalog: CATALOG, tools: { demo_write: ACTION }, protectedRoots });
+function gateWith() {
+  const audit = createAuditBarrier({ sink: createMemorySink({ buffer: 8 }) });
+  return createGate({
+    catalog: CATALOG,
+    tools: { demo_write: ACTION },
+    rules: {},
+    audit,
+    getActor: () => 'svc-policy-test',
+  });
 }
 
 function writeExec() {
   return {
     name: 'demo_write',
-    arguments: { target: join(ROOT, 'secret.txt') },
+    arguments: { target: join(tmpdir(), 'secret.txt') },
     callId: 'c1',
+    agent: { kind: 'agent' },
     signal: new AbortController().signal,
   };
 }
 
-test('目录条目声明路径参数后，命中受保护路径在确认前硬拒绝', async () => {
-  const gate = gateWith([{ raw: ROOT, root: ROOT }]);
-  const decision = await gate.preExecute({}, writeExec(), () => Promise.resolve({ kind: 'allow' }));
-  assert.equal(decision.kind, 'deny');
-  assert.match(decision.reason, /targets the protected path/u);
+test('关闭路径规则时，门禁没有路径阶段也不看路径参数', async () => {
+  const gate = gateWith();
+  const exec = writeExec();
+  const decision = await gate.preExecute({}, exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(decision.kind, 'allow');
+  assert.equal(gate.stages.some((stage) => stage.stage === 'protected-paths'), false);
+  assert.equal(gate.guard(exec), undefined);
 });
 
-test('声明了路径参数却没有任何受保护根时关闭，不降级为放行', async () => {
-  const gate = gateWith([]);
-  const decision = await gate.preExecute({}, writeExec(), () => Promise.resolve({ kind: 'allow' }));
-  assert.equal(decision.kind, 'deny');
-  assert.match(decision.reason, /no protected root is configured/u);
+test('开启路径规则时挂载被拒绝，并指出具体配置键', () => {
+  assert.throws(
+    () => resolveConfig({ catalog: [], rules: { protectPaths: true } }),
+    (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.protectPaths/u.test(error.message),
+  );
+});
+
+test('结清后不再持有执行对象：pendingAdmissions 回到 0', async () => {
+  // 评审 P2：`admitted` 只该在"已放行、未结清"之间挡住同一个 callId，
+  // 结清后仍留着会把执行对象（含正文）一直强引用到插件卸载。
+  const gate = gateWith();
+  const exec = writeExec();
+  const pre = await gate.preExecute({}, exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(pre.kind, 'allow');
+  assert.equal(gate.pendingAdmissions(), 1, '放行后到结清前必须被追踪');
+
+  await gate.postExecute(exec, { isError: false });
+  assert.equal(gate.pendingAdmissions(), 0, '结清后必须释放');
 });

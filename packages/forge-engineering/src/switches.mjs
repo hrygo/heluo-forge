@@ -4,8 +4,8 @@
 // AI 发布 / 人工 review / 观察"五类能力各自需要的依赖、默认状态与失败语义写成一个纯函数，
 // 由组合层按宿主实测事实调用。写与发布默认关闭；必要审计缺失时**不降级为无审计只读**。
 //
-// 事实依据：策略动作目录的 kind 只有 read/write/confirm（packages/forge-policy/src/catalog.mjs）；
-// 审计落点配置为 `audit.sink ∈ {none, memory}` 且 memory 需显式 allowNonDurable（P03）；
+// 事实依据：策略动作目录只登记 `action`/`target`/`category`（packages/forge-policy/src/catalog.mjs）；
+// 审计落点配置为 `audit.sink ∈ {memory, file}`，`memory` 为默认、进程退出即丢；
 // 业务行（DevOps/Gitee 发布与人工 review）尚未实现，因此这两类只能是 blocked 而不是 on。
 
 export const SWITCH_IDS = Object.freeze(['read', 'research-write', 'ai-publish', 'human-review', 'observe']);

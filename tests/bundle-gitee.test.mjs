@@ -134,7 +134,7 @@ test('分发内容就是产物内容：源码、补丁层与 README，无测试�
   });
 });
 
-test('产物入口与工作区逐字节一致，缺失或被改动都能被测出来（AC-5）；补丁层随包分发且含只读判定（AC-11）', () => {
+test('产物入口与工作区逐字节一致，缺失或被改动都能被测出来（AC-5）；补丁层随包分发且含受控写目录（AC-11）', () => {
   withTemp('gitee-artifact-', (dir) => {
     const built = buildBundle({ root, entry: '@heluo/forge-gitee', destination: dir });
     const artifact = readTarball(built.tarball);
@@ -149,8 +149,8 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
     assert.equal(artifact.has('package/lib/index.mjs'), false, '不得有编译产物');
     assert.equal(artifact.has('package/dist/index.mjs'), false, '不得有编译产物');
 
-    // AC-11：权限事实（补丁层）是交付物的一部分——它必须真的进包、与工作区逐字节一致，
-    // 且目录是 12 条并集（6 读 + 6 写）：写动作随包登记、只决定可见，放行仍由分类承担。只在源码断言会漏掉
+    // AC-11：受控面（补丁层）是交付物的一部分——它必须真的进包、与工作区逐字节一致，
+    // 且目录只有 6 条受控写（P0 起读动作不登记，按 out-of-scope 透传）。只在源码断言会漏掉
     // `files` 白名单或打包遗漏：那种情况下用户装到的包与通过用例的树是两个东西。
     const patchPath = 'package/cordis.patch.yml';
     assert.ok(artifact.has(patchPath), '产物里必须有补丁层（依赖它挂载策略与工具面）');
@@ -167,23 +167,29 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
       .filter((line) => /^\s*-\s*\{\s*action:/u.test(line));
     assert.equal(
       catalogRows.length,
-      12,
-      `补丁层目录应为 12 条并集（6 读 + 6 写），实为 ${catalogRows.length} 条`,
+      6,
+      `补丁层目录应为 6 条受控写（读动作不登记），实为 ${catalogRows.length} 条`,
     );
-    assert.ok(
-      catalogRows.some((row) => row.includes("'change.read'")),
-      '产物补丁层必须含 devops 的 change.read：两包同装时共用同一行策略与同一份并集目录',
-    );
-    assert.ok(
-      catalogRows.some((row) => row.includes("'change.list'")),
-      '产物补丁层必须含 devops 的第二条变更读 change.list：并集目录与 devops 侧逐字相同',
-    );
-    const judgeRow = catalogRows.find((row) => row.includes("'gitee.delivery.judge'"));
-    assert.ok(judgeRow, '产物补丁层必须含 gitee.delivery.judge 目录（判定随包默认登记）');
-    assert.match(judgeRow, /target:\s*'change'/u, '判定 target 必须逐字为 change');
-    assert.match(judgeRow, /enabled:\s*true/u, '判定必须随包默认启用');
+    for (const readAction of [
+      'change.read',
+      'change.list',
+      'gitee.repository.read',
+      'gitee.issue.read',
+      'gitee.pr.read',
+      'gitee.delivery.judge',
+    ]) {
+      assert.ok(
+        catalogRows.every((row) => !row.includes(`'${readAction}'`)),
+        `P0 起目录不得登记读动作 ${readAction}（读调用按 out-of-scope 透传）`,
+      );
+    }
     for (const row of catalogRows) {
-      assert.doesNotMatch(row, /kind:|egress:/u, `登记行只写 action / target / enabled：${row.trim()}`);
+      assert.match(
+        row,
+        /^\s*-\s*\{\s*action:\s*'[^']+',\s*target:\s*'[^']+',\s*category:\s*'(?:dev-write|review-write|remote-write|human-record)'\s*\}$/u,
+        `登记行只写 action / target / category：${row.trim()}`,
+      );
+      assert.doesNotMatch(row, /enabled:|revision:|kind:|egress:/u, `登记行不得携带已废字段：${row.trim()}`);
     }
     for (const action of [
       'gitee.issue.write',

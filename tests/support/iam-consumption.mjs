@@ -120,14 +120,17 @@ export async function jointFixture(t, { confidential = false, beforeTool, modelS
     },
   });
   t.after(() => iam.dispose());
+  // 策略门禁需要宿主 IAM 视图：这里跟随实际注册的 IAM 实例（登录后 subject 变化也按当前视图判定）。
+  toolHost.ctx.provide('iam', { getView: () => (registration?.iam ?? iam).getView() });
   const toolOwner = installIamConsumerTools(toolHost.ctx, {
-    audit: { sink: 'memory', allowNonDurable: true },
-    catalog: [{ action: 'gitee.repository.read', target: 'repository', enabled: true }],
-    tools: { 'joint.read': 'gitee.repository.read' }, onDecision: (decision) => decisions.push(decision),
+    audit: { sink: 'memory' },
+    // 受控写动作随包登记（TECH-CHANGE §3.1）：只读动作不登记，联合夹具只验 IAM 消费者链路。
+    catalog: [{ action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }],
+    tools: { 'joint.read': 'gitee.issue.write' }, onDecision: (decision) => decisions.push(decision),
   }, { ...sourceOptions,
-    tools: [{ name: 'joint.read', action: 'gitee.repository.read', description: 'Synthetic joint read', scope: toolScope, beforeSend: beforeTool,
+    tools: [{ name: 'joint.read', action: 'gitee.issue.write', description: 'Synthetic joint read', scope: toolScope, beforeSend: beforeTool,
       send(input) { counts.tool++; requests.push(input); return { target: input.target, message: 'joint synthetic tool result' }; } }],
-    commands: [{ name: 'joint-read', action: 'gitee.repository.read', description: 'Synthetic joint command', scope: toolScope,
+    commands: [{ name: 'joint-read', action: 'gitee.issue.write', description: 'Synthetic joint command', scope: toolScope,
       send(input) { counts.command++; requests.push(input); return { target: input.target, message: 'joint synthetic command result' }; } }],
   });
   t.after(() => toolOwner.dispose());

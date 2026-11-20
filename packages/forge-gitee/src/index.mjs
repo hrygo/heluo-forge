@@ -1,7 +1,7 @@
 /**
  * `@heluo/forge-gitee` 插件入口（宿主装配层）。
  *
- * 这一层只做**装配与 fail-closed**，不做业务判断：配置校验、宿主能力探测、策略目录自检、
+ * 这一层只做**装配与 fail-closed**，不做业务判断：配置校验、宿主能力探测、策略入口自检、
  * 依赖装配（runner → adapter → guard → session → 工具面）、provide、注册工具、清理注册。
  * 业务判定（只读归一、四状态、幂等、回读、审查渲染、交付判定）都在 `gitee-*.mjs` 里，
  * 这样"装上了但策略没生效"这类问题只能在装配期暴露，而不是运行期悄悄降级。
@@ -10,11 +10,8 @@
  *   1. 配置：`validateGiteeConfig` → `GITEE_CONFIG_INVALID`（报字段名，不报值）
  *   2. 宿主能力：`ctx.get/provide/effect` 与 `ctx.tools.register` → `GITEE_HOST_UNAVAILABLE`
  *   3. 策略服务：`ctx.get('policy')` 且有 `executeAction` → `GITEE_POLICY_UNAVAILABLE`
- *   4. 目录自检：三个 `gitee.*` 只读动作必须已登记且 `enabled` → `GITEE_ACTION_UNREGISTERED`
- *      （`detail.missing` 列全）。缺策略、缺目录都不降级成"无策略只读"。
- *      **只查 gitee 自己的三条**：默认目录是 devops 与 gitee 的 12 条并集（含 devops 的
- *      `change.read` / `change.list` 与六条写），本插件不依赖那两条 dop 读动作，要求它们存在就是
- *      耦合到另一个平台的配置面。
+ *   4. P0（TECH-CHANGE §3.4）：只读动作不登记，装配不再要求 `gitee.*` 读动作"已登记且
+ *      enabled"；读调用按 out-of-scope 透传，是否放行由 `policy.executeAction` 的流水线决定。
  *   5. 依赖装配：`resolveGiteeConfig` → runner → git adapter / CLI adapter → guard → session
  *      （**惰性**：`preflight()` 在首次真正调用时执行，装配期不起子进程、不读凭据内容；
  *      但 git 适配器的 argv 表与 `runGit` 出口在装配期就校验，缺 `runGit` 直接拒绝挂载）
@@ -92,8 +89,6 @@ export const GITEE_REASONS = Object.freeze({
   HOST_UNAVAILABLE: 'GITEE_HOST_UNAVAILABLE',
   /** 策略服务缺失或没有 admission 入口。 */
   POLICY_UNAVAILABLE: 'GITEE_POLICY_UNAVAILABLE',
-  /** 三个只读动作没在策略目录里登记/启用（或目录本身为空）。 */
-  ACTION_UNREGISTERED: 'GITEE_ACTION_UNREGISTERED',
   /** 工具面组装/注册失败（缺项、越界、宿主注册抛错）——已回滚，不留半挂载。 */
   TOOLS_UNAVAILABLE: 'GITEE_TOOLS_UNAVAILABLE',
   /** 服务已卸载后仍被调用（可见错误，不是静默返回空）。 */
@@ -179,27 +174,10 @@ function assertPolicy(ctx) {
 }
 
 /**
- * 目录自检：只读动作必须"已登记且 enabled"。
- *
- * 这一项不是防手滑，而是把"装了插件但没配目录"变成装配期可见的失败。空目录 / 少一条 /
- * 被 `enabled: false` 关掉的目录，以前会装上一个每次调用都 `denied` 的工具面——看起来
- * 装了，其实什么都查不到；现在直接拒绝挂载并列出缺哪些动作。
- *
- * 自检面**只含 gitee 自己的三条读**（`GITEE_READ_ACTIONS`），不含并集里的 `change.read` /
- * `change.list`：默认目录是两包共用的 12 条并集，这两条属于 devops 的 dop 流程，gitee 插件不
- * 依赖它们；把它们写进自检等于让 gitee 的单装前置条件依赖另一个平台的配置。
+ * P0（TECH-CHANGE §3.4）：只读动作不登记，挂载自检只要求策略提供 admission 入口。
+ * 旧实现要求 gitee 的三条读"已登记且 enabled:true"，该事实已被本阶段取代；
+ * 读调用是否放行统一由 `policy.executeAction` 的流水线决定，未登记即 out-of-scope 透传。
  */
-function assertReadCatalog(policy) {
-  const read = typeof policy?.catalog?.get === 'function' ? (action) => policy.catalog.get(action) : () => undefined;
-  const missing = GITEE_READ_ACTIONS.filter((action) => read(action)?.enabled !== true);
-  if (missing.length > 0) {
-    throw mountError(
-      GITEE_REASONS.ACTION_UNREGISTERED,
-      `策略目录缺 gitee 只读动作：${missing.join(', ')}（需在 heluo-policy 行的 config.catalog 里登记且 enabled:true）`,
-      { missing },
-    );
-  }
-}
 
 /** 只读调用被策略拒绝时抛的错误：工具层按 `code` 映射成 `status:'denied'`。 */
 function denialError(reason, message, detail) {
@@ -487,7 +465,6 @@ export function apply(ctx, rawConfig = {}) {
   const config = validateConfig(rawConfig);
   assertHost(ctx);
   const policy = assertPolicy(ctx);
-  assertReadCatalog(policy);
 
   // 解析只做"读配置 + 读环境变量"，不起子进程、不回显凭据内容。
   const resolved = resolveGiteeConfig({ config, env: process.env });

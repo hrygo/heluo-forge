@@ -10,4 +10,4 @@ Zoom Out 与 Inventive Catalyst 分别在独立上下文审查设计。两位评
 | Z2 | 重要 | §2.1、§3.5、§5.2 仅明确职责和当前员工调用资格等状态，缺少 PRD FE-FR-02 确认的可披露能力、资源及动作摘要 | 同一管理目录投影提供可披露摘要，摘要缺失或过期如实提示。用管理页场景验收资料来源和披露边界 |
 | Z3 | 重要 | §3.2、§3.6 未明确实际发送使用 Policy 的范围。现有 `authorizeDelegation` 绑定已注册动作、`changeId` 与 `repository`，覆盖的是研发委托 | 专家绑定归插件，沿实际外发入口应用已有 Policy 的外发约束。由 #245 核验动作分类、目标、内容确认和拒发判据 |
 
-证据来自仓库内链接、固定版本记录以及设置槽、IAM 路由、Policy 接口的源码核验。目标安装包、员工目录和真实委派仍待实测。 [PRD §4](../../../requirements/delegra-experts-prd.md#4-功能需求与优先级) · [接入方案 §6](../../../plans/2026-11-18-forge-experts-integration-proposal.md#6-恢复后的阶段与验收) · [Policy 委托实现](../../../../packages/forge-policy/src/delegation.mjs)
+证据来自仓库内链接、固定版本记录以及设置槽、IAM 路由、Policy 接口的源码核验。目标安装包、员工目录和真实委派仍待实测。 [PRD §4](../../../requirements/delegra-experts-prd.md#4-功能需求与优先级) · [接入方案 §6](../../../plans/2026-11-18-forge-experts-integration-proposal.md#6-恢复后的阶段与验收) · Policy 委托实现（原 `packages/forge-policy/src/delegation.mjs`，P0 起随确认与票据一并移除，见[实施计划](../../../plans/2026-11-19-policy-minimal-gates.md)）

@@ -209,25 +209,15 @@ export function validateConfig(input = {}) {
 }
 
 /**
- * FIX-02（#21）：已知企业入口的目录绑定在挂载时验证。
- * 空目录、缺目录项、未开放动作都拒绝挂载——登记 ≠ 批准，未登记不得静默
- * 落入 out-of-scope。普通非企业工具仍走门禁原有的 out-of-scope 语义，不误封。
+ * P0（TECH-CHANGE §3.1）：只读动作不登记，挂载只要求策略提供 admission 入口。
+ * devops 的读面不使用受控写目录，登记只决定可见；放行统一由 `policy.executeAction` 判定。
+ * 旧实现要求两条读动作已登记且 `enabled: true`，该事实已被本阶段取代。
  */
 function assertPolicyReadActions(policy) {
-  // FIX-08：admission 入口本身缺失时同样拒绝挂载——不能挂上一个"看起来接了策略、
-  // 实际调用抛 TypeError"的只读面。
   if (typeof policy.executeAction !== 'function') {
     throw new DevopsReadError(
       READ_REASONS.POLICY_REQUIRED,
       '策略服务没有可用的 admission 入口（executeAction），devops 只读面不开放',
-    );
-  }
-  const missing = READ_ACTIONS.filter((action) => policy.catalog?.get?.(action)?.enabled !== true);
-  if (missing.length > 0) {
-    throw new DevopsReadError(
-      READ_REASONS.POLICY_ACTION_UNREGISTERED,
-      `策略目录缺失或未开放只读动作：${missing.join(', ')}（devops 只读面不开放）`,
-      { missing },
     );
   }
 }
@@ -733,8 +723,7 @@ export function apply(ctx, rawConfig = {}) {
         FLOW_ACTIONS.CHANGE_UPDATE,
         {
           name: 'devops.change.update',
-          // 变更号同时进 arguments：范围票据按"身份 + 变更号 + 仓库 + 动作"绑定，
-          // 只给 target 会让每一次写都因为"没有变更号"被拒。
+          // 变更号同时进 parameters 供确认卡片与审计摘要定位，正文走私有通道、审计只记摘要。
           arguments: { target: id, changeId: id },
           // 正文走私有通道过内容闸；审计只记摘要。
           content: { title: summary, body: description, ...(aiAc === undefined || aiAc === '' ? {} : { text: aiAc }) },

@@ -2,30 +2,26 @@
 #
 # 本文件只做一件事：把 gitee 插件挂载所需的最小配置插进 profile，使"只装 gitee 一个包"也能
 # 挂载并直接用于只读查询。两行的顺序即加载顺序，策略必须先行。
-#   1. `heluo-policy`：gitee 的策略门禁是硬依赖。`policy` 服务缺失、或三条 `gitee.*` 只读动作
-#      未登记/未启用时，`apply()` 按 fail-closed 语义拒绝挂载（`GITEE_POLICY_UNAVAILABLE` /
-#      `GITEE_ACTION_UNREGISTERED`，`missing` 列全），不降级成"无策略只读"。
+#   1. `heluo-policy`：gitee 的策略门禁是硬依赖。`policy` 服务缺失或缺少 `executeAction` 时，
+#      `apply()` 按 fail-closed 语义拒绝挂载（`GITEE_POLICY_UNAVAILABLE`），不降级成"无策略只读"。
+#      只读动作不登记，读面不因目录缺项拒绝挂载。
 #   2. `heluo-gitee`：`name` 必须是**包根名**（与清单 `name` 一致），写成子路径宿主解析不到该包。
 #
-# 目录（catalog）是 **12 条并集、6 条 write**：`change.read` / `change.list`（devops 的两条 dop 变更读）+
-# 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定 + 六条写动作。
-#   - 这一份并集**逐字**写在本包与 `@heluo/forge-devops`、`@heluo/forge-enterprise`、
+# 目录（catalog）只登记 **6 条写动作**；只读动作不登记，未登记动作按 out-of-scope 出闸放行。
+#   - 这一份 6 条目录**逐字**写在本包与 `@heluo/forge-devops`、`@heluo/forge-enterprise`、
 #     `@heluo/forge-engineering` 的补丁层里，行都叫 `id: heluo-policy`，都不另立服务域：loader 按 id
 #     覆盖 config，同装后只剩一个 `policy` 实例、一份目录；任一插件单独装也能自洽。几处文本必须完全
 #     一致，否则幸存目录取决于装配顺序（`tests/plugin-patch-layers.test.mjs` 静态守这份一致，
 #     `coexistence.test.mjs` 再验装配后果）。
-#   - 第 5 条 `gitee.delivery.judge` 是"只判定、不执行"的只读能力，随包默认登记：
-#     `target: 'change'`（逐字，非 `delivery` 等替代串）；动作类别由策略引擎的内置词表决定，
-#     登记行不再重复声明 `kind`/`egress`。判定回的 `executed` 恒为 `false`、`remote_calls` 恒为 `0`。
-#   - 六条写动作随包登记，但登记不等于放行：默认决策仍由内置分类给出——四个研发/评审写
-#     （`gitee.issue.write` / `gitee.pr.write` / `change.clarification.write` / `gitee.review.publish`）
-#     默认 `allow` 并叠加内容闸与流程规则；`gitee.git.push` 默认 `confirm`，每次推送单独确认；
-#     `gitee.review.record` 默认 `deny`（人工留痕不由 Agent 发起）。未登记的动作一律
-#     `unregistered-action` 拒绝，登记行只写 `action` / `target` / `enabled`。
+#   - 登记行只写 `action` / `target` / `category`，类别与内置词表逐字一致：目标写错会在挂载期
+#     报 `POLICY_CATALOG_TARGET_MISMATCH`，不会静默降级。
+#   - 六条写动作随包登记，但登记不等于放行：P0 六个规则开关均关闭，受控写仍要求 IAM 身份并落一条
+#     执行记录；内容、路径、流程、确认四类规则都不介入。打开任一开关会在挂载期 fail closed。
+#     `gitee.review.record` 的命令面保持不注册（人工留痕不由 Agent 发起）。
 #   - 本地动作 `git commit` 不进目录：它必须能做，发起前由 `git-message.mjs` 强校验首行 `[变更号]`。
 #   - 组织策略信封只能收紧内置默认，本机配置不能放宽。
-#   - 审计舱用内存 sink：属**联调/试点级**证据，记录随进程退出丢失。生产或合规场景必须在
-#     profile 注入持久 sink 后删掉 `allowNonDurable`（否则每个动作都会被 `POLICY_AUDIT_*` 拒绝）。
+#   - 审计舱用内存 sink：属**联调/试点级**证据，记录随进程退出丢失。生产或合规场景把 sink 换成
+#     `file`（按天轮转、按 keepDays 保留），或由 profile 注入持久 sink。
 #   - 不写 `tools` 映射：插件的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射一次
 #     会重复准入、重复审计。
 #
@@ -39,21 +35,16 @@
       name: '@heluo/forge-policy'
       config:
         catalog:
-          - { action: 'change.read', target: 'change', enabled: true }
-          - { action: 'change.list', target: 'changes', enabled: true }
-          - { action: 'gitee.repository.read', target: 'repository', enabled: true }
-          - { action: 'gitee.issue.read', target: 'issue', enabled: true }
-          - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
-          - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
-          - { action: 'gitee.issue.write', target: 'issue', enabled: true }
-          - { action: 'gitee.pr.write', target: 'pull-request', enabled: true }
-          - { action: 'change.clarification.write', target: 'change', enabled: true }
-          - { action: 'gitee.review.publish', target: 'pull-request', enabled: true }
-          - { action: 'gitee.git.push', target: 'repository', enabled: true }
-          - { action: 'gitee.review.record', target: 'pull-request', enabled: true }
+          - { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }
+          - { action: 'gitee.pr.write', target: 'pull-request', category: 'dev-write' }
+          - { action: 'change.clarification.write', target: 'change', category: 'dev-write' }
+          - { action: 'gitee.review.publish', target: 'pull-request', category: 'review-write' }
+          - { action: 'gitee.git.push', target: 'repository', category: 'remote-write' }
+          - { action: 'gitee.review.record', target: 'pull-request', category: 'human-record' }
         audit:
           sink: memory
-          allowNonDurable: true
+          buffer: 1000
+          keepDays: 7
     - id: heluo-gitee
       name: '@heluo/forge-gitee'
       # 显式空配置：宿主 resolveConfig 会把**缺席**的 `config:` 当 `undefined` 交给

@@ -73,11 +73,11 @@
 
 | 动作族 | 归属 | 实现动作标识 | 登记状态 |
 |---|---|---|---|
-| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`、`change.list`；`change.clarification.write` | 两条读与澄清回写都随包登记；登记只决定可见，澄清回写仍须身份、范围票据与内容/流程规则；工具面入口 `forge_devops_change_update`（`change update`），需 `confirm{object}`，写后用 `change view` 回读 |
+| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`、`change.list`；`change.clarification.write` | 两条读不登记（按 out-of-scope 出闸）；澄清回写随包登记，登记只决定由门禁负责，仍须 IAM 身份与前置执行记录，`confirmDopWrite` 开启后另经问答卡片确认；工具面入口 `forge_devops_change_update`（`change update`），需 `confirm{object}`，写后用 `change view` 回读 |
 | 仓库 / Issue / PR 读取 | `@heluo/forge-gitee` | `gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read` | 随包登记（只读） |
 | 交付就绪判定 | `@heluo/forge-gitee` | `gitee.delivery.judge` | 随包登记为只读判定（`target: change`），只判定不执行 |
 | Issue / PR / 评审写 | `@heluo/forge-gitee` | `gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record` | 随包登记但登记不等于放行：研发/评审写按分类受控，`gitee.review.record` 恒拒；push 类还需 `confirm{repo,object}` 逐字匹配 |
-| 本地提交与推送 | `@heluo/forge-gitee` | `git commit` 是**本地动作**（不进策略目录，首行 `[变更号]` 由 `git-message.mjs` 强校验）；`git push` 是远端写，动作 `gitee.git.push` | push 随包登记、默认 `confirm` 逐次确认，需 `confirm{repo,object}` 逐字匹配 |
+| 本地提交与推送 | `@heluo/forge-gitee` | `git commit` 是**本地动作**（不进策略目录，首行 `[变更号]` 由 `git-message.mjs` 强校验）；`git push` 是远端写，动作 `gitee.git.push` | push 随包登记、分类默认 `allow`，`confirmPush` 开启后弹确认卡片，需 `confirm{repo,object}` 逐字匹配 |
 
 r10 起 devops 不再持有仓库/Issue/PR 的读写实现（gh 侧模块已删除），`change_context` 的承建仓库段降级为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。`git commit` 不进策略目录不是放宽：策略对任何 `enabled` 的非读动作恒要求审批台账，而提交必须发生，因此改为本地动作 + 提交信息单源校验。
 

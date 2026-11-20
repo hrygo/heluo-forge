@@ -6,13 +6,13 @@
  * 2) 放行路径**透明返回**下游结果——守卫不下场做事，也不改写下游的结论；
  * 3) 前置裁决在"只有 catalog + executeAction"的桩策略上也成立（不假设 `decide` 一定存在，
  *    否则离线装配与真实门禁会走两条不同的判定路径）；
- * 4) 与真实 `@heluo/forge-policy` 门禁装配后行为一致：写动作按分类放行、内容闸拒绝时零下游、
- *    推送走逐次确认且没有确认通道时拒绝（AC-16「写动作前必须显示目标并走确认」）。
+ * 4) 与真实 `@heluo/forge-policy` 门禁装配后行为一致：写动作按分类放行、门禁拒绝时零下游
+ *    （P0 不弹确认：确认卡片由 `confirmDopWrite` 控制，开关置真在装载期即被拒绝）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { compileCatalog, compileContentRules, createGate, createScopeLedger, decideAction } from '@heluo/forge-policy';
+import { compileCatalog, createGate, decideAction } from '@heluo/forge-policy';
 
 import { GUARD_DECISIONS, GUARD_REASONS, GUARD_STATUSES, createPolicyGuard } from '../src/policy-guard.mjs';
 
@@ -38,9 +38,7 @@ function spyOperation(result = { status: 'done' }) {
 }
 
 const IDENTITY = () => 'dev-1';
-const CONTENT_RULES = compileContentRules([]).rules;
 const AGENT = Object.freeze({ id: 'agent-1' });
-const approvalCtx = (approval) => ({ get: (name) => (name === 'approval' ? approval : undefined) });
 const audit = {
   begin: async () => ({ id: 'r1' }),
   settle: async () => ({}),
@@ -50,23 +48,22 @@ const audit = {
 /**
  * 真实门禁 + 生产服务面：`createGate` 只暴露执行通道，而生产装配里的策略服务
  * （`@heluo/forge-policy` 的 `apply`）另带 `catalog` 与 `decide`。这里按同一形状补齐，
- * 让守卫走**真实的**判定、内容规则与审计，而不是桩判定。
+ * 让守卫走**真实的**判定与审计，而不是桩判定。P0 门禁不再接受 approval / scope /
+ * contentRules 输入（TECH-CHANGE §3.3），因此装配只留目录、规则、审计与身份。
  */
-function gateService(entries, { approval, recordingAudit = audit, now = () => Date.now() } = {}) {
+function gateService(entries, { recordingAudit = audit, now = () => Date.now() } = {}) {
   const catalog = compileCatalog(entries);
   const gate = createGate({
     catalog,
+    rules: {},
     audit: recordingAudit,
-    approval,
-    contentRules: CONTENT_RULES,
     getActor: IDENTITY,
-    scope: createScopeLedger({ now }),
     now,
   });
-  return Object.assign(gate, { catalog, decide: (request) => decideAction({ catalog, ...request }) });
+  return { ...gate, catalog, decide: (request) => decideAction({ catalog, rules: {}, ...request }) };
 }
 
-const entry = (action, target, extra = {}) => ({ action, target, enabled: true, ...extra });
+const entry = (action, target, category = 'dev-write') => ({ action, target, category });
 
 test('GUARD_STATUSES 只有 done/denied/failed，不含动作层的 unknown', () => {
   assert.deepEqual(Array.from(GUARD_STATUSES), ['done', 'denied', 'failed']);
@@ -94,24 +91,25 @@ test('前置裁决：策略服务没有可用目录时按未登记拒绝（fail 
   assert.equal(verdict.rule, 'policy-unavailable');
 });
 
-test('前置裁决：未登记动作 / 未启用动作都拒绝，并带上策略给的规则名', () => {
+test('前置裁决：未登记动作拒绝；只登记即视为可见（取代事实：旧实现还要求 enabled:true）', () => {
   const guard = createPolicyGuard({ policy: stubPolicy() });
   const unregistered = guard.admit({ action: 'gitee.pr.write', target: 'acme/demo' });
   assert.equal(unregistered.status, 'denied');
   assert.equal(unregistered.code, GUARD_REASONS.POLICY_ACTION_UNREGISTERED);
   assert.equal(unregistered.rule, 'unregistered-action');
 
-  const disabled = createPolicyGuard({
-    policy: stubPolicy({ entries: [{ action: 'gitee.pr.write', enabled: false }] }),
+  // 反向断言（TECH-CHANGE §3.1）：catalog 条目只有 action/target/category，没有 enabled；
+  // 登记只决定可见，是否放行由 policy.executeAction 的流水线决定。
+  const registered = createPolicyGuard({
+    policy: stubPolicy({ entries: [{ action: 'gitee.pr.write', target: 'pull-request', category: 'dev-write' }] }),
   }).admit({ action: 'gitee.pr.write', target: 'acme/demo' });
-  assert.equal(disabled.status, 'denied');
-  assert.equal(disabled.code, GUARD_REASONS.POLICY_DENIED);
-  assert.equal(disabled.rule, 'action-disabled');
+  assert.equal(registered.status, 'allowed');
+  assert.equal(registered.rule, 'registered-action');
 });
 
-test('前置裁决：已登记且启用才放行', () => {
+test('前置裁决：已登记即放行，不假设旧启用开关', () => {
   const guard = createPolicyGuard({
-    policy: stubPolicy({ entries: [{ action: 'gitee.issue.write', enabled: true }] }),
+    policy: stubPolicy({ entries: [{ action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }] }),
   });
   const verdict = guard.admit({ action: 'gitee.issue.write', target: 'acme/demo' });
   assert.equal(verdict.status, 'allowed');
@@ -296,22 +294,27 @@ test('没拿到 operation 时判 failed 而不是静默放行', async () => {
   assert.equal(outcome.reason, GUARD_REASONS.NO_OPERATION);
 });
 
-test('装配真实门禁：干净的写动作经一次范围确认后放行，审计收到动作', async () => {
+test('装配真实门禁：受控写不需要确认通道即放行，审计收到动作', async () => {
+  // 取代事实（TECH-CHANGE §3.3）：旧实现要求 approval 逐次确认；P0 门禁不调用 approval，
+  // 全关时受控写只做身份解析 + 一条 begin/一条 settle。
   const audited = [];
+  const settled = [];
   const service = gateService([entry('gitee.issue.write', 'issue')], {
-    approval: { async request() { return 'allowed-once'; } },
     recordingAudit: {
       begin: async (record) => {
         audited.push(record);
         return { id: 'r1' };
       },
-      settle: async () => ({ action: 'settled' }),
+      settle: async (receipt, outcome) => {
+        settled.push({ receipt, outcome });
+        return { action: 'settled' };
+      },
       isDegraded: () => false,
     },
   });
   const guard = createPolicyGuard({ policy: service });
   const outcome = await guard.execute(
-    { ctx: approvalCtx({ async request() { return 'allowed-once'; } }), agent: AGENT, action: 'gitee.issue.write', target: 'acme/demo!7', arguments: { changeId: 'CHG-1', body: 'plain text' } },
+    { ctx: {}, agent: AGENT, action: 'gitee.issue.write', target: 'acme/demo!7', arguments: { changeId: 'CHG-1', body: 'plain text' } },
     async () => ({ status: 'done', objectRef: 'acme/demo#7' }),
   );
   assert.equal(outcome.status, 'done');
@@ -320,17 +323,17 @@ test('装配真实门禁：干净的写动作经一次范围确认后放行，�
   assert.equal(audited[0].action, 'gitee.issue.write');
   assert.equal(audited[0].target, 'acme/demo!7');
   assert.equal(audited[0].actor, 'dev-1');
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].outcome.decision, 'executed');
 });
 
-test('装配真实门禁：内容闸命中时拒绝且下游零调用', async () => {
-  const service = gateService([entry('gitee.issue.write', 'issue')], {
-    approval: { async request() { return 'allowed-once'; } },
-  });
+test('装配真实门禁：全关时内容闸不介入（取代事实：旧实现命中内置规则即拒绝）', async () => {
+  const service = gateService([entry('gitee.issue.write', 'issue')]);
   const guard = createPolicyGuard({ policy: service });
   const spy = spyOperation();
   const outcome = await guard.execute(
     {
-      ctx: approvalCtx({ async request() { return 'allowed-once'; } }),
+      ctx: {},
       agent: AGENT,
       action: 'gitee.issue.write',
       target: 'acme/demo!7',
@@ -338,28 +341,38 @@ test('装配真实门禁：内容闸命中时拒绝且下游零调用', async ()
     },
     spy.operation,
   );
-  assert.equal(outcome.status, 'denied');
-  assert.match(String(outcome.detail), /BUILTIN-/u);
-  assert.equal(spy.calls.length, 0, '内容闸拒绝后不得写平台');
+  assert.equal(outcome.status, 'done');
+  assert.equal(spy.calls.length, 1, 'P0 内容规则未实现，正文原样交给下游');
 });
 
-test('装配真实门禁：推送没有确认通道时拒绝且下游零调用', async () => {
-  const service = gateService([entry('gitee.git.push', 'repository')]);
+test('装配真实门禁：推送不需要确认通道即放行且下游执行一次（取代事实：旧实现拒绝无确认通道）', async () => {
+  const audited = [];
+  const service = gateService([entry('gitee.git.push', 'repository', 'remote-write')], {
+    recordingAudit: {
+      begin: async (record) => {
+        audited.push(record);
+        return { id: 'r1' };
+      },
+      settle: async () => ({}),
+      isDegraded: () => false,
+    },
+  });
   const guard = createPolicyGuard({ policy: service });
   const spy = spyOperation();
   const outcome = await guard.execute(
-    { ctx: approvalCtx(undefined), agent: AGENT, action: 'gitee.git.push', target: 'acme/demo', arguments: { branch: 'feature/x' } },
+    { ctx: {}, agent: AGENT, action: 'gitee.git.push', target: 'acme/demo', arguments: { branch: 'feature/x' } },
     spy.operation,
   );
-  assert.equal(outcome.status, 'denied');
-  assert.match(String(outcome.detail), /approval channel/u);
-  assert.equal(spy.calls.length, 0, '确认未完成前不得推送');
+  assert.equal(outcome.status, 'done');
+  assert.equal(spy.calls.length, 1, 'P0 不再有确认阶段，也不调用 approval');
+  assert.equal(audited.length, 1);
+  assert.equal(audited[0].action, 'gitee.git.push');
 });
 
-test('装配真实门禁：未登记动作被拒，适配器与审计都零调用', async () => {
+test('装配真实门禁：未登记动作按 out-of-scope 放行，审计零调用（取代事实：旧实现拒绝未登记）', async () => {
+  // TECH-CHANGE §4：只有目录内受控写进入流水线；未登记动作不属于控制面，直接透传且不写记录。
   let auditCalls = 0;
   const service = gateService([entry('gitee.issue.write', 'issue')], {
-    approval: { async request() { return 'allowed-once'; } },
     recordingAudit: {
       begin: async () => {
         auditCalls += 1;
@@ -372,11 +385,10 @@ test('装配真实门禁：未登记动作被拒，适配器与审计都零调�
   const guard = createPolicyGuard({ policy: service });
   const spy = spyOperation();
   const outcome = await guard.execute(
-    { ctx: approvalCtx({ async request() { return 'allowed-once'; } }), agent: AGENT, action: 'gitee.pr.write', target: 'acme/demo!7', arguments: { changeId: 'CHG-1' } },
+    { ctx: {}, agent: AGENT, action: 'gitee.pr.write', target: 'acme/demo!7', arguments: { changeId: 'CHG-1' } },
     spy.operation,
   );
-  assert.equal(outcome.status, 'denied');
-  assert.equal(outcome.rule, 'unregistered-action');
-  assert.equal(spy.calls.length, 0);
-  assert.equal(auditCalls, 0);
+  assert.equal(outcome.status, 'done');
+  assert.equal(spy.calls.length, 1, 'out-of-scope 动作正常执行');
+  assert.equal(auditCalls, 0, 'out-of-scope 不落受控执行记录');
 });

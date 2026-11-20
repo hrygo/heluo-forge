@@ -69,7 +69,6 @@ const DECISION_CODES = Object.freeze({
   'policy-unavailable': GUARD_REASONS.POLICY_UNAVAILABLE,
   'target-required': GUARD_REASONS.TARGET_REQUIRED,
   'confirm-required': GUARD_REASONS.CONFIRMATION_REQUIRED,
-  'egress-confirm': GUARD_REASONS.CONFIRMATION_REQUIRED,
 });
 
 /**
@@ -132,10 +131,8 @@ export function createPolicyGuard({ policy } = {}) {
     if (entry === undefined) {
       return denied(GUARD_REASONS.POLICY_ACTION_UNREGISTERED, 'unregistered-action', `动作 ${action} 未在策略目录登记`);
     }
-    if (asObject(entry).enabled !== true) {
-      return denied(GUARD_REASONS.POLICY_DENIED, 'action-disabled', `动作 ${action} 未启用`);
-    }
-    return allowed('registered-action', `动作 ${action} 已登记且启用`);
+    // 目录在 P0 只登记受控写：登记只决定可见，是否放行由 policy.executeAction 的流水线决定。
+    return allowed('registered-action', `动作 ${action} 已在策略目录登记`);
   }
 
   /** 门禁拒绝时 `executeAction` 返回的形状（`{kind:'error', text}`）；据此判"没被允许"。 */

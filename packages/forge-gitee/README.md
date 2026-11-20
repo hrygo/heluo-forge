@@ -61,25 +61,25 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 服务端契约：`GET /api/forge-gitee/config` 返回 `{revision, plugin, writable, ready, reason, guidance, editable, missing, entries, host, readAt}`；`POST` 同路径要求 `x-forge-gitee-request: 1`、体只认 `{revision, fields}`、超 64 KiB 回 413，状态码映射 409 冲突 / 422 非法 / 503 不可用，成功体带 `applied`。写成功后单点重建读面（`rebuildFaces()`），页面配的 `cliPath` 立刻用于运行期，不需要重启。
 
-## 工具面（10 个，顺序与命名固定）
+## 工具面（11 个，顺序与命名固定）
 
 | 工具 | 参数 | 策略动作 | 默认 |
 |---|---|---|---|
-| `forge_gitee_repository_read` | `target` | `gitee.repository.read` | 放行（补丁层已登记） |
-| `forge_gitee_issue_read` | `target`、`list`/`state`(created\|processing\|rejected\|finished\|all)/`limit`/`json` | `gitee.issue.read` | 放行（补丁层已登记） |
-| `forge_gitee_pr_read` | `target`、`list`/`state`(opened\|closed\|merged\|all)/`limit`/`json` | `gitee.pr.read` | 放行（补丁层已登记） |
-| `forge_gitee_issue_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.issue.write` | 按分类放行：需 IAM 身份、过一次范围确认、过内容与流程规则 |
-| `forge_gitee_pr_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.pr.write` | 按分类放行：需 IAM 身份、过一次范围确认、过内容与流程规则 |
-| `forge_gitee_review_publish` | `target`、`changeId`、`commit`、`body`、`confirm` | `gitee.review.publish` | 按分类放行：需 IAM 身份、范围确认，正文须标注 AI 来源与 PR 版本 |
+| `forge_gitee_repository_read` | `target` | `gitee.repository.read` | 放行（读动作不进策略目录，按 out-of-scope 出闸） |
+| `forge_gitee_issue_read` | `target`、`list`/`state`(created\|processing\|rejected\|finished\|all)/`limit`/`json` | `gitee.issue.read` | 放行（读动作不进策略目录，按 out-of-scope 出闸） |
+| `forge_gitee_pr_read` | `target`、`list`/`state`(opened\|closed\|merged\|all)/`limit`/`json` | `gitee.pr.read` | 放行（读动作不进策略目录，按 out-of-scope 出闸） |
+| `forge_gitee_issue_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.issue.write` | 按分类放行：需 IAM 身份、落前置审计并持一次性收据；内容与流程规则待 P1–P3 |
+| `forge_gitee_pr_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.pr.write` | 按分类放行：需 IAM 身份、落前置审计并持一次性收据；内容与流程规则待 P1–P3 |
+| `forge_gitee_review_publish` | `target`、`changeId`、`commit`、`body`、`confirm` | `gitee.review.publish` | 按分类放行：需 IAM 身份与前置审计；正文须标注 AI 来源与 PR 版本（P1–P3 接入内容闸） |
 | `forge_gitee_review_record` | `repoRoot`、`changeId`、`commit`、`model`、`opinion`、`conclusion` | `gitee.review.record` | `denied`（人工评审留痕，Agent 不可发起） |
-| `forge_gitee_delivery_gate` | `changeId`、`message`、`criteria` | `gitee.delivery.judge` | 放行（补丁层已登记为只读判定：`target: change`、`enabled: true`） |
+| `forge_gitee_delivery_gate` | `changeId`、`message`、`criteria` | `gitee.delivery.judge` | 放行（只读判定不进策略目录，按 out-of-scope 出闸，`target` 取 `change`） |
 | `forge_gitee_delivery_snapshot` | 无参 | 无（本地只读动作） | 可直接调用；只读当前工作区版本，不在策略目录、不起写命令 |
 | `forge_gitee_git_commit` | `changeId`、`message` | 无（本地动作） | 可直接调用；`message` 先过 `assertCommitMessage()`，不合规即 `COMMIT_MESSAGE_INVALID`、零子进程 |
-| `forge_gitee_git_push` | `target`、`remote`（默认 `origin`）、`branch`、`confirm` | `gitee.git.push` | 逐次确认：每次推送都要确认，另有保护分支与 force push 规则 |
+| `forge_gitee_git_push` | `target`、`remote`（默认 `origin`）、`branch`、`confirm` | `gitee.git.push` | 按分类放行 + 前置审计；`confirmPush` 开启后弹确认卡片，保护分支与 force push 规则随 P2 接入 |
 
-11 个工具按能力分五类：**3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**。版本快照同样只读：它把「这次交付验的是哪一份代码」落成 `contentId`（覆盖暂存、未暂存、删除、重命名与未跟踪内容），不接受调用方传目录，截断、超时、未支持形态或采样期间有写入者时一律 `unknown`。判定与写的区别是结构性的，不是放行程度不同：判定只读仓库/提交状态并比对提交信息与关闭四条件，不产生远端写，返回体 `executed` 恒为 `false`、`remote_calls` 恒为 `0`；受控写各有 `done`/`failed`/`denied`/`unknown` 四状态与幂等台账。`git commit` 是唯一"必须发生"的动作，因此按本地动作处理：不进策略目录，只由 `git-message.mjs` 校验首行 `[变更号]`；`git push` 是远端写，默认逐次确认，并叠加保护分支与 force push 规则。工具名与注册顺序不因放行策略变化。
+11 个工具按能力分五类：**3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**。版本快照同样只读：它把「这次交付验的是哪一份代码」落成 `contentId`（覆盖暂存、未暂存、删除、重命名与未跟踪内容），不接受调用方传目录，截断、超时、未支持形态或采样期间有写入者时一律 `unknown`。判定与写的区别是结构性的，不是放行程度不同：判定只读仓库/提交状态并比对提交信息与关闭四条件，不产生远端写，返回体 `executed` 恒为 `false`、`remote_calls` 恒为 `0`；受控写各有 `done`/`failed`/`denied`/`unknown` 四状态与幂等台账。`git commit` 是唯一"必须发生"的动作，因此按本地动作处理：不进策略目录，只由 `git-message.mjs` 校验首行 `[变更号]`；`git push` 是远端写，与其他受控写同样要求 IAM 身份与前置审计；确认卡片与保护分支规则由独立开关控制，代码默认关闭。工具名与注册顺序不因放行策略变化。
 
-推送前按本地远端跟踪分支与目标分支之间的提交逐个读取补丁；跟踪分支不存在、读取失败、输出被截断或脱敏时拒绝推送。内容扫描有大小与二进制限制，未检查的部分在确认与审计中标明。远端状态和跟踪引用仍需由使用者保持同步。
+推送前按本地远端跟踪分支与目标分支之间的提交逐个读取补丁；跟踪分支不存在、读取失败、输出被截断或脱敏时拒绝推送。内容扫描有大小与二进制限制，未检查的部分在审计摘要中标明。远端状态和跟踪引用仍需由使用者保持同步。
 
 没有 `run`/`exec`/`shell`/`api` 这类泛化入口：动作是具名枚举，表里拼不出的动词在包里不存在（`pr merge`、`pr close`、`issue close`、`release`、`workflow`、`api`、`auth`、`config`、`gist` 属禁项，出现即拒绝且零子进程）。
 
@@ -118,17 +118,18 @@ Windows 主机在 DSH 沙箱内执行 `forge_gitee_git_push` 时，git 的 crede
 
 ## 策略门禁与凭据
 
-- 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。判定与 git push 不在这一断言内：缺 `gitee.delivery.judge`/`gitee.git.push` 时挂载照常成功，只有对应工具降级为 `denied`（读动作的 fail-closed 不因它们放宽）。
-- 补丁层预置 **12 条并集目录（6 读 + 6 写，与 `@heluo/forge-devops`、企业层、工程层逐字相同）**：登记行只写 `action`、`target`、`enabled`，类别、默认决策与出网语义由内置词表给出，未知字段在装载时拒绝。读面是本包 3 读 + 1 只读判定（`gitee.delivery.judge`，`target` 逐字 `change`）+ 2 条 devops 的变更读 `change.read`/`change.list`；写面登记 `gitee.issue.write`（`issue`）、`gitee.pr.write` / `gitee.review.publish` / `gitee.review.record`（`pull-request`）、`gitee.git.push`（`repository`）与 `change.clarification.write`（`change`），六条都 `enabled: true`。**登记只决定动作可见，不等于放行**：写类仍按内置分类受控——研发/评审写放行但须过身份、内容与流程规则，`gitee.git.push` 逐次确认，`gitee.review.record` 恒拒；未登记只会得到 `unregistered-action`。要收紧由组织信封下发上限，或在该 profile 的补丁层删行/置 `enabled: false`（只能更严）。条目形态如下（分发层已逐条登记，此处仅示单行结构）：
+- 策略是硬依赖：`policy` 服务缺失或没有 `executeAction` 入口时，`apply()` 直接抛 `GITEE_POLICY_UNAVAILABLE`（`missing` 列全），**不降级成"无策略只读"**。读动作不需要在目录里登记：每次读写都经 `policy.executeAction`，未登记即按 out-of-scope 出闸，登记与否由补丁层与部署者决定，不在装配期断言。
+- 补丁层预置**六条写动作目录**（与 `@heluo/forge-devops`、企业层、工程层逐字相同）：登记行只写 `action`、`target`、`category`，旧键（`enabled`/`revision`/`kind`/`egress`）与其他未知字段在装载期拒绝。只读动作**不登记**：未登记的动作属于门禁作用域之外，直接放行、不读身份、不写审计；`denyUnknownAction` 开启后才改为硬拒绝。六条写动作是 `gitee.issue.write`（`issue`）、`gitee.pr.write` / `gitee.review.publish` / `gitee.review.record`（`pull-request`）、`gitee.git.push`（`repository`）与 `change.clarification.write`（`change`），类别逐条写在登记行上。条目形态如下（分发层已逐条登记，此处仅示单行结构）：
 
 ```yaml
 catalog:
-  - { action: 'gitee.issue.write', target: 'issue', enabled: true }
-  - { action: 'gitee.git.push', target: 'repository', enabled: true }
+  - { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }
+  - { action: 'gitee.git.push', target: 'repository', category: 'remote-write' }
 ```
 
-登记回答的是"这个动作是否可见"，默认决策、类别与出网语义由内置词表给出，不因登记而放宽：写类按分类受控，风险由身份、内容与流程规则承担，`gitee.git.push` 逐次确认，`gitee.review.record` 恒拒；要收紧由组织信封下发上限（只能更严）。第 5、6 条 `change.read`/`change.list` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**——目录是并集，装谁都不缺自己那条。
-- 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产需要持久 sink 并关闭该开关。现有配置仅支持 `none` 和 `memory`，持久适配器及其程序接入仍待完成和验证。
+登记只决定"这个动作是否由本门禁负责"，不等于放行：写类先按分类给默认决策，再解析 IAM 身份、落一条前置执行记录、签发一次性收据，执行前复验、执行后结清；`gitee.review.record` 恒拒（人工评审留痕，Agent 不可发起）。内容、路径、流程与确认四类规则各由独立开关控制，代码默认全关，本阶段置真会在装载期被拒绝（fail closed），按[实施计划](../../docs/plans/2026-11-19-policy-minimal-gates.md)在 P1–P3 接入。要收紧由组织信封下发上限，或在该 profile 的补丁层删行——两种途径都只能更严。
+两份补丁层写同一份六条目录，是为了同装后只剩一个策略实例、一份登记；装谁都不缺自己那条，也不再靠"并集 12 条"让读面显得已登记。
+- 审计舱默认用内存 sink（`audit.sink: memory`，缓冲 1000 条），属**联调/试点级**证据，记录随进程退出丢失；生产应把 `audit.sink` 改为 `file`（按天 JSONL、保留 `keepDays` 天，默认 7）。组织信封要求持久审计时 `memory` 会被拒（`POLICY_AUDIT_NOT_DURABLE`）。
 - 凭据主路径是 `gh` 的系统凭据库（keyring service `gitee-cli-go`，规格 §1.3）：用户在终端运行一次 `gh auth login`，插件不代跑、不代填 `-t`（会进 `ps` 与命令审计）。`GITEE_TOKEN` 是子进程环境白名单里的**唯一**凭据例外、不点名 `authEnv` 也会继承；其它凭据变量仍只经 `authEnv` 显式注入，配置里没有存令牌的字段。`authEnv` 只用于无桌面凭据库或 CI。CLI 配置目录存在持久令牌时默认**告警**（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程），自检覆盖 `~/.gitee-cli/config.json` 与 `gh` 兼容的 `hosts.yml` 等布局，结果只回文件名与下一步、不回显令牌值；子进程输出按令牌值脱敏后再返回。
 - 唯一的子进程出口是 `src/gitee-cli.mjs`：`execFile` + `shell: false` + 超时 + 单流 1 MiB 上限；`run()` 发 gitee CLI，`runGit()` 发本机 git（只叠加 `GIT_TERMINAL_PROMPT=0` 与 `cwd`），共用同一套白名单/超时/截断/脱敏，入参只接受 `{bin|args, purpose, cwd}` 这几键，没有"把整条命令当字符串"的通道。
 
@@ -136,7 +137,7 @@ catalog:
 
 | 形态 | 结果 | 建议 |
 |---|---|---|
-| 只装一个（Gitee 面或 devops 面） | 12 条并集目录 + 自己的插件行；本包工具 11 个，目录里另有两条 devops 的变更读与 `change.clarification.write`（登记只决定可见，写仍受分类与门禁约束） | **推荐** |
+| 只装一个（Gitee 面或 devops 面） | 六条写动作目录 + 自己的插件行；本包工具 11 个，目录里的 `change.clarification.write` 供 devops 使用（登记只决定由谁负责，写仍受分类、身份与审计约束） | **推荐** |
 | 同 profile **叠加两个补丁层**（各装各的，默认） | 两个策略行同 `id: heluo-policy`、目录逐字相同、都不写 `isolate`：loader 按 id 覆盖 config，留下**唯一**一个策略实例；两处内容相同，幸存者不取决于装配顺序；15 个工具全枚举、0 行激活失败，**不用改任何配置** | **默认可行**：`dsh plugin add` 两个 tgz 即可 |
 | **单边改过目录**再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按 `GITEE_ACTION_UNREGISTERED` fail closed（`missing` 列全），先挂载方的工具仍在 | 不采用（`tests/plugin-patch-layers.test.mjs` 会红） |
 | 想回到 r4 的服务域隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
@@ -149,7 +150,7 @@ catalog:
 
 装之前先读这一节：卸载步骤不需要动本包源码。
 
-1. **收窄写能力（不需要时）**：在活动 profile 补丁层把 `heluo-policy` 的 `config.catalog` 里六条写条目删掉或改成 `enabled: false`，对应写工具即按 `unregistered-action` / `action-disabled` 可见拒绝；读面与判定必须保留（判定是只读能力，删掉会让交付判定工具不可用）。分发层**已经**登记六条写，不能靠"默认不登记"实现停用。
+1. **收窄写能力（不需要时）**：在活动 profile 补丁层把 `heluo-policy` 的 `config.catalog` 里对应写条目删掉——该动作随即变成门禁作用域之外（out-of-scope 放行），要硬拒则同时开启 `denyUnknownAction`；只想让动作彻底不可用，应卸载提供它的插件。读面与判定不登记，无需保留条目。
 2. **手工回滚配置**：在活动 profile 的补丁文件里把 `heluo-gitee` 条目的 `config:` 恢复为 `config: {}`——删掉手工加的 `cliPath`/`host`/`timeoutMs`/`authEnv`/`persistentToken`，保留注释与其它条目原样，保存后重载 profile。**不要把 `config: {}` 整段删掉**：缺席的 `config:` 会被当成 `undefined` 交给校验器，整条 entry 不激活（`heluo-gitee` 行上方的注释说明了这一点）。
 3. **卸载**：`dsh plugin --profile web remove @heluo/forge-gitee`。这条命令只移除依赖并重载，**不清理 profile 补丁层**：`heluo-gitee` 条目会残留，冷启动因找不到对应包而打印 `entry not found`；卸载前先在补丁文件里按整条 `- id: heluo-gitee` 删掉它（保留注释与其它条目原样），再执行 `remove`。**策略行 `heluo-policy` 与 devops 共用**：devops 仍装着时不要删它（删了会让 devops 也失去目录），只有两个包都卸载后才可整条移除。
 4. **复核**：整包卸载后 `dsh --profile web --dump-config | grep "id: heluo-gitee"` 应无输出；`heluo-policy` 是否仍在取决于 devops 是否还装着。11 个工具从工具面消失；`git status --short` 不新增文件（插件不写缓存或临时文件，`review.md` 只在被调用时写 `docs/teamflow/<变更号>/review.md`）。
@@ -160,7 +161,7 @@ catalog:
 node --test "packages/forge-gitee/test/*.test.mjs"
 ```
 
-覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状，含 r15 的 `dsh.client`/`exports['./client']`/peer react）、`config-access.test.mjs`（三层读面：`origin` 口径、`inherited`/`override`/`value` 三列、409 栅栏 editor 0 次、422 写盘 0 次、未知键拒绝、等值保存不写、`null` 删键只动本键、写后回读不一致降级、`describe()` 不含值）、`http.test.mjs`（端点常量逐字、`no-store`/`nosniff`/`x-forge-gitee-at`、无 CORS、预检头与体形状 400、超 64 KiB 413、`applied` 透传、409/422/503 映射、`toNodeRoute` 404/405/HEAD/尾斜杠）、`faces-rebuild.test.mjs`（保存即生效、`?refresh=1` 是唯一重建入口、路由挂载与 `applied`、无 webServer 降级、卸载撤路由）、`client-shape.test.mjs`（浏览器半真执行：Loader 装载、effect 标签、分区 id/order、真渲染三列同屏、主机与凭据值不出现在文本里、只发 1 次 GET）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；12 条并集可用、六条写登记后仍按分类受控（push `confirm`、review.record `deny`）、删行后可见拒绝；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 15 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、`GITEE_TOKEN` 白名单唯一例外、持久令牌 warn/block 与 `~/.gitee-cli/config.json` 检出、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、argv 形状（单对象命令的编号 + `-R`、纯数字 target、`repo list` 无位置参数）、`--state` 按命令分表、空 PR 列表解包、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封、四类降级与两个读工具的 state enum）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写在无身份与范围票据时 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 要 `confirm{repo,object}` 逐字匹配）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
+覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状，含 r15 的 `dsh.client`/`exports['./client']`/peer react）、`config-access.test.mjs`（三层读面：`origin` 口径、`inherited`/`override`/`value` 三列、409 栅栏 editor 0 次、422 写盘 0 次、未知键拒绝、等值保存不写、`null` 删键只动本键、写后回读不一致降级、`describe()` 不含值）、`http.test.mjs`（端点常量逐字、`no-store`/`nosniff`/`x-forge-gitee-at`、无 CORS、预检头与体形状 400、超 64 KiB 413、`applied` 透传、409/422/503 映射、`toNodeRoute` 404/405/HEAD/尾斜杠）、`faces-rebuild.test.mjs`（保存即生效、`?refresh=1` 是唯一重建入口、路由挂载与 `applied`、无 webServer 降级、卸载撤路由）、`client-shape.test.mjs`（浏览器半真执行：Loader 装载、effect 标签、分区 id/order、真渲染三列同屏、主机与凭据值不出现在文本里、只发 1 次 GET）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；六条写动作可用、登记后仍按分类受控（review.record `deny`）、删行后出闸；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 15 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、`GITEE_TOKEN` 白名单唯一例外、持久令牌 warn/block 与 `~/.gitee-cli/config.json` 检出、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、argv 形状（单对象命令的编号 + `-R`、纯数字 target、`repo list` 无位置参数）、`--state` 按命令分表、空 PR 列表解包、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封、四类降级与两个读工具的 state enum）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写在无 IAM 身份时 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 要 `confirm{repo,object}` 逐字匹配）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
 
 ## 证据表（r4 轮，2026-10-29）
 

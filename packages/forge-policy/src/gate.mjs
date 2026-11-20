@@ -1,513 +1,395 @@
 /**
- * Shared command/tool admission. Async preparation writes the mandatory audit;
- * the monotonic guard admits only that exact, unchanged execution once.
+ * 门禁的宿主适配器：把 0–10 骨架落到 tools/pre-execute、tools 守卫与 command 面。
  *
- * 判定顺序：能力域 → 受保护路径 → 身份 → 内容域 → 流程域 → 决策合成 →
- * 写动作范围复验 → 逐次确认 → 前置审计。任何一步的 `deny` 都零副作用。
+ * P0 只保留 resolve → identity → audit → receipt 四段：登记目录里的写动作要求
+ * 解析出 IAM actor，先落 `begin` 审计再放行；执行后 `settle` 补结果。一次性
+ * 收据防止重放，执行前复验参数、身份与审计健康度。未登记动作（含全部读动作）
+ * 是 out-of-scope：直接放行，不读身份、不写审计（D22/D23）。
  */
+
 import { decideAction } from './catalog.mjs';
-import { isWriteAction, strictestDecision } from './classify.mjs';
-import { payloadsFromArguments, scanPayloads } from './content-rules.mjs';
-import { effectiveDecision } from './org-policy.mjs';
-import { evaluateProcessRules, factsFromArguments, withSources } from './process-rules.mjs';
-import { approvalDisplayReason, confirmationDisplayReason } from './prompts.mjs';
-import { digestContent } from './egress.mjs';
-import { matchProtected } from './paths.mjs';
+import { digestContent } from './content-rules.mjs';
 
-const READ_CATEGORY = 'read';
+const AUDIT_FAILURE_COPY = (action, sinkKind, target) => {
+  const shape = target === undefined ? '(无目标)' : target.includes('/') ? target.split('/').slice(-2).join('/') : target;
+  return `受控写「${action}」已中止：本次执行记录无法写入（存储 ${sinkKind}，目标 ${shape}）。`
+    + '请检查策略日志目录的写权限、磁盘空间与路径配置后重试；在记录可写之前本次动作不会执行。';
+};
 
+const AUDIT_OUTSTANDING_COPY = '上一次执行记录尚未回写，为避免漏记，本次受控写已中止；请检查策略存储并确认缺口后重试。';
+
+const IDENTITY_COPY = (action) => `未解析到 IAM 身份，受控写「${action}」已拒绝：请在「设置 → 账号」完成登录后重试。`;
+
+function normalizeActor(value) {
+  if (typeof value === 'string') return value.trim() === '' ? undefined : value;
+  if (value !== null && typeof value === 'object') {
+    if (typeof value.principal === 'string' && value.principal.trim() !== '') return value.principal;
+    if (typeof value.subject === 'string' && value.subject.trim() !== '') return value.subject;
+  }
+  return undefined;
+}
+
+function targetOf(exec) {
+  const value = exec?.arguments?.target;
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}
+
+/**
+ * 参数摘要只覆盖工具名与 arguments，用于放行后的"参数有没有被改写"复验——
+ * 这一步必须同步，正文通道（`exec.content`）可能是异步函数，不能塞进来。
+ */
+function staticDigestOf(exec) {
+  return digestContent({ name: exec?.name ?? null, arguments: exec?.arguments ?? null });
+}
+
+/**
+ * 正文摘要额外覆盖 `exec.content`：Gitee 与 DevOps 把写出去的正文放在这条私有通道上，
+ * 只散列 arguments 会让"同目标、同参数、不同正文"的两次写在审计里长得一模一样。
+ * 函数形式的正文在这里解析一次；解析失败用占位符，避免因为读不到正文就放行无记录。
+ */
+function digestInput(exec, content) {
+  return {
+    name: exec?.name ?? null,
+    arguments: exec?.arguments ?? null,
+    ...(content === undefined ? {} : { content }),
+  };
+}
+
+/** 正文是普通对象时同步算：放行路径上多余的 await 会改变宿主看到的时序。 */
+function contentDigestOf(exec) {
+  if (typeof exec?.content !== 'function') return digestContent(digestInput(exec, exec?.content));
+  return (async () => {
+    try {
+      return digestContent(digestInput(exec, await exec.content()));
+    } catch {
+      return digestContent(digestInput(exec, '[content-unavailable]'));
+    }
+  })();
+}
+
+/**
+ * `subject` 是 provider 自证（Gitee guard 要求 `gitee`），与 IAM `actor` 是两个字段。
+ * 从工具名前缀推断来源，推断不出来就不写，交给消费方按"没自证"处理。
+ */
+function subjectOf(toolName, action) {
+  const name = typeof toolName === 'string' ? toolName : '';
+  if (name.startsWith('forge_gitee_')) return 'gitee';
+  if (name.startsWith('forge_devops_')) return 'devops';
+  if (typeof action === 'string' && action.startsWith('gitee.')) return 'gitee';
+  return undefined;
+}
+
+// `params` 只写调用摘要：正文/评论/补丁等业务内容既不落审计，也不进日志。
+// 需要的完整性由 `contentDigest`（参数整体摘要）承担。
+const CONTENT_ARG_KEYS = new Set(['title', 'body', 'description', 'content', 'message', 'comment', 'review', 'summary', 'text', 'diff', 'patch']);
+
+function summarizeArguments(args) {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return args ?? {};
+  const summary = {};
+  for (const [key, value] of Object.entries(args)) {
+    summary[key] = CONTENT_ARG_KEYS.has(key) ? '[content]' : value;
+  }
+  return summary;
+}
+
+function agentKindOf(exec) {
+  if (exec?.agent === null || exec?.agent === undefined) return 'host';
+  if (typeof exec.agent.kind === 'string') return exec.agent.kind;
+  if (exec.agent.id !== undefined) return 'agent';
+  return 'host';
+}
+
+function deny(reason) {
+  return Object.freeze({ kind: 'deny', reason });
+}
+
+function toolAction(tools, toolName) {
+  if (tools instanceof Map) return tools.get(toolName);
+  if (tools !== null && typeof tools === 'object' && Object.hasOwn(tools, toolName)) return tools[toolName];
+  return undefined;
+}
+
+/**
+ * @param {{catalog: Map, rules?: object, pipeline?: readonly object[], audit: object,
+ *   tools?: object | Map, getActor?: Function, onDecision?: Function, now?: () => number}} options
+ */
 export function createGate({
   catalog,
-  tools = {},
-  categories = {},
-  protectedRoots = {},
-  pathOptions = {},
+  rules = {},
+  pipeline = [],
   audit,
-  onDecision,
-  contentRules = [],
-  org = { state: 'absent' },
+  tools = {},
   getActor,
-  getFactSources,
-  scope,
-  now = () => Date.now(),
+  onDecision,
+  now,
 } = {}) {
-  const approved = new WeakSet();
-  const receipts = new Map();
-  const attempted = new WeakSet();
-  const settlements = new Set();
-  let active = true;
-  const actionFor = (toolName) => tools[toolName] ?? categories[toolName];
-  const isEnforced = (toolName) => Object.hasOwn(tools, toolName) || Object.hasOwn(categories, toolName);
+  const stages = Object.freeze([...(pipeline ?? [])]);
+  const clock = now ?? (() => Date.now());
+  const approved = new WeakMap();
+  const admitting = new WeakSet();
+  const admitted = new Map();
+  const pendingSettlements = new Set();
+  let disposed = false;
 
-  const notify = (event) => {
-    try { onDecision?.(event); } catch { /* Optional observation cannot change admission. */ }
-  };
+  function actionFor(toolName) {
+    return toolAction(tools, toolName);
+  }
 
-  const policyVersion = org.state === 'verified' ? org.policyVersion : 'builtin';
-  const orgDigest = org.state === 'verified' ? org.digest : undefined;
+  function isControlled(action) {
+    return catalog instanceof Map && catalog.has(action);
+  }
 
-  function decisionFor(toolName, action, request = {}) {
-    const base = decideAction({ catalog, action, target: request.target });
-    let decision = base;
-    if (base.action !== 'deny') {
-      // 组织上限只能收紧：信封给出更严的决策时覆盖内置默认，从不放宽。
-      let capped = 'allow';
-      try {
-        capped = effectiveDecision({ action, org });
-      } catch {
-        capped = 'deny';
-      }
-      const merged = strictestDecision(base.action, capped);
-      if (merged !== base.action) {
-        decision = {
-          ...base,
-          action: merged,
-          rule: 'org-policy-ceiling',
-          reason: `the organization policy holds ${action} at ${capped}`,
-        };
-      }
-    }
-    notify({ toolName, action, decision });
-    return decision;
+  function isEnforced(toolName) {
+    const action = actionFor(toolName);
+    return action !== undefined && isControlled(action);
   }
 
   function check(toolName, request = {}) {
-    const action = actionFor(toolName);
-    if (action === undefined) return { action: 'allow', reason: `tool "${toolName}" is not an enterprise action`, rule: 'out-of-scope' };
-    return decisionFor(toolName, action, request);
-  }
-
-  function pathDenial(exec, action) {
-    const entry = catalog.get(action);
-    if (entry?.path === undefined) return undefined;
-    const candidate = exec.arguments?.[entry.path];
-    if (protectedRoots.length === 0) return `action "${action}" needs a path check but no protected root is configured`;
-    try {
-      const match = matchProtected(candidate, protectedRoots, pathOptions);
-      if (match.protected) return `action "${action}" targets the protected path ${match.root}`;
-    } catch (error) {
-      return `action "${action}" path cannot be verified (${error?.code ?? error?.message})`;
+    const action = actionFor(toolName) ?? (isControlled(toolName) ? toolName : undefined);
+    if (action === undefined) {
+      return Object.freeze({ action: 'allow', rule: 'out-of-scope', reason: `tool "${toolName}" is not under policy control` });
     }
-    return undefined;
+    const decision = decideAction({ catalog, rules, action, target: request?.target });
+    onDecision?.(decision);
+    return decision;
   }
 
-  // Digests stay in private memory: arguments and business content are never
-  // added to the minimized audit record. The execution object is the capability,
-  // not its caller-supplied/correlating callId.
-  const snapshot = (exec, action) => digestContent({
-    action,
-    name: exec.name,
-    arguments: exec.arguments,
-    content: exec.content,
-    callId: exec.callId,
-  });
-  const deny = (reason, extra = undefined) => ({ kind: 'deny', reason, ...(extra === undefined ? {} : extra) });
-  function changed(exec, action, digest, agent) {
-    try { return agent !== exec.agent || digest !== snapshot(exec, action); } catch { return true; }
-  }
-  const interruption = (exec) => !active ? 'the policy service was disposed'
-    : exec.signal?.aborted ? 'the execution was cancelled before admission' : undefined;
-
-  function actorOf() {
+  async function settle(entry, outcome) {
+    if (entry.settled) return;
+    entry.settled = true;
+    // 结清即释放：`admitted` 只用来在放行与结清之间挡住同一个 callId 的并发重放，
+    // 留着已结清的条目会把执行对象（含正文）一直强引用到插件卸载。
+    if (entry.exec?.callId !== undefined) admitted.delete(String(entry.exec.callId));
+    const promise = audit.settle(entry.receipt, { decision: outcome.decision, rule: outcome.rule ?? entry.decision?.rule, ...outcome.extra });
+    pendingSettlements.add(promise);
     try {
-      const value = typeof getActor === 'function' ? getActor() : undefined;
-      return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-    } catch {
-      return undefined;
+      await promise;
+    } finally {
+      pendingSettlements.delete(promise);
     }
   }
 
   /**
-   * The repository a call is scoped to. Issue and pull-request targets carry a
-   * `repo!number` form; a repository action is the repository itself.
+   * Resolve → identity → audit, then register the one-shot receipt.
+   * Returns `{kind:'allow'}` or `{kind:'deny', reason}`.
    */
-  function repositoryOf(action, args) {
-    const target = typeof args?.target === 'string' ? args.target : undefined;
-    if (target === undefined) return undefined;
-    const entry = catalog.get(action);
-    if (entry?.category === READ_CATEGORY) return target;
-    // `owner/name!12` 与 `owner/name#12` 指的是同一仓库里的同一个对象；作用域必须按仓库算，
-    // 否则同一任务的两种写法会各自要一次确认，把"一条任务一次确认"退化成逐次询问。
-    const cut = target.search(/[#!]/u);
-    return cut === -1 ? target : target.slice(0, cut);
-  }
-
-  /**
-   * The trusted session identity a task scope belongs to. A range ticket is a
-   * per-session grant: the same authenticated principal in another session must
-   * confirm again, otherwise one confirmation leaks across sessions.
-   */
-  function sessionOf(exec) {
-    const agent = exec?.agent;
-    if (typeof agent === 'string' && agent.trim() !== '') return agent.trim();
-    const id = agent?.id;
-    if (typeof id === 'string' && id.trim() !== '') return id.trim();
-    return undefined;
-  }
-
-  function changeOf(args) {
-    if (typeof args?.changeId === 'string' && args.changeId.trim().length > 0) return args.changeId;
-    if (typeof args?.change === 'string' && args.change.trim().length > 0) return args.change;
-    return undefined;
-  }
-
-  /**
-   * 工具写入的正文通过 `exec.content` 这一私有通道进来：它参与内容/流程判定与摘要，
-   * 但不进入参数对象，也不写进审计记录。
-   */
-  const withContent = (args, content) => (content === undefined || content === null ? args : { ...args, ...content });
-
-  function processOutcome(action, args, content) {
-    const entry = catalog.get(action);
-    if (entry === undefined || entry.processRules.length === 0) {
-      return { decision: 'allow', deny: [], confirm: [], unevaluated: [], ruleIds: [] };
+  async function admit(ctx, exec, action) {
+    // One execution object gets exactly one admission, even under concurrent
+    // prepare listeners; a second one must not mint another receipt.
+    if (approved.has(exec) || admitting.has(exec)) {
+      return deny('this execution was already admitted by the policy gate');
     }
-    const sources = typeof getFactSources === 'function'
-      ? getFactSources({ action, changeId: changeOf(args) }) ?? {} : {};
-    const facts = withSources(factsFromArguments(withContent(args, content)), sources);
-    const outcome = evaluateProcessRules({
-      rules: entry.processRules,
-      facts,
-      severities: org.state === 'verified' ? org.processRules : {},
-    });
-    const decision = outcome.deny.length > 0 ? 'deny' : outcome.confirm.length > 0 ? 'confirm' : 'allow';
-    const reason = outcome.deny[0]?.reason ?? outcome.confirm[0]?.reason;
-    return {
-      decision,
-      reason,
-      deny: outcome.deny,
-      confirm: outcome.confirm,
-      unevaluated: outcome.unevaluated,
-      ruleIds: [...outcome.deny, ...outcome.confirm, ...outcome.unevaluated].map((item) => item.rule),
-    };
-  }
-
-  function contentOutcome(action, args, content) {
-    const entry = catalog.get(action);
-    if (entry === undefined || entry.contentGate !== true || contentRules.length === 0) {
-      return { decision: 'allow', hard: [], soft: [], skipped: [], ruleIds: [] };
-    }
-    let result;
+    admitting.add(exec);
     try {
-      result = scanPayloads(contentRules, payloadsFromArguments(withContent(args, content)));
-    } catch (error) {
-      return { decision: 'deny', denied: `content rules cannot be evaluated (${error?.code ?? error?.message})`, hard: [], soft: [], skipped: [], ruleIds: [] };
+      return await admitOnce(ctx, exec, action);
+    } finally {
+      admitting.delete(exec);
     }
-    if (result.hard.length > 0) {
-      const hit = result.hard[0];
-      return {
-        decision: 'deny',
-        denied: `content rule ${hit.rule} rejected this ${action} (${hit.field}: ${hit.excerpt})`,
-        hard: result.hard,
-        soft: result.soft,
-        skipped: result.skipped,
-        ruleIds: result.hard.map((finding) => finding.rule),
-      };
-    }
-    return {
-      // SOFT 命中不阻断，但要求人工停下来确认一次。
-      decision: result.soft.length > 0 || result.skipped.length > 0 ? 'confirm' : 'allow',
-      reason: result.soft.length > 0 ? `content rules flagged ${result.soft.map((finding) => finding.rule).join(', ')}` : undefined,
-      hard: [],
-      soft: result.soft,
-      skipped: result.skipped,
-      ruleIds: result.soft.map((finding) => finding.rule),
-    };
   }
 
-  async function requestApproval(ctx, exec, reason, display) {
-    const approval = typeof ctx.get === 'function' ? ctx.get('approval') : undefined;
-    if (approval === undefined || approval === null || exec.agent === undefined) {
-      return { ok: false, reason: `${reason}: no approval channel is available for this call` };
+  async function admitOnce(ctx, exec, action) {
+    const target = targetOf(exec);
+    const decision = decideAction({ catalog, rules, action, target });
+    onDecision?.(decision);
+    if (decision.action !== 'allow') {
+      return deny(decision.reason);
     }
-    let outcome;
+    const actor = normalizeActor(await getActor?.(ctx));
+    if (actor === undefined) {
+      return deny(IDENTITY_COPY(action));
+    }
+    const digest = staticDigestOf(exec);
+    const contentDigest = typeof exec?.content === 'function'
+      ? await contentDigestOf(exec)
+      : contentDigestOf(exec);
+    const subject = subjectOf(exec?.name, action);
+    let receipt;
     try {
-      outcome = await approval.request({
-        agent: exec.agent,
-        toolName: exec.name,
-        callId: exec.callId,
-        reason,
-        ...(display === undefined ? {} : { displayReason: display }),
-        signal: exec.signal,
+      receipt = await audit.begin({
+        ...(subject === undefined ? {} : { subject }),
+        actor,
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'allow',
+        rule: decision.rule,
+        operationId: exec?.callId === undefined ? undefined : String(exec.callId),
+        policyVersion: undefined,
+        agent: { kind: agentKindOf(exec) },
+        summary: `受控写 ${action}（目标 ${target ?? '(未提供)'}）`,
+        params: summarizeArguments(exec?.arguments ?? {}),
+        contentDigest,
       });
     } catch (error) {
-      return { ok: false, reason: `${reason}: approval unavailable (${error?.message ?? error})` };
+      if (error?.code === 'POLICY_AUDIT_GAP_OUTSTANDING') return deny(AUDIT_OUTSTANDING_COPY);
+      return deny(AUDIT_FAILURE_COPY(action, audit?.sinks?.()?.kind ?? 'memory', target));
     }
-    if (interruption(exec)) return { ok: false, reason: interruption(exec) };
-    if (outcome !== 'allowed-once') return { ok: false, reason: `${reason}: ${outcome}` };
-    return { ok: true };
-  }
-
-  /**
-   * A range ticket covers repeated writes inside one task scope (principal,
-   * session, change, repository, action). It is reusable and never consumed by
-   * use, but every call still passes the other axes on its own, and a ticket
-   * never carries over to another session.
-   */
-  function scopeOf(action, args, exec) {
-    const entry = catalog.get(action);
-    if (entry === undefined || entry.confirmation !== 'scope') return undefined;
-    return {
-      principal: actorOf(),
-      session: sessionOf(exec),
-      changeId: changeOf(args),
-      repository: repositoryOf(action, args),
-      action,
-      revisions: typeof args?.revision === 'string' ? { [entry.target]: args.revision } : {},
-    };
-  }
-
-  async function scopeAdmission(ctx, exec, action, args) {
-    const request = scopeOf(action, args, exec);
-    if (request === undefined) return { ok: true, ticketId: undefined };
-    if (scope === undefined || typeof scope.verify !== 'function') {
-      return { ok: false, reason: `action "${action}" needs a task scope but no scope ledger is available` };
-    }
-    const verified = scope.verify(request);
-    if (verified.ok === true) return { ok: true, ticketId: verified.ticketId };
-    if (request.principal === undefined) return { ok: false, reason: `action "${action}" needs an authenticated identity for its task scope` };
-    if (request.changeId === undefined) return { ok: false, reason: `action "${action}" needs a change id to establish its task scope` };
-    if (request.session === undefined) return { ok: false, reason: `action "${action}" needs a trusted session to establish its task scope` };
-    const granted = await requestApproval(
-      ctx,
+    const entry = {
       exec,
-      `confirm a task scope for ${action} on ${request.repository ?? request.changeId}`,
-      approvalDisplayReason({ action, repository: request.repository, changeId: request.changeId, args }),
-    );
-    // 审批侧的真实原因（被拒、无应答者、通道异常）优先于票据文案：只报票据
-    // 文案时，用户点了"拒绝"和从未弹窗得到的是同一句话。
-    if (granted.ok !== true) return { ok: false, reason: granted.reason ?? verified.reason ?? `${action} is outside the current task scope` };
-    const issued = scope.issue(request);
-    return { ok: true, ticketId: issued.id };
+      action,
+      target,
+      actor,
+      staticDigest: digest,
+      decision,
+      receipt,
+      startedAt: receipt.startedAt,
+      used: false,
+      settled: false,
+    };
+    approved.set(exec, entry);
+    if (exec?.callId !== undefined) admitted.set(String(exec.callId), exec);
+    return Object.freeze({ kind: 'allow' });
   }
 
-  async function prepare(ctx, exec, action) {
-    if (!active) return deny('the policy service was disposed');
-    if (attempted.has(exec)) return deny('the audit admission for this execution was already prepared');
-    attempted.add(exec);
-    // tools/result is an unawaited observer. Its fallback settlement must be
-    // registered synchronously and drained HERE before another protected action.
-    await Promise.all([...settlements]);
-    if (interruption(exec)) return deny(interruption(exec));
-    const entry = catalog.get(action);
-    const pathReason = pathDenial(exec, action);
-    if (pathReason !== undefined) return deny(pathReason);
-    const actionDecision = decisionFor(exec.name, action, exec.arguments);
-    if (actionDecision.action === 'deny') return deny(actionDecision.reason);
-    if (entry?.revision === true && (typeof exec.arguments?.revision !== 'string' || exec.arguments.revision.trim() === '')) {
-      return deny(`action "${action}" requires a revision, and none was supplied`);
-    }
-    const write = isWriteAction(action);
-    const actor = actorOf();
-    if (write && actor === undefined) {
-      return deny(`write action "${action}" requires an authenticated identity`);
-    }
-    if (write && org.state === 'invalid') {
-      return deny(`the organization policy envelope is invalid (${org.reason ?? 'unknown reason'}); write actions are refused`);
-    }
-    // 写正文可以由调用方按需提供（例如推送前读取提交集合）：只有走到内容域才解析，
-    // 被能力域拒绝的调用不产生任何额外读取。解析失败按"内容无法判定"拒绝。
-    if (typeof exec.content === 'function') {
-      try { exec.content = await exec.content(); } catch (error) {
-        return deny(`content for ${action} cannot be read (${error?.code ?? error?.message})`);
-      }
-    }
-    const content = contentOutcome(action, exec.arguments, exec.content);
-    if (content.decision === 'deny') return deny(content.denied ?? 'content rules rejected this call');
-    const process = processOutcome(action, exec.arguments, exec.content);
-    if (process.decision === 'deny') return deny(process.reason ?? 'process rules rejected this call');
-    let decision = strictestDecision(actionDecision.action, content.decision, process.decision);
-    // 摘要与身份必须在任何等待（范围确认、逐次确认、审计）之前采集：等待期间参数或
-    // 正文被改写时，后续复验会发现并拒绝，而不是只把新值写进收据。
-    const agent = exec.agent;
-    let digest;
-    try { digest = snapshot(exec, action); } catch { return deny('execution arguments cannot be verified for audit'); }
-    const scopeResult = write && decision !== 'deny'
-      ? await scopeAdmission(ctx, exec, action, exec.arguments)
-      : { ok: true };
-    if (scopeResult.ok !== true) return deny(scopeResult.reason);
-    if (decision === 'confirm') {
-      const reason = [content.reason ?? process.reason ?? actionDecision.reason ?? 'this action requires confirmation',
-        ...(content.skipped.length ? [`content scan incomplete: ${content.skipped.map(({ field, reason: why }) => `${field} (${why})`).join(', ')}`] : []),
-      ].join('; ');
-      const asked = await requestApproval(ctx, exec, reason, confirmationDisplayReason({
-        action,
-        repository: repositoryOf(action, exec.arguments),
-        changeId: changeOf(exec.arguments),
-        args: exec.arguments,
-        rules: [...content.soft.map((finding) => finding.rule), ...process.confirm.map((item) => item.rule)],
-        skipped: content.skipped,
-      }));
-      if (asked.ok !== true) return deny(asked.reason);
-    }
-    if (interruption(exec) || changed(exec, action, digest, agent)) return deny(interruption(exec) ?? 'execution arguments or identity changed during confirmation');
-    const ruleIds = [...new Set([...content.ruleIds, ...process.ruleIds])];
-    const extra = {
-      policyVersion,
-      ...(orgDigest === undefined ? {} : { orgDigest }),
-      ruleIds,
-      actor,
-      approver: decision === 'confirm' || scopeResult.ticketId !== undefined ? 'host-approval' : '',
-      unevaluated: process.unevaluated.map((item) => item.rule),
-      contentSkipped: content.skipped.map(({ field, reason }) => `${field}:${reason}`),
-      mode: org.state === 'verified' ? 'managed' : 'personal',
-    };
-    try {
-      if (audit === undefined) throw new Error('no audit barrier is available');
-      const receipt = await audit.begin({
-        action,
-        target: typeof exec.arguments?.target === 'string' ? exec.arguments.target : undefined,
-        tool: exec.name,
-        decision,
-        rule: actionDecision.rule ?? 'composed-decision',
-        operationId: exec.callId,
-        policyVersion: extra.policyVersion,
-        ruleIds: extra.ruleIds,
-        actor: extra.actor,
-        approver: extra.approver,
-        unevaluated: extra.unevaluated,
-        contentSkipped: extra.contentSkipped,
-        mode: extra.mode,
-        ...(extra.orgDigest === undefined ? {} : { orgDigest: extra.orgDigest }),
-        contentDigest: digest,
-      });
-      if (interruption(exec) || changed(exec, action, digest, agent)) {
-        await audit.settle(receipt, { decision: 'cancelled' });
-        return deny(interruption(exec) ?? 'execution arguments or identity changed during audit');
-      }
-      receipts.set(exec, { receipt, digest, action, agent, used: false, actor, decision, ruleIds,
-        processConfirm: process.confirm.map((item) => item.rule), ticketId: scopeResult.ticketId });
-      if (decision === 'confirm') approved.add(exec);
-      return { kind: 'allow' };
-    } catch (error) {
-      return deny(`audit refused the action: ${error?.message ?? error}`);
-    }
+  async function cancel(entry, reason, rule = 'cancelled') {
+    await settle(entry, { decision: 'cancelled', rule });
+    return deny(reason);
   }
 
   async function preExecute(ctx, exec, next) {
-    if (!isEnforced(exec.name)) return next();
-    const decision = await prepare(ctx, exec, actionFor(exec.name));
-    if (decision.kind === 'deny') return decision;
+    const action = actionFor(exec?.name);
+    if (action === undefined || !isControlled(action)) {
+      return typeof next === 'function' ? next() : Object.freeze({ kind: 'allow' });
+    }
+    if (disposed) return deny('the policy gate is no longer mounted');
+    // A final-result observer settles asynchronously; the next controlled call
+    // waits for it so a failed settlement cannot slip through as a fresh begin.
+    if (pendingSettlements.size > 0) await Promise.allSettled([...pendingSettlements]);
+    if (typeof audit?.isDegraded === 'function' && audit.isDegraded()) return deny(AUDIT_OUTSTANDING_COPY);
+    const admission = await admit(ctx, exec, action);
+    if (admission.kind !== 'allow') return admission;
+    const entry = approved.get(exec);
+    if (typeof next !== 'function') return admission;
     let downstream;
-    try { downstream = await next(); } catch (error) {
-      await settleAdmission(exec, 'error');
+    try {
+      downstream = await next();
+    } catch (error) {
+      await settle(entry, { decision: 'error', rule: 'downstream-failed' });
       throw error;
     }
-    // HMR/unload may remove the monotonic guard while a downstream listener is
-    // awaiting. A captured pre callback must not return allow after disposal.
-    if (interruption(exec)) {
-      await settleAdmission(exec, 'cancelled');
-      return deny(interruption(exec));
+    if (downstream !== undefined && downstream?.kind !== 'allow') {
+      return cancel(entry, downstream?.reason ?? 'a downstream stage refused the call', 'downstream-refused');
     }
-    return downstream;
+    const changedReason = await recheck(entry, exec, ctx);
+    if (changedReason !== undefined) return cancel(entry, changedReason.reason);
+    return Object.freeze({ kind: 'allow' });
   }
 
-  function guardAction(exec, action) {
-    if (interruption(exec)) return interruption(exec);
-    const pathReason = pathDenial(exec, action);
-    if (pathReason !== undefined) {
-      notify({ toolName: exec.name, action, decision: { action: 'deny', reason: pathReason, rule: 'protected-path' } });
-      return pathReason;
+  /**
+   * 放行之后、执行之前的最终复验：卸载、取消、参数改写、身份切换，任何一项变化都不能
+   * 让这次写入落地。`tools/pre-execute` 与 `executeAction` 共用这一份判定，避免两条入口
+   * 各自维护、慢慢走样。
+   */
+  async function recheck(entry, exec, ctx) {
+    if (disposed) return { reason: 'the policy gate was unloaded before the call started', rule: 'unloaded' };
+    if (exec?.signal?.aborted === true) return { reason: 'the call was cancelled after it was admitted', rule: 'cancelled' };
+    if (staticDigestOf(exec) !== entry.staticDigest) {
+      return { reason: 'the arguments changed before the call started', rule: 'arguments-changed' };
     }
-    const decision = decisionFor(exec.name, action, exec.arguments);
-    if (decision.action === 'deny') return decision.reason;
-    if (audit?.isDegraded()) return 'an earlier audit gap is still outstanding';
-    if (settlements.size > 0) return 'a previous mandatory audit settlement is still pending';
-    const admission = receipts.get(exec);
-    if (admission === undefined) return 'the mandatory audit stage did not run for this execution';
-    if (admission.used) return 'the audit admission for this execution was already consumed';
-    if (admission.action !== action || changed(exec, action, admission.digest, admission.agent)) {
-      return 'execution arguments or identity changed after the mandatory audit';
+    if (typeof getActor === 'function') {
+      const current = normalizeActor(await getActor(ctx));
+      if (current !== entry.actor) return { reason: 'the IAM identity changed after the call was admitted', rule: 'identity-changed' };
     }
-    // Facts can change while approval, audit, or downstream listeners await.
-    // A new soft finding was not covered by the earlier confirmation either.
-    const process = processOutcome(action, exec.arguments, exec.content);
-    if (process.decision === 'deny') return process.reason ?? 'process rules rejected this call';
-    const newConfirmation = process.confirm.find((item) => !admission.processConfirm.includes(item.rule));
-    if (newConfirmation !== undefined) return newConfirmation.reason;
-    // 范围票据可能在确认、审计或下游 await 期间被撤销或换绑：执行前按票据号复验，
-    // 撤销后的收据不能再放行一次写。
-    if (admission.ticketId !== undefined) {
-      const request = scopeOf(action, exec.arguments, exec);
-      const verified = request === undefined || scope === undefined || typeof scope.verify !== 'function'
-        ? { ok: false }
-        : scope.verify(request);
-      if (verified.ok !== true || verified.ticketId !== admission.ticketId) {
-        return 'the task scope for this execution is no longer valid';
-      }
-    }
-    // 执行期复验身份与策略摘要：在确认或下游 await 期间变化一律拒绝。
-    const reActor = actorOf();
-    if (isWriteAction(action) && reActor !== admission.actor) {
-      return 'the authenticated identity changed after the mandatory audit';
-    }
-    if (admission.decision === 'confirm' && !approved.has(exec)) {
-      return `${decision.reason} (the confirmation stage did not run)`;
-    }
-    admission.used = true;
     return undefined;
   }
 
-  function guard(exec) {
-    return isEnforced(exec.name) ? guardAction(exec, actionFor(exec.name)) : undefined;
-  }
-
-  async function settleAdmission(exec, decision) {
-    const admission = receipts.get(exec);
-    if (admission === undefined) return undefined;
-    receipts.delete(exec);
-    approved.delete(exec);
-    // Register before any observer returns. Removing the receipt first makes
-    // post-execute + final-result fallback idempotent, not two audit appends.
-    const pending = Promise.resolve().then(() => audit.settle(admission.receipt, { decision }))
-      .catch(() => ({ action: 'gap', gap: audit.abandon(admission.receipt, 'audit-settlement-unavailable') }));
-    settlements.add(pending);
-    try { return await pending; } finally { settlements.delete(pending); }
+  function guard(ctxOrExec, maybeExec) {
+    const exec = maybeExec ?? ctxOrExec;
+    const action = actionFor(exec?.name);
+    if (action === undefined || !isControlled(action)) return undefined;
+    if (disposed) return 'the policy gate is no longer mounted';
+    const entry = approved.get(exec);
+    if (entry === undefined) {
+      return exec?.callId !== undefined && admitted.has(String(exec.callId))
+        ? 'this call id was already admitted by another call'
+        : 'this call was not admitted by the policy gate';
+    }
+    if (entry.used) return 'the admission receipt for this call was already used';
+    if (typeof audit?.isDegraded === 'function' && audit.isDegraded()) {
+      return 'an earlier audit gap is outstanding; the call is refused until it is acknowledged';
+    }
+    if (pendingSettlements.size > 0) return 'a previous settlement is still pending; the call is refused';
+    if (exec?.signal?.aborted === true) return 'the call was cancelled after it was admitted';
+    if (staticDigestOf(exec) !== entry.staticDigest) return 'the arguments changed after the call was admitted';
+    if (typeof getActor === 'function' && normalizeActor(getActor(undefined)) !== entry.actor) {
+      return 'the IAM identity changed after the call was admitted';
+    }
+    entry.used = true;
+    return undefined;
   }
 
   async function postExecute(exec, result) {
-    return await settleAdmission(exec, result?.isError === true || result?.kind === 'error' ? 'error' : 'executed');
+    const entry = approved.get(exec);
+    if (entry === undefined || entry.settled) return;
+    const failed = result?.isError === true || result?.kind === 'error';
+    await settle(entry, { decision: failed ? 'error' : 'executed' });
   }
 
-  /** The direct command path uses the same preparation, hard checks and settle. */
+  /** `recheck` 的拒绝文案：说清"没有执行"，也不把内部规则名抛给用户。 */
+  function executeDenyCopy(action, rule) {
+    if (rule === 'cancelled') return `受控写「${action}」已取消：调用在排队等待期间被取消，本次未执行。`;
+    if (rule === 'identity-changed') return `受控写「${action}」未执行：等待期间登录身份发生变化，请重新发起该动作。`;
+    if (rule === 'arguments-changed') return `受控写「${action}」未执行：等待期间参数发生变化，请重新发起该动作。`;
+    if (rule === 'unloaded') return `受控写「${action}」未执行：策略插件已卸载，本次未执行。`;
+    return `受控写「${action}」未执行：放行后状态发生变化。`;
+  }
+
   async function executeAction(ctx, action, exec, operation) {
-    const prepared = await prepare(ctx, exec, action);
-    if (prepared.kind === 'deny') return { kind: 'error', text: prepared.reason };
-    let reason;
-    try {
-      reason = guardAction(exec, action);
-    } catch (error) {
-      // A failed final check did not run the operation; close its audit receipt.
-      await postExecute(exec, { kind: 'error' });
-      throw error;
+    if (typeof operation !== 'function') {
+      return { kind: 'error', text: '受控写缺少执行体，已拒绝执行。' };
     }
-    if (reason !== undefined) {
-      await postExecute(exec, { kind: 'error' });
-      return { kind: 'error', text: reason };
+    if (!isControlled(action)) return operation();
+    if (disposed) return { kind: 'error', text: 'the policy gate is no longer mounted' };
+    const record = exec ?? {};
+    const admission = await admit(ctx, record, action);
+    if (admission.kind !== 'allow') return { kind: 'error', text: admission.reason };
+    const entry = approved.get(record);
+    const changedReason = await recheck(entry, record, ctx);
+    if (changedReason !== undefined) {
+      await settle(entry, { decision: 'cancelled', rule: changedReason.rule });
+      return { kind: 'error', text: executeDenyCopy(action, changedReason.rule) };
     }
+    entry.used = true;
     let result;
     try {
       result = await operation();
-      return result;
     } catch (error) {
-      result = { kind: 'error' };
+      await settle(entry, { decision: 'error', rule: 'operation-failed' });
       throw error;
-    } finally {
-      await postExecute(exec, result);
     }
+    const current = normalizeActor(await getActor?.(ctx));
+    if (typeof getActor === 'function' && current !== entry.actor) {
+      await settle(entry, { decision: 'error', rule: 'identity-changed' });
+      return { kind: 'error', text: '执行后复验发现 IAM 身份已变化，本次动作结果按失败处理。' };
+    }
+    const failed = result?.isError === true || result?.kind === 'error';
+    await settle(entry, { decision: failed ? 'error' : 'executed' });
+    return result;
   }
 
   function dispose() {
-    if (!active) return;
-    active = false;
-    for (const [exec, admission] of receipts) {
-      // A body admitted before unload may still be running. Never invent its
-      // completion: preserve an explicit unknown-outcome gap and do not replay.
-      if (admission.used) audit.abandon(admission.receipt, 'policy-disposed-before-outcome');
-      void settleAdmission(exec, admission.used ? 'unknown' : 'cancelled');
+    disposed = true;
+    for (const entry of admitted.values()) {
+      const admittedEntry = approved.get(entry);
+      if (admittedEntry !== undefined && !admittedEntry.settled) {
+        void settle(admittedEntry, { decision: 'unknown', rule: 'gate-disposed' });
+      }
     }
+    admitted.clear();
   }
 
-  return { actionFor, isEnforced, check, pathDenial, preExecute, postExecute, guard, executeAction,
-    dispose, isApproved: (exec) => approved.has(exec), policyVersion };
+  return Object.freeze({
+    stages,
+    actionFor,
+    isEnforced,
+    check,
+    preExecute,
+    guard,
+    postExecute,
+    executeAction,
+    dispose,
+    now: clock,
+    /** 诊断用：还在"已放行、未结清"之间的执行数（结清后必须归零，否则执行对象被长期持有）。 */
+    pendingAdmissions: () => admitted.size,
+  });
 }
