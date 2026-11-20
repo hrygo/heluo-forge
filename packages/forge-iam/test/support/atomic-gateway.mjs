@@ -75,4 +75,3 @@ export function createAtomicGatewayFixture(credentials = new MemoryCredentials()
   const fixture = { credentials, adapter, pair };
   return { ...fixture, options: gatewayAtomicOptions(fixture) };
 }
-
