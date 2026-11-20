@@ -714,10 +714,12 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const neutral = assertNeutralPatch(patchTexts, { required: requiredRowsForEntry(root.name) });
   if (neutral.length > 0) fail('PUBLIC_TARBALL_INVALID', `public tarball is not configuration-neutral: ${neutral.join('; ')}`);
 
-  const runtimeIam = { ...config.iam };
-  // The opt-in controls packaging and Discovery validation only. The runtime
-  // ignores this field, so emitting it would falsely imply a runtime guard.
-  delete runtimeIam.allowInsecureHttp;
+  const { allowInsecureHttp, ...runtimeIam } = config.iam;
+  // Keep the legacy profile key inert at runtime. Only a confidential private
+  // deployment with an explicit maker opt-in may send client secrets over HTTP.
+  if (runtimeIam.authMode === 'confidential' && allowInsecureHttp === true) {
+    runtimeIam.allowInsecureClientAuthHttp = true;
+  }
   // Which layer owns which row is a bundle decision, not this tool's: find the
   // row in whichever patch carries it and rewrite there.
   const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));

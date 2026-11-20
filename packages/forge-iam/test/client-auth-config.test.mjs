@@ -32,6 +32,22 @@ for (const method of ['client_secret_basic', 'client_secret_post']) {
     assert.deepEqual(validateConfig(first.value), first);
   });
 }
+
+test('only an explicit boolean confidential opt-in is normalized for HTTP client authentication', () => {
+  const legacy = validateConfig({ ...confidential, allowInsecureHttp: true });
+  assert.equal(Object.hasOwn(legacy.value, 'allowInsecureHttp'), false);
+  assert.equal(Object.hasOwn(legacy.value, 'allowInsecureClientAuthHttp'), false);
+  for (const optIn of [true, false]) {
+    const result = validateConfig({ ...confidential, allowInsecureClientAuthHttp: optIn });
+    assert.equal(result.value.allowInsecureClientAuthHttp, optIn);
+    assert.deepEqual(validateConfig(result.value), result);
+  }
+  for (const input of [{ allowInsecureClientAuthHttp: true },
+    ...['true', 1, null, undefined].map((optIn) => ({ ...confidential, allowInsecureClientAuthHttp: optIn }))]) {
+    assert.ok(validateConfig(input).issues?.some(({ path }) => path[0] === 'allowInsecureClientAuthHttp'));
+  }
+});
+
 for (const [name, input] of [
   ['public undefined ref', { clientSecretRef: undefined }], ['public null ref', { clientSecretRef: null }],
   ['public empty ref', { clientSecretRef: '' }], ['public nonempty ref', { clientSecretRef: 'fixture-client' }],

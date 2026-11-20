@@ -1,5 +1,10 @@
 /** Grammar for a credential service or namespace segment. */
 export const NAMESPACE_PATTERN = /^[A-Za-z0-9._-]+$/;
+export const IAM_CLIENT_SECRET_RECORD_SCOPE = 'iam-client-secret';
+
+export function isIamClientSecretRecordKey(key) {
+  return key.startsWith(`${IAM_CLIENT_SECRET_RECORD_SCOPE}/`);
+}
 
 /** Reject text that cannot make a lossless UTF-8 round trip. */
 export function assertWellFormed(value) {

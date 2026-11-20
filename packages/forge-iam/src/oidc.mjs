@@ -6,7 +6,8 @@ import {
   timingSafeEqual,
   verify as verifySignature,
 } from 'node:crypto';
-import { assertClientAuthCurrent, buildClientAuthRequest } from './client-auth.mjs';
+import { assertClientAuthCurrent, assertClientAuthEndpoint, buildClientAuthRequest } from './client-auth.mjs';
+import { IamError } from './errors.mjs';
 import { parseHttpUrl } from './http-url.mjs';
 
 export const OAUTH_ERROR_CODES = Object.freeze([
@@ -262,6 +263,7 @@ function preconnectSocketError(cause) {
 
 export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, expectedStatus, clientAuthentication } = {}) {
   if (typeof fetchImpl !== 'function') throw new OidcError('IAM_HTTP_UNAVAILABLE', 'fetch is unavailable');
+  const endpoint = assertClientAuthEndpoint(url, clientAuthentication);
   const timeout = AbortSignal.timeout(timeoutMs);
   const signals = [timeout];
   if (signal) signals.push(signal);
@@ -270,7 +272,7 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
   // synchronous check and the actual fetch invocation.
   assertClientAuthCurrent(clientAuthentication);
   try {
-    response = await fetchImpl(url, {
+    response = await fetchImpl(endpoint, {
       method,
       headers,
       body,
@@ -508,6 +510,9 @@ export async function revokeSessionToken({
     }
     if (error?.code === 'IAM_HTTP_ERROR') return revokeHttpOutcome(error.details.status);
     if (error?.code === 'IAM_REVOKE_UNCONFIRMED') return { state: 'unknown', code: error.code };
+    if (error instanceof IamError && error.code === 'IAM_CONFIG_INVALID') {
+      return { state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' };
+    }
     return { state: 'unknown', code: 'IAM_REVOKE_UNREACHABLE' };
   } finally {
     boundSignal.removeEventListener('abort', onAbort);

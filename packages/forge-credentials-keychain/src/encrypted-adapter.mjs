@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { assertCredentialValue, assertWellFormed } from './text.mjs';
+import { assertCredentialValue, assertWellFormed, IAM_CLIENT_SECRET_RECORD_SCOPE } from './text.mjs';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
 const PIN_READ_FAILURES = new Set([
@@ -8,6 +8,13 @@ const PIN_READ_FAILURES = new Set([
   'CRED_LEGACY_STORE', 'CRED_STORE_PATH_CONFLICT', 'CRED_STORE_PERMISSIONS', 'CRED_STORE_UNAVAILABLE',
   'EACCES', 'EIO', 'ELOOP', 'EMFILE', 'ENFILE', 'ENOENT', 'ENOTDIR', 'EPERM',
 ]);
+const iamClientSecretRecords = new WeakMap();
+
+// The backend registry takes this capability by identity. The public backend
+// returned by createCredentialStore() never exposes the port.
+export function getIamClientSecretRecords(backend) {
+  return iamClientSecretRecords.get(backend);
+}
 
 function kindOf(id) {
   if (typeof id !== 'string' || id.length === 0 || id.includes('|')) throw error('CRED_STORE_INVALID', 'invalid credential key');
@@ -18,6 +25,31 @@ function kindOf(id) {
     throw error('CRED_STORE_INVALID', 'invalid credential key');
   }
   return parts[2];
+}
+
+function isIamClientSecretId(id) {
+  const [, , kind, scope] = id.split('/', 4);
+  return kind === 'record' && scope === IAM_CLIENT_SECRET_RECORD_SCOPE;
+}
+
+function publicKindOf(id) {
+  const kind = kindOf(id);
+  if (isIamClientSecretId(id)) throw error('CRED_STORE_INVALID', 'credential record scope is reserved');
+  return kind;
+}
+
+function publicScope(scope) {
+  const { recordKey, ref } = scope ?? {};
+  if (publicKindOf(recordKey) !== 'record' || publicKindOf(ref) !== 'ref') {
+    throw error('CRED_STORE_INVALID', 'invalid credential scope');
+  }
+  return { recordKey, ref };
+}
+
+function assertIamClientSecretId(id) {
+  if (kindOf(id) !== 'record' || !isIamClientSecretId(id)) {
+    throw error('CRED_STORE_INVALID', 'expected an IAM client secret record key');
+  }
 }
 
 function ownerOf(kind, value) {
@@ -53,7 +85,6 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
     backend.set({ id, kind, owner, kid, envelope });
   }
   function pair(scope) {
-    if (!scope || kindOf(scope.recordKey) !== 'record' || kindOf(scope.ref) !== 'ref') throw error('CRED_STORE_INVALID', 'invalid credential scope');
     const raw = read(scope.recordKey);
     let record;
     if (raw !== undefined) {
@@ -73,13 +104,29 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
       return action(token);
     }, integrity?.verify);
   }
-  return Object.freeze({
-    kind,
-    durable,
-    available: true,
-    async get(id) { kindOf(id); return backend.withRead(() => backend.open() ? read(id) : undefined); },
-    async pinRecord(id) {
-      if (kindOf(id) !== 'record') throw error('CRED_STORE_INVALID', 'invalid credential record key');
+  function transact(id, mutate) {
+    return withLock(async (token) => {
+      const original = await backend.withRead(() => read(id), token);
+      let current = original;
+      let changed = false;
+      const tx = { get: () => current, set(value) { current = value; changed = true; }, delete() { current = undefined; changed = true; } };
+      const result = await mutate(tx);
+      if (changed) await commit(token, () => {
+        if (!isDeepStrictEqual(read(id), original)) throw error('CRED_STORE_CONFLICT', 'credential changed during mutation');
+        if (current === undefined) backend.delete(id); else write(id, current);
+      });
+      return result;
+    });
+  }
+  function listPublicRows(prefix) {
+    return backend.list().filter(({ id }) => id.startsWith(prefix) && !isIamClientSecretId(id));
+  }
+
+  // Keep the stored row and its authenticated envelope compatible with existing pins.
+  // Only this port can address the reserved IAM client secret scope.
+  const iamClientSecrets = Object.freeze({
+    async pin(id) {
+      assertIamClientSecretId(id);
       return backend.withRead(() => {
         if (!backend.open()) return undefined;
         const row = backend.get(id);
@@ -108,32 +155,45 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
         };
       });
     },
-    async set(id, value) { return withLock((token) => commit(token, () => write(id, value))); },
-    async delete(id) { return withLock((token) => commit(token, () => { kindOf(id); read(id); backend.delete(id); })); },
-    async list(prefix) { return backend.withRead(() => backend.open() ? backend.list().map((row) => row.id).filter((id) => id.startsWith(prefix)) : []); },
-    async listEntries(prefix) { return backend.withRead(() => backend.open() ? backend.transaction(() => backend.list().filter((row) => row.id.startsWith(prefix)).map((row) => ({ key: row.id, value: read(row.id) }))) : []); },
+    async modify(id, mutate) {
+      assertIamClientSecretId(id);
+      return transact(id, mutate);
+    },
+  });
+
+  const store = Object.freeze({
+    kind,
+    durable,
+    available: true,
+    async get(id) { publicKindOf(id); return backend.withRead(() => backend.open() ? read(id) : undefined); },
+    async set(id, value) {
+      publicKindOf(id);
+      return withLock((token) => commit(token, () => write(id, value)));
+    },
+    async delete(id) {
+      publicKindOf(id);
+      return withLock((token) => commit(token, () => { read(id); backend.delete(id); }));
+    },
+    async list(prefix) {
+      return backend.withRead(() => backend.open() ? listPublicRows(prefix).map(({ id }) => id) : []);
+    },
+    async listEntries(prefix) {
+      return backend.withRead(() => backend.open()
+        ? backend.transaction(() => listPublicRows(prefix).map(({ id }) => ({ key: id, value: read(id) }))) : []);
+    },
     async transaction(id, mutate) {
-      return withLock(async (token) => {
-        const original = await backend.withRead(() => read(id), token);
-        let current = original;
-        let changed = false;
-        const tx = { get: () => current, set(value) { current = value; changed = true; }, delete() { current = undefined; changed = true; } };
-        const result = await mutate(tx);
-        if (changed) await commit(token, () => {
-          if (!isDeepStrictEqual(read(id), original)) throw error('CRED_STORE_CONFLICT', 'credential changed during mutation');
-          if (current === undefined) backend.delete(id); else write(id, current);
-        });
-        return result;
-      });
+      publicKindOf(id);
+      return transact(id, mutate);
     },
     async snapshot(scope) {
-      if (!scope || kindOf(scope.recordKey) !== 'record' || kindOf(scope.ref) !== 'ref') throw error('CRED_STORE_INVALID', 'invalid credential scope');
-      return backend.withRead(() => backend.open() ? backend.transaction(() => pair(scope)) : { record: undefined, value: undefined });
+      const checked = publicScope(scope);
+      return backend.withRead(() => backend.open() ? backend.transaction(() => pair(checked)) : { record: undefined, value: undefined });
     },
     async compareAndSwap(scope, expected, next, guard) {
       if (typeof guard !== 'function') throw error('KEYCHAIN_GUARD_REQUIRED', 'joint commit requires a synchronous guard');
+      const checked = publicScope(scope);
       return withLock((token) => commit(token, () => {
-        const current = pair(scope);
+        const current = pair(checked);
         if (!isDeepStrictEqual(current, expected)) return { ok: false };
         const admitted = guard();
         if (admitted !== null && typeof admitted === 'object' && typeof admitted.then === 'function') {
@@ -142,8 +202,8 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
         }
         if (admitted !== true) throw error('KEYCHAIN_GUARD_REFUSED', 'joint commit guard refused');
         const committed = { record: next?.record, value: next?.value };
-        if (committed.record === undefined) backend.delete(scope.recordKey); else write(scope.recordKey, JSON.stringify(committed.record));
-        if (committed.value === undefined) backend.delete(scope.ref); else write(scope.ref, committed.value);
+        if (committed.record === undefined) backend.delete(checked.recordKey); else write(checked.recordKey, JSON.stringify(committed.record));
+        if (committed.value === undefined) backend.delete(checked.ref); else write(checked.ref, committed.value);
         return { ok: true, snapshot: structuredClone(committed) };
       }));
     },
@@ -156,4 +216,6 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
     },
     async close() { await backend.close(); },
   });
+  iamClientSecretRecords.set(store, iamClientSecrets);
+  return store;
 }

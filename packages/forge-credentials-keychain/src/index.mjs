@@ -194,15 +194,15 @@ function storeDirectory(directory) {
 
 /** Open only the read operations needed by offline CLI clients. */
 export async function openCredentialReader({ directory, service, accountPrefix } = {}) {
-  const { backend } = createDefaultBackend({ directory: storeDirectory(directory), readOnly: true });
+  const { backend, iamClientSecretRecords } = createDefaultBackend({ directory: storeDirectory(directory), readOnly: true });
   const namespace = { service, accountPrefix };
   const provider = createKeychainProvider(backend, namespace);
-  const clientSecrets = createIamClientSecretSource(backend, namespacePrefixes(namespace));
+  const clientSecrets = iamClientSecretRecords && createIamClientSecretSource(iamClientSecretRecords, namespacePrefixes(namespace));
   return Object.freeze({
     readRecord: (key) => provider.readRecord(key),
     resolve: (ref) => provider.resolve(ref),
     async verifyIamClientSecret(scope, revision) {
-      const snapshot = await clientSecrets.read(scope);
+      const snapshot = await clientSecrets?.read(scope);
       return snapshot !== undefined && snapshot.revision === revision && clientSecrets.isCurrent(snapshot);
     },
     close: () => provider.close(),
@@ -211,10 +211,11 @@ export async function openCredentialReader({ directory, service, accountPrefix }
 
 /** Provision only the dedicated IAM client record in the built-in store. */
 export async function setIamClientSecret(scope, value, { directory, service, accountPrefix, previousBinding } = {}) {
-  const { backend } = createDefaultBackend({ directory: storeDirectory(directory) });
-  const provider = createKeychainProvider(backend, { service, accountPrefix });
-  try { await storeIamClientSecret(provider, scope, value, previousBinding); }
-  finally { await provider.close(); }
+  const { backend, iamClientSecretRecords } = createDefaultBackend({ directory: storeDirectory(directory) });
+  try {
+    if (!iamClientSecretRecords) throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', 'IAM client secret storage is unavailable');
+    await storeIamClientSecret(iamClientSecretRecords, namespacePrefixes({ service, accountPrefix }), scope, value, previousBinding);
+  } finally { await backend.close(); }
 }
 
 export const Config = {
@@ -307,8 +308,9 @@ export function apply(ctx, rawConfig = {}) {
   });
   // Independent of the transaction capability, only the built-in composition
   // can bind this read-only client secret port to the actual provider.
-  const clientSecretPort = registered === undefined ? undefined : Object.freeze({
-    ...createIamClientSecretSource(backend, prefixes),
+  const clientSecretRecords = registered?.iamClientSecretRecords;
+  const clientSecretPort = clientSecretRecords === undefined ? undefined : Object.freeze({
+    ...createIamClientSecretSource(clientSecretRecords, prefixes),
     verify: (candidate) => !closed && candidate === provider,
   });
 

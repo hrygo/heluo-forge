@@ -17,6 +17,7 @@ export const CONFIG_FIELDS = [
   'authMode',
   'clientAuthMethod',
   'clientSecretRef',
+  'allowInsecureClientAuthHttp',
   'discoveryUrl',
   'issuer',
   'authorizationEndpoint',
@@ -143,6 +144,14 @@ export function validateConfig(input) {
     }
   }
   if (mode === 'confidential') value.authMode = mode;
+  if (Object.hasOwn(source, 'allowInsecureClientAuthHttp')) {
+    const allowInsecureClientAuthHttp = source.allowInsecureClientAuthHttp;
+    if (mode !== 'confidential' || typeof allowInsecureClientAuthHttp !== 'boolean') {
+      issues.push(issue('allowInsecureClientAuthHttp', 'allowInsecureClientAuthHttp must be a boolean and is only valid for confidential authentication'));
+    } else {
+      value.allowInsecureClientAuthHttp = allowInsecureClientAuthHttp;
+    }
+  }
 
   for (const key of STRING_FIELDS) {
     const raw = source[key];

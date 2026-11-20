@@ -444,6 +444,28 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
   assert.equal(config.iam.allowInsecureHttp, true);
   const built = buildPrivateTarball({ entries: readBundleEntries(publicTarball(), { withContent: true }), version: '0.2.0', config, baseSha256: 'a'.repeat(64) });
   assert.doesNotMatch(built.patch, /allowInsecureHttp/u, 'the packaging-only opt-in must not be represented as a runtime guard');
+  assert.doesNotMatch(built.patch, /allowInsecureClientAuthHttp/u);
+});
+
+test('confidential private patches carry the explicit HTTP opt-in for either Discovery protocol', () => {
+  const env = [
+    ...ENV.filter((line) => !line.startsWith('HELUO_IAM_ISSUER=')),
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+  ];
+  const entries = readBundleEntries(publicTarball(), { withContent: true });
+  const httpEnv = env.map((line) => line.replace('https://iam.corp.example/', 'http://iam.corp.example/'));
+  for (const [endpoints, optIn] of [[env, undefined], [env, 'false'], [env, 'true'], [httpEnv, 'true']]) {
+    const input = optIn === undefined ? endpoints : [...endpoints, `HELUO_IAM_ALLOW_INSECURE_HTTP=${optIn}`];
+    const config = buildConfig(parseEnvConfig(input.join('\n')));
+    const { patch } = buildPrivateTarball({ entries, version: '0.2.0', config, baseSha256: 'a'.repeat(64) });
+    assert.ok(patch.includes(`discoveryUrl: "${config.iam.discoveryUrl}"`));
+    assert.doesNotMatch(patch, /allowInsecureHttp/u);
+    if (optIn === 'true') assert.match(patch, /^\s+allowInsecureClientAuthHttp: true$/mu);
+    else assert.doesNotMatch(patch, /allowInsecureClientAuthHttp/u);
+  }
 });
 
 test('discovery is sufficient for login; an issuer without endpoints is incomplete', () => {

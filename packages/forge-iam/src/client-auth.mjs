@@ -1,5 +1,6 @@
 import { validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
+import { parseHttpUrl } from './http-url.mjs';
 
 // Operations may hold short-lived material; provenance deliberately cannot.
 const operations = new WeakMap();
@@ -128,7 +129,10 @@ export async function prepareClientAuthentication(rawConfig, options = {}, conte
   const assertCurrent = guardedMaterial(provenance, original, copy, context.guard);
   assertCurrent();
   const operation = Object.freeze({ pin, provenance });
-  operations.set(operation, { clientId: scope.clientId, method: scope.method, secret: copy.value, assertCurrent });
+  operations.set(operation, {
+    clientId: scope.clientId, method: scope.method, secret: copy.value, assertCurrent,
+    allowInsecureClientAuthHttp: config.allowInsecureClientAuthHttp === true,
+  });
   return operation;
 }
 export function isClientAuthReadUnavailable(error) {
@@ -158,6 +162,20 @@ export function assertClientAuthCurrent(operation) {
   if (!material) throw fail('IAM_CLIENT_AUTH_UNVERIFIED');
   return material.assertCurrent();
 }
+
+/** Validate and pin the destination before dispatching client credentials. */
+export function assertClientAuthEndpoint(endpoint, operation) {
+  if (operation === undefined) return endpoint;
+  const material = operations.get(operation);
+  if (!material) throw fail('IAM_CLIENT_AUTH_UNVERIFIED');
+  if (material.method === 'none') return endpoint;
+  const url = parseHttpUrl(endpoint);
+  if (!url || (url.protocol !== 'https:' && !material.allowInsecureClientAuthHttp)) {
+    throw new IamError('IAM_CONFIG_INVALID', 'IAM client authentication requires an HTTPS endpoint');
+  }
+  return url.href;
+}
+
 function formComponent(value) { return new URLSearchParams([['', value]]).toString().slice(1); }
 /** Pure construction over private operation material; no source I/O. */
 export function buildClientAuthRequest(clientId, input, operation) {

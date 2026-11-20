@@ -33,7 +33,9 @@ test('rotation during callback listener setup releases the listener before publi
 
 test('public cancellation cannot be lost in a newly introduced source-free await', async (t) => {
   const h = await confidentialHarness(t);
-  const config = { ...h.config, authMode: 'public', clientAuthMethod: 'none' }; delete config.clientSecretRef;
+  const config = { ...h.config, authMode: 'public', clientAuthMethod: 'none' };
+  delete config.clientSecretRef;
+  delete config.allowInsecureClientAuthHttp;
   let service; let checks = 0;
   service = createIamService(config, { credentials: h.credentials,
     verifyAtomicStore: () => { if (++checks === 2) queueMicrotask(() => service.cancelSignIn()); return true; },

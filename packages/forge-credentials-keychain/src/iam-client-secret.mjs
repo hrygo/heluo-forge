@@ -1,8 +1,8 @@
-import { assertCredentialValue } from './text.mjs';
+import { assertCredentialValue, IAM_CLIENT_SECRET_RECORD_SCOPE } from './text.mjs';
 
 const METHOD = new Set(['client_secret_basic', 'client_secret_post']);
 const REF = /^[a-z][a-z0-9-]*$/u;
-const recordKey = (ref) => `iam-client-secret/${ref}`;
+const recordKey = (recordPrefix, ref) => `${recordPrefix}${IAM_CLIENT_SECRET_RECORD_SCOPE}/${ref}`;
 const validBinding = ({ issuer, clientId, ref, method }) =>
   typeof ref === 'string' && REF.test(ref) && METHOD.has(method)
   && typeof issuer === 'string' && issuer.length > 0 && typeof clientId === 'string' && clientId.length > 0;
@@ -11,18 +11,21 @@ const matches = (payload, scope) => payload?.issuer === scope.issuer && payload.
 const bindingMismatch = () => Object.assign(new Error('stored IAM client secret does not match the expected binding'),
   { code: 'IAM_CLIENT_SECRET_BINDING_MISMATCH' });
 
-export function createIamClientSecretSource(backend, { recordPrefix }) {
+function decodeRecord(value) {
+  try { return JSON.parse(value); }
+  catch {
+    throw Object.assign(new Error('stored IAM client secret record is invalid'), { code: 'KEYCHAIN_RECORD_INVALID' });
+  }
+}
+
+export function createIamClientSecretSource(records, { recordPrefix }) {
   const snapshots = new WeakMap();
   return Object.freeze({
     async read(scope) {
       if (!validBinding(scope)) return undefined;
-      const pinned = await backend.pinRecord(`${recordPrefix}${recordKey(scope.ref)}`);
+      const pinned = await records.pin(recordKey(recordPrefix, scope.ref));
       if (!pinned) return undefined;
-      let record;
-      try { record = JSON.parse(pinned.value); }
-      catch {
-        throw Object.assign(new Error('stored IAM client secret record is invalid'), { code: 'KEYCHAIN_RECORD_INVALID' });
-      }
+      const record = decodeRecord(pinned.value);
       const payload = record?.payload;
       if (record?.kind !== 'grant' || !matches(payload, scope) || Object.keys(payload).length !== 4
         || typeof payload.value !== 'string' || !payload.value.length) return undefined;
@@ -36,7 +39,7 @@ export function createIamClientSecretSource(backend, { recordPrefix }) {
   });
 }
 
-export async function storeIamClientSecret(provider, scope, value, previousBinding) {
+export async function storeIamClientSecret(records, { recordPrefix }, scope, value, previousBinding) {
   const { issuer, clientId, method, ref } = scope;
   const binding = { issuer, clientId, method, ref };
   const url = typeof issuer === 'string' && URL.canParse(issuer) ? new URL(issuer) : undefined;
@@ -48,12 +51,14 @@ export async function storeIamClientSecret(provider, scope, value, previousBindi
     throw Object.assign(new Error('invalid IAM client secret binding'), { code: 'IAM_CLIENT_SECRET_CONFIG_INVALID' });
   }
   assertCredentialValue(value);
-  const key = recordKey(ref);
+  const key = recordKey(recordPrefix, ref);
   // A failed repair must not initialize a new store. Recheck the binding under the write lock.
-  if (replacing && (await provider.readRecord(key)) === undefined) throw bindingMismatch();
-  await provider.modifyRecord(key, (record) => {
+  if (replacing && (await records.pin(key)) === undefined) throw bindingMismatch();
+  await records.modify(key, (tx) => {
+    const raw = tx.get();
+    const record = raw === undefined ? undefined : decodeRecord(raw);
     if ((replacing || record !== undefined)
       && (record?.kind !== 'grant' || !matches(record.payload, expected))) throw bindingMismatch();
-    return { kind: 'grant', payload: { issuer, clientId, method, value } };
+    tx.set(JSON.stringify({ kind: 'grant', payload: { issuer, clientId, method, value } }));
   });
 }

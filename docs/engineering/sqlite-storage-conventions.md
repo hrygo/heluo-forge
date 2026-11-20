@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-004 |
 | 文档名称 | SQLite 存储扩展与使用规范 |
-| 版本 | V0.1.1 |
+| 版本 | V0.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-13 |
+| 最后更新 | 2026-11-20 |
 | 门禁 | 新增或修改 SQLite 存储时复核 |
 
 > 编制依据：仓库凭据存储与 IAM 源码、测试和[凭据包说明](../../packages/forge-credentials-keychain/README.md)，以及 [SQLite 官方文档](https://www.sqlite.org/docs.html)和 [Node.js 24 SQLite API](https://github.com/nodejs/node/blob/v24.21.0/doc/api/sqlite.md)；核验日期为 2026-11-12。本文的业务数据库示例使用内存数据库；现有离线测试与示例不代表目标宿主、企业环境或生产备份恢复已完成验证。
@@ -54,7 +54,7 @@
 
 IAM access token、refresh token 和 IAM 会话记录由 IAM 管理；插件按需调用 `ctx.iam.getAccessToken()`，不把令牌复制到自己的引用。个人网关 Key 使用企业账号页面或 `ctx.iam.saveGatewayCredential()`，不直接修改 IAM 的内部记录。完整示例和令牌读取边界见[凭据接入指南](../../packages/forge-iam/docs/credential-access.md)。
 
-机密客户端密钥使用独立的 `iam-client-secret/<ref>` 加密记录，绑定 issuer、clientId 和认证方法。管理员通过预置命令写同一凭据命名空间，IAM 通过内置组合注册的只读来源读取。复用现有记录口、加密及单记录提交。参见[客户端认证契约](../contracts/iam-client-auth-isolated.md)。
+机密客户端密钥保存于凭据命名空间内保留的 `iam-client-secret/<ref>` 记录域，绑定 issuer、clientId 和认证方法。管理员预置与 IAM 只读来源使用专用端口，复用值级加密及单记录提交。通用读写、离线记录读取与联合操作拒绝访问该域，通用枚举在解密前跳过。此规则约束凭据接口，同账户文件访问受 §2.2 所述限制。参见[客户端认证契约](../contracts/iam-client-auth-isolated.md)。
 
 ### 2.2 实现与安全边界
 

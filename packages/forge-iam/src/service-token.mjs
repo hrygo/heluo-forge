@@ -1,4 +1,4 @@
-import { assertClientAuthCurrent, clientAuthDescriptor, isClientAuthReadUnavailable } from './client-auth.mjs';
+import { assertClientAuthCurrent, assertClientAuthEndpoint, clientAuthDescriptor, isClientAuthReadUnavailable } from './client-auth.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { credentialReadError } from './error-contract.mjs';
@@ -930,6 +930,7 @@ export function createTokenResolver(env) {
         const meta = await grants.metadata();
         checkAlive();
         grants.assertGrantContext(initial, meta.issuer);
+        assertClientAuthEndpoint(meta.tokenEndpoint, authentication);
         advance('jwks');
         const keys = await grants.jwks(meta.jwksUri);
         checkAlive();
@@ -1210,7 +1211,8 @@ export function createTokenResolver(env) {
           if (ctx.state === 'ready' && !isAccessExpired(ctx.lastGrant, now())) return ctx.lastGrant.accessToken;
           throw cause;
         }
-        if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)) {
+        if ((cause instanceof IamError && cause.code === 'IAM_CONFIG_INVALID')
+          || ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)) {
           return rejectSession(cause.code, 'rejected', cause);
         }
         // Once a request might have been sent, pending remains authoritative;

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.6.0 |
+| 版本 | V3.6.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -306,6 +306,7 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `authMode` | string | `public` | 否 | 认证模式；支持 `public` 与 `confidential` |
 | `clientAuthMethod` | string | `none` | 条件 | `public` 只允许 `none`。机密模式显式选择 IAM 登记的 `client_secret_basic` 或 `client_secret_post` |
 | `clientSecretRef` | string | 空 | 条件 | 机密模式必填的小写记录选择器，对应 `iam-client-secret/<ref>` |
+| `allowInsecureClientAuthHttp` | boolean | `false` | 否 | 仅机密模式接受。只有显式设为 `true` 才允许客户端认证 POST 使用 HTTP |
 | `discoveryUrl` | string | 空 | 条件 | OIDC Discovery 地址。核心配置齐备时仅在需要补齐可选端点时查询，并核对 issuer |
 | `issuer` | string | 空 | 条件 | 显式配置时必填，作为发行者 Pin 用于 ID Token 校验 |
 | `authorizationEndpoint` | string | 空 | 条件 | 显式授权请求端点 |
@@ -330,6 +331,8 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `requireExclusive` | boolean | `true` | 否 | 排他性强断言开关；检测到官方服务残留时阻断就绪 |
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
+
+Host 在发送机密换票、刷新和撤销 POST 前检查实际端点，含运行时 Discovery 选出的地址。默认对 HTTP 拒绝发送，刷新在写入 pending 前先行检查。认证和拒绝语义见[客户端认证契约](../../contracts/iam-client-auth-isolated.md)。
 
 ### 5.2 现行接口规范
 

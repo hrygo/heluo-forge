@@ -5,6 +5,7 @@
 // compareAndSwap(); it never degrades into two independent writes.
 
 import { KeychainProviderError } from './provider.mjs';
+import { isIamClientSecretRecordKey } from './text.mjs';
 
 /** Host service a trusted composition reads the adapter from. */
 export const JOINT_STORE_SERVICE = 'iam-atomic-store';
@@ -28,6 +29,9 @@ export function createJointStore(backend, prefixes) {
     if (typeof recordKey !== 'string' || recordKey.length === 0
       || typeof ref !== 'string' || ref.length === 0) {
       throw new KeychainProviderError('KEYCHAIN_SCOPE_INVALID', 'joint store requires recordKey and ref');
+    }
+    if (isIamClientSecretRecordKey(recordKey)) {
+      throw new KeychainProviderError('KEYCHAIN_SCOPE_INVALID', 'credential record scope is reserved');
     }
     return { recordKey: `${prefixes.recordPrefix}${recordKey}`, ref: `${prefixes.refPrefix}${ref}` };
   }

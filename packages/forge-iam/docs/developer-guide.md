@@ -22,6 +22,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `authMode` | `public` | public 为兼容默认。要求认证客户端的部署显式使用 confidential。 |
 | `clientAuthMethod` | `none` | public 使用 none。confidential 显式选择 IAM 登记的 `client_secret_basic` 或 `client_secret_post`。 |
 | `clientSecretRef` | 不产生 | confidential 必填的非秘密选择器，匹配 `^[a-z][a-z0-9-]*$`，对应加密记录 `iam-client-secret/<ref>`。 |
+| `allowInsecureClientAuthHttp` | `false` | 仅 confidential 接受此可选布尔字段。仅为 `true` 时，Host 允许携带客户端密钥的 POST 使用 HTTP。 |
 | `discoveryUrl` | 空 | 用于补齐缺失的 issuer、授权、token 或 JWKS 端点。 |
 | `issuer` | 空 | 不使用 discovery 时必需；作为明确的发行者 pin。只配 discovery 仍可配置登录，但旧 grant 复用要求明确 pin 或本实例已验证的 metadata issuer，不能由旧记录自行提供信任。 |
 | `authorizationEndpoint` / `tokenEndpoint` / `jwksUri` | 空 | 无 discovery 时与 issuer 一起必需；显式值优先。 |
@@ -46,7 +47,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
 
-显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。协议端点和网关地址接受 HTTP 或 HTTPS；HTTP 不提供传输加密或端点身份认证，令牌、客户端 secret、网关 Key 与业务内容可能被窃取或篡改，OIDC 公钥经 HTTP 获取时签名校验也不能防止网络替换公钥。回调须符合 IAM 登记规则；这里没有已验证的生产配置模板。
+显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。Host 在机密换票、刷新和回调失败撤销 POST 发送前核验实际端点，默认要求 HTTPS。其他端点和网关地址接受 HTTP 或 HTTPS。HTTP 会以明文传输令牌、密钥与业务内容；经 HTTP 获取 OIDC 公钥时，网络可以替换公钥。回调须符合 IAM 登记规则。
 
 两种模式都强制 PKCE S256。授权码换票、刷新和回调失败清理的撤销 POST 共用配置的机密认证方法。普通退出默认使用 AT 自证 GET。机密模式由 [Host](<../src/index.mjs>)注入内置凭据组合注册的 `iam-client-secret-source`，校验具体凭据实例身份与配置绑定。缺少来源或记录时拒绝机密请求。
 

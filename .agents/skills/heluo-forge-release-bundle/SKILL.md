@@ -28,7 +28,7 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 - 密钥、令牌、`client_secret` 不属于本交付；发现即停止。原始 `HELUO_IAM_CLIENT_SECRET` 和 `HELUO_IAM_CLIENT_SECRET_FILE` 键会报 `BUNDLE_SECRET_EMBED_UNSUPPORTED`，未知键会被拒绝。
 - 输出目录必须在仓库外；缺字段、摘要不符、目录已存在或用户取消时安全失败，不覆盖、不留半成品。
 - 官方 DSH 宿主原样使用：交付包不重签、不公证、不修改官方载荷，只安装企业插件。
-- 企业地址默认只接受 HTTPS。确需内网 HTTP 时，必须先说明令牌与个人 Key 会明文传输，取得打包人员明确确认后才写 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
+- 企业地址默认只接受 HTTPS。确需内网 HTTP 时，先说明客户端密钥、令牌与个人 Key 的明文传输风险，取得打包人员明确确认后才写 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
 - 运行期挂载只能在宿主「设置 → 插件」确认；工具输出 `mounted=unknown` 是正常的，不得写成挂载证据。
 
 ## 问答协议
@@ -78,7 +78,7 @@ HELUO_IAM_ALLOW_INSECURE_HTTP=<true 仅内网 http 且已确认>
 HELUO_GITEE_HOST=<gitee host>
 ```
 
-`HELUO_IAM_DEFAULT_PROVIDER` 使用企业网关的模型路由标识；不确定时向打包人员确认，不要编造。Gitee 未提供时删掉该行。使用 Discovery URL 时 issuer 由文档提供，私版不写入 `issuer`；未配置 Discovery 时，须同时提供 `HELUO_IAM_ISSUER`、`HELUO_IAM_AUTHORIZATION_ENDPOINT`、`HELUO_IAM_TOKEN_ENDPOINT` 和 `HELUO_IAM_JWKS_URI`。授权码换票和刷新使用同一个 `tokenEndpoint` 及登记的同一种认证方法；实际端点和方法须联调确认。仅兼容部署可用 `HELUO_IAM_AUTH_MODE=public`（或省略），方法省略或填 `none`，省略 `HELUO_IAM_CLIENT_SECRET_REF`。`HELUO_IAM_ALLOW_INSECURE_HTTP` 仅影响制包端的检查。
+`HELUO_IAM_DEFAULT_PROVIDER` 使用企业网关的模型路由标识；不确定时向打包人员确认，不要编造。Gitee 未提供时删掉该行。使用 Discovery URL 时 issuer 由文档提供，私版不写入 `issuer`；未配置 Discovery 时，须同时提供 `HELUO_IAM_ISSUER`、`HELUO_IAM_AUTHORIZATION_ENDPOINT`、`HELUO_IAM_TOKEN_ENDPOINT` 和 `HELUO_IAM_JWKS_URI`。授权码换票和刷新使用同一个 `tokenEndpoint` 及登记的同一种认证方法；实际端点和方法须联调确认。仅兼容部署可用 `HELUO_IAM_AUTH_MODE=public`（或省略），方法省略或填 `none`，省略 `HELUO_IAM_CLIENT_SECRET_REF`。机密模式下，显式 `HELUO_IAM_ALLOW_INSECURE_HTTP=true` 同时写入 Host 策略 `allowInsecureClientAuthHttp: true`。
 
 提供现有文件路径给 `config`，并在 macOS 制包机上检查忽略规则、设置文件权限；检查失败时停止：
 

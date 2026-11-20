@@ -1,4 +1,4 @@
-import { NAMESPACE_PATTERN } from './text.mjs';
+import { isIamClientSecretRecordKey, NAMESPACE_PATTERN } from './text.mjs';
 
 export const STORAGE_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REF_PATTERN = STORAGE_REF_PATTERN;
@@ -38,6 +38,9 @@ function validateRef(ref) {
 function validateRecordKey(key) {
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
     throw new KeychainProviderError('KEYCHAIN_KEY_INVALID', 'credential key must be <scope>/<id>');
+  }
+  if (isIamClientSecretRecordKey(key)) {
+    throw new KeychainProviderError('KEYCHAIN_KEY_INVALID', 'credential record scope is reserved');
   }
   return key;
 }
@@ -193,6 +196,7 @@ export function createKeychainProvider(backend, options = {}) {
       let foreign = 0;
       for (const entry of entries) {
         const suffix = String(entry.key ?? '').slice(recordPrefix.length);
+        if (isIamClientSecretRecordKey(suffix)) continue;
         if (!KEY_PATTERN.test(suffix)) {
           // A key under our prefix that is not ours (another owner, a manual
           // edit) must not brick the listing: skip it and report the count.

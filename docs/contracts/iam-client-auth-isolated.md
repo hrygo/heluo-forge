@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
 | 文档名称 | IAM 客户端认证契约 |
-| 版本 | V1.1.1 |
+| 版本 | V1.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -33,10 +33,11 @@
 | authMode | public / confidential；省略等价 public | public 适用于 IAM 明确允许无客户端认证换票与刷新的部署；要求客户端认证时显式使用 confidential |
 | clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | 授权码换票、刷新、回调失败清理的撤销 POST 共用登记方法 |
 | clientSecretRef | 仅 confidential 必填；匹配 `^[a-z][a-z0-9-]*$` | 指向当前凭据命名空间内的 IAM 专用记录 `iam-client-secret/<ref>` |
+| allowInsecureClientAuthHttp | 仅 confidential 接受可选布尔值；缺省为 `false` | 仅在显式为 `true` 时允许携带客户端密钥的 POST 使用 HTTP |
 
 公共配置出现任何 clientSecretRef（包括空、null 或显式 undefined）均拒绝；正常 public 归一化结果不产生此键。未知 mode/method、部分机密配置、原始 clientSecret/client_secret、自定义 Authorization 或认证 body 覆盖均拒绝。缺少来源、凭据或精确认可时拒绝机密登录和刷新。Discovery、401 和其他响应均不触发认证方式切换。
 
-所有模式要求 PKCE S256、state、nonce 和 code_verifier。私版只注入模式、方法和非秘密引用。密钥预置和轮换走凭据存储的独立运维入口。
+所有模式要求 PKCE S256、state、nonce 和 code_verifier。私版注入模式、方法及非秘密引用。使用 HTTP 的企业 IAM 沿用制包项 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。机密模式的私版据此自动注入 `allowInsecureClientAuthHttp: true`，适用于 HTTP Discovery 和它选出的 HTTP 端点。密钥预置和轮换走凭据存储的独立运维入口。
 
 **轮换**：认证上下文（method/ref/revision）变化后需新登录。Host 拒绝采用旧 AT/RT，禁止用新 secret 重放旧 RT。IAM 书面答复称 secret 由管理员轮换，后台更新最迟两分钟经缓存生效，既发 AT 自然过期。实际生效窗口与目标端点行为须联调核验。见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
 
@@ -63,7 +64,8 @@ verifyClientSecretSource?: (
 - 仅内置加密 SQLite 凭据组合注册 `iam-client-secret-source`，并按身份核对同一 `credentials` 实例。Host 在 confidential 模式注入该端口，为同一绑定返回稳定 source；端口解绑或重绑使已捕获的来源失效。
 - verifier 在当前注入作用域检查具体 credentials、source、配置的 clientId/ref/method；记录读取再精确核对 issuer/clientId/method。只有同步字面 `true` 通过。凭据的来源证明独立于 IAM grant 单记录及网关联合写入能力。
 - binding 冻结且不交给来源修改。read 只捕获一次完整内存快照，缺失不查找第二来源；service 独立核对五字段类型、精确 binding、非空 revision/value，不 trim secret。
-- 内置来源读取当前凭据命名空间的 `iam-client-secret/<ref>`，记录为 `{ kind: 'grant', payload: { issuer, clientId, method, value } }`。复用值级加密与单记录提交。每次写入产生新加密信封。`revision` 取已认证信封的摘要。同步 `isCurrent` 确认当前存储可读，并按原快照核对当前行。密钥文件不可用、记录删除或重写时，快照失效。隔离 fixture 同样提供不可变快照和同步检查。
+- 当前凭据命名空间的 `iam-client-secret/<ref>` 保留给专用存储端口。通用 provider、离线记录读取和联合操作拒绝访问该域，枚举在解密前跳过。离线 CLI 的专用检查仅返回绑定与 revision 是否匹配。此边界约束凭据接口，文件保护仍依赖操作系统权限。
+- 加密记录沿用 `{ kind: 'grant', payload: { issuer, clientId, method, value } }` 的存储表示，已有预置记录和 revision 可继续使用。每次写入产生新加密信封。`revision` 取已认证信封的摘要。同步 `isCurrent` 确认当前存储可读，并按原快照核对当前行。密钥文件不可用、记录删除或重写时，快照失效。隔离 fixture 同样提供不可变快照和同步检查。
 - service 保留原快照仅用于身份检查，另取私有字段副本用于请求与 pin；每个使用边界检查原数据仍匹配副本，不能让来源改写调用方的秘密或比较基准。
 - secret 原值仅进入管理员标准输入、加密记录的读写及必要 HTTP 操作；attempt、会话 grant、pending、view、诊断、错误、日志、argv 和交付物均不携带原值。
 
@@ -79,7 +81,7 @@ verifyClientSecretSource?: (
 | client_secret_basic | Basic；clientId、secret 分别 form-urlencoded 后以冒号连接，再 UTF-8/Base64 | 不放 client_id/client_secret 认证参数 |
 | client_secret_post | 无 | URLSearchParams 编码 client_id/client_secret |
 
-共享纯构造函数供 code、refresh、revoke 及失败 cleanup 使用。secret 不进授权 URL、重定向或日志；Basic 编码串也视为秘密。端点接受 HTTP(S)，保留 redirect:error、超时、取消和现有资源/回调上下文；HTTP 不提供传输加密或端点身份认证，secret 与令牌可能被窃取或篡改。POST 是显式兼容选项，不是推荐默认；不得自动 Basic↔Post 切换、无认证降级或重试。
+共享纯构造函数供 code、refresh 及回调失败的撤销 POST 使用。发送前按实际选定的端点校验协议，包括运行时 Discovery 返回的端点。机密 POST 默认要求 HTTPS，显式启用 `allowInsecureClientAuthHttp` 时允许 HTTP。拒绝换票或刷新时返回 `IAM_CONFIG_INVALID`，撤销端点拒绝归入 `failed` / `IAM_REVOKE_ENDPOINT_INVALID`。刷新在写入 pending 前预检端点。保留 `redirect: 'error'`、超时、取消和现有资源/回调上下文。HTTP 会以明文传输 secret 与令牌。secret 和 Basic 编码串仅在必要的 POST 中使用。每次请求固定使用已配置的方法。
 
 依 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)，有客户端凭据时撤销也认证；真实 IAM 的方法、token/revoke 能否采用同一选择仍待供应商确认。本地 fixture 接受某方法不证明真实端点接受。
 

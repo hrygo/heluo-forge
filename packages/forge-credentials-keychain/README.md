@@ -30,11 +30,11 @@
 
 企业组合先挂载本包并禁用官方 `dsh-credentials-local`，再挂载 `@heluo/forge-iam`。内置 SQLite 后端由组合根绑定到当前 provider，单记录和网关联合写入分别受 IAM 门禁约束；其他注入对象不能通过自报方法获得信任。同权 JavaScript 代码仍可绕过进程内门禁，这不是进程隔离。
 
-内置组合还注册独立的 `iam-client-secret-source`。来源验证绑定对应的凭据实例，只读 `iam-client-secret/<ref>` 专用加密记录，并检查记录的 issuer、客户端 ID、认证方法及 revision。由管理员在目标命名空间预置及轮换，操作见[凭据访问说明](../forge-iam/docs/credential-access.md#9-管理员预置与轮换-iam-客户端密钥)。
+内置组合还注册独立的 `iam-client-secret-source`。来源验证绑定对应的凭据实例，只读 `iam-client-secret/<ref>` 保留域中的加密记录，并核对 issuer、客户端 ID、认证方法及 revision。通用读写、离线记录读取和联合操作拒绝访问该域，通用枚举略过。已有记录沿用原存储格式。管理员通过专用命令预置及轮换，见[凭据访问说明](../forge-iam/docs/credential-access.md#9-管理员预置与轮换-iam-客户端密钥)。
 
 `storeDirectory` 可指定隔离存储目录 `D`，必须在 Git 工作区外；新布局的 `D.keys` 由此路径确定，无需单独配置。省略时使用平台用户目录：macOS 为 `~/Library/Application Support/HeluoForge`，Windows 为 `%LOCALAPPDATA%/HeluoForge`，Linux 为 `$XDG_DATA_HOME/HeluoForge`，未设置或无效时为 `~/.local/share/HeluoForge`。Windows 的 `LOCALAPPDATA` 为空或不是绝对路径时使用用户目录下的 `AppData/Local/HeluoForge`。
 
-Linux 默认使用当前 XDG 目录，不回退或自动迁移旧默认目录。CLI 与 Host 必须使用同一目录和命名空间。CLI 可通过 `HELUO_FORGE_STORE_DIRECTORY` 指定目录。`openCredentialReader` 提供记录读取、引用解析、机密客户端记录 revision 核对及关闭，存储以只读模式打开。Host 桥接的鉴权规则见[凭据访问说明](../forge-iam/docs/credential-access.md)。
+Linux 默认使用当前 XDG 目录，不回退或自动迁移旧默认目录。CLI 与 Host 必须使用同一目录和命名空间。CLI 可通过 `HELUO_FORGE_STORE_DIRECTORY` 指定目录。`openCredentialReader` 以只读方式打开存储，提供通用记录读取、引用解析和关闭。机密客户端记录的专用校验只返回绑定与 revision 是否匹配。Host 桥接的鉴权规则见[凭据访问说明](../forge-iam/docs/credential-access.md)。
 
 测试注入的内存后端需 `allowEphemeral: true`；数据仅存在当前进程内，不获得 IAM 可信声明，也不作为生产后备。没有明文文件或系统钥匙串回退。
 

@@ -31,7 +31,7 @@ async function command(directory, args, input) {
   return { code, stdout, stderr };
 }
 
-async function deployment(t, { method, authMode }) {
+async function deployment(t, { method, authMode, useDiscovery = false }) {
   const mock = await startMockOidc({
     clientAuthMethod: method, clientSecret: secret, allowPublicCodeExchange: authMode === 'public', accessTtl: 60,
   });
@@ -89,9 +89,10 @@ async function deployment(t, { method, authMode }) {
       await rm(home, { recursive: true, force: true });
     }
   });
+  const endpoints = useDiscovery ? { discoveryUrl: `${mock.issuer}/.well-known/openid-configuration` } : mock.endpoints;
   stopIam = applyIam(context, {
-    ...mock.endpoints, clientId: mock.clientId, callbackPort: 0, refreshSkewSeconds: 1,
-    ...(authMode === 'confidential' ? { authMode, clientAuthMethod: method, clientSecretRef: ref } : {}),
+    ...endpoints, clientId: mock.clientId, callbackPort: 0, refreshSkewSeconds: 1,
+    ...(authMode === 'confidential' ? { authMode, clientAuthMethod: method, clientSecretRef: ref, allowInsecureClientAuthHttp: true } : {}),
   });
   const service = services.get('iam');
   const args = ['client-secret', 'set', '--issuer', mock.issuer, '--client-id', mock.clientId, '--method', method, '--ref', ref];
@@ -186,8 +187,8 @@ test('client secret replacement refuses an absent record and an incomplete old b
 });
 
 for (const method of ['client_secret_basic', 'client_secret_post']) {
-  test(`the composed confidential Host uses ${method} at both grants and completes scheduled renewal`, async (t) => {
-    const app = await deployment(t, { method, authMode: 'confidential' });
+  test(`the confidential Host uses ${method} with HTTP Discovery and completes scheduled renewal`, async (t) => {
+    const app = await deployment(t, { method, authMode: 'confidential', useDiscovery: true });
     await assert.rejects(() => app.service.startSignIn(), { code: 'IAM_CLIENT_AUTH_UNVERIFIED' });
     assert.equal(app.mock.counts.authorize, 0);
     assert.equal(app.mock.counts.token, 0);

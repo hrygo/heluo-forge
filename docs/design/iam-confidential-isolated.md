@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-016 |
 | 文档名称 | IAM 机密客户端认证设计 |
-| 版本 | V1.1.0 |
+| 版本 | V1.1.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -43,7 +43,7 @@ Host 支持 Basic/Post、V2 会话生成与恢复、共享刷新及回调清理�
 | 升级前 V1 reader | 旧 record 仅校验 version=1、保留未知扩展，旧 service 仅绑定 issuer/client/resource；可选机密标记可能被旧 reader 忽略，因此 confidential 采用 format2。现行 V1 codec 已另加认证标记拒绝，但不能追溯改变已部署旧 reader |
 | 标准 HTTP | [RFC 6749 §2.3.1](<https://www.rfc-editor.org/rfc/rfc6749.html#section-2.3.1>)定义 Basic 的双端 form 编码和可选 Post，不允许一请求多方法；[RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)要求撤销时认证 |
 
-运行期来源复用内置值级加密存储。专用记录 `iam-client-secret/<ref>` 绑定 issuer、clientId 和 method。预置和轮换使用同一单记录提交。已认证的加密信封产生非秘密 revision；同步检查采用当前密文行身份。管理员运维路径、隔离 fixture 与 Host 源的详细要求见[客户端认证契约](../contracts/iam-client-auth-isolated.md)。
+运行期来源复用内置值级加密存储。`iam-client-secret/<ref>` 是凭据命名空间中的保留记录域，绑定 issuer、clientId 和 method。通用凭据读写、离线读取和联合操作拒绝访问，通用枚举在解密前略过。预置和轮换通过专用端口执行单记录提交。已认证的加密信封产生非秘密 revision；同步检查采用当前密文行身份。管理员运维路径、隔离 fixture 与 Host 源的详细要求见[客户端认证契约](../contracts/iam-client-auth-isolated.md)。
 
 SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的证据。引用的标准在 2026-11-02 核验，不替代供应商 client authentication 配置与实测。
 
@@ -76,7 +76,7 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ## 4. 网络与失败边界
 
-授权码与刷新 POST、回调清理的撤销 POST 使用机密认证编码；普通 signOut 使用不带客户端认证的 AT 自证 GET。各路径保持各自的 HTTP(S) 端点校验、redirect:error、超时与取消边界。HTTP 不提供传输加密或端点身份认证，机密客户端 secret 和令牌可能被窃取或篡改。构造的 Basic header、Post body 和 snapshot 只在操作局部保留；不进入错误或制品。
+授权码与刷新 POST、回调清理的撤销 POST 使用机密认证编码。普通 signOut 默认使用 AT 自证 GET。机密 POST 发出前按实际端点核验 HTTPS，只有管理员显式允许的部署可使用 HTTP。HTTP 会以明文传输客户端 secret 和令牌。请求保留 `redirect: 'error'`、超时和取消边界。构造的 Basic header、Post body 和 snapshot 仅在操作局部使用。
 
 机密认证的 code、refresh 与清理操作在相关边界核对当前 getter 的 source 身份、独立 verifier 字面 true、原 snapshot 仍为 current、私有副本与原数据一致、mode/method/issuer/client/ref/revision、credentials/store、现有认证/操作代际；普通 signOut 按 §3.3 的独立路径校验，不读取 secret。local 失效错误不得被网络 catch 误包装为 IAM_UNREACHABLE。来源异常与任意 HTTP error 原文不输出；合法 invalid_grant 的既有分类保留。
 

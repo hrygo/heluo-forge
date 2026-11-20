@@ -291,7 +291,7 @@ heluo-forge client-secret set --issuer https://iam.corp.example \
 node node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs client-secret set --issuer https://iam.corp.example --client-id forge-console --method client_secret_post --ref enterprise-oidc
 ```
 
-由获准的密钥分发工具通过管道或重定向将原始 UTF-8 字节送入上述命令的标准输入。禁止在终端交互输入或回显密钥。末尾换行只有在属于密钥原文时才保留。原值不得进入命令参数、环境变量、配置补丁、制品或日志。内置 provider 将其单独写入值级加密的 SQLite `iam-client-secret/<ref>` 记录，绑定 issuer、client ID 和方法；Host 通过独立受信端口读取。
+由获准的密钥分发工具通过管道或重定向将原始 UTF-8 字节送入上述命令的标准输入。禁止在终端交互输入或回显密钥。末尾换行只有在属于密钥原文时才保留。原值不得进入命令参数、环境变量、配置补丁、制品或日志。管理员命令通过专用端口写入值级加密的 SQLite `iam-client-secret/<ref>` 记录，绑定 issuer、client ID 和方法。Host 通过独立受信端口读取，通用凭据接口拒绝访问该记录域。
 
 在 IAM 管理端轮换后，使用 `client-secret set` 更新绑定一致的记录。若首次预置填错绑定，使用 `client-secret replace` 更正同一引用。目标参数取自私版配置，`--old-issuer`、`--old-client-id`、`--old-method` 填入上次预置的值，密钥仍经标准输入提供。记录缺失或旧绑定不符时，命令中止更新并报告 `IAM_CLIENT_SECRET_BINDING_MISMATCH`。
 

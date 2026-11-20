@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareClientAuthentication, buildClientAuthRequest } from '../src/client-auth.mjs';
-import { exchangeCode, refreshTokens, revokeToken, buildAuthorizationUrl } from '../src/oidc.mjs';
+import { exchangeCode, refreshTokens, revokeToken, revokeSessionToken, buildAuthorizationUrl } from '../src/oidc.mjs';
 import { createClientSecretFixture } from './support/client-secret-source.mjs';
 
 const endpoint = 'https://iam.corp.example/token';
@@ -9,11 +9,11 @@ const clientId = 'c: +é';
 const secret = 's: +é ';
 const basic = `Basic ${Buffer.from('c%3A+%2B%C3%A9:s%3A+%2B%C3%A9+').toString('base64')}`;
 const calls = [
-  ['code', (fetchImpl, clientAuthentication) => exchangeCode({ tokenEndpoint: endpoint, code: 'synthetic-code',
+  ['code', (fetchImpl, clientAuthentication, target = endpoint) => exchangeCode({ tokenEndpoint: target, code: 'synthetic-code',
     codeVerifier: 'synthetic-verifier', redirectUri: 'http://127.0.0.1:9/iam/callback', clientId, fetchImpl, clientAuthentication })],
-  ['refresh', (fetchImpl, clientAuthentication) => refreshTokens({ tokenEndpoint: endpoint,
+  ['refresh', (fetchImpl, clientAuthentication, target = endpoint) => refreshTokens({ tokenEndpoint: target,
     refreshToken: 'synthetic-refresh', clientId, fetchImpl, clientAuthentication })],
-  ['revoke', (fetchImpl, clientAuthentication) => revokeToken({ revocationEndpoint: endpoint,
+  ['revoke', (fetchImpl, clientAuthentication, target = endpoint) => revokeToken({ revocationEndpoint: target,
     token: 'synthetic-refresh', clientId, fetchImpl, clientAuthentication })],
 ];
 
@@ -57,6 +57,27 @@ for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {
 }
 
 for (const [kind, invoke] of calls) {
+  test(`${kind} accepts HTTP for public authentication and explicitly opted-in confidential authentication`, async () => {
+    const target = endpoint.replace('https:', 'http:');
+    for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {
+      const f = createClientSecretFixture({}, { clientId, value: secret, method });
+      const config = method === 'none' ? { clientId, allowInsecureHttp: true } : { ...f.config, allowInsecureClientAuthHttp: true };
+      const operation = await prepareClientAuthentication(config, f.options);
+      let requests = 0;
+      await invoke(async (url, init) => {
+        requests++;
+        assert.equal(url, target);
+        assert.equal(init.redirect, 'error');
+        const form = new URLSearchParams(init.body);
+        assert.equal(init.headers.authorization === basic, method === 'client_secret_basic');
+        assert.equal(form.get('client_secret') === secret, method === 'client_secret_post');
+        return kind === 'revoke' ? new Response(null, { status: 200 })
+          : Response.json({ access_token: 'synthetic-access', token_type: 'Bearer', expires_in: 300 });
+      }, operation, target);
+      assert.equal(requests, 1);
+    }
+  });
+
   test(`${kind} refuses raw secret/options pretending to be an authenticated operation`, async () => {
     let requests = 0;
     await assert.rejects(invoke(async () => { requests++; }, { method: 'client_secret_basic', secret, guard: () => true }),
@@ -86,6 +107,18 @@ test('pure construction neither mutates the caller form nor permits duplicate cr
       { code: 'IAM_CONFIG_INVALID' });
   }
   assert.throws(() => buildClientAuthRequest('other-client', form, operation), { code: 'IAM_CLIENT_AUTH_CONTEXT_INVALID' });
+});
+
+test('a refused HTTP revocation is reported as failed locally and never attempts transport', async () => {
+  const f = createClientSecretFixture({}, { clientId, value: secret });
+  const operation = await prepareClientAuthentication(f.config, f.options);
+  let requests = 0;
+  const result = await revokeSessionToken({ revocationEndpoint: endpoint.replace('https:', 'http:'),
+    revocationMode: 'rfc7009', refreshToken: 'synthetic-refresh', clientId, clientAuthentication: operation,
+    fetchImpl: async () => { requests++; return new Response(null, { status: 200 }); },
+  });
+  assert.deepEqual(result, { state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' });
+  assert.equal(requests, 0);
 });
 
 for (const change of ['issuer', 'clientId', 'ref', 'revision', 'value', 'source', 'credentials']) {
