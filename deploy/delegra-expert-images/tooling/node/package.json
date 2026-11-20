@@ -1,9 +1,0 @@
-{
-  "name": "heluo-forge-expert-node",
-  "version": "1.0.0",
-  "private": true,
-  "dependencies": {
-    "pnpm": "11.28.5",
-    "typescript": "6.0.3"
-  }
-}
