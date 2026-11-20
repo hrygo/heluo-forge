@@ -39,6 +39,11 @@ export async function buildPlugin(output = join(packageRoot, 'lib'), root = pack
   // source anchors; removing them keeps generated paths deterministic.
   const clientPath = join(output, 'client.js');
   let client = (await readFile(clientPath, 'utf8')).replace(/^\/\/ [^\r\n]*\/node_modules\/[^\r\n]*\r?\n/gm, '');
+  // Source-location comments are emitted relative to the working directory and
+  // escape with ../.. when the output sits outside it (another checkout, a
+  // temporary stage); rewriting them to the package-relative form keeps the
+  // bundle byte-identical across checkouts and operating systems.
+  client = client.replace(/^\/\/ (?:.*[/\\])?(src[/\\][^/\\]+\.tsx?)\r?$/gm, (match, source) => `// ${source.replace(/\\/g, '/')}`);
   client = normalizeDependencyIds(client);
   // Restore only the source section boundaries beside their emitted symbols.
   const clientSource = await readFile(join(source, 'client.ts'), 'utf8');

@@ -2,7 +2,7 @@
 // 运行：node test/preset-skills.test.mjs
 
 import { promises as fsPromises } from "node:fs";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -37,7 +37,9 @@ function eq(actual, expected, msg) {
   );
 }
 
-const tmp = await mkdtemp(join(tmpdir(), "dssm-preset-test-"));
+// 服务端按 realpath 归一预设目录；macOS 的 tmpdir 位于 /var → /private/var 符号链接
+// 之后，fixture 根目录创建后先解析到真实位置，断言与解析结果同口径。
+const tmp = await realpath(await mkdtemp(join(tmpdir(), "dssm-preset-test-")));
 process.env.DSH_HOME = tmp;
 
 const mockCordisDir = join(tmp, "mock-cordis-skills");

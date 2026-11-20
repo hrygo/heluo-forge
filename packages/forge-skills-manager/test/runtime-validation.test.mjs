@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,11 +27,14 @@ function fixture(context) {
 
 test('compatibility preflight resolves SDK entries only from the specified runtime', context => {
   const { root, runtime } = fixture(context);
+  // inspectRuntime 对运行目录做 realpath（macOS 的 /var → /private/var 等），
+  // 期望值必须同口径规范，否则只在无系统符号链接的平台成立。
+  const canonicalRoot = realpathSync(root);
   const checked = inspectRuntime(runtime);
   assert.equal(checked.version, baseline);
   assert.equal(Object.keys(checked.entries).length, requiredSdk.length);
   for (const name of requiredSdk) {
-    assert.equal(checked.entries['@deepseek-ai/' + name], join(root, 'node_modules', '@deepseek-ai', name, 'index.js'));
+    assert.equal(checked.entries['@deepseek-ai/' + name], join(canonicalRoot, 'node_modules', '@deepseek-ai', name, 'index.js'));
   }
 });
 
