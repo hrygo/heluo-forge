@@ -208,14 +208,12 @@ function isBinary(text) {
  * the remaining fields are reported as `truncated` instead of scanned.
  *
  * @param {readonly object[]} rules compiled rules
- * `options.observations` carries classifications reported by the provider's
- * controlled scan interface (D86): a field whose text was redacted before the
- * policy saw it is judged by the category of what was removed, not by the
- * redacted text. Unregistered categories count as "not fully scanned".
- *
- * @param {readonly object[]} rules compiled rules
  * @param {readonly {field: string, text: string}[]} payloads
  * @param {{maxBytes?: number, observations?: readonly {field: string, kind: string}[]}} [options]
+ *   `options.observations` carries classifications reported by the provider's
+ *   controlled scan interface (D86): a field whose text was redacted before the
+ *   policy saw it is judged by the category of what was removed, not by the
+ *   redacted text. Unregistered categories count as "not fully scanned".
  * @returns {{findings: object[], hard: object[], confirm: object[], soft: object[], skipped: object[], truncated: boolean}}
  */
 export function scanPayloads(rules, payloads, options = {}) {
@@ -250,7 +248,6 @@ export function scanPayloads(rules, payloads, options = {}) {
     } else {
       remaining -= bytes;
     }
-    let matched = false;
     for (const rule of rules) {
       if (!rule.pathRegexes.some((pathRegex) => pathRegex.test(field))) continue;
       // 组织规则可以带 `g`/`y` 这类有状态标志：复用一个表达式前必须归零位置，
@@ -261,7 +258,6 @@ export function scanPayloads(rules, payloads, options = {}) {
       const key = `${rule.id}:${field}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      matched = true;
       findings.push(Object.freeze({
         rule: rule.id,
         severity: rule.severity,
@@ -271,7 +267,7 @@ export function scanPayloads(rules, payloads, options = {}) {
         ...(truncated ? { truncated: true } : {}),
       }));
     }
-    if (truncated) skipped.push({ field, reason: 'truncated', ...(matched ? {} : {}) });
+    if (truncated) skipped.push({ field, reason: 'truncated' });
   }
   // 受控扫描接口（D86）：提供方报告"被脱敏内容的类别"，策略据此复用同一套规则判定。
   // 内容已经过公共脱敏，这里只认类别，不再看正文；未登记类别视为"未完整扫描"。

@@ -366,6 +366,18 @@ test('脱敏分类：令牌与代理凭据分别上报，未脱敏时不带分�
   assert.equal('redactionKinds' in plain, false);
 });
 
+test('只有 stderr 被脱敏时单独上报，不冒充 stdout 正文（D86）', async () => {
+  const token = TOKEN_VALUE;
+  const { execFile } = fakeExecFile(() => ({ stdout: 'clean\n', stderr: `fatal: auth ${token}\n` }));
+  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: token }, authEnv: ['GH_TOKEN'] });
+  const result = await runner.run({ bin: 'git', args: ['push'] });
+  assert.equal(result.redacted, undefined);
+  assert.equal(result.redactionKinds, undefined);
+  assert.equal(result.stderrRedacted, true);
+  assert.deepEqual(result.stderrRedactionKinds, ['token']);
+  assert.equal(result.stderr.includes(token), false);
+});
+
 test('redactionKinds 只报告类别：空输入返回空数组，不保留原值', () => {
   assert.deepEqual(redactionKinds(''), []);
   assert.deepEqual(redactionKinds('plain', []), []);

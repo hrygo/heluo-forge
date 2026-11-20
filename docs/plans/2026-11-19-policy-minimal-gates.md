@@ -104,6 +104,8 @@
 | D51 | H3/H4 可确认，但无卡片通道时拒绝 |
 | D86 | Gitee 推送正文在公共 CLI 出口按类别脱敏（`token`、`credential-url`）；读取层把类别交给内容闸映射回 `BUILTIN-TOKEN`/`BUILTIN-CREDENTIAL-URL`，可确认命中照常进分步卡；无法分类的脱敏才记 `字段:原因`（如 `commits[0]:redaction-unknown`）后放行。`contentSkipped` 与 `truncated` 在 asked/answered/begin 三处保持一致 |
 | D87 | 正文与最终执行绑定：普通对象正文在 `recheck` 与宿主同步 `guard` 都按同一摘要复验，确认或下游等待期间被改写即拒绝并零执行 |
+| D88 | 正文扫描器自身抛错时按不可确认拒绝（`POLICY_CONTENT_SCAN_FAILED`）：异常不等价于"没有命中"，不得因扫描失败而放行 H1/H2 |
+| D89 | 正文读不到时（`content:unreadable`）不查也不写决策复用缓存：占位摘要无法区分不同正文，复用会让重试绕过重新确认；其余结论复用规则不变 |
 
 ### 3.5 审计与子代理
 

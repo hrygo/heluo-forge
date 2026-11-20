@@ -113,6 +113,9 @@ function contentPayloads(action, args, content) {
   return payloads;
 }
 
+const CONTENT_SCAN_FAILED_COPY = (action) => `受控写「${action}」已拒绝：正文扫描失败，不能按"没有命中"放行。`
+  + '请重试；持续失败时检查规则配置与正文结构。';
+
 const CONTENT_HARD_COPY = (action, findings) => {
   const ids = [...new Set(findings.map((finding) => finding.rule))].join('、');
   return `受控写「${action}」已拒绝：提交内容命中了不允许放行的高风险信息（${ids}）。`
@@ -248,6 +251,7 @@ export function createGate({
         truncated: scanned.truncated || skipped.some((item) => item.reason === 'truncated'),
       });
     } catch {
+      // 扫描异常不能等价于"没有命中"：内容闸是安全组件，宁可拒绝也不能让 hard 规则失效。
       return Object.freeze({
         findings: Object.freeze([]),
         hard: Object.freeze([]),
@@ -255,6 +259,7 @@ export function createGate({
         soft: Object.freeze([]),
         skipped: Object.freeze([{ field: 'content', reason: 'scan-failed' }]),
         truncated: false,
+        failed: true,
       });
     }
   }
@@ -388,6 +393,22 @@ export function createGate({
       ? undefined
       : [...new Set(scanned.skipped.map((item) => `${item.field}:${item.reason}`))];
     const contentTruncated = scanned?.truncated === true ? true : undefined;
+    // 扫描器自身失败时按不可确认拒绝：异常不代表没有命中，放行会让 H1/H2 形同虚设。
+    if (scanned?.failed === true) {
+      return denyWithEvidence({
+        ...(subject === undefined ? {} : { subject }),
+        actor,
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'deny',
+        rule: 'content-scan-failed',
+        operationId,
+        agent: { kind },
+        ...(contentSkipped === undefined ? {} : { contentSkipped }),
+        summary: `受控写 ${action} 的正文扫描失败，按不可确认拒绝`,
+      }, CONTENT_SCAN_FAILED_COPY(action), 'POLICY_CONTENT_SCAN_FAILED');
+    }
     if (scanned !== undefined && scanned.hard.length > 0) {
       // H1/H2 不可确认：连卡片都不弹，直接留证据拒绝。
       return denyWithEvidence({
@@ -437,7 +458,12 @@ export function createGate({
         }
       }
       const callId = callIdOf(exec);
-      const key = reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest });
+      // 读不到正文时摘要只是占位串：两次"读不到"会算出同一个键，这样的决定不能复用，
+      // 否则确认过的是一次看不见的正文，重试时同样看不见却会被当作同一份内容放行。
+      const cacheable = content === undefined || content.readable !== false;
+      const key = cacheable
+        ? reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest })
+        : undefined;
       const hit = key !== undefined && decisionCache !== undefined ? decisionCache.peek(key) : undefined;
       if (hit !== undefined
         && hit.digest === digest

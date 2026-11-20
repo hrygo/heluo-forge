@@ -72,6 +72,18 @@ test('S5 只认 .env 文件路径引用，不认 process.env 代码标识（D45�
   assert.deepEqual(code.soft.filter((finding) => finding.rule === 'BUILTIN-ENV-FILE'), []);
 });
 
+test('S5 不把普通文件名或代码标识当成 .env 引用（D45 澄清）', () => {
+  const { rules } = compileContentRules([]);
+  for (const text of ['foo.env', 'v1.env', 'app.env.bak', 'const key = process.env.OPENAI_API_KEY']) {
+    const scanned = scanPayloads(rules, [{ field: 'body', text }]);
+    assert.deepEqual(
+      scanned.soft.filter((finding) => finding.rule === 'BUILTIN-ENV-FILE'),
+      [],
+      `不应命中：${text}`,
+    );
+  }
+});
+
 test('字节预算由一次调用的所有字段共享，超出的字段标截断（D50）', () => {
   const { rules } = compileContentRules([]);
   const half = 'a'.repeat(MAX_PAYLOAD_BYTES - 16);

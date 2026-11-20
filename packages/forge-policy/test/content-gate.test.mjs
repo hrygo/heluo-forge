@@ -250,3 +250,44 @@ test('宿主同步守卫拒绝被改写的普通对象正文', async () => {
   assert.match(String(h.guards[0](exec)), /content changed after the call was admitted/u);
   h.dispose();
 });
+
+test('扫描器异常按不可确认拒绝：不弹卡、不执行、证据可追（fail-closed）', async () => {
+  const channel = answering();
+  const h = mount({ rules: { contentGate: true, confirmPush: true }, userQuestions: channel });
+  // 非枚举的取正文属性：摘要不受影响，扫描字段展开时才抛错（模拟扫描器自身失败）。
+  const args = { target: 'corp.example/repo', title: '标题' };
+  Object.defineProperty(args, 'body', {
+    enumerable: false,
+    configurable: true,
+    get() { throw new Error('scan boom'); },
+  });
+  const exec = { name: 'forge_gitee_write', arguments: args, callId: 'call-scan-fail', agent: { kind: 'agent' } };
+  let ran = 0;
+  const result = await h.policy.executeAction(h.ctx, 'gitee.issue.write', exec, async () => (ran++, { ok: true }));
+  assert.equal(ran, 0);
+  assert.equal(channel.calls.length, 0, '扫描失败不可确认：连卡片都不弹');
+  assert.equal(result.code, 'POLICY_CONTENT_SCAN_FAILED');
+  const records = h.policy.auditRecords();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].decision, 'deny');
+  assert.equal(records[0].rule, 'content-scan-failed');
+  assert.deepEqual(records[0].contentSkipped, ['content:scan-failed']);
+  h.dispose();
+});
+
+test('正文读不到时确认结论不进入复用缓存：重试仍要重新确认（D89）', async () => {
+  const channel = answering();
+  const h = mount({ rules: { contentGate: true, confirmPush: true }, userQuestions: channel });
+  const unreadable = () => ({
+    ...pushExec('提交正文', 'call-unreadable'),
+    content: async () => { throw new Error('readback unavailable'); },
+  });
+  const first = await h.policy.executeAction(h.ctx, 'gitee.git.push', unreadable(), async () => ({ ok: true }));
+  assert.deepEqual(first, { ok: true });
+  assert.equal(channel.calls.length, 1);
+  const second = await h.policy.executeAction(h.ctx, 'gitee.git.push', unreadable(), async () => ({ ok: true }));
+  assert.deepEqual(second, { ok: true });
+  assert.equal(channel.calls.length, 2, '看不见的正文不能被当作同一份内容复用');
+  assert.equal(h.policy.auditRecords().some((record) => record.rule === 'reused-decision'), false);
+  h.dispose();
+});

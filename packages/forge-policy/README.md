@@ -21,12 +21,12 @@
 | 判定 | `decideAction`：未登记动作在 `denyUnknownAction` 关闭时按 `out-of-scope` 放行；登记动作缺业务目标即拒绝；人工留痕动作在 `denyHumanRecord` 关闭时按 `out-of-scope` 放行；其余登记动作放行并进入身份与审计阶段。`confirmPush` 开启时只有 `gitee.git.push`、`confirmDopWrite` 开启时只有 `change.clarification.write` 进入确认阶段，其余写动作不弹卡；未实现的开关置真一律装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`） |
 | 流水线 | `buildPipeline` 按已实现的开关装配阶段：`resolve → identity → audit → receipt` 常开，内容闸阶段在 `contentGate` 开启时插到确认之前，确认阶段在 `confirmPush`/`confirmDopWrite` 开启时插到审计之前；关闭的规则不出现在阶段表里，因此不会"进入后放行"，也不会因为走过阶段而多写审计 |
 | 身份 | 登记动作必须解析出 IAM actor（宿主 IAM 视图）；解析不出即拒绝，文案指向「设置 → 账号」完成登录后重试；子 Agent 继承父会话身份，不单独查 |
-| 内容闸 | `contentGate` 开启时按动作声明字段扫描正文（issue/pr 的 title+body、review 的 body+comment、变更澄清的 summary+description+aiAc、push 的提交消息与 diff），未知动作退回全局白名单；9 条内置规则分三档：私钥块与云长期密钥不可确认（HARD 直接拒绝），带凭据连接串与常见令牌可确认，`.env` 提交、内网地址、本机绝对路径、超长 base64 只记录；一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`），超出部分记 `truncated` 后按已扫内容判定，二进制跳过，正文读不到按放行并在审计留 `content-unreadable`；命中值与正文都不进审计、卡片与错误文案，只留首尾各 4 字符的脱敏摘录 |
+| 内容闸 | `contentGate` 开启时按动作声明字段扫描正文（issue/pr 的 title+body、review 的 body+comment、变更澄清的 summary+description+aiAc、push 的提交消息与 diff），未知动作退回全局白名单；9 条内置规则分三档：私钥块与云长期密钥不可确认（HARD 直接拒绝），带凭据连接串与常见令牌可确认，`.env` 提交、内网地址、本机绝对路径、超长 base64 只记录；一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`），超出部分记 `truncated` 后按已扫内容判定，二进制跳过；正文读不到按放行并在审计记 `content:unreadable`，该结论不进复用缓存；扫描器自身失败按不可确认拒绝（`POLICY_CONTENT_SCAN_FAILED`）；命中值与正文都不进审计、卡片与错误文案，只留首尾各 4 字符的脱敏摘录 |
 | 确认卡片 | 一次 `ask`、每题一对固定标签「允许本次写入 / 取消本次写入」，只有每题都恰好选中允许标签才放行；动作确认与内容风险同时成立时是一次 `ask` 带两题（先动作、后内容），客户端按题分步呈现、最后一次提交；其余应答（缺失、结构非法、未知标签、带自定义文本）一律按未确认拒绝。卡片只含动作可读名、目标定位与原因类别，不含正文、参数原文、令牌或绝对路径 |
 | 确认超时 | 默认 120000 ms（`confirmation.timeoutMs`，装载期校验为正整数）；超时映射为 `POLICY_CONFIRM_TIMEOUT`，文案明确是等待超时而不是用户拒绝。判定由本包自己的计时器执行，宿主侧挂起询问在结论落定后立即 abort |
 | 无 UI 环境 | 没有可用的 `userQuestions` 服务时装载照常完成并给出一次告警，但每次需要卡片的受控写都以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed），不会降级为直接放行 |
-| 错误码 | 七类结论各有唯一码：`POLICY_CONTENT_HARD`、`POLICY_CONFIRM_DENIED`、`_TIMEOUT`、`_UNAVAILABLE`、`_INVALID_ANSWER`、`_DELEGATED`、`_ERROR`；码同时出现在结构化判定结果与审计里，用户文案不拼码 |
-| 决策复用 | 只缓存"允许"的决定，键为 `工具名 + callId + 动作 + 参数摘要`，同一键的重试不再打扰用户但必须重过身份校验、一次性收据与执行后复验；拒绝、超时、无应答、非法应答与执行失败都不入缓存。缓存最多 32 条、进程内 LRU、不落盘，卸载即清空 |
+| 错误码 | 八类结论各有唯一码：`POLICY_CONTENT_HARD`、`POLICY_CONTENT_SCAN_FAILED`、`POLICY_CONFIRM_DENIED`、`_TIMEOUT`、`_UNAVAILABLE`、`_INVALID_ANSWER`、`_DELEGATED`、`_ERROR`；码同时出现在结构化判定结果与审计里，用户文案不拼码 |
+| 决策复用 | 只缓存"允许"的决定，键为 `工具名 + callId + 动作 + 参数摘要`，同一键的重试不再打扰用户但必须重过身份校验、一次性收据与执行后复验；拒绝、超时、无应答、非法应答、执行失败与正文读不到都不入缓存。缓存最多 32 条、进程内 LRU、不落盘，卸载即清空 |
 | 子代理来源 | 需要人工确认的写由存活的主会话根代问（卡片弹在主会话，正文写明「本次写入由子代理发起」）；找不到唯一存活的根才以 `POLICY_CONFIRM_DELEGATED` 拒绝。不需确认的写与主会话同路径，不因来源被拒 |
 | 审计 | `audit.begin` 在放行前落记录（主体取 provider 自证、身份单列 `actor`、摘要覆盖参数与正文），`audit.settle` 执行后补 `durationMs` 与 `decision`；memory 是进程内环形缓冲（默认 1000），file 按天一个 JSONL、保留 `keepDays` 天；写入失败中止本次受控调用给可操作提示，绝不静默回落 memory；上一次未结清时下一次受控写中止，缺口由 `auditGaps()`/`acknowledgeAuditGaps()` 处理 |
 | 记录最小化 | 只写白名单字段；`arguments`/`content`/`stdout`/`stderr` 等禁用字段直接报错；`params` 只存摘要，路径只留尾 4 段 |
