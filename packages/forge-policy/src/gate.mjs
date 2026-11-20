@@ -30,6 +30,7 @@ import {
   delegationCopy,
   delegationSummary,
   personaOf,
+  rootOf,
 } from './delegation.mjs';
 import { reuseKeyOf } from './reuse.mjs';
 
@@ -416,19 +417,24 @@ export function createGate({
     let rule = decision.rule;
     let cacheKey;
     if (reasons.length > 0) {
-      // 来源判定在查缓存之前：子代理没有确认通道，命中缓存也不能替它跳过人工确认。
+      // 来源判定在查缓存之前：命中缓存也不能让子代理替人跳过确认。
+      // 子代理自己收不到卡片（宿主 assertLiveRoot 只认存活根），把卡片转交给它的根会话代问。
+      let cardAgent = exec?.agent;
       if (persona === PERSONA.CHILD) {
-        return denyWithEvidence({
-          action,
-          target,
-          tool: exec?.name,
-          decision: 'deny',
-          rule: 'confirm-delegated-refused',
-          code: CONFIRM_CODES.DELEGATED,
-          operationId,
-          agent: { kind },
-          summary: delegationSummary(action),
-        }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+        cardAgent = rootOf(ctx, exec?.agent);
+        if (cardAgent === undefined) {
+          return denyWithEvidence({
+            action,
+            target,
+            tool: exec?.name,
+            decision: 'deny',
+            rule: 'confirm-delegated-refused',
+            code: CONFIRM_CODES.DELEGATED,
+            operationId,
+            agent: { kind },
+            summary: delegationSummary(action),
+          }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+        }
       }
       const callId = callIdOf(exec);
       const key = reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest });
@@ -445,7 +451,13 @@ export function createGate({
         cacheKey = key;
         rule = 'reused-decision';
       } else {
-        const card = buildConfirmationCard({ action, target, args: exec?.arguments ?? {}, reasons });
+        const card = buildConfirmationCard({
+          action,
+          target,
+          args: exec?.arguments ?? {},
+          reasons,
+          origin: persona === PERSONA.CHILD ? 'subagent' : 'root',
+        });
         const askedAt = clock();
         const asked = await writeRecord({
           ...(subject === undefined ? {} : { subject }),
@@ -457,7 +469,7 @@ export function createGate({
           rule: 'confirm-required',
           operationId,
           agent: { kind },
-          summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）`,
+          summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）${persona === PERSONA.CHILD ? '，已转交主会话代问' : ''}`,
           ...(ruleIds === undefined ? {} : { ruleIds }),
           ...(contentSkipped === undefined ? {} : { contentSkipped }),
           phase: 'asked',
@@ -467,7 +479,7 @@ export function createGate({
         confirmationCount += 1;
         const verdict = (await confirmations?.ask({
           ctx,
-          agent: exec?.agent,
+          agent: cardAgent,
           action,
           questions: card.questions,
           timeoutMs: confirmationTimeoutMs,

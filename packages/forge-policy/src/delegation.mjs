@@ -60,6 +60,36 @@ export function agentKindOf(exec) {
   return persona === PERSONA.HOST ? PERSONA.ROOT : persona;
 }
 
+/**
+ * 找到这次子代理调用所属的存活根（主会话）agent。
+ *
+ * 宿主只允许"存活的根"收人工确认（`assertLiveRoot` 会抛 `DELEGATED_CALLER`），
+ * 所以子代理要拿到卡片，只能由它的根会话代问。沿 `session.header.parentSession`
+ * 上溯，命中 `agents.roots()` 的那只就是根；上溯不到时只有全进程恰好一个根才敢认
+ * ——多个根时猜错会把卡片弹进别人的会话，宁可不弹。
+ *
+ * @param {object} ctx 插件上下文（需要 `ctx.get('agents')`）
+ * @param {unknown} agent 触发这次调用的子代理
+ * @returns {object | undefined} 存活根 agent
+ */
+export function rootOf(ctx, agent) {
+  const registry = ctx?.get?.('agents');
+  if (registry === null || typeof registry !== 'object' || typeof registry.roots !== 'function') {
+    return undefined;
+  }
+  const roots = registry.roots();
+  if (!Array.isArray(roots) || roots.length === 0) return undefined;
+  let current = agent;
+  for (let depth = 0; depth < 32; depth += 1) {
+    const parentId = isPlainObject(current) ? current.session?.header?.parentSession : undefined;
+    if (typeof parentId !== 'string' || parentId === '') break;
+    const root = roots.find((candidate) => candidate?.id === parentId);
+    if (root !== undefined) return root;
+    current = typeof registry.get === 'function' ? registry.get(parentId) : undefined;
+  }
+  return roots.length === 1 ? roots[0] : undefined;
+}
+
 /** 子代理来源的拒绝文案：只说明必须在主会话发起，不给任何绕过提示。 */
 export function delegationCopy(action) {
   return `受控写「${action}」已拒绝：本次调用来自子代理，受控写必须在主会话发起。请在主会话重新发起该动作。`;
@@ -67,7 +97,7 @@ export function delegationCopy(action) {
 
 /** 需要人工确认的写来自子代理时的拒绝文案（开关关闭时的兜底）。 */
 export function confirmDelegatedCopy(action) {
-  return `受控写「${action}」需要人工确认，但本次调用来自子代理；受控写必须在主会话发起，未执行。`;
+  return `受控写「${action}」需要人工确认，但本次调用来自子代理、又找不到可代问的主会话，未执行。请在主会话重新发起该动作。`;
 }
 
 /** 一条审计即可解释拒绝理由：来源、动作、结论。 */

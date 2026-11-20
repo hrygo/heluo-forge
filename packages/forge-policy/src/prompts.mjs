@@ -62,6 +62,10 @@ const SELF = Object.freeze({
     en: 'It runs as soon as you confirm; leaving it unanswered cancels the call.',
     zh: '确认后立即执行；不选择视为取消。',
   },
+  cardChild: {
+    en: 'A sub-agent asked for this write; confirming runs it immediately, leaving it unanswered cancels it.',
+    zh: '本次写入由子代理发起；确认后立即执行，不选择视为取消。',
+  },
 });
 
 /** 确认原因类别：卡片标题行与审计 summary 共用同一份措辞。 */
@@ -128,7 +132,7 @@ const CARD_DETAIL_INDENT = '\u2002\u2002\u2002';
  * @param {{action: string, target?: string, args?: object, reason?: string}} request
  * @returns {{question: string, detail: string}}
  */
-export function confirmationCardCopy({ action, target, args = {}, reason = 'action' } = {}) {
+export function confirmationCardCopy({ action, target, args = {}, reason = 'action', origin = 'root' } = {}) {
   const place = locatorOf({ target, args }) ?? '目标';
   const what = subject({ action, repository: place, args });
   const category = Object.hasOwn(REASON_LABELS, reason) ? REASON_LABELS[reason].zh : '需要人工复核';
@@ -137,7 +141,7 @@ export function confirmationCardCopy({ action, target, args = {}, reason = 'acti
   return {
     question: `${lead}允许${what.zh}${branchOf(args)}？`,
     // 标题行已经说了这是什么确认，正文只说用户还需要知道的事：确认后立刻执行，放着不管等于取消。
-    detail: `${CARD_DETAIL_INDENT}${SELF.card.zh}`,
+    detail: `${CARD_DETAIL_INDENT}${origin === 'subagent' ? SELF.cardChild.zh : SELF.card.zh}`,
   };
 }
 

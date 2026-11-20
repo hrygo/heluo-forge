@@ -59,14 +59,14 @@ function normalizeReasons(reasons) {
  * Build the payload for one human confirmation. One question per merged reason, so
  * the client can walk them step by step and submit once.
  *
- * @param {{action: string, target?: string, args?: object, reasons?: readonly string[]}} request
+ * @param {{action: string, target?: string, args?: object, reasons?: readonly string[], origin?: 'root' | 'subagent'}} request
  * @returns {{questions: object[], allowLabel: string, denyLabel: string}}
  */
-export function buildConfirmationCard({ action, target, args = {}, reasons } = {}) {
+export function buildConfirmationCard({ action, target, args = {}, reasons, origin = 'root' } = {}) {
   const allowLabel = CONFIRM_LABELS.allow;
   const denyLabel = CONFIRM_LABELS.deny;
   const questions = normalizeReasons(reasons).map((reason) => {
-    const copy = confirmationCardCopy({ action, target, args, reason });
+    const copy = confirmationCardCopy({ action, target, args, reason, origin });
     return Object.freeze({
       id: `forge-policy-${reason}`,
       header: CONFIRM_REASONS[reason],
