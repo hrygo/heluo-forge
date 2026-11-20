@@ -1827,3 +1827,28 @@ test('a catalogue that was never read is not reported as "the enterprise never o
   // problem, not an authorization decision about that model.
   await assert.rejects(f.adapter.prepareCall('enterprise', 'ghost'), { code: 'ENTERPRISE_GATEWAY_UNAVAILABLE' });
 });
+
+test('a failed rebuild after a metadata-only change keeps installed models callable (issue #202 review)', async t => {
+  let catalogue = [{ id: 'enterprise-chat', compliance: { level: 'L1', region: 'cn-north-1' } }];
+  let failBuild = false;
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify({ data: structuredClone(catalogue) })),
+    createAdapter: async () => {
+      if (failBuild) throw new TypeError('synthetic adapter failure');
+      return {
+        providerInfo: id => ({ id, name: '企业模型' }),
+        async resolveModel(provider, model) { return { provider, id: model, name: model }; },
+        async *stream() { yield { type: 'text', text: 'ok' }; yield { type: 'finish', reason: { kind: 'stop' } }; },
+      };
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // Only the compliance label changes, and the rebuild for it fails.
+  failBuild = true;
+  catalogue = [{ id: 'enterprise-chat', compliance: { level: 'L3', region: 'cn-north-1' } }];
+  await f.runtime.refresh().catch(() => { });
+  // Display metadata is not part of the call contract: the model stays callable.
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(result[0].text, 'ok');
+});

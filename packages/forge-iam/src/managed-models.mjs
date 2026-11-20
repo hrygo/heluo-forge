@@ -395,7 +395,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // The catalogue can move ahead of a failed adapter rebuild. Only the
   // unchanged subset installed for this binding is still safe to dispatch.
   let installedModels = new Map();
-  const installed = model => Boolean(backend) && isDeepStrictEqual(installedModels.get(model.id), model);
+  // Install state must not depend on display-only metadata: a catalogue refresh
+  // that changes only the compliance label, or a rebuild that fails after such a
+  // change, must not turn an otherwise callable model into an unusable one.
+  const callShape = model => JSON.stringify([model?.id, model?.contextWindow, model?.maxTokens, model?.inputModalities, model?.streaming]);
+  const installed = model => Boolean(backend) && installedModels.has(model.id)
+    && callShape(installedModels.get(model.id)) === callShape(model);
   const credentialRevoked = () => revokedBinding === lastId;
   // Bounded compensation for a refresh that lost its race to a context change:
   // one rebuild per version, never more than REBUILD_ATTEMPT_LIMIT in a row.
