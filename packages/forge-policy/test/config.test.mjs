@@ -179,3 +179,14 @@ test('content.maxBytes 与扫描器同口径：只接受正的安全整数', () 
   }
   assert.equal(validateConfig({ content: { maxBytes: 1 } }).issues, undefined);
 });
+
+test('已删除的开关在装载期点名迁移说明，而不是静默忽略或保留失效别名', () => {
+  const { issues } = validateConfig({ rules: { denyDelegatedWrites: false } });
+  assert.equal(issues.length, 1);
+  assert.match(issues[0], /rules\.denyDelegatedWrites: unknown rule switch/u);
+  assert.match(issues[0], /该开关已删除.*主会话代问/u);
+  assert.throws(
+    () => resolveConfig({ rules: { denyDelegatedWrites: true } }),
+    (error) => error.code === 'POLICY_CONFIG_INVALID',
+  );
+});

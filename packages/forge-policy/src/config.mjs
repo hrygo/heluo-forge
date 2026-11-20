@@ -30,6 +30,15 @@ export const RULE_KEYS = Object.freeze([
   'confirmDopWrite',
 ]);
 
+/**
+ * 已删除的开关：装载期点名给出迁移说明，既不静默忽略，也不保留会悄悄失效的别名。
+ * 删除理由见 docs/design/plugins/forge-policy.md §5.1.4——子代理受控写恒拒，
+ * 需要确认的写统一由主会话代问。
+ */
+export const REMOVED_RULE_KEYS = Object.freeze({
+  denyDelegatedWrites: '该开关已删除：子代理发起受控写恒拒，需要确认的写由主会话代问；请从配置中移除',
+});
+
 /** 已实现三键：两条逐次确认与内容闸；其余四个开关仍在后续阶段。 */
 export const IMPLEMENTED_RULES = Object.freeze([
   'contentGate',
@@ -104,7 +113,8 @@ function checkRules(issues, rules) {
   }
   for (const [key, value] of Object.entries(rules)) {
     if (!RULE_KEYS.includes(key)) {
-      issues.push(`rules.${key}: unknown rule switch`);
+      const guidance = Object.hasOwn(REMOVED_RULE_KEYS, key) ? `（${REMOVED_RULE_KEYS[key]}）` : '';
+      issues.push(`rules.${key}: unknown rule switch${guidance}`);
       continue;
     }
     if (typeof value !== 'boolean') {
