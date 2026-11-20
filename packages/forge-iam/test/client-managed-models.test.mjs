@@ -1048,3 +1048,40 @@ test('a change made while a save is in flight is queued and wins', async t => {
   await new Promise(setImmediate);
   assert.match(panel.text(panel.render()), /模型配置已自动保存并生效/);
 });
+
+test('declared compliance is shown as context and never as an access badge (issue #202 review)', async t => {
+  const declared = {
+    ...view,
+    modelAccess: { configured: true, state: 'ready', models: [
+      { id: 'restricted-model', name: 'restricted-model', enabled: true, contextWindow: 128000, maxTokens: 8192,
+        inputModalities: ['text'], compliance: { level: 'L3', region: 'cn-north-2' } },
+    ] },
+  };
+  const panel = await mountModels(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(declared);
+    return Response.json({ models: declared.modelAccess.models, view: declared });
+  });
+  t.after(() => panel.close());
+  const text = panel.text(panel.render());
+  assert.match(text, /合规 L3/u);
+  assert.match(text, /区域 cn-north-2/u);
+  // The label is informational: it must not read like a permission or a block.
+  assert.doesNotMatch(text, /已授权|无权限|禁止使用/u);
+});
+
+test('a model that cannot stream offers no way to enable it (issue #202 review)', async t => {
+  const declared = {
+    ...view,
+    modelAccess: { configured: true, state: 'ready', models: [
+      { id: 'no-stream', name: 'no-stream', enabled: false, streaming: false, contextWindow: 128000, maxTokens: 8192, inputModalities: ['text'] },
+    ] },
+  };
+  const panel = await mountModels(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(declared);
+    return Response.json({ models: declared.modelAccess.models, view: declared });
+  });
+  t.after(() => panel.close());
+  const text = panel.text(panel.render());
+  assert.match(text, /不支持流式/u);
+  assert.doesNotMatch(text, /一键启用/u, 'a model the host cannot stream must not offer an enable action');
+});

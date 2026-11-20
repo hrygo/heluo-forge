@@ -94,7 +94,8 @@ export const MESSAGES = Object.freeze({
   IAM_MANUAL_MODEL_CONFLICT: '该模型已在当前目录中，请直接启用，无需重复添加。',
 });
 const error = code => new IamError(code, MESSAGES[code]);
-const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: MESSAGES[code] } } });
+const finish = (code, message = MESSAGES[code]) => ({ type: 'finish', reason: { kind: 'error', failure: { code, message } } });
+const NOT_STREAMABLE_MESSAGE = '该模型不支持流式调用，无法在对话中使用。';
 
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
@@ -155,6 +156,114 @@ function normalizeSelection(value) {
 
 const CATALOG_ENTRY_LIMIT = 500;
 
+/**
+ * Declared catalogue metadata (issue #202 item 3). The contract fixes the
+ * semantics — modality, streaming, context length, max output, compliance
+ * level, deployment region — but not the exact JSON field names, so this reads
+ * a documented alias set and treats anything else as "not declared". An
+ * unusable declaration falls back to the baseline default instead of failing
+ * the whole catalogue: metadata is optional, while a missing or duplicate id
+ * still fails it (fail closed stays where it belongs).
+ */
+const CONTEXT_KEYS = Object.freeze(['context_length', 'contextLength', 'context_window', 'contextWindow', 'max_context_tokens', 'maxContextTokens']);
+const MAX_OUTPUT_KEYS = Object.freeze(['max_output_tokens', 'maxOutputTokens', 'max_completion_tokens', 'maxCompletionTokens', 'max_tokens', 'maxTokens']);
+const MODALITY_KEYS = Object.freeze(['input_modalities', 'inputModalities', 'modalities', 'input']);
+const STREAMING_KEYS = Object.freeze(['streaming', 'stream', 'supports_streaming', 'supportsStreaming']);
+const COMPLIANCE_LEVEL_KEYS = Object.freeze(['level', 'compliance_level', 'complianceLevel', 'tier']);
+const COMPLIANCE_REGION_KEYS = Object.freeze(['region', 'deployment_region', 'deploymentRegion', 'deploy_region', 'deployRegion']);
+/** A capacity beyond this is a parse accident, not a real window; treat as undeclared. */
+const CAPACITY_CEILING = 100_000_000;
+const MODALITIES = Object.freeze(['text', 'image']);
+const COMPLIANCE_TEXT_LIMIT = 64;
+
+const pick = (source, keys) => {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  for (const key of keys) {
+    if (Object.hasOwn(source, key)) return source[key];
+  }
+  return undefined;
+};
+
+/**
+ * Like `pick`, but skips aliases whose value is unusable, so `{streaming: null,
+ * supportsStreaming: false}` still reads as `false` instead of hiding behind the
+ * null. When usable aliases disagree the conservative value wins (see
+ * `declaredStreaming`).
+ */
+const pickValid = (source, keys, accept) => {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  for (const key of keys) {
+    if (!Object.hasOwn(source, key)) continue;
+    const value = source[key];
+    if (accept(value)) return value;
+  }
+  return undefined;
+};
+
+/** Positive integer capacity, or undefined when the declaration is unusable. */
+const usableCapacity = value => typeof value === 'number' && Number.isSafeInteger(value)
+  && value > 0 && value <= CAPACITY_CEILING;
+const declaredCapacity = (source, keys) => pickValid(source, keys, usableCapacity);
+
+/** Declared input modalities, filtered to the two the runtime understands. */
+const declaredModalities = capabilities => {
+  const raw = pickValid(capabilities, MODALITY_KEYS, value => Array.isArray(value) && value.length > 0);
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  // A declaration that mixes a known mode with an unknown one says nothing
+  // reliable about the model: keeping the known subset would advertise, for
+  // example, "image only" for a model that also takes text. The whole
+  // declaration falls back to the text baseline instead.
+  if (raw.some(value => !MODALITIES.includes(value))) return undefined;
+  return [...new Set(raw)];
+};
+
+const declaredStreaming = capabilities => {
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return undefined;
+  const declared = STREAMING_KEYS.filter(key => Object.hasOwn(capabilities, key))
+    .map(key => capabilities[key]).filter(value => typeof value === 'boolean');
+  if (declared.length === 0) return undefined;
+  // Aliases that disagree describe nothing reliable; "cannot stream" is the
+  // conservative reading because it only narrows what the caller may offer.
+  return declared.every(value => value === declared[0]) ? declared[0] : false;
+};
+
+/** Display-only compliance metadata; never an authorization input. */
+function declaredCompliance(compliance) {
+  if (!compliance || typeof compliance !== 'object' || Array.isArray(compliance)) return undefined;
+  const usable = raw => {
+    if (typeof raw !== 'string') return undefined;
+    const value = raw.trim();
+    return value.length > 0 && value.length <= COMPLIANCE_TEXT_LIMIT && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
+  };
+  const read = keys => usable(pickValid(compliance, keys, raw => usable(raw) !== undefined));
+  const level = read(COMPLIANCE_LEVEL_KEYS);
+  const region = read(COMPLIANCE_REGION_KEYS);
+  return level === undefined && region === undefined ? undefined : { ...(level === undefined ? {} : { level }), ...(region === undefined ? {} : { region }) };
+}
+
+/**
+ * Turn one gateway catalogue entry into the runtime model shape. Declared
+ * values win; the 200K/64K/text baselines only fill what the gateway left out.
+ */
+function catalogEntry(item) {
+  const capabilities = item?.capabilities;
+  const contextWindow = declaredCapacity(capabilities, CONTEXT_KEYS);
+  const maxTokens = declaredCapacity(capabilities, MAX_OUTPUT_KEYS);
+  const modalities = declaredModalities(capabilities);
+  const streaming = declaredStreaming(capabilities);
+  const compliance = declaredCompliance(item?.compliance);
+  return {
+    id: item.id,
+    name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : item.id,
+    contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+    input: modalities ?? ['text'],
+    inputModalities: modalities ?? ['text'],
+    ...(streaming === undefined ? {} : { streaming }),
+    ...(compliance === undefined ? {} : { compliance }),
+  };
+}
+
 /** Bound discovery: no redirects, ambient credentials, arbitrary error body or stale results. */
 async function discover(connection, signal, fetcher, headers) {
   const response = await fetcher(`${connection.baseURL}/models`, {
@@ -187,8 +296,9 @@ async function discover(connection, signal, fetcher, headers) {
   const discovered = body.data.map(item => {
     if (!isModelId(item?.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
     seen.add(item.id);
-    // Standard /models does not promise capacity or modality metadata; use default capacity baselines.
-    return { id: item.id, name: item.id, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, input: ['text'], inputModalities: ['text'] };
+    // Declared capabilities win (issue #202); the 200K/64K/text baselines only
+    // fill what the gateway did not declare.
+    return catalogEntry(item);
   });
   // Sort before trimming: the retained subset must not depend on the order the
   // gateway happened to answer in, or an already enabled model could vanish
@@ -256,8 +366,36 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let selectionLoaded = false; let selectionOwner = null;
   const settingsIdentity = (view) => JSON.stringify([identity(view), iam.getModelAuthorizationEpoch?.() ?? null]);
   const enabled = id => Object.hasOwn(modelOptions, id);
-  const callable = model => enabled(model.id);
-  const enabledModel = (route, model) => route === provider && enabled(model) ? models.find(item => item.id === model) : undefined;
+  const streamable = id => rawModels.find(item => item.id === id)?.streaming !== false;
+  // One contract code, four causes that must not be conflated (issue #206).
+  const DENIED_LOCALLY = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '该模型在本机未启用，请在设置中启用。' });
+  const NOT_IN_CATALOG = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '企业目录未提供该模型。' });
+  const NOT_STREAMABLE = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: NOT_STREAMABLE_MESSAGE });
+  const INTERNAL_REFUSAL = Object.freeze({ code: 'IAM_INTERNAL', message: '内部错误，请重试；持续失败请联系管理员。' });
+  // The waterfall sees every provider this host may route to: a foreign route
+  // there is a policy refusal, not a caller bug.
+  const FOREIGN_PROVIDER = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '企业环境仅允许使用企业模型。' });
+  function denialFor(route, model, { guard = false } = {}) {
+    if (route !== provider) return guard ? FOREIGN_PROVIDER : INTERNAL_REFUSAL;
+    const entry = models.find(item => item.id === model) ?? rawModels.find(item => item.id === model);
+    if (!entry) {
+      // An enabled manual route this snapshot cannot see (a pending refresh) is
+      // not a catalogue decision: keep it callable. Anything else without a
+      // catalogue read is a gateway-side failure, not "never offered".
+      if (enabled(model) && manualModels.some(item => item.id === model)) return null;
+      if (!catalogueRead) {
+        const code = catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
+        return { code, message: MESSAGES[code] ?? MESSAGES.ENTERPRISE_MODELS_UNAVAILABLE };
+      }
+      return NOT_IN_CATALOG;
+    }
+    if (entry.streaming === false) return NOT_STREAMABLE;
+    if (!enabled(model)) return DENIED_LOCALLY;
+    return null;
+  }
+  const selectableId = id => enabled(id) && streamable(id);
+  const callable = model => selectableId(typeof model === 'string' ? model : model.id);
+  const enabledModel = (route, model) => route === provider && selectableId(model) ? models.find(item => item.id === model) : undefined;
   const allowed = (route, model) => Boolean(enabledModel(route, model));
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let lastSettingsIdentity; let lastSessionIdentity; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
@@ -266,7 +404,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // The catalogue can move ahead of a failed adapter rebuild. Only the
   // unchanged subset installed for this binding is still safe to dispatch.
   let installedModels = new Map();
-  const installed = model => Boolean(backend) && isDeepStrictEqual(installedModels.get(model.id), model);
+  // Install state must not depend on display-only metadata: a catalogue refresh
+  // that changes only the compliance label, or a rebuild that fails after such a
+  // change, must not turn an otherwise callable model into an unusable one.
+  const callShape = model => JSON.stringify([model?.id, model?.contextWindow, model?.maxTokens, model?.inputModalities, model?.streaming]);
+  const installed = model => Boolean(backend) && installedModels.has(model.id)
+    && callShape(installedModels.get(model.id)) === callShape(model);
   const credentialRevoked = () => revokedBinding === lastId;
   // Bounded compensation for a refresh that lost its race to a context change:
   // one rebuild per version, never more than REBUILD_ATTEMPT_LIMIT in a row.
@@ -438,14 +581,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   /** Answered before a stream starts: the call must still belong to this context. */
   function refusal(request, captured) {
     const denied = permit(sample());
-    if (disposed) return 'ENTERPRISE_MODELS_UNAVAILABLE';
-    if (denied) return denied;
-    if (captured !== undefined && captured !== version) return 'IAM_MODEL_CONTEXT_CHANGED';
-    if (credentialRevoked()) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
-    if (!backend) return adapterError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
+    const plain = code => (code ? { code, message: MESSAGES[code] } : null);
+    if (disposed) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
+    if (denied) return plain(denied);
+    if (captured !== undefined && captured !== version) return plain('IAM_MODEL_CONTEXT_CHANGED');
+    if (credentialRevoked()) return plain('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+    if (!backend) return plain(adapterError ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     const model = enabledModel(request.provider, request.model);
-    if (!model) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
-    if (!installed(model)) return 'ENTERPRISE_MODELS_UNAVAILABLE';
+    if (!model) return denialFor(request.provider, request.model, { guard: true });
+    if (!installed(model)) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
     return null;
   }
   /**
@@ -509,9 +653,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const reportFailure = (request, cause, code, stage, transport) => {
     try { diagnoseFailure?.({ detailCode: cause?.code ?? code, code, message: MESSAGES[code] ?? MESSAGES.ENTERPRISE_GATEWAY_CALL_FAILED, stage, request, ...(transport ? { transport } : {}) }); } catch { /* diagnostics never change the answer */ }
   };
-  const failed = (request, cause, code, stage, transport) => {
+  const failed = (request, cause, code, stage, transport, message) => {
     reportFailure(request, cause, code, stage, transport);
-    const chunk = finish(code);
+    const chunk = finish(code, message ?? MESSAGES[code]);
     diagnosed.add(chunk);
     return chunk;
   };
@@ -520,6 +664,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
    * request would: a stalled recovery must not hang the answer.
    */
   async function rebuildBinding(request) {
+    if (process.env.DBG304) console.error('REBUILD');
     let timer;
     const sync = refresh();
     const localReady = flight?.localReady;
@@ -588,22 +733,25 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       yield failed(request, cause, mapped, 'local');
       return;
     }
-    let code = refusal(request, captured);
+    let denial = refusal(request, captured);
     // A prepared call that outlived its selection is re-prepared when it still
     // belongs to this person: the model is still callable, only the context
     // generation moved. A different account is not recoverable by re-preparing.
-    if (code === 'IAM_MODEL_CONTEXT_CHANGED') {
+    if (denial?.code === 'IAM_MODEL_CONTEXT_CHANGED') {
       const moved = preparedSubject !== undefined && iam.getView()?.principal !== preparedSubject;
-      if (moved) code = 'IAM_LOGIN_REQUIRED';
+      if (moved) denial = { code: 'IAM_LOGIN_REQUIRED', message: MESSAGES.IAM_LOGIN_REQUIRED };
       else if (redispatch) {
-        try { await redispatch(); checkSession(); captured = version; code = refusal(request, captured); }
+        try { await redispatch(); checkSession(); captured = version; denial = refusal(request, captured); }
         catch (cause) {
           if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
           const mapped = record(failureCode(cause)); yield failed(request, cause, mapped, 'local'); return;
         }
       }
     }
-    if (code) { yield failed(request, null, code, 'local'); return; }
+    if (denial) { if (process.env.DBG304) console.error('DENIAL', JSON.stringify(denial)); yield failed(request, null, denial.code, 'local', undefined, denial.message); return; }
+    // Reused by the streaming loop below; the initial refusal above is already
+    // settled, so this holds only per-attempt failure codes.
+    let code;
     const subject = iam.getView()?.principal;
     const streamLease = renewLease();
     const signal = AbortSignal.any([lifetime.signal, streamLease.signal, ...(request.signal ? [request.signal] : [])]);
@@ -618,7 +766,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
     const retryTransport = async (attempt, cause, mapped) => {
       if (emitted || retried || signal.aborted || mapped !== 'ENTERPRISE_GATEWAY_UNAVAILABLE' || !modelPreconnectFault(attempt)
-        || refusal(request, attempt.version)) return false;
+        || Boolean(refusal(request, attempt.version))) return false;
       retried = true;
       retryVersion = attempt.version;
       reportFailure(request, cause, mapped, 'unknown', modelTransportDiagnostic(attempt, output, true));
@@ -662,8 +810,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           try {
             checkSession();
             signal.throwIfAborted();
-            const denied = refusal(request, this.version);
-            if (denied) { this.denied = denied; throw error(denied); }
+            // Keep the denial object: flattening it loses the message and even
+            // leaks `code: true` into the failure that reaches the person.
+            const denial = refusal(request, this.version);
+            if (denial) { this.denied ??= denial.code; throw error(denial.code); }
           } catch (cause) {
             this.denied ??= streamRefusal() ?? failureCode(cause);
             throw cause;
@@ -673,8 +823,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       try {
         checkSession();
         signal.throwIfAborted();
-        code = refusal(request, retryVersion);
-        if (code) { yield failed(request, null, code, 'local'); return; }
+        const retryDenial = refusal(request, retryVersion);
+        if (retryDenial) { yield failed(request, null, retryDenial.code, 'local', undefined, retryDenial.message); return; }
         const send = () => dispatch({ ...current, signal });
         for await (const chunk of attempt ? trackModelAttempt(send, attempt) : send()) {
           code = streamRefusal();
@@ -746,8 +896,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
             await rebuildBinding(request);
             checkSession();
             // A successful directory read can finish without a usable route.
-            code = refusal(request);
-            if (code) { yield failed(request, null, code, 'local'); return; }
+            const reboundDenial = refusal(request);
+            if (reboundDenial) { yield failed(request, null, reboundDenial.code, 'local', undefined, reboundDenial.message); return; }
             if (redispatch) await redispatch();
             continue;
           }
@@ -917,6 +1067,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       syncRawModels();
       const available = applyModelOptions(rawModels, modelOptions);
       let builtLocally = false;
+      if (process.env.DBG304) console.error('LOCAL', JSON.stringify({sel: selectionSubject, principal: iam.getView().principal, subject: connection.subject, backend: Boolean(backend), avail: available.map(m=>m.id), inst: [...installedModels.keys()]}));
       if (selectionSubject === iam.getView().principal && selectionSubject === connection.subject
         && available.some(callable) && (!backend || installedModels.size !== available.length || !available.every(installed))) {
         builtLocally = await refreshAdapter(connection, available, current, settings);
@@ -949,7 +1100,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // gateway still offers it, otherwise the first catalogue entry (the
       // catalogue is sorted, so "first" is stable across refreshes).
       if (!selectionSaved && nextRawModels.length > 0) {
-        const chosen = pickDefaultModel(nextRawModels, config.defaultModel);
+        // Judge selectability against the catalogue this refresh just read:
+        // `rawModels` still holds the previous snapshot (empty on first run).
+        const selectableIn = id => nextRawModels.find(item => item.id === id)?.streaming !== false;
+        const chosen = pickDefaultModel(nextRawModels, config.defaultModel, selectableIn);
         if (chosen) {
           nextOptions = { [chosen]: {} };
           nextDefault = chosen;
@@ -962,8 +1116,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           if (flight?.promise === task) flight.version = mine;
           current();
         }
-      } else if (!nextDefault || !enabled(nextDefault) || !nextRawModels.some(m => m.id === nextDefault)) {
-        nextDefault = nextRawModels.find(m => enabled(m.id))?.id ?? Object.keys(nextOptions)[0] ?? null;
+      } else if (!nextDefault || !callable(nextDefault) || !nextRawModels.some(m => m.id === nextDefault)) {
+        nextDefault = nextRawModels.find(m => callable(m))?.id ?? null;
       }
       const entries = applyModelOptions(nextRawModels, nextOptions);
       if (!builtLocally || !isDeepStrictEqual(available, entries)) {
@@ -980,7 +1134,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publishSelection(scope, selectionPersisted);
       await syncHostDefault(); current();
-      return { models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
+      return { models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities, streaming, compliance }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities, ...(streaming === undefined ? {} : { streaming }), ...(compliance === undefined ? {} : { compliance }) })), truncated: catalogTruncated };
     }).catch(cause => {
       // Our own cancellation is not a gateway outage. Telling the person to
       // check the gateway address after we stopped the request ourselves sends
@@ -1132,7 +1286,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         const subject = iam.getView()?.principal;
         // Even a saved selection after logout reaches an actionable sign-in error.
         if (!permit(iam.getView()) && !allowed(route, model)) {
-          const cause = error('ENTERPRISE_MODEL_NOT_ALLOWED');
+          // `permit()` may be the real blocker (signed out, revoked); keep its
+          // outcome when the model itself is fine, so nothing pretends the
+          // catalogue is at fault.
+          const denial = denialFor(route, model)
+            ?? { code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: MESSAGES.ENTERPRISE_MODEL_NOT_ALLOWED };
+          const cause = new IamError(denial.code, denial.message);
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
         }
@@ -1164,7 +1323,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       };
       if (key === 'resolveModel') return async (route, model, signal) => {
         if (!permit(sample()) && !allowed(route, model)) {
-          const cause = error('ENTERPRISE_MODEL_NOT_ALLOWED');
+          // `permit()` may be the real blocker (signed out, revoked); keep its
+          // outcome when the model itself is fine, so nothing pretends the
+          // catalogue is at fault.
+          const denial = denialFor(route, model)
+            ?? { code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: MESSAGES.ENTERPRISE_MODEL_NOT_ALLOWED };
+          const cause = new IamError(denial.code, denial.message);
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
         }
@@ -1280,6 +1444,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (!catalogueKnown && enabled(id)) continue;
       delete nextMap[id];
     }
+    // A model that declares no streaming support cannot be enabled at all:
+    // drop it from the submitted set instead of storing a dead option.
+    for (const id of Object.keys(nextMap)) if (!streamable(id)) delete nextMap[id];
     const nextDefault = defaultModelId && Object.hasOwn(nextMap, defaultModelId)
       ? defaultModelId : Object.keys(nextMap)[0] ?? null;
     const persisted = await persistSelection(settings, { models: nextMap, defaultModelId: nextDefault, manual: manualModels });
@@ -1309,7 +1476,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ok: true, persisted,
       defaultModelId,
       enabled: Object.keys(modelOptions),
-      models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities }))
+      models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities, streaming, compliance }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities, ...(streaming === undefined ? {} : { streaming }), ...(compliance === undefined ? {} : { compliance }) }))
     };
   }
 
@@ -1466,7 +1633,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         hostDefaultModel: hostDefault,
         enabled: Object.keys(modelOptions),
         selectionError: selectionError ?? selectionWriteError,
-        models: models.map(({ id, name, source, hasManualEntry, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
+        models: models.map(({ id, name, source, hasManualEntry, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning, streaming, compliance }) => ({
           id,
           name,
           source: source ?? 'gateway',
@@ -1476,9 +1643,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           inputModalities: inputModalities ?? ['text'],
           reasoningEfforts: reasoningEfforts ?? null,
           reasoning: Boolean(reasoning),
+          // Declared metadata for display only (issue #202 item 4): showing a
+          // compliance level or region never grants or denies access here.
+          ...(streaming === undefined ? {} : { streaming }),
+          ...(compliance === undefined ? {} : { compliance }),
           // A listed model is not necessarily callable; only enabled ones are.
-          enabled: enabled(id),
-          isDefault: defaultModelId === id,
+          // Same rule as the native picker and the save path: a model that cannot
+          // stream is listed but never enabled or shown as the default.
+          enabled: enabled(id) && streamable(id),
+          isDefault: defaultModelId === id && callable(id),
         })),
         modelOptions: { ...modelOptions }
       };

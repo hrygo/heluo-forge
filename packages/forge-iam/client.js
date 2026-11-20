@@ -2509,6 +2509,13 @@ window.__ModuleLoader__.load({
       const hasImage = currentModalities.includes('image');
       const reasoningBounds = getReasoningEffortBounds(opt.reasoningEfforts ?? model.reasoningEfforts ?? buildReasoningEffortRange('off', 'high'));
       const hasReasoning = reasoningBounds.enabled || Boolean(model.reasoning);
+      // Declared compliance is informational only: it never grants or denies a
+      // call, so it is rendered as plain text and cannot be edited (issue #202).
+      const declaredCompliance = model.compliance && typeof model.compliance === 'object' ? model.compliance : null;
+      const complianceText = declaredCompliance
+        ? [typeof declaredCompliance.level === 'string' ? `合规 ${declaredCompliance.level}` : '',
+          typeof declaredCompliance.region === 'string' ? `区域 ${declaredCompliance.region}` : ''].filter(Boolean).join(' · ')
+        : '';
       const reasoningBadgeText = reasoningBounds.enabled
         ? (reasoningBounds.lower === reasoningBounds.upper
           ? `深度推理 · ${REASONING_LEVEL_SHORT[reasoningBounds.lower]}`
@@ -2534,6 +2541,8 @@ window.__ModuleLoader__.load({
                 : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
+              model.streaming === false ? h('span', { className: 'fiam-model-meta-status' }, '不支持流式') : null,
+              model.streaming === false ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
               !isEnabled ? h('span', { className: 'fiam-model-meta-status' }, '未启用') : null,
               !isEnabled ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
               h('span', { className: 'fiam-model-meta-spec' }, `${contextVal} · 输出 ${maxTokensVal}`),
@@ -2541,6 +2550,8 @@ window.__ModuleLoader__.load({
               hasImage ? h('span', { className: 'fiam-model-meta-item' }, '视觉图片') : null,
               hasReasoning ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
               hasReasoning ? h('span', { className: 'fiam-model-meta-item' }, reasoningBadgeText) : null,
+              complianceText ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
+              complianceText ? h('span', { className: 'fiam-model-meta-item', title: '网关声明的合规信息，仅作展示，不参与授权判定' }, complianceText) : null,
               displayName !== model.id ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
               displayName !== model.id ? h('span', { className: 'fiam-model-meta-id' }, model.id) : null,
             ),
@@ -2558,7 +2569,7 @@ window.__ModuleLoader__.load({
                 onClick: () => disableModelWithSave(model.id),
               }, '停用')
               : null,
-            !isEnabled
+            !isEnabled && model.streaming !== false
               ? h('button', {
                 type: 'button',
                 className: 'forge-iam-primary fiam-quick-btn',
@@ -2781,13 +2792,15 @@ window.__ModuleLoader__.load({
                     'aria-label': `停用 ${model.id}`,
                     onClick: () => disableModelOption(model.id),
                   }, '停用模型')
-                  : h('button', {
-                    type: 'button',
-                    style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
-                    disabled: actionBusy,
-                    'aria-label': `启用 ${model.id}`,
-                    onClick: () => enableModelOption(model.id),
-                  }, '启用模型')
+                  : model.streaming === false
+                    ? h('span', { style: { ...muted, fontSize: 12 } }, '该模型不支持流式调用，不可启用')
+                    : h('button', {
+                      type: 'button',
+                      style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
+                      disabled: actionBusy,
+                      'aria-label': `启用 ${model.id}`,
+                      onClick: () => enableModelOption(model.id),
+                    }, '启用模型')
               ),
               h('div', { className: 'fiam-model-actions-right' },
                 h('button', {
@@ -3549,7 +3562,14 @@ window.__ModuleLoader__.load({
         await persistModelOptions(optionsRef.current, '模型精细化配置已保存并生效。');
       };
 
+      // The view is the single source for optionality: a model that declares no
+      // streaming support cannot be enabled even by the bulk action.
+      const selectableModel = id => (view?.modelAccess?.models ?? []).find(item => item.id === id)?.streaming !== false;
+
       const enableModelWithDefaults = async (id) => {
+        // A model that declares no streaming support cannot be enabled; the
+        // server would drop it and the panel would have claimed success.
+        if (!selectableModel(id)) return;
         const nextOptions = { ...modelOptions, [id]: {} };
         applyModelOptions(nextOptions);
         await persistModelOptions(nextOptions, `已采用默认参数启用 ${id} 并生效。`);
@@ -3559,7 +3579,7 @@ window.__ModuleLoader__.load({
         const currentModels = view?.modelAccess?.models ?? [];
         const nextOptions = { ...modelOptions };
         for (const m of currentModels) {
-          if (m?.id && !Object.hasOwn(nextOptions, m.id)) {
+          if (m?.id && selectableModel(m.id) && !Object.hasOwn(nextOptions, m.id)) {
             nextOptions[m.id] = {};
           }
         }

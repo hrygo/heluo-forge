@@ -63,9 +63,13 @@ export function validateManagedModels(input) {
  * it; otherwise the first catalogue entry is taken. The catalogue is sorted, so
  * "first" is stable across refreshes instead of depending on response order.
  */
-export function pickDefaultModel(models, preferred) {
+export function pickDefaultModel(models, preferred, selectable = () => true) {
   if (!Array.isArray(models)) return undefined;
-  const ids = models.map(item => item?.id).filter(id => typeof id === 'string' && id.length > 0);
+  // A model the host cannot stream must not become the first-run default: the
+  // person would start with a choice that can never run (issue #202 review).
+  const ids = models
+    .filter(item => item && typeof item.id === 'string' && item.id.length > 0 && selectable(item.id))
+    .map(item => item.id);
   if (ids.length === 0) return undefined;
   const wanted = typeof preferred === 'string' ? preferred.trim() : '';
   if (wanted && ids.includes(wanted)) return wanted;
