@@ -1952,3 +1952,56 @@ test('the last scheduled retry still honours a newer longer Retry-After (issue #
   // The pending (last) retry must be cancelled, not fired against the gateway.
   assert.equal(f.runtime.getView().retryAt, null);
 });
+
+test('a failed first directory read reports the same gateway cause on both entries (issue #380)', async t => {
+  const f = fixture({ fetch: async () => new Response('{}', { status: 503 }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  // Direct entry.
+  const prepared = await f.adapter.prepareCall('enterprise', 'enterprise-chat').then(() => null, error => error);
+  assert.equal(prepared?.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  // Stream guard entry: the same directory failure must not become a generic
+  // "models unavailable", or the two entries would describe different causes.
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'enterprise-chat', messages: [] }, async function* () {
+    yield { type: 'text', text: 'leak' };
+  }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+});
+
+test('a manual route and the stream guard agree when the directory failed (issue #380)', async t => {
+  const f = fixture({
+    selection: { models: { 'manual-enabled': {} }, defaultModelId: 'manual-enabled', manual: [{ id: 'manual-enabled' }] },
+    fetch: async () => new Response('{}', { status: 503 }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // A manual route is user-configured and does not depend on the catalogue, so
+  // both entries may serve it; what matters is that they describe the same state.
+  const prepared = await f.adapter.prepareCall('enterprise', 'manual-enabled').then(call => ({ call }), error => ({ error }));
+  const fromCall = prepared.error
+    ? { code: prepared.error.code }
+    : { code: (await chunks(prepared.call.stream({ provider: 'enterprise', model: 'manual-enabled', messages: [] }))).at(-1)?.reason?.failure?.code ?? null };
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'manual-enabled', messages: [] }, async function* () {
+    yield { type: 'text', text: 'ok' };
+  }));
+  const fromGuard = streamed.at(-1)?.reason?.failure?.code ?? null;
+  // Either both refuse with the same cause or both serve; never one of each.
+  assert.equal(fromCall.code ?? null, fromGuard ?? null, `prepareCall=${fromCall.code} guard=${fromGuard}`);
+});
+
+test('only a directory that was actually read can say the model is not offered (issue #380)', async t => {
+  const f = fixture({
+    selection: { models: { 'manual-enabled': {} }, defaultModelId: 'manual-enabled', manual: [{ id: 'manual-enabled' }] },
+    fetch: async () => new Response(JSON.stringify({ data: [] })),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const prepared = await f.adapter.prepareCall('enterprise', 'ghost').then(() => null, error => error);
+  assert.equal(prepared?.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'ghost', messages: [] }, async function* () {
+    yield { type: 'text', text: 'leak' };
+  }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.match(streamed[0].reason.failure.message, /企业目录未提供该模型/u);
+});
