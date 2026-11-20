@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.2.2 |
+| 版本 | V1.2.3 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -18,9 +18,9 @@
 | 确认日期 | 2026-11-20 |
 | 确认事项 | Delegra 组装和调度专家。所有镜像包含 Codex、Python 和 uv，构建、验收与交付统一使用 `linux/arm64`。镜像构建、测试和发布归属 `hrygo/Delegra`。Heluo Forge 按发布回执登记和验证 `name@digest`。镜像方案覆盖受监管机构开发、测试、运维和办公，按 DRY 与 SOLID 复用公共层，在保全 Agent 与 Codex 必需能力的前提下压缩体积。首版使用发起用户的授权，允许把 DSH IAM 获取的网关连接交给本次任务的 Harness 使用。接入 AIGS 后按用户与 Agent 两种身份的权限交集执行。 |
 | 适用范围 | 专家组成、`linux/arm64` 镜像、首版 DSH 用户凭据与 AIGS 双主体授权。 |
-| 门禁 | 按 §3、§8 分别验收本地 ARM64 制品与目标 Runner。企业凭据接入须满足 §4、§6.4 的授权、契约与实测判据。 |
+| 门禁 | 目标 Runner 按 §8 验收。企业凭据接入须满足 §4、§6.4 的授权、契约与实测判据。 |
 
-> 编制依据为[运行时镜像概念简报](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md)、2026-11-20 的[本机镜像与模拟网关探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md)，以及 Delegra 标签 `deploy/v2026.1106.0-r2` 的构建和 Codex 配置源码。目标制品库和真实 Runner 待验收，企业网关连接待联调。
+> 编制依据为[运行时镜像概念简报](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md)、2026-11-20 的[本机镜像与模拟网关探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md)，以及 Delegra 标签 `deploy/v2026.1106.0-r2` 的构建和 Codex 配置源码。Delegra 首版发布、GHCR 摘要拉取和冒烟证据见[镜像实测记录](verification/delegra-runtime-images.md#按摘要选用发布镜像)。目标 Runner 待验收，企业网关连接待联调。
 >
 > 关联文档为[专家智能体 PRD](../requirements/delegra-experts-prd.md)、[专家接入方案](../plans/2026-11-18-forge-experts-integration-proposal.md)和[企业 AI 网关契约](../contracts/gateway-contract.md)。
 

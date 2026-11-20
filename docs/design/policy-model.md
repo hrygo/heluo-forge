@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-020 |
 | 文档名称 | 策略判定模型设计 |
-| 版本 | V0.2.0 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -15,7 +15,10 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-11-20 |
 | 门禁 | G2 |
-| 模块状态 | 部分实现（P0 受控写骨架已上线：目录、身份、审计、收据；内容/流程/确认按[实施计划](../plans/2026-11-19-policy-minimal-gates.md)分阶段接入） |
+| 确认人 | 项目负责人 |
+| 确认日期 | 2026-11-20 |
+| 确认事项 | 移除 `denyDelegatedWrites`，受控写规则目录保留七条 |
+| 适用范围 | 策略判定模型的规则目录。其他裁决见编制依据及实施计划 |
 
 > 编制依据：2026-11-16 内网 UAT 观测——活动 profile 的补丁层未覆盖 `heluo-policy`，生效配置由 `forge-enterprise`、`forge-devops`、`forge-gitee` 三个 bundle 层同 id 折叠而成；策略目录只有六条只读动作，六个写动作全部返回 `deny / unregistered-action`，零子进程、零远端调用。同日源码核验：`packages/forge-policy/src/catalog.mjs:66,68`（`egress` 缺省 `confirm`、`enabled` 仅接受布尔 `true`）、`packages/forge-policy/src/installer.mjs:223-226`、`packages/forge-policy/src/approvals.mjs:142`、`packages/forge-policy/src/gate.mjs:65-88`、`packages/forge-gitee/src/gitee-guard.mjs:212,281`、`packages/forge-gitee/src/gitee-actions.mjs:53-58,490`。规则格式复用 `scripts/sensitive-scan/rules.example.json`，推送前扫描的提交集合取法复用 `scripts/sensitive-scan/team-pre-push.mjs` 的 `rev-list base..head`。判定模型的取舍经项目负责人 2026-11-16 逐项确认（确认人：项目负责人；确认事项：默认分层、托管与签名、身份与确认、内容规则边界；适用范围：本文 §4–§9）。**2026-11-19 复决**：确认通道改用宿主问答卡片、范围票据整层取消、规则开关代码默认全关由部署者逐条开启（决策与阶段见[实施计划](../plans/2026-11-19-policy-minimal-gates.md)；2026-11-20 复决删除 `denyDelegatedWrites`，现为七条），本文已按此修订。
 >

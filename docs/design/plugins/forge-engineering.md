@@ -6,15 +6,15 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-019 |
 | 文档名称 | 企业研发工具套件详细设计 |
-| 版本 | V1.1.0 |
-| 文档状态 | 草案 |
+| 版本 | V1.1.1 |
+| 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
-| 门禁 | G2 |
+| 最后更新 | 2026-11-20 |
+| 门禁 | G2：独立组合包与离线契约已有验证；真实企业 CLI、OS 凭据库和双端 GUI 待联调 |
 | 模块状态 | 可用（独立可预装企业研发组合包：`heluo-engineering-ui`、`enterprise-issue-delivery`、`@heluo/forge-devops`、`@heluo/forge-gitee` 与共享 `@heluo/forge-policy` 六动作目录；实现与验证见[设计索引 §2.2](../README.md#22-实现与验证入口)） |
 
 > 编制依据：依据 [总体架构](../../architecture/platform-architecture.md)、[企业组合包详细设计](forge-enterprise.md)、[企业设置菜单统一与 Token 收敛详细设计](../enterprise-menu-and-token-unification.md)、[DevOps 接入设计](forge-devops.md) 与 [Gitee 接入设计](forge-gitee.md) 编制；双包同装与单包独立装配语义基于 DSH 宿主机清单与 `cordis-plugin-loader` 合并实测。真实企业 DevOps / Gitee CLI、OS 凭据库与双端 GUI 实机联调尚未完成。

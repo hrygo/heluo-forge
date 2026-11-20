@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.50.0 |
+| 版本 | V1.50.2 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 负责 | 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-19 |
+| 最后更新 | 2026-11-20 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -46,9 +46,9 @@
 |---|---|---|---|
 | `requirements/` | 范围、画像、场景、需求与指标 | [需求与场景基线](<requirements/requirements-baseline.md>) | 业务方、PM、安全、试点用户 |
 | `architecture/` | 跨域决策、信任边界、领域设计、ADR | [总体架构设计](<architecture/platform-architecture.md>)；[专用访问评审](architecture/gateway-identity-review.md)，[静态 Key 接入](architecture/gateway-static-key-option.md)仅保留历史依据 | 架构评审、各团队负责人 |
-| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>)；本地 [IAM 联合变更计划](<plans/2026-11-02-iam-gateway-atomic.md>)、[默认模型只读编排计划](<plans/2026-11-02-iam-default-model-readonly.md>)、[隔离消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)；后续[收尾计划](<plans/2026-11-03-iam-mock-closeout.md>)；[多端凭据存储方案](<plans/2026-11-03-credential-multiplatform.md>)（默认组合止血、非生产样机与生产门禁分开）；执行侧 [IAM Issue 实施计划](<plans/2026-11-04-iam-issues-implementation.md>)、[双端验收矩阵](<plans/2026-11-04-iam-dual-platform-acceptance.md>)、[账号启动器计划](<plans/2026-11-04-iam-launcher.md>)；历史记账 [修复验收台账](<plans/fix-acceptance-ledger.md>)；本轮 [Issue #254 审查处置与覆盖台账](<plans/2026-11-12-issue-254-review-ledger.md>) | PM、实施团队 |
+| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>)；本地实施记录 [IAM 联合变更计划](<plans/2026-11-02-iam-gateway-atomic.md>)、[默认模型只读编排计划](<plans/2026-11-02-iam-default-model-readonly.md>)、[隔离消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)、[收尾计划](<plans/2026-11-03-iam-mock-closeout.md>)；[多端凭据存储方案](<plans/2026-11-03-credential-multiplatform.md>)（默认组合止血、非生产样机与生产门禁分开）；执行侧 [IAM Issue 实施计划](<plans/2026-11-04-iam-issues-implementation.md>)、[双端验收矩阵](<plans/2026-11-04-iam-dual-platform-acceptance.md>)、[账号启动器计划](<plans/2026-11-04-iam-launcher.md>)；历史记账 [修复验收台账](<plans/fix-acceptance-ledger.md>)；[Issue #254 审查处置与覆盖台账](<plans/2026-11-12-issue-254-review-ledger.md>) | PM、实施团队 |
 | `design/` | 逐模块详细设计的索引与状态 | [设计索引](<design/README.md>) | 插件与服务开发者 |
-| `contracts/` | 外部系统字段级契约与明确标注的私有隔离草案 | [AI 网关契约](<contracts/gateway-contract.md>)；[IAM 消费隔离草案](<contracts/iam-consumer-isolated.md>)（source/mock见证/许可/合成工具与模型已分段验收；根联合已实现，本地验收已完成，真实准入未开放）；[IAM 只读订阅隔离草案](<contracts/iam-view-observer-isolated.md>)（私有source/mock接缝已验收；真实注册关闭） | 网关、模型与安全团队 |
+| `contracts/` | 外部系统字段级契约与限定范围的私有隔离契约 | [AI 网关契约](<contracts/gateway-contract.md>)；[IAM 消费隔离契约](<contracts/iam-consumer-isolated.md>)（source/mock见证/许可/合成工具与模型已分段验收；根联合已实现，本地验收已完成，真实准入未开放）；[IAM 只读订阅隔离契约](<contracts/iam-view-observer-isolated.md>)（私有source/mock接缝已验收；真实注册关闭） | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
 | `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
 | `engineering/` | 仓库结构、开发测试与发布约定、插件跨包规范 | [工程结构设计](<engineering/repository-structure-design.md>)；[SQLite 存储扩展与使用规范](<engineering/sqlite-storage-conventions.md>) | 工程负责人、维护者 |
@@ -73,7 +73,7 @@
 | 终端打包 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
 | 试点推广 | 分批计划、指标采集、支持渠道、退出条件，人数与范围见[需求基线](requirements/requirements-baseline.md#2-范围边界唯一真源) |
 
-IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.md>)、[字段契约](<contracts/iam-client-auth-isolated.md>)。完整 source/mock 设计已获用户批准，[实施计划](<plans/2026-11-02-iam-confidential-isolated.md>)已登记；基础 schema、来源/HTTP、codec 与实际机密隔离服务已验；真实来源未开放。消费模拟A/B/C/D已分段验收，E根联合16项定向通过，源码、联合审阅与本批完整检查已完成，见[消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)。
+IAM 隔离开发见[机密认证设计](design/iam-confidential-isolated.md)、[机密客户端契约](contracts/iam-client-auth-isolated.md)和[消费隔离契约](contracts/iam-consumer-isolated.md)。验收证据见[机密客户端实施记录](plans/2026-11-02-iam-confidential-isolated.md)及[消费隔离实施记录](plans/2026-11-02-iam-consumer-isolated.md)。
 
 企业研发跨模块草案：[全流程能力设计](design/plugins/forge-devops-lifecycle.md)、[工具动作契约](contracts/engineering-tools.md)、[观察事件契约](contracts/metrics-events.md)。覆盖已确认受控写目标与待审批项，不改变上述十项团队交付物的负责关系，也不代表接口已核验。
 
@@ -138,7 +138,9 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 模块验证记录 | 记可追溯的版本、环境、结果与未验项；可放在模块设计的验证章节，或 `design/verification/` 的模块实测记录。后者不立文档编号或审批，不作为技术契约 |
 | 仓库说明与模板 | 根 README、AGENTS、CONTRIBUTING、SECURITY、模块职责 README、仅描述当前代码行为的随包使用说明和模板不因存在而成为已批准的技术契约，不强加受控正文编号；随包说明不承载外部契约或生产准入批准 |
 
-受控正文缺少必备内容时按草案处理，不标“评审稿”或“生效”。agent 代拟时标注“代拟”，未发生的审核、批准保持“待定”；既有真实记录保留，不倒填审批人。用户已确认的需求须记录确认人、日期、事项与适用范围，不得继续标为待第三方批准，也不得扩写为整篇技术方案获批。
+受控正文的文档信息表作为首个二级章节，使正文与派生清单使用同一份属性。
+
+受控正文缺少必备内容时按草案处理，不标“评审稿”或“生效”。agent 代拟时标注“代拟”，未发生的审核、批准保持“待定”；既有真实记录保留，不倒填审批人。用户已确认的需求须记录确认人、日期、事项与适用范围，不得继续标为待第三方批准，也不得扩写为整篇技术方案获批。文档状态填写该版本的编审或归档阶段。已经完成并经确认的隔离契约或设计可在获批的范围内生效，适用范围和门禁明确其环境边界。单项决定或限定环境的批准可与草案、评审稿并存，确认事项与适用范围须明确其边界。多次确认时，表中填写所列决定对应的一个日期，其余历史决定保留在编制依据或原始记录中。
 
 检查器按机器规则执行：受控正文的审核／批准只要不全是待定（允许“待定（…）”注解），文档状态就必须为“生效”。所有生效正文均须在文档信息表保留确认人、真实的 `YYYY-MM-DD` 确认日期、确认事项与适用范围，即使审核或批准栏仍标注待定，也不能只改状态。格式检查只证明记录形态完整，不等于确认事实已被核实。本文、文档清单、设计索引、运维索引的审核／批准栏沿用项目自身标识，不适用该确认记录规则，也不构成对外审批凭证。
 
@@ -167,7 +169,7 @@ L1 是总体架构，L2 是需求与实施计划，L3 是字段级契约、模�
 
 | 项 | 规则 |
 |---|---|
-| 状态 | 正常推进为“待启动 → 草案 → 评审稿 → 生效”；任一已建文档可按授权废止，保留原文和替代说明。回退写明原因 |
+| 状态 | 正常推进为“待启动 → 草案 → 评审稿 → 生效”；已有交付证据且本文职责结束的实施计划、台账或历史制品说明标为“已归档”，保留正文与编号，并在门禁中注明交付证据和剩余边界。任一已建文档可按授权废止，保留原文和替代说明。回退写明原因 |
 | 生效 | 受控正文须有真实审核与批准记录；未获得批准保持草案或评审稿。辅助索引由平台组维护，可直接生效，不代表正文方案获批 |
 | 版本 | `V0.x` 用于草案与初步评审，`V1.0` 及以上用于正式评审稿与生效正文；辅助索引的版本不表示正文批准程度 |
 | 升版 | 不兼容的契约或架构变更升主版本；新增章节或跨文档口径同步升次版本；文字修订及纯路径迁移升修订号 |
@@ -188,7 +190,7 @@ L1 是总体架构，L2 是需求与实施计划，L3 是字段级契约、模�
 
 ### 6.6 状态词与证据等级
 
-同一事实只写一处：**实现与验证状态**写各模块记录，由[设计索引 §2.2](<design/README.md#22-实现与验证入口>)导航；**交付物负责方与门禁**写其正文，无正文的写保留记录；**排期、跨团队依赖与阶段门禁**写[推广实施方案](<plans/rollout-plan.md>)。单项进度、回函与复跑证据写对应 Issue、专项文档或原记录。模块设计的“模块状态”只写设计阶段（规划 / 可用 / 已废止）。
+同一事实只写一处：**实现与验证状态**写各模块记录，由[设计索引 §2.2](<design/README.md#22-实现与验证入口>)导航；**交付物负责方与门禁**写其正文，无正文的写保留记录；**排期、跨团队依赖与阶段门禁**写[推广实施方案](<plans/rollout-plan.md>)。单项进度、回函与复跑证据写对应 Issue、专项文档或原记录。门禁填写进入下一阶段所需的条件，可链接验收证据。模块设计的“模块状态”只写设计阶段（规划 / 可用 / 已废止）。
 
 状态词按下表取值，不要互相替代：
 
