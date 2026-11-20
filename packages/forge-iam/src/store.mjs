@@ -28,8 +28,11 @@ const gatewayTombstone = () => ({
     version: GATEWAY_VERSION, type: 'heluo-iam-gateway-tombstone', writeOperationId: randomUUID(),
   }
 });
+// A tombstone written by an earlier release still means "cleared": refusing to
+// recognise it would leave the person unable to save a Key again after upgrade.
+const GATEWAY_TOMBSTONE_VERSIONS = Object.freeze([GATEWAY_LEGACY_VERSION, GATEWAY_UNBOUND_VERSION, GATEWAY_VERSION]);
 const isGatewayTombstone = (record) => record?.kind === GATEWAY_RECORD_KIND
-  && Object.keys(record).length === 2 && record.payload?.version === GATEWAY_VERSION
+  && Object.keys(record).length === 2 && GATEWAY_TOMBSTONE_VERSIONS.includes(record.payload?.version)
   && record.payload.type === 'heluo-iam-gateway-tombstone'
   && Object.keys(record.payload).length === 3 && typeof record.payload.writeOperationId === 'string'
   && WRITE_ID_PATTERN.test(record.payload.writeOperationId);

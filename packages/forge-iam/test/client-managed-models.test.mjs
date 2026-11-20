@@ -1085,3 +1085,21 @@ test('a model that cannot stream offers no way to enable it (issue #202 review)'
   assert.match(text, /不支持流式/u);
   assert.doesNotMatch(text, /一键启用/u, 'a model the host cannot stream must not offer an enable action');
 });
+
+test('re-entry without an enterprise preset still offers the address field (issue #226 review)', async t => {
+  // A stored Key bound to another address needs the person to type the new one;
+  // hiding the input would leave no way to complete the re-entry.
+  const rebind = {
+    ...view,
+    gatewayCredential: { state: 'rebind-required', rebindReason: 'address-missing', matchesAccount: true, baseURL: null },
+    modelAccess: { configured: true, state: 'ready', models: [] },
+  };
+  const panel = await mountPanel(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(rebind);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  const inputs = nodes(panel.render()).filter(node => node?.props?.['aria-label'] === '网关地址');
+  assert.equal(inputs.length, 1, 'the address must be editable when no preset owns it');
+  assert.equal(inputs[0].props.disabled, false);
+});

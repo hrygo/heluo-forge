@@ -233,16 +233,24 @@ test('a changed trusted issuer stops the call without touching the stored Key (i
   const saved = createAtomicGatewayFixture();
   const first = await serviceWith(t, { fixture: saved });
   await first.service.saveGatewayCredential({ key });
+  const movedIssuer = 'https://iam-2.corp.example';
+  // Seed a grant for the new issuer too, so the refusal comes from the credential
+  // binding rather than from an earlier grant-context mismatch: otherwise this
+  // test would pass even if the binding check stopped working (issue #226 review).
+  await createGrantStore(saved.credentials).write({
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: movedIssuer, clientId: baseConfig.clientId, subject: 'synthetic-subject',
+    accessToken: 'synthetic-access-2', refreshToken: 'synthetic-refresh-2', scope: 'openid',
+    obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
+  });
   const moved = createIamService(
-    { ...baseConfig, issuer: 'https://iam-2.corp.example', managedModels: { baseURL: gatewayA } },
+    { ...baseConfig, issuer: movedIssuer, managedModels: { baseURL: gatewayA } },
     { credentials: saved.credentials, now: () => now, ...saved.options, fetch: async () => { throw new Error('no network permitted'); } },
   );
   t.after(() => moved.dispose());
-  // The grant of the previous issuer is refused first; either way no Key leaves
-  // the process, and the panel still explains why a re-entry is needed.
+  // The grant is valid for the new issuer, so only the stale binding can refuse.
   await assert.rejects(
     () => moved.resolveGatewayConnection(),
-    (error) => ['IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED', 'IAM_GRANT_CONTEXT_MISMATCH'].includes(error.code),
+    (error) => error.code === 'IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED' && error.details?.reason === BINDING_REASONS.ISSUER_CHANGED,
   );
   const view = await moved.loadGatewayCredential({ force: true });
   assert.equal(view.state, 'rebind-required');

@@ -486,3 +486,22 @@ test('a gateway record of another kind is reported, not read as a credential', a
   assert.equal(read.ok, false);
   assert.equal(read.reason, 'wrong-kind');
 });
+
+test('a tombstone written by the previous release still means "cleared" (issue #226 review)', async () => {
+  // Upgrading to record version 3 must not strand people whose last action was
+  // Clear on version 2: their record is a tombstone, not a corrupt credential.
+  for (const version of [1, 2, 3]) {
+    const credentials = fakeCredentials({
+      records: [[GATEWAY_RECORD_KEY, { kind: 'grant',
+        payload: { version, type: 'heluo-iam-gateway-tombstone', writeOperationId: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d' } }]],
+    });
+    const atomic = createAtomicGatewayFixture(credentials);
+    const store = createGatewayCredentialStore(credentials, atomic.options);
+    assert.deepEqual(await store.read(), { ok: true, credential: null }, `v${version} tombstone must read as cleared`);
+    const saved = await store.save({
+      value: gatewayValue, ownerSubject: 'E1001', issuer: 'https://iam.corp.example',
+      baseURL: 'https://gateway.corp.example/v1', enteredAt: '2030-01-01T00:00:00.000Z',
+    });
+    assert.equal(saved.credential.version, 3, `v${version} tombstone must not block the next save`);
+  }
+});
