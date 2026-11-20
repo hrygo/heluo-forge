@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.2.0 |
+| 版本 | V1.2.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -106,7 +106,7 @@ sequenceDiagram
 | --- | --- | --- |
 | 公共层 | `codex-min` | 固定版 Codex、Native Runner、Python、uv、Shell、CA 证书和[通用工程工具](#922-保留能力并控制体积) |
 | 开发 | `codex-java-8`、`codex-java-11`、`codex-java-17`、`codex-java-21`、`codex-java-25`、`codex-node`、`codex-go`、`codex-sql`、`codex-dotnet-10` | 各语言工具链及数据库客户端 |
-| 测试 | `codex-test-api`、`codex-test-web`、`codex-test-load` | Newman 接口回归、Playwright 浏览器回归、k6 容量测试 |
+| 测试 | `codex-test-api`、`codex-test-web`、`codex-test-load` | Hurl 接口回归、Playwright 浏览器回归、k6 容量测试 |
 | 运维 | `codex-ops-diag`、`codex-ops-k8s`、`codex-ops-iac` | 网络与证书诊断、Kubernetes 清单与查询、基础设施即代码 |
 | 办公 | `codex-office-zh` | LibreOffice、中文字体、Pandoc 和 PDF 工具 |
 
@@ -355,11 +355,11 @@ ARM64 Go 发行元数据和 .NET 镜像清单已核对，完整场景镜像按�
 
 | Dockerfile → Bake 目标 | 构建指令与输入 | 完成判据 |
 | --- | --- | --- |
-| `Dockerfile.test-api` → `codex-test-api` | `FROM expert_base` 对应 `codex-min`。使用固定 Node 工具阶段在 `tooling/test-api/` 的锁文件上执行 `npm ci`，复制 Newman 运行闭包并加入 `PATH`。 | 在容器回环地址启动模拟接口，用 Postman Collection v2.1 断言状态码、JSON 字段和错误响应，生成 JUnit 测试报告。 |
+| `Dockerfile.test-api` → `codex-test-api` | `FROM expert_base` 对应 `codex-min`。按发布方 SHA-256 校验 Hurl 8.1.0 ARM64 Debian 包，通过固定的 Debian 快照安装运行依赖。 | 在容器回环地址启动模拟接口，用 `.hurl` 用例断言状态码、JSON 字段和错误响应，生成 JUnit 测试报告。 |
 | `Dockerfile.test-web` → `codex-test-web` | `FROM expert_base` 对应 `codex-min`。使用固定 Node 工具阶段和 `tooling/test-web/` 的锁文件准备 `@playwright/test`，复制运行闭包。设置 `PLAYWRIGHT_BROWSERS_PATH=/opt/playwright`，按 Debian 快照安装系统库，再按锁定的 Playwright 版本安装并校验其对应的 ARM64 Chromium，运行用户具备读取和执行权限。 | 以非 root 用户设置 `chromiumSandbox: true`，对回环样例页校验表单和页面跳转，保存测试报告与截图。Runner 同时验证所需沙箱能力及浏览器进程回收。 |
 | `Dockerfile.test-load` → `codex-test-load` | `FROM expert_base` 对应 `codex-min`。在下载阶段按发布方校验值取得 Grafana k6 Linux ARM64 归档，复制 `k6` 至 `/usr/local/bin`。 | 用一个虚拟用户对回环模拟接口运行固定时长的容量样例，校验成功率和本地结果。实际测试的目标、负载规模和时段按任务授权。 |
 
-Java 项目复用相应 JDK 镜像执行项目自带的测试，Python 项目可从项目锁文件安装 `pytest`。PostgreSQL、MySQL、缓存与消息队列这类集成测试依赖使用独立的 ARM64 服务镜像或获准测试实例，按项目固定版本和摘要。依赖服务由试验环境编排，任务容器通过获准的测试网络访问。已核对 k6 `v2.4.0` 的 Linux ARM64 归档。 [Newman CLI](https://learning.postman.com/docs/reference/newman-cli/command-line-integration-with-newman/) · [Playwright ARM64 系统要求](https://playwright.dev/docs/intro#system-requirements) · [Playwright Docker 沙箱](https://playwright.dev/docs/docker) · [k6 ARM64 发布制品](https://github.com/grafana/k6/releases/tag/v2.4.0)
+Java 项目复用相应 JDK 镜像执行项目自带的测试，Python 项目可从项目锁文件安装 `pytest`。PostgreSQL、MySQL、缓存与消息队列这类集成测试依赖使用独立的 ARM64 服务镜像或获准测试实例，按项目固定版本和摘要。依赖服务由试验环境编排，任务容器通过获准的测试网络访问。已核对 Hurl `8.1.0` 和 k6 `v2.4.0` 的 Linux ARM64 发布制品。 [Hurl 测试说明](https://hurl.dev/docs/running-tests.html) · [Playwright ARM64 系统要求](https://playwright.dev/docs/intro#system-requirements) · [Playwright Docker 沙箱](https://playwright.dev/docs/docker) · [k6 ARM64 发布制品](https://github.com/grafana/k6/releases/tag/v2.4.0)
 
 #### 9.3.4 运维
 

@@ -71,7 +71,7 @@
 
 Bake `--print` 核对了 13 份 Dockerfile、17 个发布目标以及独立的两个对照目标的 ARM64 平台和父镜像。各目标使用同一公共冒烟入口，场景使用网络隔离容器内的回环服务和合成输入。
 
-从 Delegra 仓库根目录运行 `docker buildx bake -f docker/expert-runtime/buildx-bake.hcl --load --sbom=true --provenance=mode=min,version=v1 default reference`。复用本机构建缓存耗时 12.12 秒。经 `docker image save` 核对 19 个镜像的 SPDX SBOM、SLSA provenance 和父镜像压缩层，耗时 24.74 秒。两类声明均绑定各自的 ARM64 manifest。Delegra 的统一入口完成 19 个离线冒烟，耗时 57.99 秒。表中摘要来自本地 Buildx 导出，压缩体积按 ARM64 manifest 去重，Kubernetes 和 IaC 按运维诊断父层计算增量。
+从 Delegra 仓库根目录运行 `docker buildx bake -f docker/expert-runtime/buildx-bake.hcl --load --sbom=true --provenance=mode=min,version=v1 default reference`。初次验收复用本机构建缓存，构建耗时 12.12 秒。经 `docker image save` 核对 19 个镜像的 SPDX SBOM、SLSA provenance 和父镜像压缩层，耗时 24.74 秒。两类声明均绑定各自的 ARM64 manifest。Delegra 的统一入口完成 19 个离线冒烟，耗时 57.99 秒。表中摘要来自该次本地 Buildx 导出，压缩体积按 ARM64 manifest 去重，Kubernetes 和 IaC 按运维诊断父层计算增量。
 
 | 目标 | 场景判据 | image index digest | 压缩 MiB | 父层增量 MiB | 冒烟秒数 |
 | --- | --- | --- | ---: | ---: | ---: |
@@ -85,7 +85,7 @@ Bake `--print` 核对了 13 份 Dockerfile、17 个发布目标以及独立的�
 | `codex-go` | Go 1.27.4，断网运行 go test | `sha256:b48e2ecd1cb86bbf28d475e78e72bbf1e98b8fb56dfa84d5252b22378af834b2` | 377.24 | 64.64 | 4.97 |
 | `codex-sql` | PostgreSQL 客户端 17.12、MariaDB 客户端 11.8.6 | `sha256:887b0215d1ba0a3c6ea05e1df11e778746f90ef5404c413da76cffd18310374d` | 332.95 | 20.36 | 2.16 |
 | `codex-dotnet-10` | .NET SDK 10.0.404，无外部源 restore、编译与执行 | `sha256:1d43bf6df74ed3a91eb59f1eee5bb41056672fd5b960361527b15dfb75ffc159` | 551.79 | 239.20 | 5.11 |
-| `codex-test-api` | Newman 6.2.3，200、404 及 JSON 共 4 项断言和 JUnit 报告 | `sha256:bdb8a4691e71da38058bf8e200a05d7a7ca04fa18453f6b932d8925fd76746dc` | 323.98 | 11.38 | 2.52 |
+| `codex-test-api`（初次验收基线） | Newman 6.2.3，200、404 及 JSON 共 4 项断言和 JUnit 报告 | `sha256:bdb8a4691e71da38058bf8e200a05d7a7ca04fa18453f6b932d8925fd76746dc` | 323.98 | 11.38 | 2.52 |
 | `codex-test-web` | Playwright 1.65.1、Chromium 159.0.8154.6，表单、导航和 PNG | `sha256:b6069afea435cd5dd80d3fe21ffcc413f1eed2301f41f1bc08010c7fe924c6a3` | 722.80 | 410.21 | 2.92 |
 | `codex-test-load` | k6 2.4.0，单虚拟用户对回环接口测试 | `sha256:54b1de156983329eb97c286e4f725ae1e5757ef89697ac38106bdb843d700381` | 340.53 | 27.94 | 4.21 |
 | `codex-ops-diag` | BIND 9.20.30、回环网卡、证书及进程 | `sha256:f4c6af1a1fb056c6880f30857501d6f8e901676511de5afafb00a115088fec19` | 317.73 | 5.14 | 2.22 |
@@ -94,6 +94,8 @@ Bake `--print` 核对了 13 份 Dockerfile、17 个发布目标以及独立的�
 | `codex-office-zh` | LibreOffice 25.2.3.2、Pandoc 3.1.11.1，三种格式导出与中文文本核对 | `sha256:39ad74e9eda25ce012578f633abce11d086b2d0d191c6d43f14fc233a83813d7` | 601.19 | 288.60 | 3.65 |
 
 `codex-min-native` 的 image index digest 为 `sha256:347369c8a80f0af28db01a9514f043086b23435099e09c32ca15933884b22422`，冒烟耗时 1.81 秒。`codex-java-21-native` 的 image index digest 为 `sha256:3cdefa128e6af5954b94dceef3487212c669788e66768fa8aedb4f461c1cd176`，冒烟耗时 3.66 秒。
+
+`codex-test-api` 的交付配方使用 Hurl 8.1.0。官方 ARM64 包为 2,014,052 字节，SHA-256 为 `74dce80fd6d9d6a8f70ec4af963c811184d35232798e1fe263897ecc4cf061dc`。使用同一 Dockerfile 安装步骤和同一 Debian 签名快照，在临时 Debian ARM64 底层镜像上核对 `hurl`、`hurlfmt` 和许可证。以 UID 1000 在断网容器中运行仓库的 `.hurl` 用例，两项 HTTP 状态和两项 JSON 断言通过，JUnit 为 1 项测试、0 项失败。将 404 改为 500 的反例以退出码 4 失败。构建耗时 314.48 秒，容器内验证耗时 0.13 秒。实际 `codex-min` 父层的镜像摘要和依赖增量以完整 Bake 构建为准。 [Hurl 8.1.0 ARM64 包](https://github.com/Orange-OpenSource/hurl/releases/tag/8.1.0)
 
 早期参考矩阵的 .NET 构建遇到下载中断，单目标重试使用相同的 MCR ARM64 digest，耗时 12 分 34 秒。中文办公构建耗时 8 分 02 秒。个别下载先使用相同 SHA-256 的暂存制品，最终全量构建使用默认锁定输入。
 
