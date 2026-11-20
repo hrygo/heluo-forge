@@ -137,7 +137,7 @@ export function validateConfig(input) {
     if (!validMethod || !validRef) {
       issues.push(issue('authMode', 'confidential authentication requires an explicit method and reference'));
       if (!validMethod) issues.push(issue('clientAuthMethod', 'confidential authentication requires an explicit supported method'));
-      if (!validRef) issues.push(issue('clientSecretRef', 'confidential authentication requires a lowercase record selector'));
+      if (!validRef) issues.push(issue('clientSecretRef', 'confidential authentication requires a record selector matching ^[a-z][a-z0-9-]*$'));
     } else {
       value.clientAuthMethod = method;
       value.clientSecretRef = source.clientSecretRef;

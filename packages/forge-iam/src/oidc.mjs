@@ -346,6 +346,10 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, optio
     && (needsOptional || !config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
   if (needsDiscovery) {
     const discoveryUrl = assertHttpEndpoint(config.discoveryUrl, 'discoveryUrl');
+    if (config.authMode === 'confidential' && discoveryUrl.protocol === 'http:'
+      && config.allowInsecureClientAuthHttp !== true) {
+      throw new OidcError('IAM_CONFIG_INVALID', 'Confidential IAM Discovery requires HTTPS');
+    }
     document = await fetchJson(discoveryUrl, { fetchImpl, timeoutMs, signal });
     if (document === null || typeof document !== 'object' || Array.isArray(document)) {
       throw new OidcError('IAM_DISCOVERY_INVALID', 'discovery document must be an object');

@@ -165,7 +165,7 @@ test('same-Host sign-out revokes the confirmed refresh without publishing its to
   assert.doesNotMatch(JSON.stringify(renewalEvents), /synthetic-new-(?:access|refresh)/);
 });
 
-test('same-Host sign-out takes a confidential refresh response while its pin read waits', { timeout: 5000 }, async (t) => {
+async function signOutWhilePinReadWaits(t, stage, dispatched) {
   const credentials = new MemoryCredentials();
   const fixture = createClientSecretFixture(credentials, { issuer: config.issuer, clientId: config.clientId });
   await createGrantStore(credentials).write({
@@ -196,7 +196,7 @@ test('same-Host sign-out takes a confidential refresh response while its pin rea
     getClientSecretSource: () => source,
     verifyClientSecretSource: (candidate, current) => candidate === credentials && current === source,
     logRenewal(event, fields) {
-      if (event === 'refresh-stage' && fields.stage === 'validate-response') waitForRead = true;
+      if (event === 'refresh-stage' && fields.stage === stage) waitForRead = true;
     },
     async fetch(url, { method }) {
       const { pathname, searchParams } = new URL(url);
@@ -211,7 +211,7 @@ test('same-Host sign-out takes a confidential refresh response while its pin rea
   });
   t.after(() => { release.resolve(); return service.dispose(); });
   const blockedGetter = assert.rejects(service.resolveToken(), { code: 'IAM_DISPOSED' });
-  await Promise.race([entered.promise, blockedGetter.then(() => assert.fail('the response pin read did not wait'))]);
+  await Promise.race([entered.promise, blockedGetter.then(() => assert.fail('the refresh pin read did not wait'))]);
   const signingOut = service.signOut();
   release.resolve();
   const [result] = await Promise.all([signingOut, blockedGetter]);
@@ -219,13 +219,18 @@ test('same-Host sign-out takes a confidential refresh response while its pin rea
   assert.equal(result.revocation, 'ok');
   assert.equal(result.view.state, 'signed-out');
   assert.deepEqual(requests, [
-    { method: 'POST', path: '/token' },
-    { method: 'GET', path: '/revoke', accessToken: 'synthetic-new-access' },
+    ...(dispatched ? [{ method: 'POST', path: '/token' }] : []),
+    { method: 'GET', path: '/revoke', accessToken: dispatched ? 'synthetic-new-access' : 'synthetic-old-access' },
   ]);
   assert.deepEqual(await credentials.readRecord(GRANT_KEY), {
     kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' },
   });
-});
+}
+
+for (const [stage, dispatched] of [['token-endpoint', false], ['validate-response', true]]) {
+  test(`same-Host sign-out completes while a confidential refresh pin read waits at ${stage}`,
+    { timeout: 5000 }, (t) => signOutWhilePinReadWaits(t, stage, dispatched));
+}
 
 test('same-Host sign-out cannot consume the result or revoke a replacement login during refresh', { timeout: 5000 }, async (t) => {
   const { credentials, grant, release, requests, service, refresh } = await startLocalRefresh(t, () =>

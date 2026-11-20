@@ -124,8 +124,8 @@ export function createSignOut(env) {
     // Waiting for our flight must not retarget logout to a concurrently
     // installed login, even when the subject is identical.
     if (ownedRefresh && (!handoff || !(isDeepStrictEqual(grant, handoff.pending)
-      || isDeepStrictEqual(grant, handoff.complete)))) return unknownSignOut();
-    const confirmedRefresh = handoff?.complete ? handoff : undefined;
+      || isDeepStrictEqual(grant, handoff.complete)
+      || isDeepStrictEqual(grant, handoff.unsentGrant)))) return unknownSignOut();
     // A locally authenticated session must not clear a grant that another
     // process replaced; the check needs no client secret.
     if (ctx.sessionAuthentication && grant
@@ -161,7 +161,7 @@ export function createSignOut(env) {
       // grant. Fence it first when its issuer is already independently known.
       // A cold discovery-only Host must establish the issuer before any write.
       if (expectedIssuer && !grant.signOutOperation) {
-        const fenced = await targetStore.fenceSignOut(grant, confirmedRefresh,
+        const fenced = await targetStore.fenceSignOut(grant, handoff,
           { expectedRecord: record, revocationContext: refusesEndpoint(endpoint) ? preflightIntent : discoveryIntent, guard: assertCurrent });
         checkDisposed();
         if (!fenced.ok || !fenced.pending) return unknownSignOut();
@@ -200,7 +200,7 @@ export function createSignOut(env) {
     if (revocable && refusesEndpoint(endpoint)) {
       // Fence further local use without pinning an endpoint that cannot receive a request.
       if (!operation) {
-        const fenced = await targetStore.fenceSignOut(grant, confirmedRefresh,
+        const fenced = await targetStore.fenceSignOut(grant, handoff,
           { expectedRecord: record, revocationContext: preflightIntent ?? discoveryIntent, guard: assertCurrent });
         checkDisposed();
         if (!fenced.ok || !fenced.pending) return unknownSignOut();
@@ -221,7 +221,7 @@ export function createSignOut(env) {
       if (requiresClientAuthentication) {
         // Client authentication can also be unavailable. Pin before reading
         // it, and verify that exact record again after the lock-free lookup.
-        const pinned = await targetStore.fenceSignOut(grant, confirmedRefresh,
+        const pinned = await targetStore.fenceSignOut(grant, handoff,
           { expectedRecord: record, revocationContext, revocationIntents, guard: assertCurrent });
         if (!pinned.ok || !pinned.pending) return unknownSignOut();
         record = pinned.pending;
@@ -253,7 +253,7 @@ export function createSignOut(env) {
       }
       guard();
     };
-    const cleared = await targetStore.signOutSnapshot(grant, revokeCurrent, confirmedRefresh,
+    const cleared = await targetStore.signOutSnapshot(grant, revokeCurrent, handoff,
       { expectedRecord: record, revocationContext, revocationIntents, allowLegacyRecovery, guard });
     checkDisposed();
     try { assertCurrent(); } catch { return unknownSignOut(); }

@@ -4,6 +4,7 @@ import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { OidcError, buildAuthorizationUrl, createPkce, exchangeCode, parseCallbackUrl, randomToken, revokeSessionToken, safeStateEqual } from './oidc.mjs';
 import { nowIso, safeMessage, tokenErrorMessage } from './service-helpers.mjs';
+import { tokenEndpointFailureFields } from './session-renewal-log.mjs';
 import { credentialStoreUnavailable, transition } from './state.mjs';
 
 /**
@@ -19,7 +20,7 @@ export function createSignIn(env) {
   const {
     config, configured, ctx, provider, grants, gateway, token, now, fetchImpl,
     openCallback, closeCallback, recoverCredentialStore, isSigningOut, getAuthEpoch, bumpAuthEpoch,
-    clearObservation,
+    clearObservation, logRenewal,
     getSignInPromise, setSignInPromise, invalidateConsumption, beginConsumption, adoptConsumption,
   } = env;
 
@@ -342,6 +343,10 @@ export function createSignIn(env) {
         resource: config.gatewayResource,
         fetchImpl,
         timeoutMs: config.httpTimeoutMs,
+      }).catch((cause) => {
+        const failure = tokenEndpointFailureFields(cause, authentication?.pin.method ?? 'none');
+        if (failure) logRenewal?.('code-exchange-failed', { stage: 'token-endpoint', code: tokenErrorMessage(cause), ...failure });
+        throw cause;
       });
       issuedToken = token;
       assertClientAuthCurrent(authentication);

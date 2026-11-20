@@ -345,17 +345,20 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 
 自动续期和面板同步遇到 SQLite 首次读锁 `CRED_LOCK_TIMEOUT` 时，Host 暂停令牌消费并安排一次 1 秒后的凭据重读。面板轮询共享该重试，持续锁争用时每次失败后继续退避。读回同一绑定中的有效授权后，Host 发布授权、状态和错误码，账号页与服务会话据此恢复。迟到的计时器读锁错误将到期时间交给当前的同一授权重读，包括正在观察 `pending` 的读取。若确认请求未发送且原授权已还原，Host 保留原续期时间，到期后的退避受剩余刷新有效期限制。网关摘要独立核验，普通账号切换等待摘要返回后再次校验当前会话的凭据库和客户端认证绑定。所有 `pending` 等待均固定原子信任绑定及观察截止时间，换绑后旧等待失败关闭。读取后的 claim、Token 端点和提交继续遵守防重放协议。
 
-Host 将会话续期事件写入 `$DSH_HOME/logs/forge-iam-session-renewal.jsonl`。`DSH_HOME` 为空时使用 `~/.dsh/logs/forge-iam-session-renewal.jsonl`。按故障时间查找对应记录，使用 `hostId` 区分插件运行实例，使用 `renewalId` 关联同一实例的后台计时器与刷新尝试。每条记录包含 UTC 时间和插件版本，到期时间和计时器截止时间使用 Unix 毫秒值。
+Host 将授权码换票失败和会话续期事件写入 `$DSH_HOME/logs/forge-iam-session-renewal.jsonl`。`DSH_HOME` 为空时使用 `~/.dsh/logs/forge-iam-session-renewal.jsonl`。按故障时间查找对应记录，使用 `hostId` 区分插件运行实例，使用 `renewalId` 关联同一实例的后台计时器与刷新尝试。每条记录包含 UTC 时间和插件版本，到期时间和计时器截止时间使用 Unix 毫秒值。
 
 每个日志目录保留 1 MiB 活跃文件和一份 1 MiB 的 `.1` 归档，写入时清理已超限的旧文件。共享实际目录的 Host 使用同名 `.lock.sqlite` 空文件串行执行大小检查、轮转和追加。目录重定向使用实际目录的同一把锁，进程退出由操作系统释放该锁。每进程每路径最多积压 128 条待写事件，包含正在写入的一条。争用锁最多等待 250 毫秒，锁等待超时、队列满或 I/O 失败时舍弃对应事件并发出固定告警。日志队列独立于续期和卸载。
 
 | 事件 | 排查内容 |
 |---|---|
 | `host-start`、`host-stop`、`binding-changed`、`session-state`、`store-sync` | 插件装卸、凭据与原子存储绑定、会话状态、读库与跨 Host 轮换观察 |
+| `code-exchange-failed` | 授权码换票的 Token 端点 HTTP 错误与请求认证方式 |
 | `renewal-scheduled`、`renewal-fired`、`renewal-blocked`、`renewal-cancelled`、`renewal-failed` | 计划时间、实际触发延迟、退避以及跳过、取消或失败原因 |
 | `refresh-stage`、`refresh-retry`、`refresh-failed`、`refresh-committed`、`refresh-adopted` | 凭据读取、Discovery/JWKS、刷新占位、Token 请求与校验、条件提交、同一会话的已确认轮换 |
 
-`refresh-failed` 的 `code` 表示 Host 对调用方返回的错误分类，`causeCode` 记录已登记的内部错误。IAM 响应可附 `httpStatus` 和标准 `oauthError`。HTTP 401 缺少标准错误码时，`oauthErrorResponse` 只记录 `empty`、`nonstandard` 或 `unreadable`。用同一 `renewalId` 的 `token-endpoint` 阶段核对 `clientAuthMethod`。结合 IAM 登记和服务端记录识别拒绝原因。
+`refresh-failed` 的 `code` 表示 Host 对调用方返回的错误分类，`causeCode` 记录已登记的内部错误。换票和刷新收到 Token 端点错误响应时，失败记录包含 `httpStatus` 和实际采用的 `clientAuthMethod`。标准 OAuth 错误在同一条记录中写入 `oauthError`。HTTP 401 缺少标准错误码时，同一条记录的 `oauthErrorResponse` 取值为 `empty`、`nonstandard` 或 `unreadable`。
+
+`clientAuthMethod=none` 表示请求未发送客户端认证。`oauthError=invalid_client` 表示服务端拒绝客户端认证，`refresh-failed` 上的 `oauthError=invalid_grant` 表示服务端拒绝刷新授权。空或非标准响应的拒绝原因由 IAM 登记和服务端记录确认。 [RFC 6749 §5.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.2)
 
 `timedOut` 表示观察到本地请求超时，`requestUnsent` 表示传输层已确认请求未送出。`refresh-committed` 在存储确认新令牌后记录，可用新的到期时间核对授权是否延长。日志字段使用白名单，排除凭据、账号标识、地址、请求和响应原文及异常堆栈。日志写入失败时 Host 发出固定告警。
 

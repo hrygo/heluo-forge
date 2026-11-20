@@ -306,7 +306,7 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `authMode` | string | `public` | 否 | 认证模式；支持 `public` 与 `confidential` |
 | `clientAuthMethod` | string | `none` | 条件 | `public` 只允许 `none`。机密模式显式选择 IAM 登记的 `client_secret_basic` 或 `client_secret_post` |
 | `clientSecretRef` | string | 空 | 条件 | 机密模式必填的小写记录选择器，对应 `iam-client-secret/<ref>` |
-| `allowInsecureClientAuthHttp` | boolean | `false` | 否 | 仅机密模式接受。只有显式设为 `true` 才允许客户端认证 POST 使用 HTTP |
+| `allowInsecureClientAuthHttp` | boolean | `false` | 否 | 仅机密模式接受。读取 HTTP Discovery 或通过 HTTP 发送客户端认证 POST 均须显式设为 `true` |
 | `discoveryUrl` | string | 空 | 条件 | OIDC Discovery 地址。核心配置齐备时仅在需要补齐可选端点时查询，并核对 issuer |
 | `issuer` | string | 空 | 条件 | 显式配置时必填，作为发行者 Pin 用于 ID Token 校验 |
 | `authorizationEndpoint` | string | 空 | 条件 | 显式授权请求端点 |
@@ -332,7 +332,7 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
 
-Host 在发送机密换票、刷新和撤销 POST 前检查实际端点，含运行时 Discovery 选出的地址。默认对 HTTP 拒绝发送，刷新在写入 pending 前先行检查。认证和拒绝语义见[客户端认证契约](../../contracts/iam-client-auth-isolated.md)。
+Host 在读取机密模式的 Discovery 前检查其协议，并在换票、刷新和撤销 POST 前检查实际端点。HTTP 需要显式开启，刷新在写入 pending 前先行检查。认证和拒绝语义见[客户端认证契约](../../contracts/iam-client-auth-isolated.md)。
 
 ### 5.2 现行接口规范
 
@@ -572,7 +572,7 @@ Linux 使用当前绝对路径形式的 `XDG_DATA_HOME`；未设置或无效时�
 
 以上为存储层错误。Host、HTTP 和 CLI 可按入口契约映射错误：例如读取时保留 `CRED_KEY_UNAVAILABLE` / `CRED_DECRYPT_FAILED`，其他存储错误通常收敛为 `IAM_CREDENTIALS_UNAVAILABLE`。错误映射不改变存储的保留与拒绝行为。
 
-只支持单机本地文件系统、同一 PID namespace 的协作进程。所有修改和轮换使用同一逻辑锁；数据库事务仅覆盖短暂的锁定、条件检查与提交，不跨异步 I/O。数据写入与逻辑锁删除在同一 `EXCLUSIVE` 事务内完成，读写争用采用有界异步等待。未提交操作已结束而释放锁受阻时，发布绑定 PID 和随机 token 的私有完成标记，由后续写事务复核后回收；否则仅在确认持锁进程不存在时回收，活动或未知操作不得接管。退出先持久化随机 `signOutOperation` pending，再撤销对应快照。同一 Host 的在途轮换若返回并通过校验，可将匹配的刷新 pending 原子转为退出 pending，撤销新访问令牌，期间禁止发布或取用新令牌。只有撤销确认后才条件写入墓碑，失败、未知或崩溃均保留 pending 并拒绝旧令牌。并发新登录不会被迟到的退出删除。单记录原子门禁与网关联合原子门禁分别核验，任一未就绪均拒绝对应写入。
+只支持单机本地文件系统、同一 PID namespace 的协作进程。所有修改和轮换使用同一逻辑锁；数据库事务仅覆盖短暂的锁定、条件检查与提交，不跨异步 I/O。数据写入与逻辑锁删除在同一 `EXCLUSIVE` 事务内完成，读写争用采用有界异步等待。未提交操作已结束而释放锁受阻时，发布绑定 PID 和随机 token 的私有完成标记，由后续写事务复核后回收；否则仅在确认持锁进程不存在时回收，活动或未知操作不得接管。退出先持久化随机 `signOutOperation` pending，再撤销对应快照。同一 Host 退出时封住刷新请求的发送入口。确认匹配的刷新操作尚未发出时，将刷新 pending 原子转为退出 pending 并撤销原授权。已发出的轮换在响应通过校验后转为退出 pending 并撤销新授权，退出期间禁止发布或取用续期令牌。只有撤销确认后才条件写入墓碑，失败、未知或崩溃均保留 pending 并拒绝旧令牌。并发新登录不会被迟到的退出删除。单记录原子门禁与网关联合原子门禁分别核验，任一未就绪均拒绝对应写入。
 
 旧 `credentials.json` 和 `credentials.key` 不读取、不迁移、不修改，也不阻止使用 SQLite 存储；旧版用户需在新存储中重新登录或录入凭据。已有且完整的新布局 SQLite 存储继续使用原数据库和密钥，不因应用更新重建或重新初始化。旧同目录 keyring 与缺少密钥绑定的旧数据库不兼容，保留原物并拒绝访问。三平台、Electron 宿主及企业 IAM/网关验证状态以[设计索引](../README.md#22-实现与验证入口)为准。
 

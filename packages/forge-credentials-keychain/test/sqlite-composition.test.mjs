@@ -70,6 +70,7 @@ test('a provisioned IAM client secret is confined to its dedicated storage port'
   own(apply(ctx, { storeDirectory: directory, ...namespace }));
   const credentials = ctx.provided.get('credentials');
   const source = ctx.provided.get('iam-client-secret-source');
+  assert.deepEqual(Object.keys(source).sort(), ['isCurrent', 'read', 'retryRead', 'verify']);
   const pinned = await source.read(scope);
   assert.equal(pinned?.value, 'synthetic-secret-for-isolation');
   await credentials.modifyRecord(normalKey, () => normalRecord);

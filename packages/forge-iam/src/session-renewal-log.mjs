@@ -21,6 +21,7 @@ const pendingByPath = new Map();
 
 const events = new Set([
   'host-start', 'host-stop', 'binding-changed', 'session-state', 'store-sync',
+  'code-exchange-failed',
   'renewal-scheduled', 'renewal-fired', 'renewal-blocked', 'renewal-cancelled', 'renewal-resume', 'renewal-failed',
   'refresh-stage', 'refresh-claimed', 'refresh-shared', 'refresh-reused',
   'refresh-retry', 'refresh-failed', 'refresh-committed', 'refresh-adopted', 'refresh-handed-off',
@@ -80,6 +81,12 @@ export function renewalErrorFields(cause) {
   } catch {
     return { causeCode: 'IAM_INTERNAL' };
   }
+}
+
+export function tokenEndpointFailureFields(cause, clientAuthMethod) {
+  const fields = renewalErrorFields(cause);
+  if (fields.causeCode !== 'IAM_HTTP_ERROR' || fields.httpStatus === undefined) return undefined;
+  return { ...fields, clientAuthMethod };
 }
 
 async function drainWrites(path, pending) {

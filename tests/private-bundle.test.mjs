@@ -446,6 +446,10 @@ test('a confidential configuration requires an explicit supported method and rec
   for (const additions of [[method], [ref], [method, 'HELUO_IAM_CLIENT_SECRET_REF=file:iam-secret']]) {
     expectCode(() => buildConfig(parseEnvConfig([...mode, ...additions].join('\n'))), 'CONFIG_INVALID');
   }
+  for (const value of ['', '"   "']) {
+    const input = [...mode, method, `HELUO_IAM_CLIENT_SECRET_REF=${value}`];
+    expectCode(() => buildConfig(parseEnvConfig(input.join('\n'))), 'CONFIG_INVALID');
+  }
 });
 
 test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {

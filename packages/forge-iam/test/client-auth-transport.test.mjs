@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareClientAuthentication, buildClientAuthRequest } from '../src/client-auth.mjs';
+import { prepareClientAuthentication, buildClientAuthRequest, isClientAuthReadLockTimeout, withCurrentClientAuth } from '../src/client-auth.mjs';
 import { exchangeCode, refreshTokens, revokeToken, revokeSessionToken, buildAuthorizationUrl } from '../src/oidc.mjs';
 import { createClientSecretFixture } from './support/client-secret-source.mjs';
 
@@ -51,6 +51,51 @@ test('cancelling revocation while the pin read waits prevents dispatch', async (
   assert.deepEqual(await pending, { state: 'unknown', code: 'IAM_REVOKE_CANCELLED' });
   await finished.promise;
   assert.equal(posts, 0);
+});
+
+test('only the exhausted pin read identifies an action as unsent', async () => {
+  const fixture = createClientSecretFixture({}, { clientId });
+  const timeout = Object.assign(new Error('synthetic private SQLite message'), { code: 'CRED_LOCK_TIMEOUT' });
+  let blocked = false;
+  let lateCheck;
+  const source = {
+    ...fixture.source,
+    isCurrent(snapshot) {
+      if (blocked) throw Object.assign(new Error('synthetic busy'), { errcode: 5 });
+      return fixture.source.isCurrent(snapshot);
+    },
+    async retryRead(_snapshot, check) {
+      if (!blocked) return check();
+      lateCheck = check;
+      try { return check(); } catch (cause) {
+        if (cause.errcode === 5) throw timeout;
+        throw cause;
+      }
+    },
+  };
+  const authentication = await prepareClientAuthentication(fixture.config, {
+    ...fixture.options,
+    getClientSecretSource: () => source,
+    verifyClientSecretSource: (credentials, candidate, scope) => candidate === source
+      && fixture.options.verifyClientSecretSource(credentials, fixture.source, scope),
+  });
+  let starts = 0;
+  blocked = true;
+  await assert.rejects(withCurrentClientAuth(authentication, () => { starts++; }), (cause) => {
+    assert.equal(isClientAuthReadLockTimeout(cause), true);
+    assert.equal(cause.constructor, Error);
+    assert.equal(cause.code, 'CRED_LOCK_TIMEOUT');
+    assert.notEqual(cause.message, timeout.message);
+    return true;
+  });
+  blocked = false;
+  assert.throws(lateCheck, { code: 'IAM_CLIENT_AUTH_CHANGED' });
+  assert.equal(starts, 0);
+  await assert.rejects(withCurrentClientAuth(authentication, () => {
+    starts++;
+    throw timeout;
+  }), (cause) => cause === timeout && !isClientAuthReadLockTimeout(cause));
+  assert.equal(starts, 1);
 });
 
 for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {

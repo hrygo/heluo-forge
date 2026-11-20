@@ -95,7 +95,7 @@
 - token 交换与刷新只由 Host 发起。账户页和引导使用授权 URL 与非敏感 `IamView`；已通过 Connection 鉴权的同源页面可按需调用令牌接口，见[凭据接入指南](docs/credential-access.md)。
 - 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；不得为站点根或以 `/` 结尾（DSH 路由是不带尾斜杠的绝对路径）。显式 `redirectUri` 必须为 HTTP(S) 地址，其 path 与 `redirectPath` 一致且不含 query/fragment；运行时还须与实时回调 Origin 同源，否则以 `IAM_CONFIG_INVALID` 拒绝。生产值须符合 IAM 的登记规则。
 - 生产形态配置 `callbackPort: 0`：插件自建回环监听，端口由系统分配，回调地址在登录发起时才确定，监听也只在这次尝试期间存在（RFC 8252 §8.3）。需要固定端口时填 1024–65535；绑定失败直接拒登录并报 `IAM_CALLBACK_PORT_UNAVAILABLE`。省略 `callbackPort` 时仅使用宿主实时 Origin，供开发与兼容；配置后仅使用已绑定回环监听的实时 Origin，两者不互相回落。Origin 缺失、获取异常或不是有效 HTTP(S) 地址时，以 `IAM_CALLBACK_UNAVAILABLE` 拒绝登录，不生成授权链接。`callbackAddress` 默认 `auto`，始终先试 `127.0.0.1`，只在该地址族不可用时退到 `::1`；IPv6 需另行登记前缀 `http://[::1]`。
-- 内网 HTTP IAM 沿用私版制包的 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`，机密模式下自动带入 Host 的 `allowInsecureClientAuthHttp: true`。Host 按实际 token 或撤销端点核验策略，未启用 HTTP 时仅向 HTTPS 发送机密认证 POST。公共客户端和网关保留 HTTP(S) 支持，旧 Host 配置项 `allowInsecureHttp` 按未知键忽略。HTTP 会以明文传输凭据和请求内容。
+- 内网 HTTP IAM 通过私版制包项 `HELUO_IAM_ALLOW_INSECURE_HTTP=true` 启用。机密模式下，该项自动带入 Host 的 `allowInsecureClientAuthHttp: true`，同时许可 HTTP Discovery 和 HTTP 客户端认证 POST。公共客户端和网关支持 HTTP(S)，旧 Host 配置项 `allowInsecureHttp` 按未知键忽略。HTTP 会以明文传输凭据和请求内容。
 - 显式端点齐全时不强制拉取 `discoveryUrl`；issuer/authorize/token/JWKS 缺项时使用 discovery 补齐。
 
 ### 凭据与网关

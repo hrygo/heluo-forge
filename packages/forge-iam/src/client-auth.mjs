@@ -2,10 +2,14 @@ import { validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { parseHttpUrl } from './http-url.mjs';
 
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+
 // Operations may hold short-lived material; provenance deliberately cannot.
 const operations = new WeakMap();
 const provenances = new WeakMap();
 const unavailableReads = new WeakSet();
+const timedOutPinReads = new WeakSet();
 const snapshotFields = ['issuer', 'clientId', 'ref', 'revision', 'value'];
 const fail = (code) => new IamError(code, {
   IAM_CONFIG_INVALID: 'IAM client authentication configuration is invalid',
@@ -79,7 +83,7 @@ function copySnapshot(original, binding) {
 }
 function guardedMaterial(provenance, original, copy, guard) {
   const localGuard = () => { if (guard && !literalTrue(guard())) throw fail('IAM_CLIENT_AUTH_CHANGED'); };
-  return (retrying = false) => {
+  return (onPinContention) => {
     localGuard();
     try {
       assertClientAuthProvenance(provenance);
@@ -90,7 +94,10 @@ function guardedMaterial(provenance, original, copy, guard) {
       if (!unchanged()) throw 0;
     } catch (cause) {
       // Only the built-in reader's bounded retry loop can handle SQLite contention.
-      if (retrying && (cause?.errcode === 5 || cause?.errcode === 6)) throw cause;
+      if (onPinContention && (cause?.errcode === SQLITE_BUSY || cause?.errcode === SQLITE_LOCKED)) {
+        onPinContention();
+        throw cause;
+      }
       throw fail('IAM_CLIENT_AUTH_CHANGED');
     }
     localGuard();
@@ -144,6 +151,9 @@ export async function prepareClientAuthentication(rawConfig, options = {}, conte
 export function isClientAuthReadUnavailable(error) {
   return unavailableReads.has(error);
 }
+export function isClientAuthReadLockTimeout(error) {
+  return timedOutPinReads.has(error);
+}
 export function clientAuthDescriptor(operation) {
   return operation === undefined ? undefined : Object.freeze({ pin: operation.pin, provenance: operation.provenance });
 }
@@ -177,15 +187,26 @@ export function withCurrentClientAuth(operation, action = () => true) {
     return action();
   }
   let started;
+  let readOpen = true;
+  let pinReadBlocked = false;
   const start = async () => action();
   return material.retryRead(() => {
-    if (started !== undefined) throw fail('IAM_CLIENT_AUTH_CHANGED');
-    material.assertCurrent(true);
+    if (!readOpen) throw fail('IAM_CLIENT_AUTH_CHANGED');
+    material.assertCurrent(() => { pinReadBlocked = true; });
     // An async result keeps even a synchronous action failure out of the read retry.
+    readOpen = false;
     started = start();
   }).then(() => {
+    readOpen = false;
     if (started === undefined) throw fail('IAM_CLIENT_AUTH_CHANGED');
     return started;
+  }, (cause) => {
+    readOpen = false;
+    // Only exhaustion of the pin read itself proves this action did not start.
+    if (started !== undefined || !pinReadBlocked || cause?.code !== 'CRED_LOCK_TIMEOUT') throw cause;
+    const error = Object.assign(new Error('IAM credential store is busy'), { code: 'CRED_LOCK_TIMEOUT' });
+    timedOutPinReads.add(error);
+    throw error;
   });
 }
 

@@ -33,7 +33,7 @@
 | authMode | public / confidential；省略等价 public | public 适用于 IAM 明确允许无客户端认证换票与刷新的部署；要求客户端认证时显式使用 confidential |
 | clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | 授权码换票、刷新和 `rfc7009` 模式的撤销 POST 共用登记方法 |
 | clientSecretRef | 仅 confidential 必填；匹配 `^[a-z][a-z0-9-]*$` | 指向当前凭据命名空间内的 IAM 专用记录 `iam-client-secret/<ref>` |
-| allowInsecureClientAuthHttp | 仅 confidential 接受可选布尔值；缺省为 `false` | 仅在显式为 `true` 时允许携带客户端密钥的 POST 使用 HTTP |
+| allowInsecureClientAuthHttp | 仅 confidential 接受可选布尔值；缺省为 `false` | 仅在显式为 `true` 时允许通过 HTTP 读取 Discovery 或发送客户端认证 POST |
 
 公共配置出现任何 clientSecretRef（包括空、null 或显式 undefined）均拒绝；正常 public 归一化结果不产生此键。未知 mode/method、部分机密配置、原始 clientSecret/client_secret、自定义 Authorization 或认证 body 覆盖均拒绝。缺少来源、凭据或精确认可时拒绝机密登录和刷新。Discovery、401 和其他响应均不触发认证方式切换。
 
@@ -81,6 +81,8 @@ verifyClientSecretSource?: (
 | client_secret_basic | Basic；clientId、secret 分别 form-urlencoded 后以冒号连接，再 UTF-8/Base64 | 不放 client_id/client_secret 认证参数 |
 | client_secret_post | 无 | URLSearchParams 编码 client_id/client_secret |
 
+机密模式实际读取 Discovery 时默认要求 HTTPS。未显式启用 `allowInsecureClientAuthHttp` 的 HTTP Discovery 在发出请求前返回 `IAM_CONFIG_INVALID`。显式配置已提供当前操作所需的端点和 issuer 时直接使用显式配置。
+
 共享纯构造函数供授权码换票、刷新及 `rfc7009` 模式的撤销 POST 使用。发送前按实际选定的端点校验协议，包括运行时 Discovery 返回的端点。机密 POST 默认要求 HTTPS，显式启用 `allowInsecureClientAuthHttp` 时允许 HTTP。拒绝换票或刷新时返回 `IAM_CONFIG_INVALID`，撤销端点拒绝归入 `failed` / `IAM_REVOKE_ENDPOINT_INVALID`。刷新在写入 pending 前预检端点。保留 `redirect: 'error'`、超时、取消和现有资源/回调上下文。HTTP 会以明文传输 secret 与令牌。secret 和 Basic 编码串仅在必要的 POST 中使用。每次请求固定使用已配置的方法。
 
 退出和失败回调清理共用 `revocationMode`。标准私版使用默认的 `access_token_query`，向 D1 端点发送访问令牌自证 GET。D1 回执只覆盖访问令牌。Host 显式配置 `rfc7009` 时，两个入口均使用表单 POST 及配置的客户端认证；有刷新令牌时优先撤销刷新令牌。目标端点对该方法的支持须独立验证。 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)
@@ -105,6 +107,8 @@ verifyClientSecretSource?: (
 
 三个 IAM_CLIENT_AUTH_* 码已由实际管理 handler 验证503/409/401；不据此宣称 IAM_CONFIG_INVALID 已映射400。消息固定，不附 source 异常、原始响应、secret、ref、完整 snapshot、header 或表单。既有 OAuth 标准码只允许精确白名单；unknown/mixed error 不保留。成功业务响应不因错误脱敏而被删改。
 
-HTTP 401 如包含标准 OAuth 错误，诊断记录固定 `oauthError`。否则仅记 `oauthErrorResponse` 的 `empty`、`nonstandard` 或 `unreadable`。Token 请求阶段同时记录实际采用的 `clientAuthMethod`。空或非标准响应本身不能确定服务端拒绝原因。
+授权码换票和刷新收到 Token 端点 HTTP 错误时，失败记录包含 `httpStatus` 和实际采用的 `clientAuthMethod`。标准 OAuth 错误在同一条记录中写入 `oauthError`。HTTP 401 缺少标准错误码时，同一条记录的 `oauthErrorResponse` 取值为 `empty`、`nonstandard` 或 `unreadable`。空或非标准响应的拒绝原因由 IAM 登记与服务端记录确认。
+
+机密续期因 SQLite 读锁无法完成凭据快照复核时，失败返回 `IAM_CREDENTIALS_UNAVAILABLE`（503），日志记录 `CRED_LOCK_TIMEOUT`。发起方确认写入本次 pending 后，首次复核若遇到该超时，在准备发送前按 SQLite 读时限再核验一次同一凭据快照。仅在原绑定仍有效、完整 pending 匹配且原子还原得到确认后，才安排续期重试。
 
 检查只能拒绝可观察的旧结果，不能撤回已发请求、证明远端旧 secret 失效、远端 token 后代撤销或跨进程一致。IAM 答复旧访问令牌不随 secret 轮换作废；按范围前提，轮换按运维窗口执行。未知不补偿、不借新来源重试。secret 不可用时，本地退出仍按既有精确快照和受信 grant 规则处理；远端 revoke 不发送无认证请求，不盲删其他模式/主体记录，结果如实标未确认。

@@ -213,6 +213,7 @@ export function createIamService(rawConfig, options = {}) {
     token,
     now,
     fetchImpl,
+    logRenewal,
     openCallback: options.openCallback,
     closeCallback: options.closeCallback,
     recoverCredentialStore: reconcile.recoverCredentialStore,

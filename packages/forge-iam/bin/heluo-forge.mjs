@@ -23,6 +23,8 @@ const USAGE = `用法：
                                      --old-issuer URL --old-client-id ID --old-method METHOD
                                      从标准输入读取密钥，按旧绑定更正同一引用
 
+  client-secret 按原始 UTF-8 字节读取密钥。请确保输入与分发的原文一致，包括换行。
+
 环境变量：
   HELUO_FORGE_IAM_URL                 运行中的 DSH 地址（如 http://127.0.0.1:49196）；设置后
                                       auth token 经回环桥向 Host 取票，由 Host 按需刷新
@@ -30,6 +32,8 @@ const USAGE = `用法：
   HELUO_FORGE_KEYCHAIN_SERVICE        凭据命名空间的 service，默认 heluo-forge
   HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX 凭据命名空间的 account 前缀，默认 iam
 `;
+
+const CLIENT_SECRET_CHANGED_MESSAGE = 'IAM 客户端密钥缺失或已变化，请核对本机预置后回到 DSH 重新登录';
 
 function fail(code, message, json) {
   if (json) process.stderr.write(`${JSON.stringify({ error: { code, message } })}\n`);
@@ -68,18 +72,26 @@ async function provisionClientSecret(operation, args) {
   const stringOption = { type: 'string' };
   const options = { issuer: stringOption, 'client-id': stringOption, method: stringOption, ref: stringOption };
   if (replacing) Object.assign(options, { 'old-issuer': stringOption, 'old-client-id': stringOption, 'old-method': stringOption });
-  const requiredCount = Object.keys(options).length;
+  const required = Object.keys(options);
   let scope;
   let previousBinding;
   try {
     const { values, tokens } = parseArgs({ args, tokens: true, options });
-    if (tokens.length === requiredCount && Object.keys(values).length === requiredCount) {
+    const missing = required.find((name) => !values[name]?.trim());
+    if (missing) {
+      process.stderr.write(`选项 --${missing} 需要非空值。\n`);
+    } else if (tokens.length !== required.length) {
+      process.stderr.write('参数格式有误，请为每个选项提供一次值。\n');
+    } else {
       scope = { issuer: values.issuer, clientId: values['client-id'], method: values.method, ref: values.ref };
       if (replacing) {
         previousBinding = { issuer: values['old-issuer'], clientId: values['old-client-id'], method: values['old-method'] };
       }
     }
-  } catch { /* Only the fixed usage is shown. */ }
+  } catch {
+    // parseArgs diagnostics can contain argument text.
+    process.stderr.write('参数格式有误，请核对用法。\n');
+  }
   if (!scope || process.stdin.isTTY) {
     process.stderr.write(USAGE);
     return EXIT.USAGE;
@@ -88,6 +100,10 @@ async function provisionClientSecret(operation, args) {
     const chunks = [];
     for await (const chunk of process.stdin) chunks.push(chunk);
     const value = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks));
+    if (value.length === 0) {
+      fail('IAM_CLIENT_SECRET_PROVISION_FAILED', '标准输入缺少密钥内容', false);
+      return EXIT.UNAVAILABLE;
+    }
     const { setIamClientSecret } = await import('@heluo/forge-credentials-keychain');
     await setIamClientSecret(scope, value, { ...storeOptions(), previousBinding });
   } catch (error) {
@@ -184,6 +200,7 @@ async function main(argv) {
       const session = clientSecretCurrent ? sessionFromRecord(record) : sessionView(undefined, 'error');
       if (json) process.stdout.write(`${JSON.stringify(session)}\n`);
       else if (session.principal) process.stdout.write(`${session.principal.subject} (${session.principal.issuer ?? 'unknown issuer'})\n`);
+      else if (!clientSecretCurrent) process.stdout.write(`${CLIENT_SECRET_CHANGED_MESSAGE}\n`);
       else process.stdout.write('未登录\n');
       return EXIT.OK;
     }
@@ -218,7 +235,11 @@ async function main(argv) {
         : fromHost.code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.UNAVAILABLE;
     }
 
-    const result = clientSecretCurrent ? accessTokenOf(record) : { ok: false, code: 'IAM_REAUTH_REQUIRED' };
+    if (!clientSecretCurrent) {
+      fail('IAM_REAUTH_REQUIRED', CLIENT_SECRET_CHANGED_MESSAGE, json);
+      return EXIT.REAUTH_REQUIRED;
+    }
+    const result = accessTokenOf(record);
     if (!result.ok) {
       fail(result.code, result.code === 'IAM_REAUTH_REQUIRED' ? '访问令牌已过期，请回到 DSH 重新登录' : '当前没有可用的访问令牌', json);
       return result.code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.REAUTH_REQUIRED;

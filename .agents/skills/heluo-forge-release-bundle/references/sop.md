@@ -121,3 +121,14 @@ node node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/helu
 - 回调端口默认 `0`（系统分配），这是生产形态；固定端口只是 IAM 要求精确登记时的兼容选项，不是交付前提。
 - 本交付只供企业内部使用，不对外分发。
 - 真实 IAM 登录、PKCE、回调、个人 Key、运行期挂载、六平台与企业网络属于企业实测项，本地工具通过不代表企业联调完成。
+
+## 9. GitHub Actions 私版制作方案
+
+方案状态为代拟。当前工作流生成公版。私版工作流的接入输入为指定的私有发布仓库、获准的制品交付位置和终端密钥分发入口。 [release-bundle 工作流](https://github.com/hrygo/heluo-forge/blob/main/.github/workflows/release-bundle.yml)
+
+1. **准备本机配置。** 将企业发布输入维护在仓库外的专用 `.env`，以文件权限限制读取。非秘密配置使用本 SOP §2 的键名。发布工具按 `KEY=VALUE` 解析，并按明确的键清单同步到私有发布仓库的 Actions Secrets。若由 GitHub 管理真实 `client_secret`，独立使用仅向终端预置任务开放的凭据环境。
+2. **在 GitHub 制作私版。** 从发布仓库的受控 ref 手动触发私版工作流，指定公版版本、可信 SHA-256 和企业版本。工作流使用与公版配套的工具链，把制包允许的配置键写入受限临时配置文件，复用 `release-delivery` 的预览、摘要校验及制作。私版配置包含企业端点、客户端认证方法和 `HELUO_IAM_CLIENT_SECRET_REF` 等运行参数。运行记录只保留校验状态、版本及公私版摘要。成品 zip 和校验和交付到获准的私有 Release 或企业制品库。
+3. **在目标终端写入 SQLite。** 企业部署工具在首次登录前，以 DSH 的本机用户身份启动随包的 `client-secret set`，从获准的密钥分发入口把原始 UTF-8 字节送入命令的标准输入。命令通过现有凭据接口在 Host 使用的 SQLite 写入 `iam-client-secret/<ref>` 记录。当前 SQLite 密文与对应 `keyring` 配对，随包交付两者即可解密记录。终端使用本机 `keyring` 加密写入。
+4. **由 DSH 读取并验证。** Host 通过 `clientSecretRef` 读取同一凭据库，并核对 issuer、客户端 ID 和认证方法。Windows 与麒麟使用实际交付物验证预置、新登录和首次计划续期，观察 `refresh-committed` 与会话 `ready`。已有凭据库通过同一个记录 API 更新，员工的会话及个人网关凭据由各自的运行时流程管理。
+
+GitHub 的 Release 与 Actions 制品均按来源仓库的读权限提供下载。私版的发布目标须具有与员工交付范围相符的读权限。 [GitHub Release 说明](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases) · [Actions 制品下载说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
