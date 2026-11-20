@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.1.0 |
+| 版本 | V1.1.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -16,7 +16,7 @@
 | 最后更新 | 2026-11-20 |
 | 确认人 | 项目负责人（当前用户） |
 | 确认日期 | 2026-11-20 |
-| 确认事项 | Delegra 组装和调度专家。镜像默认包含 Codex，构建、验收与交付统一使用 `linux/arm64`。镜像方案覆盖受监管机构开发、测试、运维和办公，按 DRY 与 SOLID 复用公共层，在保全 Agent 与 Codex 必需能力的前提下压缩体积。首版使用发起用户的授权，允许把 DSH IAM 获取的网关连接交给本次任务的 Harness 使用。接入 AIGS 后按用户与 Agent 两种身份的权限交集执行。 |
+| 确认事项 | Delegra 组装和调度专家。镜像默认包含 Codex，构建、验收与交付统一使用 `linux/arm64`。镜像配方归属 Heluo Forge 仓库。镜像方案覆盖受监管机构开发、测试、运维和办公，按 DRY 与 SOLID 复用公共层，在保全 Agent 与 Codex 必需能力的前提下压缩体积。首版使用发起用户的授权，允许把 DSH IAM 获取的网关连接交给本次任务的 Harness 使用。接入 AIGS 后按用户与 Agent 两种身份的权限交集执行。 |
 | 适用范围 | 专家组成、`linux/arm64` 镜像、首版 DSH 用户凭据与 AIGS 双主体授权。 |
 | 门禁 | 按 §3、§8 分别验收本地 ARM64 制品与目标 Runner。企业凭据接入须满足 §4、§6.4 的授权、契约与实测判据。 |
 
@@ -59,6 +59,8 @@ AIGS 接入阶段由目标授权服务对同一资源和动作判定当前用户
 ## 5. 已有证据与待核验事项
 
 本机 Docker 已运行两个 `linux/arm64` 镜像，验证 Codex `0.167.1` 启动、非 root 工作区和 Java 样例。模拟网关收到 Codex 的 `/responses` 请求和两项合成凭据，缺失 IAM access token 时返回 `401`。 [镜像配方与实测记录](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md)
+
+本库的固定版参考镜像及场景目录在原生 Linux ARM64 完成本地构建和冒烟。实测记录包含 Codex `0.160.0` 的两种打包形态、ARM64 manifest 摘要、压缩层和各场景结果。 [运行时镜像实测记录](verification/delegra-runtime-images.md)
 
 Delegra 固定标签 `deploy/v2026.1106.0-r2`（`25c86a283a9c`）的 `runner-binary.ts` 能识别 Linux ARM64 Runner。该标签的 Daytona fleet 配方使用 `linux/amd64`，`Dockerfile.release` 检查 Codex `0.160.0`。远端 Native 兼容稳定版 `>=0.149.0 <0.161.0`。npm 注册表有 `0.160.0-linux-arm64` 制品。本机探针使用的 `0.167.1` 超出该区间。 [固定版本与验收依据](../engineering/reviews/2026-11-20-delegra-runtime-images-concepts-brief.md#接入取舍) · [Codex ARM64 包元数据](https://registry.npmjs.org/@openai%2fcodex/0.160.0-linux-arm64)
 
@@ -189,7 +191,7 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 
 ## 8. 实施计划
 
-`deploy/v2026.1106.0-r2` 的 Native Runner 和 Codex `0.160.0` 为首轮 ARM64 参考组合。Delegra 构建配方位于 `docker/agent-runtime/experts/`。任务各自产出可核验结果。跨系统范围、托管镜像发布、企业接口与真实用户凭据遵循 §4 的适用准入。
+`deploy/v2026.1106.0-r2` 的 Native Runner 和 Codex `0.160.0` 为首轮 ARM64 参考组合。镜像配方位于 Heluo Forge 的 [`deploy/delegra-expert-images/`](../../deploy/delegra-expert-images/README.md)，Runner 编译输入取自固定的 Delegra 源码归档。任务各自产出可核验结果。跨系统范围、托管镜像发布、企业接口与真实用户凭据遵循 §4 的适用准入。
 
 | 任务 | 主要交付 | 执行前置 |
 | --- | --- | --- |
@@ -209,17 +211,17 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 
 | 交付路径 | 内容 |
 | --- | --- |
-| Delegra `docker/agent-runtime/experts/Dockerfile` | ARM64 `runnerd-build` 运行 `cargo build --locked --release -p paperclip-runner-core --bin paperclip-runnerd`。独立层准备 Codex 完整运行资产。最终层按 §9.2 保留 Node、基础工具及 `tini`，以普通用户启动。检查 `BUILDOS`、`BUILDARCH`、`TARGETOS`、`TARGETARCH` 均对应 `linux/arm64`。 |
-| Delegra `docker/agent-runtime/experts/Dockerfile.java` | 基于同一公共层复制工具链的 `/opt/java/openjdk` 和 `/usr/share/maven`，设置 `JAVA_HOME`、`PATH`。 |
-| Delegra `docker/agent-runtime/experts/package.json`、`package-lock.json` | 以 npm 锁文件与 `npm ci` 固定 `@openai/codex@0.160.0` 及对应 Linux ARM64 制品。 |
-| Delegra `docker/agent-runtime/experts/Dockerfile.dockerignore`、`.dockerignore` | 根上下文限定该配方目录、`packages/paperclip-runner/runner/` 下 manifest、锁文件和 crates，以及 `protocol/`、`acpx-profiles.json` 和 `antigravity-distributions.json`。场景配方的目录上下文包含配方和目标需要的工具锁文件。 |
-| Delegra `docker/agent-runtime/experts/debian.sources`、`buildx-bake.hcl` | 填入已验证 Debian 签名快照、信任根与 ARM64 包来源，快照标识及发布索引摘要保存在构建元数据。Bake 固定基础和工具链摘要、平台和命名上下文。Java 目标复用对应公共层。 |
-| Delegra `tests/runner-e2e/expert-runtime-images-smoke.mjs` | 从容器外驱动真实默认入口与 `app-server` stdio，用 `--network none` 验证 §9.2.3。输入为两个镜像引用，非零退出码和失败报告分别标明镜像、断言和清理结果。 |
-| HeluoForge `docs/design/verification/delegra-runtime-images.md` | 实测记录含固定源码、输入、镜像摘要、平台、压缩层增量、工具版本、耗时及通过和失败判据。 |
+| `deploy/delegra-expert-images/Dockerfile` | ARM64 `runner-build` 运行 `cargo build --locked --release -p paperclip-runner-core --bin paperclip-runnerd`。独立层准备 Codex 完整运行资产。最终层按 §9.2 保留 Node、基础工具及 `tini`，以普通用户启动。检查 `BUILDOS`、`BUILDARCH`、`TARGETOS`、`TARGETARCH` 均对应 `linux/arm64`。 |
+| `deploy/delegra-expert-images/Dockerfile.java` | 基于同一公共层复制工具链的 `/opt/java/openjdk` 和 `/usr/share/maven`，设置 `JAVA_HOME`、`PATH`。 |
+| `deploy/delegra-expert-images/package.json`、`package-lock.json` | 以 npm 锁文件与 `npm ci` 固定 `@openai/codex@0.160.0` 及对应 Linux ARM64 制品。 |
+| `deploy/delegra-expert-images/.dockerignore` | 构建上下文限于配方目录，包含 Dockerfile、Debian 快照配置和工具锁文件。公共 Dockerfile 校验固定源码归档的 SHA-256，仅取编译所需的 Runner manifest、锁文件、crates、协议和配置文件。 |
+| `deploy/delegra-expert-images/debian.sources`、`buildx-bake.hcl` | 填入已验证 Debian 签名快照、信任根与 ARM64 包来源，快照标识及发布索引摘要保存在构建元数据。Bake 固定基础和工具链摘要、平台和命名上下文。Java 目标复用对应公共层。 |
+| `tests/runner-e2e/expert-runtime-images-smoke.mjs` | 从容器外驱动真实默认入口与 `app-server` stdio，用 `--network none` 验证 §9.2.3。接收一个或多个镜像引用。失败以非零状态退出并输出断言。每个容器均在用例结束后核对回收。 |
+| `docs/design/verification/delegra-runtime-images.md` | 实测记录含固定源码、输入、镜像摘要、平台、压缩层增量、工具版本、耗时及通过和失败判据。 |
 
-- [ ] 先用 `docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl --print codex-min codex-java-21` 核对平台与父层。用相同入口 `--load` 构建标签 `paperclip-expert/codex-min:arm64-local`、`paperclip-expert/codex-java-21:arm64-local`。记录原生 ARM64 构建节点。
-- [ ] 运行 `node tests/runner-e2e/expert-runtime-images-smoke.mjs paperclip-expert/codex-min:arm64-local paperclip-expert/codex-java-21:arm64-local`。断言两份的 OCI 平台、容器 `aarch64`、关键 ELF、`codex-cli 0.160.0`、UID/GID、文件与会话结束结果。核对 Runner `--build-metadata` 的 `dial_ws_loopback`、`dial_wss`、`listen_ws`。Java 执行 `javac --release 21` 样例与 `mvn --version`。
-- [ ] 精简候选使用独立 Bake 目标 `codex-min-native`、`codex-java-21-native` 和 `arm64-native-local` 标签，以相同 Node 运行资产和官方原生 Codex 归档复跑冒烟。按 §9.2.2 分别导出 OCI 布局，以相同压缩算法计算层大小。测试构建平台错误、固定摘要校验失败、公共工具缺失和 stdio 超时，核对失败且资源清理。通过本地验收的候选交任务 2 比较实际启动。
+- [x] 先用 `docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --print codex-min codex-java-21` 核对平台与父层。用相同入口 `--load` 构建标签 `paperclip-expert/codex-min:arm64-local`、`paperclip-expert/codex-java-21:arm64-local`。记录原生 ARM64 构建节点。
+- [x] 运行 `node tests/runner-e2e/expert-runtime-images-smoke.mjs paperclip-expert/codex-min:arm64-local paperclip-expert/codex-java-21:arm64-local`。断言两份的 OCI 平台、容器 `aarch64`、关键 ELF、`codex-cli 0.160.0`、UID/GID、文件与会话结束结果。核对 Runner `--build-metadata` 的 `dial_ws_loopback`、`dial_wss`、`listen_ws`。Java 执行 `javac --release 21` 样例与 `mvn --version`。
+- [x] 精简候选使用独立 Bake 目标 `codex-min-native`、`codex-java-21-native` 和 `arm64-native-local` 标签，以相同 Node 运行资产和官方原生 Codex 归档复跑冒烟。按 §9.2.2 分别导出 OCI 布局，以相同压缩算法计算层大小。测试构建平台错误、固定摘要校验失败、公共工具缺失和 stdio 超时，核对失败且资源清理。通过本地验收的候选交任务 2 比较实际启动。
 
 ### 8.2 任务 2 · 验证 Delegra 实际启动、版本固定与回收
 
@@ -244,9 +246,10 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 
 ### 8.5 任务 5 · 构建开发、测试、运维和办公镜像目录
 
-- [ ] 保留 §9.1 的 18 个构建目标及 14 份 Dockerfile 定义。按真实项目所需版本和场景分批启用。每批先固定目标工具版本、ARM64 归档及校验值、包来源和运行依赖，样例有明确入口、固定预期和退出结果。
-- [ ] 在 Delegra 的 `docker/agent-runtime/experts/` 中通过 `Dockerfile.java` 派生四个其他 JDK。其他配方及父层以 §9.3 为准。Node、Newman 和 Playwright 分别在 `tooling/node/`、`tooling/test-api/`、`tooling/test-web/` 维护 `package.json` 与 `package-lock.json`。在 `buildx-bake.hcl` 和 `.dockerignore` 补入已选目标的输入及上下文。
-- [ ] 在原生 ARM64 节点用 `buildx bake --print` 检查实际目标，再以统一 `tests/runner-e2e/expert-runtime-images-smoke.mjs` 和各场景样例跑实际镜像。浏览器验证进程沙箱与取消后回收，办公验证 CJK 字体及三类格式导出。记录失败、体积增量、启动时间和回退结果。
+- [x] 保留 §9.1 的 18 个构建目标及 14 份 Dockerfile 定义。按真实项目所需版本和场景分批启用。每批先固定目标工具版本、ARM64 归档及校验值、包来源和运行依赖，样例有明确入口、固定预期和退出结果。
+- [x] 在 `deploy/delegra-expert-images/` 中通过 `Dockerfile.java` 派生四个其他 JDK。其他配方及父层以 §9.3 为准。Node、Newman 和 Playwright 分别在 `tooling/node/`、`tooling/test-api/`、`tooling/test-web/` 维护 `package.json` 与 `package-lock.json`。在 `buildx-bake.hcl` 和 `.dockerignore` 补入已选目标的输入及上下文。
+- [x] 在原生 ARM64 节点用 `buildx bake --print` 核对 18 个发布目标，以统一冒烟入口运行各场景样例。验证 Chromium 沙箱、办公 CJK 字体及三类格式导出，记录本地镜像摘要、体积增量、冒烟耗时和失败条件。 [本地实测记录](verification/delegra-runtime-images.md)
+- [ ] 从目标 Runner 的正常调度入口验证按摘要拉取、冷启动、取消、进程和工作区回收以及版本回退，覆盖浏览器任务与试点场景。
 - [ ] 通过 §9.4 才登记可用镜像。试点形成冷拉、启动、并发和每任务 Token 用量证据，由负责人据预算与代表性任务决定扩展顺序与规模。公共层更新时重建并复验受影响的发布目标。
 
 计划和契约交付前执行 `pnpm check` 与 `git diff --check`。实测记录保留环境、命令、版本、请求关联、结果与耗时。
@@ -283,7 +286,7 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 | 接口隔离 | 浏览器、JDK、数据库客户端和办公工具按场景装入。专家任务按构建清单选择能完成工作的最小镜像。 |
 | 依赖倒置 | Dockerfile 通过 `expert_base` 消费已核验的父层，通过摘要和锁文件消费官方制品。Delegra 依赖镜像的运行约定与能力清单，可用同一个调度入口启动各场景。 |
 
-所有 Bake 目标使用 `platforms = ["linux/arm64"]`，由原生 ARM64 BuildKit 构建。以 Debian 13 glibc 底座交付目标版本的 Codex 和 `paperclip-runnerd`。配方目录为 Delegra 的 `docker/agent-runtime/experts/`。公共 `Dockerfile` 使用仓库根上下文，以 `Dockerfile.dockerignore` 保留编译所需的 Runner 源码和配方。场景文件使用配方目录及其 `.dockerignore`。`expert_base` 默认连接 `target:codex-min`，API 和 Web 测试复用 `codex-min` 的 Node 运行时和固定 Node 工具阶段的 npm 安装入口，仅复制各自运行工具。Kubernetes 和 IaC 连接 `target:codex-ops-diag`。 [Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/) · [Docker Bake 目标上下文](https://docs.docker.com/build/bake/contexts/#using-a-target-as-a-build-context) · [Paperclip Runner 平台要求](https://docs.paperclip.ing/reference/adapters/paperclip-runner/)
+所有 Bake 目标使用 `platforms = ["linux/arm64"]`，由原生 ARM64 BuildKit 构建。以 Debian 13 glibc 底座交付目标版本的 Codex 和 `paperclip-runnerd`。构建上下文为本仓库的 `deploy/delegra-expert-images/`，由 `.dockerignore` 限定配方及锁文件。公共 Dockerfile 按固定提交和 SHA-256 取得 Delegra Runner 源码。`expert_base` 默认连接 `target:codex-min`，API 和 Web 测试复用 `codex-min` 的 Node 运行时和固定 Node 工具阶段的 npm 安装入口，仅复制各自运行工具。Kubernetes 和 IaC 连接 `target:codex-ops-diag`。 [Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/) · [Docker Bake 目标上下文](https://docs.docker.com/build/bake/contexts/#using-a-target-as-a-build-context) · [Paperclip Runner 平台要求](https://docs.paperclip.ing/reference/adapters/paperclip-runner/)
 
 `buildx-bake.hcl` 固定基础及工具链镜像摘要、发行归档版本和校验值，APT 使用 `debian.sources` 指定有签名的版本化 Debian 源，Node 工具按各目录 npm 锁文件安装。访问私有制品源的构建授权通过 BuildKit secret 临时挂载。企业工具授权和工作区数据随任务交接。 [Docker 构建密钥](https://docs.docker.com/build/building/secrets/)
 
@@ -295,8 +298,10 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 4. `--load` 验功能，本地 OCI 导出测压缩层。每次对一个目标用同一 Bake 文件及压缩设置覆写输出，例如下列命令。读取 ARM64 manifest 的 `layers[].size` 之和，按 layer digest 去重计算相对父层增量。用相同存储配置记录本地大小，区分冷拉、启动及首个 turn 耗时。选择通过相同公共验收、场景样例和真实 Runner 验收后压缩拉取量较小的候选。 [Docker OCI 导出](https://docs.docker.com/build/exporters/oci-docker/)
 
 ```sh
-docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl \
-  --set 'codex-min.output=type=oci,dest=/tmp/codex-min-arm64.oci.tar,compression=gzip,compression-level=6,force-compression=true' \
+oci_dir=$(mktemp -d)
+oci_dir=$(cd "$oci_dir" && pwd -P)
+docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --allow "fs.write=$oci_dir" \
+  --set "codex-min.output=type=oci,dest=$oci_dir/codex-min-arm64.oci.tar,compression=gzip,compression-level=6,force-compression=true" \
   codex-min
 ```
 
@@ -324,7 +329,7 @@ docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl \
 | Dockerfile → Bake 目标 | 构建指令与输入 | 完成判据 |
 | --- | --- | --- |
 | `Dockerfile` → `codex-min` | `FROM` 固定 ARM64 Rust 镜像进入编译阶段，`COPY` 固定标签的 Runner 源码和 `Cargo.lock`，`RUN cargo build --locked --release` 编译 `paperclip-runnerd`。最终层 `COPY` Runner、Codex `0.160.0` 的完整运行资产及所需 Node。安装 §9.2.2 的公共包集，配置账户、`HOME`、`/workspace` 与 `tini`，切换至 `USER 1000:1000`。 | OCI 为 `linux/arm64`，关键 ELF 为 AArch64，通过公共、Java 派生及目标 Runner 的相应验收。 |
-| `Dockerfile.java` → `codex-java-8`、`codex-java-11`、`codex-java-17`、`codex-java-21`、`codex-java-25` | Bake 为每个目标传入 `JAVA_TOOLCHAIN_IMAGE`，`FROM` 对应的 Maven/Temurin ARM64 摘要作 `java-toolchain` 阶段，最终阶段 `FROM expert_base`。`COPY --from=java-toolchain` 取 `/opt/java/openjdk` 和 `/usr/share/maven`，`ENV JAVA_HOME=/opt/java/openjdk`，将 JDK 和 Maven 的 `bin` 加入 `PATH`。每个目标只装对应主版本的 JDK。 | `java`、`javac`、`mvn --version` 确认为所选 JDK。Java 8 编译指定 `-source 8 -target 8`，其余用 `javac --release <major>`，执行样例并核对输出。 |
+| `Dockerfile.java` → `codex-java-8`、`codex-java-11`、`codex-java-17`、`codex-java-21`、`codex-java-25` | Bake 的 `java_toolchain` 命名上下文为每个目标提供固定的 Maven/Temurin ARM64 摘要，最终阶段 `FROM expert_base`。`COPY --from=toolchain` 取 `/opt/java/openjdk` 和 `/usr/share/maven`，`ENV JAVA_HOME=/opt/java/openjdk`，将 JDK 和 Maven 的 `bin` 加入 `PATH`。每个目标只装对应主版本的 JDK。 | `java`、`javac`、`mvn --version` 确认为所选 JDK。Java 8 编译指定 `-source 8 -target 8`，其余用 `javac --release <major>`，执行样例并核对输出。 |
 
 以下为 2026-11-20 从 Docker Official Images 的 Maven 制品查询得到的 ARM64 清单摘要，作为各 Java 目标的构建输入候选。复制工具链后的执行兼容性按上表逐个验证。 [Maven 官方镜像](https://hub.docker.com/_/maven) · [Temurin 发布平台](https://adoptium.net/supported-platforms/)
 
@@ -386,10 +391,10 @@ Java 项目复用相应 JDK 镜像执行项目自带的测试，Python 项目可
 | 容量测试与平台工具 | Bake 固定 k6、kubectl、Helm、OpenTofu 的 ARM64 归档及 SHA-256。kubectl 的版本差与 Helm 兼容性按目标集群核定。 |
 | SQL 和办公 | 在允许的 Debian 快照锁定客户端、LibreOffice、CJK 字体和 PDF 工具，按目标系统核验直接依赖、认证方式或样张。 |
 
-新增目标的合成文件与预期结果放在 Delegra 的 `tests/runner-e2e/fixtures/expert-runtime/<target>/`。统一冒烟入口按目标选择场景测试，记录退出码、输出核对、失败阶段和剩余资源。只有目标项目的指定版本及输入锁可复现时才登记该镜像。
+新增目标的合成文件与预期结果放在 `tests/runner-e2e/fixtures/expert-runtime/`。统一冒烟入口按目标选择场景测试，记录退出码、输出核对、失败阶段和剩余资源。只有目标项目的指定版本及输入锁可复现时才登记该镜像。
 
 ### 9.4 构建与发布验收
 
-1. **先验证配方。** 用 `docker buildx bake -f docker/agent-runtime/experts/buildx-bake.hcl --print <target>` 核对每个目标的 Dockerfile、父层、构建输入及平台。使用 `--load <target>` 在 ARM64 构建节点装入本地测试镜像，验证镜像元数据和关键原生程序的 ELF 架构。冒烟测试以普通用户执行，合成服务按需使用回环地址或独立测试环境。
+1. **先验证配方。** 用 `docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --print <target>` 核对每个目标的 Dockerfile、父层、构建输入及平台。使用 `--load <target>` 在 ARM64 构建节点装入本地测试镜像，验证镜像元数据和关键原生程序的 ELF 架构。冒烟测试以普通用户执行，合成服务按需使用回环地址或独立测试环境。
 2. **生成可追溯制品。** 获准发布时以 `--push --sbom=true --provenance=mode=min` 生成镜像及证明。复用发布流程的 Bake 元数据和摘要签名校验。记录发布入口摘要、实际 ARM64 manifest、工具版本、构建时间、体积和冷启动耗时。在获准制品库检查摘要、证明和扫描结果，再创建 Delegra 的测试执行环境。验收覆盖错误架构、摘要无法拉取、工具缺失及版本错配。
 3. **从实际调度入口验收。** 最小镜像和 Java 21 先验证完整 Runner 会话。其余目标同样经过真实 Runner 的拉取、启动、功能样例、取消和回收。达到运行判据后，才在实际目录登记其可用场景。按项目需用版本逐个启用，公共层变更后以新任务演练切换与回退。 [Delegra 运行验收](#3-目标与验收)

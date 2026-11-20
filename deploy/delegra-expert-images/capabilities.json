@@ -1,0 +1,26 @@
+{
+  "platform": "linux/arm64",
+  "codex": "0.160.0",
+  "runner": "25c86a283a9c787a01911c714618d78df7552af7",
+  "common": ["paperclip-runnerd", "codex", "node", "tini", "bash", "sh", "git", "rg"],
+  "scenes": {
+    "codex-min": [],
+    "codex-java-8": ["java", "javac", "mvn"],
+    "codex-java-11": ["java", "javac", "mvn"],
+    "codex-java-17": ["java", "javac", "mvn"],
+    "codex-java-21": ["java", "javac", "mvn"],
+    "codex-java-25": ["java", "javac", "mvn"],
+    "codex-python": ["python", "uv"],
+    "codex-node": ["npm", "pnpm", "tsc"],
+    "codex-go": ["go"],
+    "codex-sql": ["psql", "mysql", "sqlite3"],
+    "codex-dotnet-10": ["dotnet"],
+    "codex-test-api": ["newman"],
+    "codex-test-web": ["playwright"],
+    "codex-test-load": ["k6"],
+    "codex-ops-diag": ["curl", "jq", "openssl", "dig", "ip", "ps"],
+    "codex-ops-k8s": ["kubectl", "helm"],
+    "codex-ops-iac": ["tofu"],
+    "codex-office-zh": ["soffice", "pandoc", "pdfinfo", "pdftotext", "fc-match"]
+  }
+}

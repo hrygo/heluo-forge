@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+FROM uv_toolchain AS toolchain
+
+FROM expert_base
+USER 0
+RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends python3.13 python3.13-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/python3.13 /usr/local/bin/python
+COPY --from=toolchain /uv /usr/local/bin/uv
+USER 1000:1000

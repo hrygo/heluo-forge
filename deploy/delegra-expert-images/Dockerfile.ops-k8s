@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+FROM download_base AS tools
+ARG KUBECTL_URL
+ARG KUBECTL_SHA256
+ARG HELM_URL
+ARG HELM_SHA256
+USER 0
+ADD --checksum=sha256:${KUBECTL_SHA256} ${KUBECTL_URL} /out/kubectl
+ADD --checksum=sha256:${HELM_SHA256} ${HELM_URL} /tmp/helm.tar.gz
+RUN tar -xzf /tmp/helm.tar.gz --strip-components=1 -C /out linux-arm64/helm linux-arm64/LICENSE
+
+FROM expert_base
+COPY --from=tools --chmod=0755 /out/kubectl /out/helm /usr/local/bin/
+COPY --from=tools /out/LICENSE /usr/share/doc/helm/LICENSE

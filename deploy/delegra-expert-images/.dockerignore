@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!Dockerfile.*
+!debian.sources
+!package.json
+!package-lock.json
+!tooling/
+!tooling/*/
+!tooling/*/package.json
+!tooling/*/package-lock.json
