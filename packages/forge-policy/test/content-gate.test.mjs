@@ -39,10 +39,11 @@ function mount({ rules = {}, confirmation, content, userQuestions } = {}) {
     audit: { sink: 'memory' },
     rules,
     catalog: CATALOG,
+    tools: { forge_gitee_write: 'gitee.issue.write' },
     ...(confirmation === undefined ? {} : { confirmation }),
     ...(content === undefined ? {} : { content }),
   });
-  return { policy: services.get('policy'), ctx, dispose };
+  return { policy: services.get('policy'), ctx, dispose, guards, listeners };
 }
 
 const issueExec = (body, callId = 'call-issue') => ({
@@ -157,7 +158,8 @@ test('正文超出预算时按已扫部分判定，并在审计里标出截断',
   assert.deepEqual(result, { ok: true });
   assert.equal(ran, 1);
   const begin = h.policy.auditRecords()[0];
-  assert.deepEqual(begin.contentSkipped, ['body']);
+  assert.deepEqual(begin.contentSkipped, ['body:truncated']);
+  assert.equal(begin.truncated, true);
   h.dispose();
 });
 
@@ -171,6 +173,80 @@ test('正文读不到时放行并如实告警（D48）', async () => {
   const result = await h.policy.executeAction(h.ctx, 'gitee.issue.write', exec, async () => (ran++, { ok: true }));
   assert.deepEqual(result, { ok: true });
   assert.equal(ran, 1);
-  assert.deepEqual(h.policy.auditRecords()[0].contentSkipped, ['content-unreadable']);
+  assert.deepEqual(h.policy.auditRecords()[0].contentSkipped, ['content:unreadable']);
+  h.dispose();
+});
+
+test('受控扫描接口的分类进入内容闸：被脱敏的令牌仍形成内容确认（D86）', async () => {
+  const channel = answering();
+  const h = mount({ rules: { contentGate: true, confirmPush: true }, userQuestions: channel });
+  let ran = 0;
+  const sha = 'a'.repeat(40);
+  const exec = {
+    ...pushExec('提交正文已在出口脱敏'),
+    content: async () => ({ sha, commits: [], redactions: [{ sha, field: 'commits[0]', kind: 'token' }] }),
+  };
+  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', exec, async () => (ran++, { ok: true }));
+  assert.deepEqual(result, { ok: true });
+  assert.equal(ran, 1);
+  assert.deepEqual(channel.calls[0].questions.map((question) => question.id), [
+    'forge-policy-action',
+    'forge-policy-content',
+  ]);
+  const records = h.policy.auditRecords();
+  assert.deepEqual(records[0].ruleIds, ['BUILTIN-TOKEN']);
+  assert.deepEqual(records[2].ruleIds, ['BUILTIN-TOKEN']);
+  assert.equal(records[2].contentSkipped, undefined, '已分类的脱敏不记为未扫全');
+  h.dispose();
+});
+
+test('无法分类的脱敏按未完整扫描记账，asked/answered/begin 三处一致', async () => {
+  const channel = answering();
+  const h = mount({ rules: { contentGate: true, confirmPush: true }, userQuestions: channel });
+  let ran = 0;
+  const exec = {
+    ...pushExec('提交正文已在出口脱敏'),
+    content: async () => ({ sha: 'b'.repeat(40), commits: [], redactions: [{ field: 'commits[0]', kind: 'fingerprint' }] }),
+  };
+  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', exec, async () => (ran++, { ok: true }));
+  assert.deepEqual(result, { ok: true });
+  assert.equal(ran, 1);
+  const records = h.policy.auditRecords();
+  assert.deepEqual(records.map((record) => record.phase), ['asked', 'answered', 'begin', 'settle']);
+  for (const record of records.slice(0, 3)) {
+    assert.deepEqual(record.contentSkipped, ['commits[0]:redaction-unknown']);
+  }
+  h.dispose();
+});
+
+test('普通对象正文在确认期间被改写：复验拒绝且零执行', async () => {
+  const exec = { ...issueExec('标题'), content: { body: `token ${TOKEN}` } };
+  const channel = {
+    calls: [],
+    ask(request) {
+      this.calls.push(request);
+      exec.content.body = '改写后的正文';
+      return Promise.resolve({
+        answers: request.questions.map((question) => ({ id: question.id, selected: [CONFIRM_LABELS.allow] })),
+      });
+    },
+  };
+  const h = mount({ rules: { contentGate: true }, userQuestions: channel });
+  let ran = 0;
+  const result = await h.policy.executeAction(h.ctx, 'gitee.issue.write', exec, async () => (ran++, { ok: true }));
+  assert.equal(ran, 0);
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /正文内容发生变化/u);
+  assert.ok(h.policy.auditRecords().some((record) => record.rule === 'content-changed'));
+  h.dispose();
+});
+
+test('宿主同步守卫拒绝被改写的普通对象正文', async () => {
+  const h = mount({ rules: { contentGate: true } });
+  const exec = { ...issueExec('标题'), content: { body: '没有风险' } };
+  const preExecute = h.listeners.get('tools/pre-execute');
+  assert.equal((await preExecute(exec, async () => ({ kind: 'allow' }))).kind, 'allow');
+  exec.content.body = '改写后的正文';
+  assert.match(String(h.guards[0](exec)), /content changed after the call was admitted/u);
   h.dispose();
 });

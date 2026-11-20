@@ -293,7 +293,7 @@ export interface PolicyDecision {
 
 未在表中的动作退回全局白名单（`title`/`body`/`description`/`content`/`message`/`comment`/`review`/`summary`/`text`/`diff`/`patch` 与 `commits[].message|diff`）。九条内置规则分三档：`BUILTIN-PRIVATE-KEY`、`BUILTIN-CLOUD-ACCESS-KEY` 为 HARD（不可确认，命中即零执行）；`BUILTIN-CREDENTIAL-URL`、`BUILTIN-TOKEN` 为可确认（有卡片通道时并入分步确认，无通道即拒绝）；`BUILTIN-ENV-COMMIT`、`BUILTIN-INTERNAL-ADDRESS`、`BUILTIN-ABSOLUTE-HOME`、`BUILTIN-LONG-BASE64`、`BUILTIN-ENV-FILE` 为 SOFT（放行并记录；动作本身需要确认时并入同一张分步卡）。口令赋值与强制推送不在内容闸里判定——前者误报过高，后者属于 `gitee.git.push` 的参数校验。
 
-一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`）：超出预算的字段按已扫部分判定并记 `truncated`，二进制字段跳过，正文读不到时放行并在审计留 `content-unreadable`。命中的规则 id 只进审计，命中值与正文既不进审计也不进卡片与错误文案，只保留首尾各 4 字符的脱敏摘录。
+一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`）：超出预算的字段按已扫部分判定并记 `truncated`，二进制字段跳过；读不到的字段放行，并在审计的 `contentSkipped` 里记 `字段:原因`（如 `content:unreadable`、`body:truncated`、`commits[0]:redaction-unknown`），`truncated` 与 `contentSkipped` 在 asked/answered/begin 三处一致。Gitee 推送正文在公共 CLI 出口先脱敏，脱敏器按类别回报（`token`、`credential-url`）：读取层把类别交给内容闸映射回 `BUILTIN-TOKEN`、`BUILTIN-CREDENTIAL-URL`，可确认命中照常进入分步卡；无法分类的脱敏按未完整扫描记账后放行（D86）。普通对象正文在确认后与执行前用同一摘要复验，等待期间被改写即拒绝（D87）。命中的规则 id 只进审计，命中值与正文既不进审计也不进卡片与错误文案，只保留首尾各 4 字符的脱敏摘录。
 
 ### 5.2 受保护路径、别名归一与沙箱取严
 

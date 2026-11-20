@@ -43,6 +43,9 @@ export const DEFAULT_CONFIRMATION_TIMEOUT_MS = 120_000;
 /** `confirmation` 段唯一开放的键：未知键在装载期报错，避免写了却没人读。 */
 export const CONFIRMATION_KEYS = Object.freeze(['timeoutMs']);
 
+/** `content` 段唯一开放的键：拼错的预算必须报错，而不是静默退回默认值。 */
+export const CONTENT_KEYS = Object.freeze(['maxBytes']);
+
 export const DEFAULT_RULES = Object.freeze(Object.fromEntries(RULE_KEYS.map((key) => [key, false])));
 
 export const DEFAULTS = Object.freeze({
@@ -75,6 +78,22 @@ function isPositiveInteger(value) {
 
 function checkPositiveInteger(issues, value, path) {
   if (value !== undefined && !isPositiveInteger(value)) issues.push(`${path}: must be a positive integer`);
+}
+
+function checkContent(issues, content) {
+  if (content === undefined) return;
+  if (!isPlainObject(content)) {
+    issues.push('content: must be an object when provided');
+    return;
+  }
+  for (const [key] of Object.entries(content)) {
+    if (!CONTENT_KEYS.includes(key)) issues.push(`content.${key}: unknown config key`);
+  }
+  // 与内容扫描器的预算判定保持一致（`Number.isSafeInteger` 且为正），
+  // 避免装载期接受一个扫描器不会采用的数值、再静默退回 256 KiB 默认值。
+  if (content.maxBytes !== undefined && !(Number.isSafeInteger(content.maxBytes) && content.maxBytes > 0)) {
+    issues.push('content.maxBytes: must be a positive safe integer');
+  }
 }
 
 function checkRules(issues, rules) {
@@ -237,10 +256,7 @@ export function validateConfig(input = {}) {
       checkPositiveInteger(issues, input.confirmation.timeoutMs, 'confirmation.timeoutMs');
     }
   }
-  if (input.content !== undefined) {
-    if (!isPlainObject(input.content)) issues.push('content: must be an object when provided');
-    else checkPositiveInteger(issues, input.content.maxBytes, 'content.maxBytes');
-  }
+  checkContent(issues, input.content);
   checkPaths(issues, input.paths);
   checkAudit(issues, input.audit);
   checkObservation(issues, input.observation);

@@ -160,3 +160,22 @@ test('Config exposes a Standard Schema validator', () => {
   assert.equal(Config['~standard'].validate({ rules: { confirmPush: true } }).issues, undefined);
   assert.equal(Config['~standard'].validate({ rules: { protectPaths: true } }).issues.length, 1);
 });
+
+test('content 段只接受已知键：拼错的预算在装载期报键路径（计划 §4.2）', () => {
+  const { issues } = validateConfig({ content: { maxbytes: 1_024 } });
+  assert.equal(issues.length, 1);
+  assert.match(issues[0], /content\.maxbytes.*unknown config key/u);
+  assert.throws(
+    () => resolveConfig({ content: { maxbytes: 1_024 } }),
+    (error) => error.code === 'POLICY_CONFIG_INVALID',
+  );
+});
+
+test('content.maxBytes 与扫描器同口径：只接受正的安全整数', () => {
+  for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY, '1024']) {
+    const { issues } = validateConfig({ content: { maxBytes: value } });
+    assert.equal(issues.length, 1, `${String(value)} must be refused`);
+    assert.match(issues[0], /content\.maxBytes: must be a positive safe integer/u);
+  }
+  assert.equal(validateConfig({ content: { maxBytes: 1 } }).issues, undefined);
+});

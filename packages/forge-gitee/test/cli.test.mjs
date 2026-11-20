@@ -20,6 +20,7 @@ import {
   INVOCATION_KEYS,
   createGiteeRunner,
   detectPersistentToken,
+  redactionKinds,
   scrubSecrets,
 } from '../src/gitee-cli.mjs';
 
@@ -342,6 +343,34 @@ test('形状兜底：未点名但形似凭据的串同样被抹掉（默认 auth
   const result = await runner.run({ bin: 'gh', args: ['version'] });
   assert.equal(result.stdout.includes(shape), false);
   assert.equal(result.stdout, 'leaked ***\n');
+});
+
+test('脱敏分类：令牌与代理凭据分别上报，未脱敏时不带分类（D86）', async () => {
+  const token = TOKEN_VALUE;
+  const proxy = `http://svc:${['pa', '55'].join('')}@proxy.corp.example:3128`;
+  const { execFile } = fakeExecFile((request) => {
+    if (request.args.includes('proxy')) return { stdout: `proxy ${proxy}\n` };
+    if (request.args.includes('plain')) return { stdout: 'plain\n' };
+    return { stdout: `token ${token}\n` };
+  });
+  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: token }, authEnv: ['GH_TOKEN'] });
+
+  const tokenResult = await runner.run({ bin: 'gh', args: ['token'] });
+  assert.deepEqual(tokenResult.redactionKinds, ['token']);
+
+  const proxyResult = await runner.run({ bin: 'gh', args: ['proxy'] });
+  assert.deepEqual(proxyResult.redactionKinds, ['credential-url']);
+
+  const plain = await runner.run({ bin: 'gh', args: ['plain'] });
+  assert.equal('redacted' in plain, false);
+  assert.equal('redactionKinds' in plain, false);
+});
+
+test('redactionKinds 只报告类别：空输入返回空数组，不保留原值', () => {
+  assert.deepEqual(redactionKinds(''), []);
+  assert.deepEqual(redactionKinds('plain', []), []);
+  assert.deepEqual(redactionKinds(`x ${TOKEN_VALUE}`, TOKEN_VALUE), ['token']);
+  assert.deepEqual(redactionKinds('see //svc:pw@proxy:3128/x', []), ['credential-url']);
 });
 
 test('scrubSecrets 是纯函数：空令牌/非字符串/无命中都不改内容', () => {

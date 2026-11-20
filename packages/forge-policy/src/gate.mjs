@@ -13,6 +13,7 @@ import { decideAction } from './catalog.mjs';
 import {
   compileContentRules,
   digestContent,
+  observationsFromContent,
   payloadsForAction,
   payloadsFromArguments,
   scanPayloads,
@@ -234,8 +235,17 @@ export function createGate({
   /** 内容闸：hard 由调用方拒绝；confirm/soft 只回报，是否弹卡由判定流程决定。 */
   function scanContent(action, args, content) {
     try {
-      return scanPayloads(contentRules, contentPayloads(action, args, content), {
+      const scanned = scanPayloads(contentRules, contentPayloads(action, args, content), {
         ...(maxContentBytes === undefined ? {} : { maxBytes: maxContentBytes }),
+        ...(content.readable ? { observations: observationsFromContent(content.value) } : {}),
+      });
+      // 正文读不到不是扫描器的返回值：在这里补一条同构的"未扫全"记录，交给调用方统一记账。
+      const skipped = [...scanned.skipped];
+      if (content.readable === false) skipped.push({ field: 'content', reason: 'unreadable' });
+      return Object.freeze({
+        ...scanned,
+        skipped: Object.freeze(skipped),
+        truncated: scanned.truncated || skipped.some((item) => item.reason === 'truncated'),
       });
     } catch {
       return Object.freeze({
@@ -243,7 +253,7 @@ export function createGate({
         hard: Object.freeze([]),
         confirm: Object.freeze([]),
         soft: Object.freeze([]),
-        skipped: Object.freeze([{ field: 'content', reason: 'unreadable' }]),
+        skipped: Object.freeze([{ field: 'content', reason: 'scan-failed' }]),
         truncated: false,
       });
     }
@@ -369,6 +379,15 @@ export function createGate({
         : contentDigestOf(exec);
     const subject = subjectOf(exec?.name, action);
     const scanned = scanning ? scanContent(action, exec?.arguments, content) : undefined;
+    // 命中的规则与未扫全的字段：拒绝、确认两段记录与 begin 共用这一份元数据，
+    // 审计才能说明"为什么问"以及"哪里没扫全"（`字段:原因`，如 `body:truncated`）。
+    const ruleIds = scanned === undefined || scanned.findings.length === 0
+      ? undefined
+      : [...new Set(scanned.findings.map((finding) => finding.rule))];
+    const contentSkipped = scanned === undefined || scanned.skipped.length === 0
+      ? undefined
+      : [...new Set(scanned.skipped.map((item) => `${item.field}:${item.reason}`))];
+    const contentTruncated = scanned?.truncated === true ? true : undefined;
     if (scanned !== undefined && scanned.hard.length > 0) {
       // H1/H2 不可确认：连卡片都不弹，直接留证据拒绝。
       return denyWithEvidence({
@@ -381,17 +400,12 @@ export function createGate({
         rule: 'content-hard-block',
         operationId,
         agent: { kind },
-        ruleIds: [...new Set(scanned.hard.map((finding) => finding.rule))],
+        ruleIds,
+        ...(contentSkipped === undefined ? {} : { contentSkipped }),
+        ...(contentTruncated === undefined ? {} : { truncated: true }),
         summary: `受控写 ${action} 的正文命中不可放行的内容风险`,
       }, CONTENT_HARD_COPY(action, scanned.hard), 'POLICY_CONTENT_HARD');
     }
-    // 命中的规则与未扫全的字段：确认两段记录与 begin 都要带上，审计才能说明"为什么问"。
-    const ruleIds = scanned === undefined || scanned.findings.length === 0
-      ? undefined
-      : [...new Set(scanned.findings.map((finding) => finding.rule))];
-    const contentSkipped = scanned?.skipped?.length > 0
-      ? scanned.skipped.map((item) => item.field)
-      : undefined;
     // 确认原因按顺序合并：动作确认在前、内容风险在后，客户端据此走分步表单（D25）。
     const reasons = [];
     if (decision.action === 'confirm') reasons.push('action');
@@ -458,6 +472,7 @@ export function createGate({
           summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）${persona === PERSONA.CHILD ? '，已转交主会话代问' : ''}`,
           ...(ruleIds === undefined ? {} : { ruleIds }),
           ...(contentSkipped === undefined ? {} : { contentSkipped }),
+          ...(contentTruncated === undefined ? {} : { truncated: true }),
           phase: 'asked',
         });
         // 先有记录，再问人：asked 写不进去时连卡片都不该弹。
@@ -486,6 +501,7 @@ export function createGate({
           summary: `受控写 ${action} 的确认结论：${answerSummary(verdict.decision, verdict.code)}`,
           ...(ruleIds === undefined ? {} : { ruleIds }),
           ...(contentSkipped === undefined ? {} : { contentSkipped }),
+          ...(contentTruncated === undefined ? {} : { truncated: true }),
           phase: 'answered',
         });
         if (!answeredOk) return deny(CONFIRM_RECORD_FAILED_COPY(action), CONFIRM_CODES.ERROR);
@@ -527,9 +543,8 @@ export function createGate({
         params: summarizeArguments(exec?.arguments ?? {}),
         contentDigest,
         ...(ruleIds === undefined ? {} : { ruleIds }),
-        ...(content?.readable === false
-          ? { contentSkipped: ['content-unreadable'] }
-          : contentSkipped === undefined ? {} : { contentSkipped }),
+        ...(contentSkipped === undefined ? {} : { contentSkipped }),
+        ...(contentTruncated === undefined ? {} : { truncated: true }),
       });
     } catch (error) {
       // 放行结论没能落成记录：本次不算一次成功的"允许"，撤掉复用缓存，重试仍要重新确认。
@@ -601,7 +616,7 @@ export function createGate({
     if (staticDigestOf(exec) !== entry.staticDigest) {
       return { reason: 'the arguments changed before the call started', rule: 'arguments-changed' };
     }
-    if (entry.contentDigest !== undefined && typeof exec?.content === 'function') {
+    if (entry.contentDigest !== undefined) {
       const current = await contentDigestOf(exec);
       if (current !== entry.contentDigest) {
         return { reason: 'the content changed before the call started', rule: 'content-changed' };
@@ -632,6 +647,12 @@ export function createGate({
     if (pendingSettlements.size > 0) return 'a previous settlement is still pending; the call is refused';
     if (exec?.signal?.aborted === true) return 'the call was cancelled after it was admitted';
     if (staticDigestOf(exec) !== entry.staticDigest) return 'the arguments changed after the call was admitted';
+    // 普通对象正文在反序列化后仍可被宿主或下游改写：同步路径也要绑定扫描时的那一份。
+    if (entry.contentDigest !== undefined
+      && typeof exec?.content !== 'function'
+      && contentDigestOf(exec) !== entry.contentDigest) {
+      return 'the content changed after the call was admitted';
+    }
     if (typeof getActor === 'function' && normalizeActor(getActor(undefined)) !== entry.actor) {
       return 'the IAM identity changed after the call was admitted';
     }
@@ -692,6 +713,13 @@ function businessDecisionOf(result) {
     if (changedReason !== undefined) {
       await settle(entry, { decision: 'cancelled', rule: changedReason.rule });
       return { kind: 'error', text: executeDenyCopy(action, changedReason.rule) };
+    }
+    // 复验与执行之间不能再有 await：普通对象正文在执行体拿到之前必须仍是扫描时那一份。
+    if (entry.contentDigest !== undefined
+      && typeof record?.content !== 'function'
+      && contentDigestOf(record) !== entry.contentDigest) {
+      await settle(entry, { decision: 'cancelled', rule: 'content-changed' });
+      return { kind: 'error', text: executeDenyCopy(action, 'content-changed') };
     }
     entry.used = true;
     let result;

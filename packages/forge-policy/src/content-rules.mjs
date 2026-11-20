@@ -26,6 +26,16 @@ export const MAX_RULES = 30;
 /** 单次调用的扫描载荷上限：各动作字段之和，超出的部分不检查并标出截断。 */
 export const MAX_PAYLOAD_BYTES = 256 * 1024;
 
+/**
+ * 受控扫描接口的类别词表（D86）：提供方在脱敏子进程输出时报告被替换内容的类别，
+ * 策略把类别映射到同目录规则，判定与直接扫到正文时一致。类别是封闭集合，
+ * 未登记类别按"未完整扫描"处理。
+ */
+export const OBSERVATION_RULES = Object.freeze({
+  token: 'BUILTIN-TOKEN',
+  'credential-url': 'BUILTIN-CREDENTIAL-URL',
+});
+
 /** 三档判定，与 `severity` 一一对应。 */
 export const SEVERITY = Object.freeze({ HARD: 'hard', CONFIRM: 'confirm', SOFT: 'soft' });
 
@@ -198,8 +208,14 @@ function isBinary(text) {
  * the remaining fields are reported as `truncated` instead of scanned.
  *
  * @param {readonly object[]} rules compiled rules
+ * `options.observations` carries classifications reported by the provider's
+ * controlled scan interface (D86): a field whose text was redacted before the
+ * policy saw it is judged by the category of what was removed, not by the
+ * redacted text. Unregistered categories count as "not fully scanned".
+ *
+ * @param {readonly object[]} rules compiled rules
  * @param {readonly {field: string, text: string}[]} payloads
- * @param {{maxBytes?: number}} [options] per-deployment budget override
+ * @param {{maxBytes?: number, observations?: readonly {field: string, kind: string}[]}} [options]
  * @returns {{findings: object[], hard: object[], confirm: object[], soft: object[], skipped: object[], truncated: boolean}}
  */
 export function scanPayloads(rules, payloads, options = {}) {
@@ -256,6 +272,23 @@ export function scanPayloads(rules, payloads, options = {}) {
       }));
     }
     if (truncated) skipped.push({ field, reason: 'truncated', ...(matched ? {} : {}) });
+  }
+  // 受控扫描接口（D86）：提供方报告"被脱敏内容的类别"，策略据此复用同一套规则判定。
+  // 内容已经过公共脱敏，这里只认类别，不再看正文；未登记类别视为"未完整扫描"。
+  for (const observation of Array.isArray(options?.observations) ? options.observations : []) {
+    if (observation === null || typeof observation !== 'object') continue;
+    const field = typeof observation.field === 'string' && observation.field.length > 0 ? observation.field : 'content';
+    const ruleId = Object.hasOwn(OBSERVATION_RULES, observation.kind) ? OBSERVATION_RULES[observation.kind] : undefined;
+    if (ruleId === undefined) {
+      skipped.push({ field, reason: 'redaction-unknown' });
+      continue;
+    }
+    const rule = rules.find((item) => item.id === ruleId);
+    if (rule === undefined) continue;
+    const key = `${rule.id}:${field}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    findings.push(Object.freeze({ rule: rule.id, severity: rule.severity, source: rule.source, field, excerpt: '***' }));
   }
   const bySeverity = (severity) => Object.freeze(findings.filter((finding) => finding.severity === severity));
   return {
@@ -355,4 +388,24 @@ export function payloadsFromArguments(args = {}) {
     if (typeof value === 'string' && value.length > 0) payloads.push({ field: key, text: value });
   }
   return payloads;
+}
+
+/**
+ * Read the classifications a provider's controlled scan interface reports
+ * (D86). The shape is `{redactions: [{field, kind}]}`; anything malformed is
+ * reported as an unregistered category so it still lands in the audit instead
+ * of silently passing.
+ *
+ * @param {unknown} value
+ * @returns {{field: string, kind: string}[]}
+ */
+export function observationsFromContent(value) {
+  if (value === null || typeof value !== 'object' || !Array.isArray(value.redactions)) return [];
+  const observations = [];
+  for (const item of value.redactions) {
+    const field = typeof item?.field === 'string' && item.field.length > 0 ? item.field : 'content';
+    const kind = typeof item?.kind === 'string' && item.kind.length > 0 ? item.kind : 'unknown';
+    observations.push({ field, kind });
+  }
+  return observations;
 }
