@@ -510,10 +510,14 @@ test('only a completed automatic review is recorded in the job steps', () => {
   assert.equal(records('issue_comment', 'review output'), false);
 });
 
-test('the workflow preserves the PR description before base settings are available', () => {
-  const action = workflow.split('      - name: Run PR-Agent\n')[1]?.split('\n      - name: ')[0] ?? '';
+test('the workflow posts a persistent PR summary with a diagram before base settings are available', async () => {
+  const action = stepDefinition('Run PR-Agent');
   assert.match(action, /PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"/u);
   assert.match(action, /PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT_PERSISTENT: "true"/u);
+  assert.ok(/^ +PR_DESCRIPTION__ENABLE_PR_DIAGRAM: "true"$/mu.test(action), 'workflow diagram setting is missing or disabled');
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const description = settings.split('[pr_description]\n')[1]?.split('\n[')[0] ?? '';
+  assert.match(description, /^enable_pr_diagram = true$/mu);
 });
 
 test('a changed head or base reports an out-of-date review', async () => {

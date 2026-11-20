@@ -73,7 +73,7 @@ extra_instructions = """
 # comment, so the repository's PR template stays the authoritative record.
 publish_description_as_comment = true
 publish_description_as_comment_persistent = true
-enable_pr_diagram = false
+enable_pr_diagram = true
 extra_instructions = """
 用简体中文概括差异中可见的主要行为变化和实际影响。行为变更多时按用户影响归并，逐文件细节放在文件清单。PR 正文只提供目的与范围。验证结论以输入中可见的证据为准，未提供的检查结果保持未知。
 """

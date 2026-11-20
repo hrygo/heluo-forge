@@ -188,9 +188,10 @@ jobs:
           GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '["/describe", "/review"]'
           GITHUB_ACTION_CONFIG__PUSH_TRIGGER_IGNORE_BOT_COMMITS: "false"
           GITHUB_ACTION_CONFIG__PUSH_TRIGGER_IGNORE_MERGE_COMMITS: "false"
-          # Preserve the original PR description before repository settings exist.
+          # Keep the PR summary and diagram in a comment before base settings are updated.
           PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"
           PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT_PERSISTENT: "true"
+          PR_DESCRIPTION__ENABLE_PR_DIAGRAM: "true"
           # Describe and review on PR open; code suggestions stay on demand
           # (`/improve`).
           github_action_config.auto_describe: "true"
