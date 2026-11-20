@@ -3562,7 +3562,14 @@ window.__ModuleLoader__.load({
         await persistModelOptions(optionsRef.current, '模型精细化配置已保存并生效。');
       };
 
+      // The view is the single source for optionality: a model that declares no
+      // streaming support cannot be enabled even by the bulk action.
+      const selectableModel = id => (view?.modelAccess?.models ?? []).find(item => item.id === id)?.streaming !== false;
+
       const enableModelWithDefaults = async (id) => {
+        // A model that declares no streaming support cannot be enabled; the
+        // server would drop it and the panel would have claimed success.
+        if (!selectableModel(id)) return;
         const nextOptions = { ...modelOptions, [id]: {} };
         applyModelOptions(nextOptions);
         await persistModelOptions(nextOptions, `已采用默认参数启用 ${id} 并生效。`);
@@ -3572,7 +3579,7 @@ window.__ModuleLoader__.load({
         const currentModels = view?.modelAccess?.models ?? [];
         const nextOptions = { ...modelOptions };
         for (const m of currentModels) {
-          if (m?.id && !Object.hasOwn(nextOptions, m.id)) {
+          if (m?.id && selectableModel(m.id) && !Object.hasOwn(nextOptions, m.id)) {
             nextOptions[m.id] = {};
           }
         }

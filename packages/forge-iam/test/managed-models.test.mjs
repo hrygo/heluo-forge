@@ -1009,7 +1009,9 @@ test('same-account relogin keeps available models usable regardless of the direc
         assert.equal((await chunks(prepared.stream(request)))[0].text, 'ok');
       }
       if (resetCache) {
-        await assert.rejects(f.adapter.prepareCall('enterprise', 'enterprise-chat'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+        // Cold cache plus a failing directory is a gateway-side failure; only a
+        // catalogue that was actually read can say "the enterprise never offered it".
+        await assert.rejects(f.adapter.prepareCall('enterprise', 'enterprise-chat'), { code: expectedError });
       }
       await assert.rejects(f.adapter.prepareCall('enterprise', 'manual-disabled'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
       if (expectedError) {
@@ -1796,4 +1798,32 @@ test('resolveModel returns the resolved model for an enabled, installed route (i
   assert.ok(resolved, 'resolveModel must not resolve to undefined');
   assert.equal(resolved.id, options.model);
   assert.equal(resolved.provider, 'enterprise');
+});
+
+test('a conflicting streaming alias is read conservatively instead of hiding the false (issue #202 review)', async t => {
+  // `streaming: null` used to win over `supportsStreaming: false`, so the model
+  // stayed selectable even though the gateway said it cannot stream.
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify({ data: [
+      { id: 'alpha', capabilities: { streaming: null, supportsStreaming: false } },
+      { id: 'beta', capabilities: { streaming: true } },
+    ] })),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const list = await f.adapter.listModels('enterprise');
+  assert.deepEqual(list.map(m => m.id), ['beta'], 'a non-streamable model must not be selectable');
+});
+
+test('a catalogue that was never read is not reported as "the enterprise never offered it" (issue #202 review)', async t => {
+  const f = fixture({
+    selection: { models: { alpha: {} }, defaultModelId: 'alpha' },
+    fetch: async () => new Response('{}', { status: 503 }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  // A model the person cannot see because the directory failed is a gateway
+  // problem, not an authorization decision about that model.
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'ghost'), { code: 'ENTERPRISE_GATEWAY_UNAVAILABLE' });
 });
