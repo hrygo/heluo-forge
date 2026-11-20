@@ -70,7 +70,7 @@ const goodReader = () => ({
 // `executeAction` admission 入口。旧实现要求两条读动作"已登记且 enabled"才允许挂载，
 // 空目录 / 缺条目 / 未开放动作都会以 POLICY_ACTION_UNREGISTERED 拒绝——该事实已删除。
 test('空目录可以挂载：只读动作不登记，读面按 out-of-scope 透传', async () => {
-  const mounted = mount({ policy: stubPolicy({ catalog: new Map() }).service });
+  const mounted = mount({ policy: stubPolicy({ catalog: new Map() }).service, reader: goodReader() });
   assert.ok(mounted.service, '空目录仍必须提供 devops 服务');
   const read = await mounted.service.read({ action: 'change.read', target: 'CHG-1' });
   assert.equal(read.status, 'succeeded');
