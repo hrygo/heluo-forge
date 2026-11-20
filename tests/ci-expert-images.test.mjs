@@ -32,6 +32,10 @@ test('CI batches cover all release targets once and exclude comparisons at relea
   const scenes = Object.keys(capabilities.scenes);
   assert.deepEqual(batchTargets(true).sort(), scenes.toSorted());
   assert.deepEqual(batchTargets(false).sort(), [...scenes, 'codex-min-native', 'codex-java-21-native'].sort());
+  assert.equal(scenes.length, 17);
+  assert(!batchTargets(false).includes('codex-python'));
+  assert(capabilities.common.includes('uv'));
+  assert(capabilities.common.includes('uvx'));
   assert(buildMatrix(false).include.every(({ targets }) => targets.length <= 3));
 });
 
@@ -52,6 +56,7 @@ test('read-only builds use per-target caches and release candidates have no tag'
     assert(candidate.includes(target + '.output=type=image,push=true,push-by-digest=true,oci-mediatypes=true'));
   }
   assert.throws(() => bakeOverrides(['codex-min-native'], { ghcr, source, commit, version }), /Invalid target/);
+  assert.throws(() => bakeOverrides(['codex-python'], { ghcr, source, commit, version }), /Invalid target codex-python/);
 });
 
 const release = { version, commit, ghcr };
@@ -67,11 +72,15 @@ test('release records require the complete matrix and the source commit', () => 
   const record = collectRelease([complete], release);
   assert.equal(record.platform, 'linux/arm64');
   assert.equal(record.python, capabilities.python);
-  assert.equal(record.images.length, 18);
+  assert.equal(record.uv, capabilities.uv);
+  assert.equal(record.images.length, 17);
   assert(record.images.every((image) => image.name === ghcr + '/' + image.target));
   const { images } = complete;
   assert.throws(() => collectRelease([{ ...complete, images: images.slice(1) }], release), /Incomplete/);
   assert.throws(() => collectRelease([{ ...complete, images: [...images, images[0]] }], release), /Duplicate/);
+  assert.throws(() => collectRelease([{ ...complete, images: [
+    ...images, { ...images[0], target: 'codex-python' },
+  ] }], release), /Invalid release target codex-python/);
   assert.throws(() => collectRelease([{ ...complete, commit: '0'.repeat(40) }], release), /source/);
   assert.throws(() => collectRelease([{ ...complete, images: [
     ...images.slice(1), { ...images[0], digest: 'sha256:payload' },
@@ -108,8 +117,8 @@ test('promotion reuses an identical tag and resolves the published digest', () =
       tags.set(to, from.split('@')[1]);
     },
   });
-  assert.equal(tags.size, 18);
-  assert.equal(writes.length, 17);
+  assert.equal(tags.size, 17);
+  assert.equal(writes.length, 16);
   assert(!writes.includes(alreadyTagged));
 });
 

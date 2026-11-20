@@ -1,6 +1,7 @@
 set -eu
 python_version=$1
-shift
+uv_version=$2
+shift 2
 test "$(uname -m)" = aarch64
 test "$(id -u):$(id -g)" = 1000:1000
 test "$PWD" = /workspace
@@ -13,6 +14,9 @@ done
 test "$(python --version)" = "Python $python_version"
 test "$(python3 --version)" = "Python $python_version"
 test "$(readlink -f "$(command -v python)")" = "$(readlink -f "$(command -v python3)")"
+test "$(uv --version | cut -d ' ' -f 2)" = "$uv_version"
+test "$(uvx --version | cut -d ' ' -f 2)" = "$uv_version"
+test -r /usr/share/doc/uv/LICENSE-MIT
 test "$(node --version)" = v24.21.0
 test "$(codex --version)" = 'codex-cli 0.160.0'
 
@@ -35,7 +39,8 @@ for (const path of process.argv.slice(1)) {
   assert.equal(hdr[5], 1, "little-endian ELF " + path)
   assert.equal(hdr.readUInt16LE(18), 183, "AArch64 ELF " + path)
 }
-' "$(command -v node)" "$(command -v python3)" "$(command -v paperclip-runnerd)" "$codex_elf"
+' "$(command -v node)" "$(command -v python3)" "$(command -v uv)" "$(command -v uvx)" \
+  "$(command -v paperclip-runnerd)" "$codex_elf"
 
 workspace=$(mktemp -d /workspace/smoke.XXXXXXXX)
 trap 'rm -rf "$workspace"' EXIT
@@ -43,6 +48,23 @@ cd "$workspace"
 python -m venv .venv
 .venv/bin/python -c 'import csv, sys; assert sys.prefix != sys.base_prefix'
 .venv/bin/python -m pip --version >/dev/null
+uv venv --offline --no-python-downloads --python "$(command -v python3)" .uv-venv
+test "$(.uv-venv/bin/python --version)" = "Python $python_version"
+printf 'name,amount\n研发,23\n测试,19\n' > input.csv
+.uv-venv/bin/python - <<'PY'
+import csv
+import sys
+import unittest
+
+assert sys.prefix != sys.base_prefix
+
+class CsvTest(unittest.TestCase):
+    def test_total(self):
+        with open("input.csv", encoding="utf-8", newline="") as data:
+            self.assertEqual(sum(int(row["amount"]) for row in csv.DictReader(data)), 42)
+
+unittest.main()
+PY
 git init -q
 printf '%s\n' 'before 样例' > 河洛.txt
 git add 河洛.txt

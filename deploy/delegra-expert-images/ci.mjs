@@ -12,7 +12,7 @@ const batches = {
   reference: ['codex-min', 'codex-java-21'],
   'java-legacy': ['codex-java-8', 'codex-java-11'],
   'java-current': ['codex-java-17', 'codex-java-25'],
-  development: ['codex-python', 'codex-node', 'codex-go'],
+  development: ['codex-node', 'codex-go'],
   data: ['codex-sql', 'codex-dotnet-10'],
   testing: ['codex-test-api', 'codex-test-load'],
   browser: ['codex-test-web'],
@@ -74,7 +74,7 @@ export function collectRelease(receipts, { version, commit, ghcr }) {
   assert.equal(images.size, scenes.length, 'Incomplete release matrix');
   return {
     version, commit, platform: capabilities.platform,
-    codex: capabilities.codex, python: capabilities.python, runner: capabilities.runner,
+    codex: capabilities.codex, python: capabilities.python, uv: capabilities.uv, runner: capabilities.runner,
     images: scenes.map((target) => images.get(target)),
   };
 }

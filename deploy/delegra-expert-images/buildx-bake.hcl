@@ -22,7 +22,7 @@ variable "JAVA_IMAGES" {
 
 group "default" {
   targets = [
-    "codex-min", "java", "codex-python", "codex-node", "codex-go", "codex-sql",
+    "codex-min", "java", "codex-node", "codex-go", "codex-sql",
     "codex-dotnet-10", "codex-test-api", "codex-test-web", "codex-test-load",
     "codex-ops-diag", "codex-ops-k8s", "codex-ops-iac", "codex-office-zh"
   ]
@@ -49,6 +49,7 @@ target "codex-min" {
     runner_compiler = "docker-image://docker.io/library/rust:1.97-bookworm@sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa"
     node_toolchain  = NODE_IMAGE
     runtime_base    = NODE_IMAGE
+    uv_toolchain    = "docker-image://ghcr.io/astral-sh/uv:0.13.9@sha256:3c427f748c40dc9fc439a497f48dea59d2386cb02937e49f2399aaba1de8028a"
   }
 }
 
@@ -87,13 +88,6 @@ target "codex-java-21-native" {
     expert_base    = "target:codex-min-native"
     java_toolchain = JAVA_IMAGES["21"]
   }
-}
-
-target "codex-python" {
-  inherits   = ["_scene"]
-  dockerfile = "Dockerfile.python"
-  tags       = ["${EXPERT_IMAGE_PREFIX}/codex-python:arm64-local"]
-  contexts   = { uv_toolchain = "docker-image://ghcr.io/astral-sh/uv:0.11.25@sha256:afb0e190853be0b7418175027d5158a3f4c2d30f3ca64312df8dac758cc2fcb2" }
 }
 
 target "_node-tools" {

@@ -11,7 +11,7 @@ const common = readFileSync(new URL('./fixtures/expert-runtime/common.sh', impor
 const capabilities = JSON.parse(readFileSync(new URL(
   '../../deploy/delegra-expert-images/capabilities.json', import.meta.url,
 ), 'utf8'))
-const commonCommand = ['sh', '-eu', '-s', '--', capabilities.python]
+const commonCommand = ['sh', '-eu', '-s', '--', capabilities.python, capabilities.uv]
 const dockerOptions = ['--pull=never', '--platform=linux/arm64', '--network=none']
 const procTimeout = 120_000
 

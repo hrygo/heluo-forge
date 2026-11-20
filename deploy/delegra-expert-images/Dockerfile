@@ -81,14 +81,21 @@ RUN --mount=type=bind,from=node_toolchain,source=/usr/local/bin/node,target=/tmp
 COPY --from=runner-build /out/paperclip-runnerd /usr/local/bin/paperclip-runnerd
 COPY --from=runner-source /source/LICENSE /usr/share/doc/paperclip-runnerd/LICENSE
 COPY --from=codex-assets /out/ /opt/expert-codex/
+COPY --from=uv_toolchain /uv /uvx /usr/local/bin/
+ADD --chmod=0644 --checksum=sha256:860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c \
+    https://raw.githubusercontent.com/astral-sh/uv/0.13.9/LICENSE-MIT /usr/share/doc/uv/LICENSE-MIT
 RUN ln -s /opt/expert-codex/bin/codex /usr/local/bin/codex \
-    && ln -s /usr/bin/python3 /usr/local/bin/python
+    && ln -s /usr/bin/python3 /usr/local/bin/python \
+    && chmod 0755 /usr/share/doc/uv
 
 USER 1000:1000
 WORKDIR /workspace
 RUN test "$(node --version)" = v24.21.0 \
     && test "$(codex --version)" = 'codex-cli 0.160.0' \
     && python -c 'import venv' \
+    && uv --version >/dev/null \
+    && uvx --version >/dev/null \
+    && test -r /usr/share/doc/uv/LICENSE-MIT \
     && paperclip-runnerd --build-metadata >/dev/null
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["codex", "--help"]
