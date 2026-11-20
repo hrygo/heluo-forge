@@ -190,10 +190,6 @@ test('an accepted stream uses the dispatch grant deadline after another Host rot
         obtainedAt: new Date(now).toISOString(), accessExpiresAt: originalDeadline,
         refreshExpiresAt: new Date(now + 600_000).toISOString(),
       });
-      seedGateway(credentials, {
-        value: `uag-${'a'.repeat(32)}`, ownerSubject: subject, enteredAt: new Date(now).toISOString(),
-      });
-
       let first, second, rotated, observedDeadline;
       const result = await fixture(t, 'rotated-session', {
         async createIam(config) {
@@ -201,6 +197,12 @@ test('an accepted stream uses the dispatch grant deadline after another Host rot
             ...config, ...oidc.endpoints, clientId: oidc.clientId,
             redirectUri: 'http://127.0.0.1:4567/iam/callback',
           };
+          // Seed the Key against the address and issuer this run actually uses:
+          // a mismatched binding would refuse the call before the stream starts.
+          seedGateway(credentials, {
+            value: `uag-${'a'.repeat(32)}`, ownerSubject: subject, enteredAt: new Date(now).toISOString(),
+            issuer: oidc.issuer, baseURL: config.managedModels.baseURL,
+          });
           first = createIamService({ ...serviceConfig, refreshSkewSeconds: 1 }, { credentials });
           second = createIamService({ ...serviceConfig, refreshSkewSeconds: 60 }, { credentials });
           t.after(async () => { await first.dispose(); await second.dispose(); });

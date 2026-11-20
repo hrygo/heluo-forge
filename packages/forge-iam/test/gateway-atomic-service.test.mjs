@@ -14,6 +14,7 @@ const config = {
   issuer: 'https://iam.corp.example', clientId: 'synthetic-client',
   authorizationEndpoint: 'https://iam.corp.example/authorize',
   tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
+  managedModels: { baseURL: 'https://gateway.corp.example/v1' },
 };
 const input = { key: `uag-${'a'.repeat(32)}`, deviceLabel: 'synthetic-device' };
 const errorStatus = {
@@ -23,7 +24,7 @@ const errorStatus = {
   IAM_GATEWAY_WRITE_UNKNOWN: 503,
 };
 
-async function setup(t, { capability = true, grantAtomic = false, signedIn = true, options = {}, fixture = createAtomicGatewayFixture() } = {}) {
+async function setup(t, { capability = true, grantAtomic = false, signedIn = true, options = {}, config: configOverride, fixture = createAtomicGatewayFixture() } = {}) {
   const { credentials } = fixture;
   if (signedIn) await createGrantStore(credentials).write({
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-subject',
@@ -31,7 +32,7 @@ async function setup(t, { capability = true, grantAtomic = false, signedIn = tru
     obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
   });
   let requests = 0;
-  const service = createIamService(config, {
+  const service = createIamService(configOverride ?? config, {
     credentials, now: () => now,
     ...(capability ? fixture.options : {}),
     ...(grantAtomic ? { verifyAtomicStore: (candidate) => candidate === credentials } : {}),
@@ -73,7 +74,9 @@ test('an explicit exact gateway capability permits a bound subject without trust
   const f = await setup(t);
   const view = await f.service.saveGatewayCredential(input);
   const stored = f.pair();
-  assert.equal(stored.record?.payload?.version, 2);
+  assert.equal(stored.record?.payload?.version, 3);
+  assert.equal(stored.record?.payload?.issuer, config.issuer);
+  assert.equal(stored.record?.payload?.baseURL, config.managedModels.baseURL);
   assert.equal(stored.record?.payload?.ownerSubject === 'synthetic-subject', true);
   assert.equal(stored.value === input.key, true);
   assert.equal(view.gatewayCredential.state, 'configured');
@@ -126,7 +129,7 @@ for (const outcome of ['throw', 'missing-receipt']) {
     assert.equal(f.adapter.attempts, 1);
     assert.equal(f.adapter.commits, 1);
     assert.equal(f.pair().value === input.key, true);
-    assert.equal(f.pair().record?.payload?.version, 2);
+    assert.equal(f.pair().record?.payload?.version, 3);
     assert.notEqual(f.service.getView().gatewayCredential?.state, 'configured');
   });
 }
@@ -263,9 +266,9 @@ test('Host credential read does not adopt a different account or an orphan key',
 test('gateway address and an opaque compatible Key commit together and remain Host-only', async t => {
   const f = await setup(t, { grantAtomic: true }); await f.service.hydrate();
   const key = 'synthetic-compatible-key';
-  await f.service.saveGatewayCredential({ key, baseURL: 'https://gateway.corp.example/' });
+  await f.service.saveGatewayCredential({ key, baseURL: 'https://gateway.corp.example/v1/' });
   const connection = await f.service.resolveGatewayConnection();
-  assert.equal(connection.baseURL, 'https://gateway.corp.example'); assert.equal(connection.key, key);
+  assert.equal(connection.baseURL, 'https://gateway.corp.example/v1'); assert.equal(connection.key, key);
   assert.equal(f.service.getView().gatewayCredential.baseURL, connection.baseURL);
   assert.equal(JSON.stringify(f.service.getView()).includes(key), false);
   const before = f.pair();
@@ -274,7 +277,9 @@ test('gateway address and an opaque compatible Key commit together and remain Ho
 });
 
 test('a remote HTTP gateway address is stored and resolved without an opt-in', async t => {
-  const f = await setup(t, { grantAtomic: true });
+  // The enterprise preset itself is plain HTTP here: the address is used as
+  // configured, and the binding compares normalized forms.
+  const f = await setup(t, { grantAtomic: true, config: { ...config, managedModels: { baseURL: 'http://gateway.corp.example/v1' } } });
   await f.service.hydrate();
   const key = 'synthetic-compatible-key';
   await f.service.saveGatewayCredential({ key, baseURL: 'http://gateway.corp.example/v1/' });
