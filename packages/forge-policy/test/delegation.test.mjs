@@ -5,7 +5,6 @@ import {
   PERSONA,
   agentKindOf,
   confirmDelegatedCopy,
-  delegationCopy,
   delegationSummary,
   personaOf,
 } from '../src/delegation.mjs';
@@ -46,14 +45,6 @@ test('the audit agent kind keeps the P0 string and normalises the rest', () => {
 });
 
 test('delegation refusal copy names the action and points back to the main session', () => {
-  const copy = delegationCopy('gitee.issue.write');
-  assert.match(copy, /gitee\.issue\.write/u);
-  assert.match(copy, /子代理/u);
-  assert.match(copy, /主会话/u);
-  // 明确的负面目标：不提示换工具、拆参数或绕过。
-  assert.doesNotMatch(copy, /换一个工具|拆成|重试子代理|改用/u);
-  assert.doesNotMatch(copy, /[A-Za-z]:[\\/]|\/Users\/|\/tmp\//u);
-
   const confirmCopy = confirmDelegatedCopy('gitee.git.push');
   assert.match(confirmCopy, /gitee\.git\.push/u);
   assert.match(confirmCopy, /主会话/u);

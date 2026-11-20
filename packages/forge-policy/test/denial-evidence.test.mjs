@@ -31,11 +31,11 @@ const pushExec = (callId = 'call-1') => ({
   signal: new AbortController().signal,
 });
 
-test('来源拒绝在审计降级时仍然拒绝，并标明证据未记录', async () => {
+test('找不到可代问的根时，拒绝在审计降级时仍成立并标明证据未记录', async () => {
   const gate = createGate({
     catalog: CATALOG,
     tools: { forge_gitee_write: PUSH },
-    rules: { denyDelegatedWrites: true },
+    rules: { confirmPush: true },
     audit: healthy({ record: async () => { throw new Error('synthetic audit gap'); } }),
     getActor: () => 'svc-policy-test',
   });
@@ -45,12 +45,12 @@ test('来源拒绝在审计降级时仍然拒绝，并标明证据未记录', as
   assert.equal(decision.evidence, 'unrecorded', '证据写不进去时要让调用链看见');
 });
 
-test('来源拒绝在审计正常时不带降级标记', async () => {
+test('找不到可代问的根时，拒绝在审计正常时不带降级标记', async () => {
   const records = [];
   const gate = createGate({
     catalog: CATALOG,
     tools: { forge_gitee_write: PUSH },
-    rules: { denyDelegatedWrites: true },
+    rules: { confirmPush: true },
     audit: healthy({ record: async (fields) => { records.push(fields); } }),
     getActor: () => 'svc-policy-test',
   });
@@ -58,7 +58,7 @@ test('来源拒绝在审计正常时不带降级标记', async () => {
   assert.equal(decision.kind, 'deny');
   assert.equal(decision.evidence, undefined);
   assert.equal(records.length, 1);
-  assert.equal(records[0].rule, 'deny-delegated-writes');
+  assert.equal(records[0].rule, 'confirm-delegated-refused');
 });
 
 test('放行记录写不进去时不留下可复用的确认，重试仍要重新问人', async () => {

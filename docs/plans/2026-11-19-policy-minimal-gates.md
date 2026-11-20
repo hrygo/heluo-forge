@@ -273,4 +273,11 @@ audit:
 
 ## 10. 实施状态
 
-草案已按裁决台账完成，代码未改。U1、U2 已核对，下一步按第 5 节进入 P0。
+| 阶段 | 状态 | 落地 |
+|---|---|---|
+| P0 骨架 | 已合并 | PR #400（`60e5cf6`） |
+| P1 安全基线 | 已合并 | PR #401（`09e4bdb`） |
+| P2 内容闸 | 已实现，待评审 | 9 条内置规则、按动作字段映射、跨字段 256 KiB 预算、截断与读不到语义、HARD/可确认/SOFT 三档与分步卡片合并 |
+| P3 收尾 | 未开始 | `protectPaths`、`enforceProcessRules`、`denyHumanRecord`、`denyUnknownAction`、`/policy-audit`、文档同步 |
+
+草案已按裁决台账完成。U1（子代理继承父会话身份）已核对；U2（企业侧 `user-questions` API）仍待企业环境核验。

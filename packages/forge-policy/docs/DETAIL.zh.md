@@ -11,4 +11,4 @@
 
 ## 使用方式
 
-本插件为底层安全组件，安装启用后在后台自动生效。八个策略开关中当前实现了 `denyDelegatedWrites`、`confirmPush`、`confirmDopWrite` 三个，其余五个置 `true` 会在装载期报错而不是静默忽略；确认超时默认 120000 ms，可用 `confirmation.timeoutMs` 调整。没有桌面确认通道时装载照常完成，但需要卡片的写会一律以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝。
+本插件为底层安全组件，安装启用后在后台自动生效。七个策略开关中当前实现了 `contentGate`、`confirmPush`、`confirmDopWrite` 三个，其余四个置 `true` 会在装载期报错而不是静默忽略；子代理发起的受控写如需人工确认，由存活的主会话根代问（卡片落在主会话），找不到根才拒绝；确认超时默认 120000 ms，可用 `confirmation.timeoutMs` 调整。没有桌面确认通道时装载照常完成，但需要卡片的写会一律以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝。

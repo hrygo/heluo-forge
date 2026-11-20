@@ -943,7 +943,30 @@ test('适配器：单条提交正文被截断时拒绝，不拿半截正文当�
   );
 });
 
-test('适配器：单条提交正文被脱敏时拒绝，不拿脱敏后的正文当完整证据', async () => {
+test('适配器：被脱敏的提交正文按类别交给内容闸，而不是一律拒绝（D86）', async () => {
+  const sha = '2'.repeat(40);
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'merge-base' || args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${sha}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return {
+      exitCode: 0, stdout: 'fix: 一条\u0000+key=***', stderr: '', durationMs: 1, timedOut: false, truncated: false,
+      redacted: true, redactionKinds: ['token', 'credential-url'],
+    };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  const range = await adapter.readRange({ remote: 'origin', branch: 'feat/other' });
+  assert.deepEqual(range.redactions, [
+    { sha, field: 'commits[0]', kind: 'token' },
+    { sha, field: 'commits[0]', kind: 'credential-url' },
+  ]);
+  assert.equal(range.commits[0].message, 'fix: 一条', '脱敏后的正文仍然交给策略扫描其他规则');
+});
+
+test('适配器：无法分类的脱敏仍拒绝，不拿来源不明的正文当完整证据', async () => {
   const runner = fakeRunner(({ args }) => {
     if (args[0] === 'merge-base' || args[0] === 'rev-parse') {
       return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
@@ -951,7 +974,10 @@ test('适配器：单条提交正文被脱敏时拒绝，不拿脱敏后的正�
     if (args[0] === 'rev-list') {
       return { exitCode: 0, stdout: `${'2'.repeat(40)}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
     }
-    return { exitCode: 0, stdout: 'fix: 一条\u0000+key=***', stderr: '', durationMs: 1, timedOut: false, truncated: false, redacted: true };
+    return {
+      exitCode: 0, stdout: 'fix: 一条\u0000+key=***', stderr: '', durationMs: 1, timedOut: false, truncated: false,
+      redacted: true, redactionKinds: ['unknown'],
+    };
   });
   const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
   await assert.rejects(

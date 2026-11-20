@@ -38,11 +38,11 @@
 
 边界：它不实现沙箱（复用 DSH 沙箱），不实现确认界面（复用宿主 `userQuestions` 卡片），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；内容闸、流程规则、受保护路径拦截与确认卡片待 P1–P3。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
+P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；P1 交付人工确认卡片与决策复用；P2 交付内容闸（9 条内置规则、按动作字段映射、跨字段字节预算）；流程规则与受保护路径拦截待 P3。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
 
-**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现只有分类默认决策加身份与审计两段，规则开关八条全部未实现。
+**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现为分类默认决策 + 身份 + 审计三段，外加已接入的三条规则开关（内容闸与两条按次确认）。
 
-**当前实现（P1，2026-11-20）**：八个策略开关只有 `denyDelegatedWrites`、`confirmPush`、`confirmDopWrite` 三个已实现，其余五个置 `true` 在装载期直接报错。需要人工确认卡片的动作只有 `gitee.git.push`（`confirmPush`）与 `change.clarification.write`（`confirmDopWrite`）两条，其余四条受控写在任何开关组合下都不弹卡；身份校验恒常开启，不占开关。确认等待默认 120000 ms（`confirmation.timeoutMs`），超时、通道不可用、应答非法分别映射 `POLICY_CONFIRM_TIMEOUT` / `_UNAVAILABLE` / `_INVALID_ANSWER`，一律不执行；来源为子代理的调用在 `denyDelegatedWrites` 开启时直接拒绝，开关关闭时需卡片的写仍以 `POLICY_CONFIRM_DELEGATED` 拒绝。已允许的调用按"工具名 + callId + 动作 + 参数摘要"复用同一结论，进程内最多 32 条、不落盘；命中后仍须重过身份校验、一次性收据与执行后复验。没有桌面确认通道时装载照常完成并告警一次，需要卡片的写全部以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed）。本文其余章节描述的是目标模型，未达成的部分仍以"待实现"标注。
+**当前实现（P2，2026-11-20）**：七个策略开关只有 `contentGate`、`confirmPush`、`confirmDopWrite` 三个已实现，其余四个置 `true` 在装载期直接报错。需要人工确认卡片的动作只有 `gitee.git.push`（`confirmPush`）与 `change.clarification.write`（`confirmDopWrite`）两条，其余四条受控写在任何开关组合下都不弹卡；身份校验恒常开启，不占开关。确认等待默认 120000 ms（`confirmation.timeoutMs`），超时、通道不可用、应答非法分别映射 `POLICY_CONFIRM_TIMEOUT` / `_UNAVAILABLE` / `_INVALID_ANSWER`，一律不执行。来源为子代理的调用不再一律拒绝：命中的确认由存活的主会话根代问（卡片弹在主会话，正文标明「本次写入由子代理发起」），找不到唯一存活的根才以 `POLICY_CONFIRM_DELEGATED` 拒绝。已允许的调用按「工具名 + callId + 动作 + 参数摘要 + 正文摘要」复用同一结论，进程内最多 32 条、不落盘并绑定 IAM 主体；命中后仍须重过身份校验、一次性收据、执行前正文复验与执行后复验。没有桌面确认通道时装载照常完成并告警一次，需要卡片的写全部以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed）。本文其余章节描述的是目标模型，未达成的部分仍以"待实现"标注。
 
 **IAM隔离消费进展**：独立许可/私有operation算法B已通过62新例及210项policy全包回归，独立peer与arguments身份变异已关闭。普通apply未注入该算法；C合成工具/命令的共享installer、发送体与owned finalizer已通过31新例/241项policy回归及独立审阅/变异。D合成模型入口已通过29新例/270项policy回归，包含最终错误桥修复及独立审阅/桥接增量复核；E根16项已验证实际IAM工厂与mock IdP的联合执行，独立审阅与本批完整检查已通过。B/C/D局部fixture本身不是联合证据，E仍不证明生产授权；普通apply不启用合成模型。会话见证、许可字段与整体边界见[IAM-003](<../../contracts/iam-consumer-isolated.md>)和[PLAN-007](<../../plans/2026-11-02-iam-consumer-isolated.md>)。
 
@@ -152,7 +152,7 @@ export interface PolicyDecision {
 
 **目标判定顺序（P1–P3）**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后完成必要的确认卡片与前置审计；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现行实现（P0）**：判定流水线只装配 `resolve → identity → audit → receipt` 四个常开阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。八条规则开关（`denyDelegatedWrites`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，置真在装载期被拒绝；未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content`）同样在装载期拒绝，避免"配了却静默不生效"。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
+**现行实现（P0–P2）**：判定流水线常开 `resolve → identity → audit → receipt` 四段，`contentGate` 开启时在审计之前插入内容闸阶段，`confirmPush`/`confirmDopWrite` 开启时再插入确认阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。七条规则开关（`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，已接入的三条（`contentGate`、`confirmPush`、`confirmDopWrite`）可以开启，其余四条置真在装载期被拒绝；仍未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`）同样在装载期拒绝，避免"配了却静默不生效"。`confirmation` 与 `content` 已接入，可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -279,6 +279,22 @@ export interface PolicyDecision {
 
 首版信封的作用是**把机器纳入托管模式并给审计一个版本锚点**，不是追加限制；后续版本按实测逐步收紧。装机包内只有信封、签名与公钥，私钥留在签发机。
 
+#### 5.1.5 内容闸的现行实现（P2）
+
+内容闸只在 `contentGate` 开启时运行，扫描对象是**动作声明的字段**，不是整个参数对象：
+
+| 动作 | 扫描字段 |
+|---|---|
+| `gitee.issue.write`、`gitee.pr.write` | `title`、`body` |
+| `gitee.review.publish` | `body`、`comment` |
+| `change.clarification.write` | `summary`、`description`、`aiAc` |
+| `gitee.git.push` | `commits[].message`、`commits[].diff`（或 `exec.content()` 读到的提交区间正文） |
+| `gitee.review.record` | 不扫描（人工留痕动作，Agent 不可发起） |
+
+未在表中的动作退回全局白名单（`title`/`body`/`description`/`content`/`message`/`comment`/`review`/`summary`/`text`/`diff`/`patch` 与 `commits[].message|diff`）。九条内置规则分三档：`BUILTIN-PRIVATE-KEY`、`BUILTIN-CLOUD-ACCESS-KEY` 为 HARD（不可确认，命中即零执行）；`BUILTIN-CREDENTIAL-URL`、`BUILTIN-TOKEN` 为可确认（有卡片通道时并入分步确认，无通道即拒绝）；`BUILTIN-ENV-COMMIT`、`BUILTIN-INTERNAL-ADDRESS`、`BUILTIN-ABSOLUTE-HOME`、`BUILTIN-LONG-BASE64`、`BUILTIN-ENV-FILE` 为 SOFT（放行并记录；动作本身需要确认时并入同一张分步卡）。口令赋值与强制推送不在内容闸里判定——前者误报过高，后者属于 `gitee.git.push` 的参数校验。
+
+一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`）：超出预算的字段按已扫部分判定并记 `truncated`，二进制字段跳过，正文读不到时放行并在审计留 `content-unreadable`。命中的规则 id 只进审计，命中值与正文既不进审计也不进卡片与错误文案，只保留首尾各 4 字符的脱敏摘录。
+
 ### 5.2 受保护路径、别名归一与沙箱取严
 
 本节自动硬拒绝为目标行为；当前内置动作未绑定路径参数，仅提供显式 `checkPath` 查询。
@@ -306,17 +322,29 @@ export interface PolicyDecision {
 | 绑定 | 卡片绑定 `(action, target, contentDigest)`；参数、目标或正文任一变化即失效，必须重新询问 |
 | 展示 | 只展示动作名、目标与定位信息（仓库、分支走向、变更号），不展示正文与凭据值；不出现卡片通道以外的内部术语 |
 | 答案 | 只接受卡片返回的允许或拒绝；取消、超时（默认 120 秒）、会话卸载、卡片通道异常一律按拒绝处理，不伪造同意 |
-| 子 Agent | 子 Agent 不能发起确认（宿主对委派调用方不派发问答），受控写必须在主会话发起；需要确认的动作在子会话一律拒绝并说明原因 |
+| 子 Agent | 子 Agent 不能自行发起确认（宿主对委派调用方抛 `DELEGATED_CALLER`），需要确认的动作由存活的主会话根代问——卡片落在主会话并标明来源；找不到唯一存活根时拒绝并说明原因 |
 | 审计 | 询问与应答各写一条审计记录（`phase: asked` / `phase: answered`），确认结果本身也是决策证据 |
 | 无 UI 场景 | 没有可用问答通道时按拒绝处理，不降级为"放行并记录" |
 
+
+#### 5.3.1 子代理相关的宿主边界
+
+子代理不是"另一个主会话"，宿主对它另有约束。以下三条事实决定了本插件的写法，也解释了为什么"拦子代理"不该做成开关：
+
+| 编号 | 宿主事实 | 出处 | 对门禁的后果 |
+|---|---|---|---|
+| H1 | 调用方不属于存活根时，`userQuestions.ask` 直接抛 `DELEGATED_CALLER`（"human interaction is unavailable while the calling agent is owned by another live agent"） | `dsh-user-questions/lib/index.js` 的 `assertLiveRoot`（0.2.1-rc.5） | 子代理永远拿不到卡片；要人确认只能由主会话代问 |
+| H2 | 父会话装有 `approval` 时，子会话的 `approval/policy` 被钉为 `never` 并写入子会话日志（`source: 'delegation'`），与父会话自身策略无关 | `dsh-subagent/lib/index.js` 的 `captureDelegatedPolicyOverrides` | 子代理里任何依赖宿主审批的操作都会被自动拒绝；因此本插件不调用 `approval`，确认一律走 `userQuestions`（ADR-29） |
+| H3 | 子会话只继承父会话**显式**的沙箱覆盖（以及 `auto`/`danger-full-access` 档位），部署默认与一次性授权不继承 | 同上 | 父会话"能写"不等于子会话"能写"；门禁不因父会话放行过就放宽子会话的受控写判定 |
+
+推论：把"子代理一律拒绝"做成开关（旧 `denyDelegatedWrites`）在团队流水线里会把全部子代理受控写打死，而它想防的风险已由 H1+H2 覆盖——子代理既拿不到卡片，也无法借宿主审批放行。该开关因此删除，改为单一策略：需要确认的写由主会话代问，找不到唯一存活的根才拒绝。
+
 ### 5.4 规则开关与准入
 
-八条规则开关各自独立、默认全关，由部署者在插件配置里逐条开启；代码里没有隐式默认开启的拦截。每条开关必须能回答"宿主为什么覆盖不了"，答不出来就不加规则。
+七条规则开关各自独立、默认全关，由部署者在插件配置里逐条开启；代码里没有隐式默认开启的拦截。每条开关必须能回答"宿主为什么覆盖不了"，答不出来就不加规则。子代理来源不设开关：一律按"能代问就代问、找不到根才拒绝"处理（见 §5.3.1）。
 
 | 开关 | 拦截什么 | 为什么必须在策略层 |
 |---|---|---|
-| `denyDelegatedWrites` | 子 Agent 发起的受控写 | 宿主 quas 不区分调用来源，委派调用与主会话调用共用同一套工具权限 |
 | `denyUnknownAction` | 未登记的写动作 | 目录是白名单，登记之外的写动作默认不属于本门禁 |
 | `denyHumanRecord` | Agent 写入人工评审留痕 | 留痕的语义要求由人发起，宿主无法从工具参数判断发起者 |
 | `protectPaths` | 落在受保护根内的写入 | 沙箱管得住路径越界，管不住"动作语义上不该写这里" |
