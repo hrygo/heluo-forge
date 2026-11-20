@@ -1,14 +1,31 @@
 /**
- * 门禁的宿主适配器：把 0–10 骨架落到 tools/pre-execute、tools 守卫与 command 面。
+ * 门禁的宿主适配器：唯一放行点 `admitOnce`，三条入口（tools/pre-execute、tools
+ * 守卫、command 面）共用同一判定。
  *
- * P0 只保留 resolve → identity → audit → receipt 四段：登记目录里的写动作要求
- * 解析出 IAM actor，先落 `begin` 审计再放行；执行后 `settle` 补结果。一次性
- * 收据防止重放，执行前复验参数、身份与审计健康度。未登记动作（含全部读动作）
- * 是 out-of-scope：直接放行，不读身份、不写审计（D22/D23）。
+ * P1 在 P0 的 resolve → identity → audit → receipt 之间插入两段：来源判定（子代理
+ * 一律不写）与逐次确认（命中 `confirmPush`/`confirmDopWrite` 时弹一次卡片，超时或
+ * 通道缺失即拒绝）。允许结论进会话内 LRU：同一次调用的重试不再打扰用户，但仍要
+ * 过身份复验、参数摘要复验与一次性收据。未登记动作（含全部读动作）是 out-of-scope：
+ * 直接放行，不读身份、不写审计（D22/D23）。
  */
 
 import { decideAction } from './catalog.mjs';
 import { digestContent } from './content-rules.mjs';
+import { DEFAULT_CONFIRMATION_TIMEOUT_MS } from './config.mjs';
+import {
+  CONFIRM_CODES,
+  CONFIRM_REASONS,
+  buildConfirmationCard,
+} from './confirm.mjs';
+import {
+  PERSONA,
+  agentKindOf,
+  confirmDelegatedCopy,
+  delegationCopy,
+  delegationSummary,
+  personaOf,
+} from './delegation.mjs';
+import { reuseKeyOf } from './reuse.mjs';
 
 const AUDIT_FAILURE_COPY = (action, sinkKind, target) => {
   const shape = target === undefined ? '(无目标)' : target.includes('/') ? target.split('/').slice(-2).join('/') : target;
@@ -92,15 +109,49 @@ function summarizeArguments(args) {
   return summary;
 }
 
-function agentKindOf(exec) {
-  if (exec?.agent === null || exec?.agent === undefined) return 'host';
-  if (typeof exec.agent.kind === 'string') return exec.agent.kind;
-  if (exec.agent.id !== undefined) return 'agent';
-  return 'host';
+/**
+ * 六个 `POLICY_CONFIRM_*` 码的用户文案：码本身留在结构化结果与审计里，不拼进正文。
+ * 每条都说清"没有执行"与"能否重试"，也都不提内部路径或实现细节。
+ */
+const CONFIRM_DENY_COPY = Object.freeze({
+  [CONFIRM_CODES.DENIED]: (action) => `受控写「${action}」已取消：你在确认卡片上选择了取消本次写入。可重新发起该动作。`,
+  [CONFIRM_CODES.TIMEOUT]: (action, seconds) => `受控写「${action}」未执行：等待人工确认超时（${seconds} 秒）。可重新发起该动作。`,
+  [CONFIRM_CODES.UNAVAILABLE]: (action) => `受控写「${action}」未执行：当前环境没有可用的确认通道（需要桌面端人工确认）。请在桌面端重试。`,
+  [CONFIRM_CODES.INVALID_ANSWER]: (action) => `受控写「${action}」未执行：确认应答无法识别，按未确认处理。请重新发起该动作。`,
+  [CONFIRM_CODES.DELEGATED]: (action) => confirmDelegatedCopy(action),
+  [CONFIRM_CODES.CANCELLED]: (action) => `受控写「${action}」未执行：本次调用在等待确认时被取消。可重新发起该动作。`,
+  [CONFIRM_CODES.ERROR]: (action) => `受控写「${action}」未执行：确认流程出现异常。请重试；若持续失败请联系管理员。`,
+});
+
+/** 审计里对确认结论的一句话：超时与通道缺失不能写成"用户拒绝"。 */
+const ANSWER_SUMMARY = Object.freeze({
+  [CONFIRM_CODES.DENIED]: '取消本次写入',
+  [CONFIRM_CODES.TIMEOUT]: '等待超时，未确认',
+  [CONFIRM_CODES.UNAVAILABLE]: '确认通道不可用，未确认',
+  [CONFIRM_CODES.INVALID_ANSWER]: '应答无法识别，未确认',
+  [CONFIRM_CODES.DELEGATED]: '子代理来源，未确认',
+  [CONFIRM_CODES.CANCELLED]: '调用被取消，未确认',
+  [CONFIRM_CODES.ERROR]: '确认流程异常，未确认',
+});
+
+/** 确认记录写不进去时本次动作不执行；文案不提「审计」，只说记录没写成。 */
+const CONFIRM_RECORD_FAILED_COPY = (action) => `受控写「${action}」未执行：本次的确认过程没有留下可用记录，按未确认处理。请检查策略存储后重试。`;
+
+function denyCopyOf(code, action, timeoutMs) {
+  const seconds = Math.max(1, Math.round((Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_CONFIRMATION_TIMEOUT_MS) / 1_000));
+  const copy = code !== undefined && Object.hasOwn(CONFIRM_DENY_COPY, code) ? CONFIRM_DENY_COPY[code] : undefined;
+  return (copy ?? CONFIRM_DENY_COPY[CONFIRM_CODES.ERROR])(action, seconds);
 }
 
-function deny(reason) {
-  return Object.freeze({ kind: 'deny', reason });
+function answerSummary(decision, code) {
+  if (decision === 'allow') return '允许本次写入';
+  return code !== undefined && Object.hasOwn(ANSWER_SUMMARY, code) ? ANSWER_SUMMARY[code] : '未确认';
+}
+
+function deny(reason, code) {
+  return code === undefined
+    ? Object.freeze({ kind: 'deny', reason })
+    : Object.freeze({ kind: 'deny', reason, code });
 }
 
 function toolAction(tools, toolName) {
@@ -111,7 +162,8 @@ function toolAction(tools, toolName) {
 
 /**
  * @param {{catalog: Map, rules?: object, pipeline?: readonly object[], audit: object,
- *   tools?: object | Map, getActor?: Function, onDecision?: Function, now?: () => number}} options
+ *   tools?: object | Map, getActor?: Function, onDecision?: Function, now?: () => number,
+ *   confirmations?: {ask: Function}, decisionCache?: object, timeoutMs?: number}} options
  */
 export function createGate({
   catalog,
@@ -122,6 +174,9 @@ export function createGate({
   getActor,
   onDecision,
   now,
+  confirmations,
+  decisionCache,
+  timeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS,
 } = {}) {
   const stages = Object.freeze([...(pipeline ?? [])]);
   const clock = now ?? (() => Date.now());
@@ -129,7 +184,47 @@ export function createGate({
   const admitting = new WeakSet();
   const admitted = new Map();
   const pendingSettlements = new Set();
+  const confirmationTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_CONFIRMATION_TIMEOUT_MS;
+  let confirmationCount = 0;
   let disposed = false;
+
+  function sessionIdOf(exec) {
+    const header = exec?.agent?.session?.header;
+    const id = header?.id;
+    return typeof id === 'string' && id.trim() !== '' ? id.trim() : undefined;
+  }
+
+  function callIdOf(exec) {
+    const value = exec?.callId;
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+  }
+
+  /** 单条审计（asked/answered/来源拒绝）。写失败只回报 false，由调用方决定拒绝。 */
+  async function writeRecord(fields) {
+    if (audit === undefined || audit === null || typeof audit.record !== 'function') return false;
+    try {
+      await audit.record(fields);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 拒绝也要留证据，但证据写不进去不该把拒绝变成放行：判定本身已经是 fail-closed，
+   * 这里只做 best-effort 记录，记录失败时在结果里标 `evidence: 'unrecorded'`，
+   * 让调用链能看到"这次拒绝没有留下审计痕迹"，而不是静默当作已记录。
+   */
+  async function denyWithEvidence(fields, reason, code) {
+    const recorded = await writeRecord(fields);
+    if (recorded) return deny(reason, code);
+    return Object.freeze({
+      kind: 'deny',
+      reason,
+      ...(code === undefined ? {} : { code }),
+      evidence: 'unrecorded',
+    });
+  }
 
   function actionFor(toolName) {
     return toolAction(tools, toolName);
@@ -160,6 +255,10 @@ export function createGate({
     // 结清即释放：`admitted` 只用来在放行与结清之间挡住同一个 callId 的并发重放，
     // 留着已结清的条目会把执行对象（含正文）一直强引用到插件卸载。
     if (entry.exec?.callId !== undefined) admitted.delete(String(entry.exec.callId));
+    // 失败/取消/未知的调用没有换来一个可复用的"允许"：撤掉缓存，重试仍要重新确认。
+    if (entry.cacheKey !== undefined && outcome.decision !== 'executed') {
+      decisionCache?.delete?.(entry.cacheKey);
+    }
     const promise = audit.settle(entry.receipt, { decision: outcome.decision, rule: outcome.rule ?? entry.decision?.rule, ...outcome.extra });
     pendingSettlements.add(promise);
     try {
@@ -191,18 +290,130 @@ export function createGate({
     const target = targetOf(exec);
     const decision = decideAction({ catalog, rules, action, target });
     onDecision?.(decision);
-    if (decision.action !== 'allow') {
+    if (decision.action === 'deny') {
       return deny(decision.reason);
+    }
+    const persona = personaOf(exec?.agent);
+    const kind = agentKindOf(exec);
+    const operationId = exec?.callId === undefined ? undefined : String(exec.callId);
+    // 来源闸在身份之前：子代理不该比主会话更容易拿到一次写入。
+    if (persona === PERSONA.CHILD && rules?.denyDelegatedWrites === true) {
+      return denyWithEvidence({
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'deny',
+        rule: 'deny-delegated-writes',
+        code: CONFIRM_CODES.DELEGATED,
+        operationId,
+        agent: { kind },
+        summary: delegationSummary(action),
+      }, delegationCopy(action), CONFIRM_CODES.DELEGATED);
     }
     const actor = normalizeActor(await getActor?.(ctx));
     if (actor === undefined) {
       return deny(IDENTITY_COPY(action));
     }
+    const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
     const contentDigest = typeof exec?.content === 'function'
       ? await contentDigestOf(exec)
       : contentDigestOf(exec);
     const subject = subjectOf(exec?.name, action);
+    let rule = decision.rule;
+    let cacheKey;
+    if (decision.action === 'confirm') {
+      // 来源判定在查缓存之前：子代理没有确认通道，命中缓存也不能替它跳过人工确认。
+      if (persona === PERSONA.CHILD) {
+        return denyWithEvidence({
+          action,
+          target,
+          tool: exec?.name,
+          decision: 'deny',
+          rule: 'confirm-delegated-refused',
+          code: CONFIRM_CODES.DELEGATED,
+          operationId,
+          agent: { kind },
+          summary: delegationSummary(action),
+        }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+      }
+      const callId = callIdOf(exec);
+      const key = reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest });
+      const hit = key !== undefined && decisionCache !== undefined ? decisionCache.peek(key) : undefined;
+      if (hit !== undefined
+        && hit.digest === digest
+        && hit.contentDigest === contentDigest
+        && hit.action === action
+        && hit.actor === actor
+        && hit.session === sessionId) {
+        // 同一个决定的重试：不再打扰用户，但仍要过身份复验、一次性收据与执行后复验。
+        decisionCache.touch(key);
+        cacheKey = key;
+        rule = 'reused-decision';
+      } else {
+        const reasons = ['action'];
+        const card = buildConfirmationCard({ action, target, args: exec?.arguments ?? {}, reasons });
+        const askedAt = clock();
+        const asked = await writeRecord({
+          ...(subject === undefined ? {} : { subject }),
+          actor,
+          action,
+          target,
+          tool: exec?.name,
+          decision: 'pending',
+          rule: 'confirm-required',
+          operationId,
+          agent: { kind },
+          summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）`,
+          phase: 'asked',
+        });
+        // 先有记录，再问人：asked 写不进去时连卡片都不该弹。
+        if (!asked) return deny(CONFIRM_RECORD_FAILED_COPY(action), CONFIRM_CODES.ERROR);
+        confirmationCount += 1;
+        const verdict = (await confirmations?.ask({
+          ctx,
+          agent: exec?.agent,
+          action,
+          questions: card.questions,
+          timeoutMs: confirmationTimeoutMs,
+          signal: exec?.signal,
+        })) ?? { decision: 'deny', code: CONFIRM_CODES.UNAVAILABLE };
+        const answeredOk = await writeRecord({
+          ...(subject === undefined ? {} : { subject }),
+          actor,
+          action,
+          target,
+          tool: exec?.name,
+          decision: verdict.decision,
+          ...(verdict.decision === 'allow' ? {} : { code: verdict.code }),
+          rule: 'confirm-required',
+          operationId,
+          agent: { kind },
+          durationMs: clock() - askedAt,
+          summary: `受控写 ${action} 的确认结论：${answerSummary(verdict.decision, verdict.code)}`,
+          phase: 'answered',
+        });
+        if (!answeredOk) return deny(CONFIRM_RECORD_FAILED_COPY(action), CONFIRM_CODES.ERROR);
+        if (verdict.decision !== 'allow') {
+          return deny(denyCopyOf(verdict.code, action, confirmationTimeoutMs), verdict.code ?? CONFIRM_CODES.ERROR);
+        }
+        if (key !== undefined && decisionCache !== undefined) {
+          decisionCache.set({
+            key,
+            tool: exec?.name,
+            callId,
+            action,
+            digest,
+            contentDigest,
+            actor,
+            session: sessionId,
+            decidedAt: clock(),
+          });
+          cacheKey = key;
+        }
+        rule = 'confirm-allowed';
+      }
+    }
     let receipt;
     try {
       receipt = await audit.begin({
@@ -212,26 +423,30 @@ export function createGate({
         target,
         tool: exec?.name,
         decision: 'allow',
-        rule: decision.rule,
-        operationId: exec?.callId === undefined ? undefined : String(exec.callId),
+        rule,
+        operationId,
         policyVersion: undefined,
-        agent: { kind: agentKindOf(exec) },
+        agent: { kind },
         summary: `受控写 ${action}（目标 ${target ?? '(未提供)'}）`,
         params: summarizeArguments(exec?.arguments ?? {}),
         contentDigest,
       });
     } catch (error) {
+      // 放行结论没能落成记录：本次不算一次成功的"允许"，撤掉复用缓存，重试仍要重新确认。
+      if (cacheKey !== undefined) decisionCache?.delete?.(cacheKey);
       if (error?.code === 'POLICY_AUDIT_GAP_OUTSTANDING') return deny(AUDIT_OUTSTANDING_COPY);
       return deny(AUDIT_FAILURE_COPY(action, audit?.sinks?.()?.kind ?? 'memory', target));
     }
     const entry = {
       exec,
+      contentDigest,
       action,
       target,
       actor,
       staticDigest: digest,
       decision,
       receipt,
+      cacheKey,
       startedAt: receipt.startedAt,
       used: false,
       settled: false,
@@ -286,6 +501,12 @@ export function createGate({
     if (staticDigestOf(exec) !== entry.staticDigest) {
       return { reason: 'the arguments changed before the call started', rule: 'arguments-changed' };
     }
+    if (entry.contentDigest !== undefined && typeof exec?.content === 'function') {
+      const current = await contentDigestOf(exec);
+      if (current !== entry.contentDigest) {
+        return { reason: 'the content changed before the call started', rule: 'content-changed' };
+      }
+    }
     if (typeof getActor === 'function') {
       const current = normalizeActor(await getActor(ctx));
       if (current !== entry.actor) return { reason: 'the IAM identity changed after the call was admitted', rule: 'identity-changed' };
@@ -318,11 +539,28 @@ export function createGate({
     return undefined;
   }
 
+
+/** 业务结果里的结论：失败/拒绝/未知都不算一次成功的"允许"，据此撤掉复用缓存。 */
+const BUSINESS_FAILED = new Set(['failed', 'denied', 'error']);
+const BUSINESS_UNKNOWN = new Set(['unknown', 'pending', 'timeout']);
+
+function businessDecisionOf(result) {
+  const candidates = [result, result?.value, result?.result];
+  for (const candidate of candidates) {
+    if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const status = typeof candidate.status === 'string' ? candidate.status.trim().toLowerCase() : '';
+    if (status === '') continue;
+    if (BUSINESS_FAILED.has(status)) return 'error';
+    if (BUSINESS_UNKNOWN.has(status)) return 'unknown';
+  }
+  return 'executed';
+}
+
   async function postExecute(exec, result) {
     const entry = approved.get(exec);
     if (entry === undefined || entry.settled) return;
     const failed = result?.isError === true || result?.kind === 'error';
-    await settle(entry, { decision: failed ? 'error' : 'executed' });
+    await settle(entry, { decision: failed ? 'error' : businessDecisionOf(result) });
   }
 
   /** `recheck` 的拒绝文案：说清"没有执行"，也不把内部规则名抛给用户。 */
@@ -330,6 +568,7 @@ export function createGate({
     if (rule === 'cancelled') return `受控写「${action}」已取消：调用在排队等待期间被取消，本次未执行。`;
     if (rule === 'identity-changed') return `受控写「${action}」未执行：等待期间登录身份发生变化，请重新发起该动作。`;
     if (rule === 'arguments-changed') return `受控写「${action}」未执行：等待期间参数发生变化，请重新发起该动作。`;
+    if (rule === 'content-changed') return `受控写「${action}」未执行：等待期间正文内容发生变化，请重新发起该动作。`;
     if (rule === 'unloaded') return `受控写「${action}」未执行：策略插件已卸载，本次未执行。`;
     return `受控写「${action}」未执行：放行后状态发生变化。`;
   }
@@ -342,7 +581,12 @@ export function createGate({
     if (disposed) return { kind: 'error', text: 'the policy gate is no longer mounted' };
     const record = exec ?? {};
     const admission = await admit(ctx, record, action);
-    if (admission.kind !== 'allow') return { kind: 'error', text: admission.reason };
+    // 拒绝时 code 必须跟着结构化结果一起交出去，调用方不能只有一句自然语言可用。
+    if (admission.kind !== 'allow') {
+      return admission.code === undefined
+        ? { kind: 'error', text: admission.reason }
+        : { kind: 'error', text: admission.reason, code: admission.code };
+    }
     const entry = approved.get(record);
     const changedReason = await recheck(entry, record, ctx);
     if (changedReason !== undefined) {
@@ -363,7 +607,7 @@ export function createGate({
       return { kind: 'error', text: '执行后复验发现 IAM 身份已变化，本次动作结果按失败处理。' };
     }
     const failed = result?.isError === true || result?.kind === 'error';
-    await settle(entry, { decision: failed ? 'error' : 'executed' });
+    await settle(entry, { decision: failed ? 'error' : businessDecisionOf(result) });
     return result;
   }
 
@@ -387,6 +631,8 @@ export function createGate({
     guard,
     postExecute,
     executeAction,
+    /** 本次挂载内真正发起过的人工询问次数（复用命中不计数）。 */
+    confirmationCount: () => confirmationCount,
     dispose,
     now: clock,
     /** 诊断用：还在"已放行、未结清"之间的执行数（结清后必须归零，否则执行对象被长期持有）。 */

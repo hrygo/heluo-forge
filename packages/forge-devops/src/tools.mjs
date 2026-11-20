@@ -317,6 +317,8 @@ function changeUpdateTool(service) {
         const forwarded = { target, summary, description, aiAc };
         if (exec?.agent !== undefined) forwarded.agent = exec.agent;
         if (exec?.signal !== undefined) forwarded.signal = exec.signal;
+        // 宿主调用标识原样透传：策略侧用它做"同一次调用的重试"判定，合成 id 会让复用永不命中。
+        if (exec?.callId !== undefined) forwarded.callId = exec.callId;
         const result = await service.changeUpdate(forwarded);
         return json({ ok: result?.status === 'done', result });
       } catch (error) {

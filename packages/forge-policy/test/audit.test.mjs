@@ -143,3 +143,53 @@ test('a broken gap observer or time source cannot break the barrier', async () =
   dispose();
   assert.equal(barrier.acknowledgeGaps(), 0);
 });
+
+test('a single confirmation record keeps its phase and code and never degrades the barrier', async () => {
+  const sink = durable();
+  const barrier = createAuditBarrier({ sink, now: () => 1_000 });
+  // `code` 是新开放字段：六类确认结论要同时进结构化结果与审计。
+  const asked = await barrier.record({
+    action: 'gitee.git.push',
+    target: 'corp/repo',
+    tool: 'forge_gitee_write',
+    decision: 'pending',
+    phase: 'asked',
+    rule: 'confirm-required',
+    operationId: 'call-1',
+    agent: { kind: 'root' },
+    summary: '受控写 gitee.git.push 需要人工确认（动作确认）',
+  });
+  const answered = await barrier.record({
+    action: 'gitee.git.push',
+    decision: 'deny',
+    code: 'POLICY_CONFIRM_TIMEOUT',
+    phase: 'answered',
+    operationId: 'call-1',
+  });
+  assert.equal(asked.phase, 'asked');
+  assert.equal(asked.observedAt, 1_000, 'record stamps the observation time itself');
+  assert.equal(answered.phase, 'answered');
+  assert.equal(answered.code, 'POLICY_CONFIRM_TIMEOUT');
+  assert.deepEqual(sink.records.map((record) => record.phase), ['asked', 'answered']);
+  assert.equal(barrier.isDegraded(), false);
+  assert.equal(barrier.gaps().length, 0);
+});
+
+test('a failed confirmation record throws but does not degrade the barrier', async () => {
+  const sink = durable();
+  const barrier = createAuditBarrier({ sink });
+  sink.append = () => { throw new Error('disk full'); };
+  await assert.rejects(
+    () => barrier.record({ action: 'gitee.git.push', decision: 'pending', phase: 'asked' }),
+    (error) => error instanceof PolicyAuditError && error.code === 'POLICY_AUDIT_WRITE_FAILED',
+  );
+  assert.equal(barrier.isDegraded(), false, 'a missing confirmation line is not an execution receipt');
+  assert.deepEqual(barrier.gaps(), []);
+
+  const noSink = createAuditBarrier({ sink: durable() });
+  noSink.setSink(undefined);
+  await assert.rejects(
+    () => noSink.record({ action: 'gitee.git.push', phase: 'answered' }),
+    (error) => error.code === 'POLICY_AUDIT_UNAVAILABLE',
+  );
+});

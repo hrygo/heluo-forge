@@ -1009,3 +1009,27 @@ test('适配器：本地没有该分支时读不到正文，报 READBACK_UNAVAIL
   );
   assert.equal(runner.calls.some((call) => call.args[0] === 'rev-list'), false, '分支不存在时不猜 HEAD 的内容');
 });
+
+test('工具：宿主 callId 透传到门禁，缺省时才用合成 id（复用判定靠前者）', async () => {
+  const runner = fakeRunner(() => ({ exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false }));
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  const captured = [];
+  const policy = {
+    decide: () => ({ action: 'allow' }),
+    executeAction: async (_ctx, _action, exec) => {
+      captured.push(exec);
+      return { status: 'done' };
+    },
+  };
+  const { service } = serviceWith({ adapter, policy });
+  const definitions = gitToolDefinitions(service, async () => '/tmp/session-repo');
+  const push = definitions.find((definition) => definition.name === GITEE_GIT_TOOLS.PUSH);
+  const input = { target: 'group/repo', branch: 'feat/r13', confirm: { repo: 'group/repo', object: 'group/repo' } };
+  await push.execute(input, { callId: 'call-host-13' });
+  assert.equal(captured.at(-1).callId, 'call-host-13', '宿主 callId 必须原样到达门禁，否则同一次重试永远命中不了复用');
+  await push.execute(input, {});
+  const synthetic = captured.at(-1).callId;
+  assert.equal(typeof synthetic, 'string');
+  assert.notEqual(synthetic, '', '没有宿主 callId 时仍要有可审计的调用标识');
+  assert.notEqual(synthetic, 'call-host-13', '缺省时不能沿用上一次的 id');
+});

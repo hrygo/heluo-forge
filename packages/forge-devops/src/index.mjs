@@ -702,7 +702,7 @@ export function apply(ctx, rawConfig = {}) {
      * （`change.clarification.write`，默认未登记即拒绝、零子进程）→ 适配器固定 argv + 回读。
      * 返回值是适配器的结果三态（done / failed / unknown），退出码 0 不当成功。
      */
-    changeUpdate: async ({ target, summary, description, aiAc, agent, signal } = {}) => {
+    changeUpdate: async ({ target, summary, description, aiAc, agent, signal, callId } = {}) => {
       const id = typeof target === 'string' ? target.trim() : '';
       if (currentChangeId === null) {
         throw new DevopsReadError(
@@ -729,13 +729,17 @@ export function apply(ctx, rawConfig = {}) {
           content: { title: summary, body: description, ...(aiAc === undefined || aiAc === '' ? {} : { text: aiAc }) },
           ...(agent === undefined ? {} : { agent }),
           ...(signal === undefined ? {} : { signal }),
-          callId: `devops-write-${(callSeq += 1)}`,
+          // 宿主调用标识优先：同一次调用的重试才能命中策略侧的复用判定；
+          // 缺省时才回落到合成 id（每次新 id ⇒ 每次重新确认，fail-closed）。
+          callId: (typeof callId === 'string' && callId.trim() !== '' ? callId.trim() : `devops-write-${(callSeq += 1)}`),
         },
         async () => callFlow('change.update', 'changeUpdate', { changeId: id, summary, description, aiAc }),
       );
       if (admitted !== null && typeof admitted === 'object' && admitted.kind === 'error') {
         throw new DevopsReadError(READ_REASONS.POLICY_DENIED, String(admitted.text ?? '策略拒绝了这次写回'), {
           action: FLOW_ACTIONS.CHANGE_UPDATE,
+          // 确认码随拒绝一起交给调用方：人工取消、超时与无应答端必须可区分。
+          ...(typeof admitted.code === 'string' && admitted.code.trim() !== '' ? { policyCode: admitted.code.trim() } : {}),
         });
       }
       return admitted;

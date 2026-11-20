@@ -5,7 +5,9 @@ import { createObservationRuntime } from './observe.mjs';
 
 import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 import { compileContentRules } from './content-rules.mjs';
+import { createConfirmationGateway } from './confirm.mjs';
 import { createGate } from './gate.mjs';
+import { createDecisionCache } from './reuse.mjs';
 import { createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
 import { loadOrgPolicy } from './org-policy.mjs';
 import { matchProtected, resolveProtectedRoots } from './paths.mjs';
@@ -21,6 +23,15 @@ const OBSERVATION_SINK_KEY = 'observationSink';
 const PROCESS_FACTS_KEY = 'processFacts';
 
 const OBSERVE_ONLY_NOTICE = '[forge-policy] 8 项策略开关均为关闭，当前为 observe-only：只记录受控执行的凭据，不拦截内容、路径、流程或确认。';
+
+// 逐次确认需要宿主的 userQuestions 服务；缺席时装载照常成功，每次需要卡片的写都会拒绝。
+const CONFIRMATION_UNAVAILABLE_NOTICE = '[forge-policy] 已启用 confirmPush/confirmDopWrite，但宿主没有可用的 userQuestions 服务：需要人工确认的受控写会一律以 POLICY_CONFIRM_UNAVAILABLE 拒绝（不降级为直接放行）。';
+
+/** 宿主确认通道是否可用：只在真正需要卡片时读取，不缓存结论。 */
+function hasConfirmationChannel(ctx) {
+  const service = typeof ctx?.get === 'function' ? ctx.get('userQuestions') : undefined;
+  return isPlainObject(service) && typeof service.ask === 'function';
+}
 
 // 路径规则的默认受保护根（9 类，按宿主占位符展开）。P0 只保留配置面与展示。
 const DEFAULT_PROTECTED_PATHS = Object.freeze(['$DSH_HOME/**']);
@@ -183,6 +194,8 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
 
   const pipeline = buildPipeline(config.rules);
   const getActor = overrides.getActor ?? (() => readActor(ctx));
+  const confirmations = overrides.confirmations ?? createConfirmationGateway({ timeoutMs: config.confirmation.timeoutMs });
+  const decisionCache = overrides.decisionCache ?? createDecisionCache();
   const gate = createGate({
     catalog,
     rules: config.rules,
@@ -191,6 +204,9 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     tools: config.tools,
     getActor,
     onDecision: config.onDecision,
+    confirmations,
+    decisionCache,
+    timeoutMs: config.confirmation.timeoutMs,
   });
 
   // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。
@@ -205,6 +221,9 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     if (disposed) return;
     disposed = true;
     owned?.dispose();
+    // 卸载顺序：先收掉挂起的确认（不留悬挂 Promise），再清会话内缓存，最后关审计。
+    confirmations.dispose();
+    decisionCache.clear();
     gate.dispose();
     for (const dispose of disposers.splice(0).reverse()) dispose?.();
     disposeProvide?.();
@@ -227,9 +246,12 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   }
 
   // 全关后只留一条 observe-only 诊断：不是拦截，也不写盘。
-  if (isObserveOnly(config.rules)) {
-    const warn = overrides.log ?? (typeof ctx.logger?.warn === 'function' ? (message) => ctx.logger.warn(message) : undefined);
-    warn?.(OBSERVE_ONLY_NOTICE);
+  const warn = overrides.log ?? (typeof ctx.logger?.warn === 'function' ? (message) => ctx.logger.warn(message) : undefined);
+  if (isObserveOnly(config.rules)) warn?.(OBSERVE_ONLY_NOTICE);
+  // 需要卡片的开关已开、宿主却没有确认通道：装载仍成功，但每次需要卡片的写都会拒绝。
+  const injectedChannel = overrides.confirmations !== undefined;
+  if ((config.rules.confirmPush === true || config.rules.confirmDopWrite === true) && !injectedChannel && !hasConfirmationChannel(ctx)) {
+    warn?.(CONFIRMATION_UNAVAILABLE_NOTICE);
   }
 
   const service = Object.freeze({
@@ -250,6 +272,10 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     auditGaps: () => audit.gaps(),
     acknowledgeAuditGaps: () => audit.acknowledgeGaps(),
     auditDegraded: () => audit.isDegraded(),
+    /** 宿主确认通道此刻是否可用（不含"曾经可用"的推断）。 */
+    confirmationAvailable: () => injectedChannel || hasConfirmationChannel(ctx),
+    /** 会话内决策缓存条目数：复用只活在内存里，卸载即空。 */
+    decisionCacheSize: () => decisionCache.size(),
     executeAction: (commandCtx, action, exec, operation) => (owned ? owned.executeAction(gate, commandCtx, action, exec, operation) : gate.executeAction(commandCtx, action, exec, operation)),
     registerCommand: (commandCtx, definition) => registerDefinition(commandCtx, service, definition, owned),
     observations: () => observations,

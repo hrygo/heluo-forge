@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   Config,
+  DEFAULT_CONFIRMATION_TIMEOUT_MS,
   DEFAULT_RULES,
   IMPLEMENTED_RULES,
   RULE_KEYS,
@@ -12,14 +13,15 @@ import {
 
 const WRITE = { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' };
 
-test('the eight rule keys are all off by default and none is implemented yet', () => {
+test('the eight rule keys are all off by default; P1 implements three of them', () => {
   assert.deepEqual([...RULE_KEYS].sort(), [
     'confirmDopWrite', 'confirmPush', 'contentGate', 'denyDelegatedWrites',
     'denyHumanRecord', 'denyUnknownAction', 'enforceProcessRules', 'protectPaths',
   ]);
   assert.equal(RULE_KEYS.length, 8);
   for (const key of RULE_KEYS) assert.equal(DEFAULT_RULES[key], false, `${key} defaults to off`);
-  assert.deepEqual(IMPLEMENTED_RULES, [], 'P0 implements no switch');
+  assert.deepEqual([...IMPLEMENTED_RULES].sort(), ['confirmDopWrite', 'confirmPush', 'denyDelegatedWrites']);
+  assert.equal(DEFAULT_CONFIRMATION_TIMEOUT_MS, 120_000);
 });
 
 test('resolveConfig fills the documented defaults', () => {
@@ -35,6 +37,14 @@ test('resolveConfig fills the documented defaults', () => {
   assert.equal(Object.isFrozen(config.audit), true);
 });
 
+test('the three implemented switches can be enabled and keep their defaults off', () => {
+  for (const key of IMPLEMENTED_RULES) {
+    const result = validateConfig({ rules: { [key]: true } });
+    assert.equal(result.issues, undefined, `${key} is implemented in this phase`);
+    assert.equal(resolveConfig({ rules: { [key]: true } }).rules[key], true);
+  }
+});
+
 test('validation reports every problem at once with key paths', () => {
   const { issues } = validateConfig({
     catalog: [
@@ -43,7 +53,7 @@ test('validation reports every problem at once with key paths', () => {
       { action: 'gitee.pr.write', target: 'issue', category: 'dev-write' },
       { ...WRITE, action: 'gitee.repository.read' },
     ],
-    rules: { confirmPush: true, nope: false },
+    rules: { contentGate: true, nope: false },
     confirmation: { timeoutMs: 0 },
     content: { maxBytes: -1 },
     paths: { append: 'not-an-array' },
@@ -57,7 +67,7 @@ test('validation reports every problem at once with key paths', () => {
   assert.match(joined, /catalog\[1\]/u, 'duplicates are located');
   assert.match(joined, /catalog\[2\].*(target|category)/u);
   assert.match(joined, /catalog\[3\].*read action/u);
-  assert.match(joined, /rules\.confirmPush.*not implemented/u);
+  assert.match(joined, /rules\.contentGate.*not implemented/u);
   assert.match(joined, /rules\.nope.*unknown/u);
   assert.match(joined, /confirmation\.timeoutMs/u);
   assert.match(joined, /content\.maxBytes/u);
@@ -95,7 +105,6 @@ test('a surface that is not wired into the decision path is refused at load time
     ['categories', { categories: { bash: 'shell.execute' } }],
     ['protectedPaths', { protectedPaths: ['$DSH_HOME/**'] }],
     ['paths.append', { paths: { append: ['$DSH_HOME/secrets/**'] } }],
-    ['confirmation', { confirmation: { timeoutMs: 5_000 } }],
     ['content', { content: { maxBytes: 1_024 } }],
   ];
   for (const [label, input] of cases) {
@@ -118,13 +127,25 @@ test('a surface that is not wired into the decision path is refused at load time
   assert.deepEqual(defaults.content, { maxBytes: 262_144 });
 });
 
-test('any switch that is not implemented refuses to resolve, naming the key', () => {
-  for (const key of RULE_KEYS) {
+test('the five switches without an implementation still refuse to resolve, naming the key', () => {
+  const pending = RULE_KEYS.filter((key) => !IMPLEMENTED_RULES.includes(key));
+  assert.equal(pending.length, 5);
+  for (const key of pending) {
     const { issues } = validateConfig({ rules: { [key]: true } });
     assert.equal(issues.length, 1);
     assert.match(issues[0], new RegExp(`rules\\.${key}`));
     assert.throws(() => resolveConfig({ rules: { [key]: true } }), (error) => error.code === 'POLICY_CONFIG_INVALID');
   }
+});
+
+test('the confirmation section only accepts a positive timeoutMs', () => {
+  assert.deepEqual(validateConfig({ confirmation: { timeoutMs: 500 } }).value.confirmation, { timeoutMs: 500 });
+  for (const timeoutMs of [0, -1, 1.5, '120000']) {
+    const { issues } = validateConfig({ confirmation: { timeoutMs } });
+    assert.deepEqual(issues, ['confirmation.timeoutMs: must be a positive integer'], `timeoutMs ${timeoutMs}`);
+  }
+  // 写进配置却没人读的键在装载期就报错，避免"配了以为生效"。
+  assert.deepEqual(validateConfig({ confirmation: { timeout: 10 } }).issues, ['confirmation.timeout: unknown config key']);
 });
 
 test('Config exposes a Standard Schema validator', () => {
@@ -133,5 +154,6 @@ test('Config exposes a Standard Schema validator', () => {
   assert.equal(typeof Config['~standard'].validate, 'function');
   const ok = Config['~standard'].validate({ catalog: [WRITE] });
   assert.deepEqual(ok.value.catalog, [WRITE]);
-  assert.deepEqual(Config['~standard'].validate({ rules: { confirmPush: true } }).issues.length, 1);
+  assert.equal(Config['~standard'].validate({ rules: { confirmPush: true } }).issues, undefined);
+  assert.equal(Config['~standard'].validate({ rules: { contentGate: true } }).issues.length, 1);
 });

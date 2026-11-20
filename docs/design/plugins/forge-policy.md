@@ -42,6 +42,8 @@ P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、�
 
 **判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现只有分类默认决策加身份与审计两段，规则开关八条全部未实现。
 
+**当前实现（P1，2026-11-20）**：八个策略开关只有 `denyDelegatedWrites`、`confirmPush`、`confirmDopWrite` 三个已实现，其余五个置 `true` 在装载期直接报错。需要人工确认卡片的动作只有 `gitee.git.push`（`confirmPush`）与 `change.clarification.write`（`confirmDopWrite`）两条，其余四条受控写在任何开关组合下都不弹卡；身份校验恒常开启，不占开关。确认等待默认 120000 ms（`confirmation.timeoutMs`），超时、通道不可用、应答非法分别映射 `POLICY_CONFIRM_TIMEOUT` / `_UNAVAILABLE` / `_INVALID_ANSWER`，一律不执行；来源为子代理的调用在 `denyDelegatedWrites` 开启时直接拒绝，开关关闭时需卡片的写仍以 `POLICY_CONFIRM_DELEGATED` 拒绝。已允许的调用按"工具名 + callId + 动作 + 参数摘要"复用同一结论，进程内最多 32 条、不落盘；命中后仍须重过身份校验、一次性收据与执行后复验。没有桌面确认通道时装载照常完成并告警一次，需要卡片的写全部以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed）。本文其余章节描述的是目标模型，未达成的部分仍以"待实现"标注。
+
 **IAM隔离消费进展**：独立许可/私有operation算法B已通过62新例及210项policy全包回归，独立peer与arguments身份变异已关闭。普通apply未注入该算法；C合成工具/命令的共享installer、发送体与owned finalizer已通过31新例/241项policy回归及独立审阅/变异。D合成模型入口已通过29新例/270项policy回归，包含最终错误桥修复及独立审阅/桥接增量复核；E根16项已验证实际IAM工厂与mock IdP的联合执行，独立审阅与本批完整检查已通过。B/C/D局部fixture本身不是联合证据，E仍不证明生产授权；普通apply不启用合成模型。会话见证、许可字段与整体边界见[IAM-003](<../../contracts/iam-consumer-isolated.md>)和[PLAN-007](<../../plans/2026-11-02-iam-consumer-isolated.md>)。
 
 ## 2. 目标与非目标

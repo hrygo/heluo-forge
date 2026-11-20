@@ -721,6 +721,7 @@ export function createGitPush() {
           confirm: isPlainObject(input.confirm) ? input.confirm : undefined,
           ...(exec?.agent === undefined ? {} : { agent: exec.agent }),
           ...(exec?.signal === undefined ? {} : { signal: exec.signal }),
+          ...(exec?.callId === undefined ? {} : { callId: exec.callId }),
           content,
           payload: {
             arguments: { target, remote, branch, change: text(input.changeId) || null, op: 'push' },

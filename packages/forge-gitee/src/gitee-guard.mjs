@@ -91,7 +91,7 @@ function repoOf(target) {
   return cut === -1 ? raw : raw.slice(0, cut);
 }
 
-function denial({ status = 'denied', action, target, tool, rule, reason, detail = null, mayHaveSideEffect = false, calls = 0 }) {
+function denial({ status = 'denied', action, target, tool, rule, reason, detail = null, mayHaveSideEffect = false, calls = 0, policyCode }) {
   return Object.freeze({
     status,
     action,
@@ -100,6 +100,8 @@ function denial({ status = 'denied', action, target, tool, rule, reason, detail 
     rule,
     reason,
     detail,
+    // 确认码只在策略拒绝时出现：调用方据此区分人工取消、超时与无应答端。
+    ...(typeof policyCode === 'string' && policyCode.trim() !== '' ? { policyCode: policyCode.trim() } : {}),
     next_action: nextActionFor(reason),
     mayHaveSideEffect,
     calls,
@@ -279,7 +281,7 @@ export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
       ...(content === undefined ? {} : { content }),
       ...(source.agent === undefined ? {} : { agent: source.agent }),
       ...(source.signal === undefined ? {} : { signal: source.signal }),
-      callId: nextCallId(action.split('.')[1] || 'action'),
+      callId: text(source.callId) || nextCallId(action.split('.')[1] || 'action'),
     };
     // 宿主 approval 通道：`index.mjs` 的 execute 直通，不额外注入 ctx；调用方要确认通道时
     // 必须显式传 `request.ctx`，否则策略侧的 `kind: 'confirm'` 条目会因"没有审批通道"被拒
@@ -312,6 +314,7 @@ export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
         rule: 'policy-denied',
         reason: GUARD_REASONS.POLICY_DENIED,
         detail: text(outcome.text) || `策略拒绝了 ${action}`,
+        policyCode: text(outcome.code),
       });
     }
 

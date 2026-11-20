@@ -190,8 +190,8 @@ test('P0: 写动作缺少身份即拒绝，与内容无关', async () => {
   assert.match(String(denied.reason), /设置 → 账号/u);
 });
 
-test('P0: 开关未实现，挂载时打开任一开关都被拒绝', () => {
-  for (const key of ['denyHumanRecord', 'confirmPush', 'denyUnknownAction']) {
+test('P1: 未实现的开关，挂载时打开仍被拒绝', () => {
+  for (const key of ['denyHumanRecord', 'denyUnknownAction', 'contentGate']) {
     assert.throws(() => mount({ rules: { [key]: true } }),
       (error) => error.code === 'POLICY_CONFIG_INVALID' && error.issues.some((issue) => issue.startsWith(`rules.${key}`)));
   }
