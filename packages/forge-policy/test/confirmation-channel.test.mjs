@@ -7,7 +7,7 @@ const questions = Object.freeze([{
   id: 'forge-policy-action',
   header: '动作确认',
   question: '允许推送分支 feat/x？',
-  detail: '本次调用需要人工确认：动作确认。这条确认只放行本次调用。',
+  detail: '确认后立即执行；不选择视为取消。',
   options: [{ label: CONFIRM_LABELS.allow }, { label: CONFIRM_LABELS.deny }],
 }]);
 

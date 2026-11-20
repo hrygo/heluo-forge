@@ -58,6 +58,10 @@ const SELF = Object.freeze({
     en: 'This confirmation covers this call only.',
     zh: '这条确认只放行本次调用。',
   },
+  card: {
+    en: 'It runs as soon as you confirm; leaving it unanswered cancels the call.',
+    zh: '确认后立即执行；不选择视为取消。',
+  },
 });
 
 /** 确认原因类别：卡片标题行与审计 summary 共用同一份措辞。 */
@@ -103,7 +107,7 @@ function locatorOf({ target, args = {} } = {}) {
 /** 分支名进入卡片正文前同样脱敏：它可能被写成路径形态。 */
 function branchOf(args) {
   const branch = sanitizeLocator(args?.branch ?? args?.head);
-  return branch === undefined ? '' : `（分支 ${branch}）`;
+  return branch === undefined ? '' : `（${branch}）`;
 }
 
 /**
@@ -123,7 +127,8 @@ export function confirmationCardCopy({ action, target, args = {}, reason = 'acti
   const lead = reason === 'content' ? `${category}：` : '';
   return {
     question: `${lead}允许${what.zh}${branchOf(args)}？`,
-    detail: `本次调用需要人工确认：${category}。${SELF.call.zh}`,
+    // 标题行已经说了这是什么确认，正文只说用户还需要知道的事：确认后立刻执行，放着不管等于取消。
+    detail: SELF.card.zh,
   };
 }
 

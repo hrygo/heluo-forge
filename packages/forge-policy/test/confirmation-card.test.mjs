@@ -21,7 +21,8 @@ test('one card carries the action, the target and a fixed pair of labels', () =>
   assert.equal(question.header, CONFIRM_REASONS.action);
   assert.match(question.question, /corp\.example\/repo/u, 'the target location is shown');
   assert.match(question.question, /feat\/x/u, 'the branch is shown so the human can tell calls apart');
-  assert.match(question.detail, /这条确认只放行本次调用/u);
+  assert.match(question.detail, /不选择视为取消/u);
+  assert.doesNotMatch(question.detail, /动作确认/u, '标题已经说了这是什么确认，正文不重复');
   assert.deepEqual(question.options.map((option) => option.label), [allowLabel, denyLabel]);
   assert.deepEqual(question.options.map((option) => option.description), ['只放行这一次调用', '拒绝本次调用，不执行']);
   assert.equal(Object.isFrozen(questions), true);
