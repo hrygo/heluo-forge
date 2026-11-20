@@ -71,6 +71,7 @@ const SELF = Object.freeze({
 /** 确认原因类别：卡片标题行与审计 summary 共用同一份措辞。 */
 export const REASON_LABELS = Object.freeze({
   action: { en: 'action confirmation', zh: '动作确认' },
+  process: { en: 'process precondition', zh: '流程条件' },
   content: { en: 'content risk', zh: '内容风险' },
 });
 

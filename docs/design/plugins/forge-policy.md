@@ -152,7 +152,7 @@ export interface PolicyDecision {
 
 **目标判定顺序（P1–P3）**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后完成必要的确认卡片与前置审计；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现行实现（P0–P2）**：判定流水线常开 `resolve → identity → audit → receipt` 四段，`contentGate` 开启时在审计之前插入内容闸阶段，`confirmPush`/`confirmDopWrite` 开启时再插入确认阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。七条规则开关（`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，已接入的三条（`contentGate`、`confirmPush`、`confirmDopWrite`）可以开启，其余四条置真在装载期被拒绝；仍未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`）同样在装载期拒绝，避免"配了却静默不生效"。`confirmation` 与 `content` 已接入，可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
+**现行实现（P0–P3）**：判定流水线常开 `resolve → identity → audit → receipt` 四段，`enforceProcessRules` 开启时在内容闸之前插入流程闸阶段，`contentGate` 开启时在审计之前插入内容闸阶段，`confirmPush`/`confirmDopWrite` 开启时再插入确认阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。七条规则开关（`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，已接入的四条（`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）可以开启，其余三条置真在装载期被拒绝；仍未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`）同样在装载期拒绝，避免"配了却静默不生效"。`confirmation` 与 `content` 已接入，可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -345,15 +345,17 @@ export interface PolicyDecision {
 
 | 开关 | 拦截什么 | 为什么必须在策略层 |
 |---|---|---|
-| `denyUnknownAction` | 未登记的写动作 | 目录是白名单，登记之外的写动作默认不属于本门禁 |
+| `denyUnknownAction` | 未登记的写动作（**严格白名单模式**） | 目录是白名单，登记之外的写动作默认不属于本门禁；默认放行，开启后才改为一律拒绝 |
 | `denyHumanRecord` | Agent 写入人工评审留痕 | 留痕的语义要求由人发起，宿主无法从工具参数判断发起者 |
 | `protectPaths` | 落在受保护根内的写入 | 沙箱管得住路径越界，管不住"动作语义上不该写这里" |
-| `enforceProcessRules` | 违反 SDD 顺序的写（变更未开始、计划未确认、保护分支、强制推送、缺验收小节、审查来源） | 宿主持久化里没有 SDD 顺序，只有策略层知道 |
+| `enforceProcessRules` | 违反 SDD 顺序的写；**已接入四條纯参数规则**：保护分支、强制推送、缺验收小节、审查来源 | 宿主持久化里没有 SDD 顺序，只有策略层知道 |
 | `contentGate` | 正文命中凭据、私钥、内网地址、绝对路径等内容规则 | 沙箱只看路径，不看内容 |
 | `confirmPush` | `gitee.git.push` 每次推送 | 宿主没有"这次推送要不要问人"的概念 |
 | `confirmDopWrite` | DOP 变更状态流转 | 同上，状态流转需要业务侧确认 |
 
 共同约束：开关只能收紧权限；置真但规则未实现时装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`）；事实源不可用时流程规则记 `unevaluated` 并继续，不把"不知道"当成"不满足"；审计恒开，与开关状态无关。
+
+**流程闸的接线范围**：`enforceProcessRules` 当前只接**纯参数即可判定**的四条规则——`push-protected-branch`（`main`/`master`/`release/*` 拒绝）、`push-force`、`pr-acceptance-section`（软命中）、`review-ai-source`（评论式评审必须写明 AI 来源与目标版本）。`change-in-progress` 与 `plan-confirmed` 要读 dop 变更状态与计划状态，事实源未接入前**不参与判定**，避免"查不到状态"被误读成"不满足流程"。规则按 `actions` 限定作用域（推送规则不管建 PR、验收小节规则不管推送），软命中在有确认通道时升级为一张「流程条件」卡片，没有通道时放行并留审计。
 
 ### 5.5 必要审计前置与执行后缺口
 
