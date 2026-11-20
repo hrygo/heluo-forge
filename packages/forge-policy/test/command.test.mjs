@@ -10,18 +10,16 @@ const IDENTITY = Object.freeze({
 });
 
 const CONFIG = {
-  audit: { sink: 'memory', allowNonDurable: true },
+  audit: { sink: 'memory' },
   catalog: [
-    { action: 'gitee.repository.read', target: 'repository', enabled: true },
-    { action: 'gitee.issue.write', target: 'issue', enabled: true },
-    { action: 'gitee.git.push', target: 'repository', enabled: true },
-    { action: 'gitee.review.record', target: 'pull-request', enabled: true },
-    { action: 'gitee.pr.read', target: 'pull-request', enabled: false },
+    { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' },
+    { action: 'gitee.git.push', target: 'repository', category: 'remote-write' },
+    { action: 'gitee.review.record', target: 'pull-request', category: 'human-record' },
   ],
   tools: {},
 };
 
-function fakeHost({ approval = { async request() { return 'allowed-once'; } } } = {}) {
+function fakeHost({ identity = IDENTITY, commands = true } = {}) {
   const provided = new Map();
   const registered = new Map();
   const guards = [];
@@ -29,15 +27,12 @@ function fakeHost({ approval = { async request() { return 'allowed-once'; } } } 
     tools: { guard: (fn) => (guards.push(fn), () => guards.splice(guards.indexOf(fn), 1)) },
     on: () => () => {},
     get(name) {
-      if (name === 'approval') return approval;
-      if (name === 'iam') return IDENTITY;
+      if (name === 'iam') return identity;
       if (name === 'commands') {
-        return {
-          register(definition) {
-            registered.set(definition.name, definition);
-            return () => registered.delete(definition.name);
-          },
-        };
+        return commands ? { register(definition) {
+          registered.set(definition.name, definition);
+          return () => registered.delete(definition.name);
+        } } : undefined;
       }
       return provided.get(name);
     },
@@ -55,25 +50,29 @@ const invocationOf = (extra = {}) => ({
   signal: new AbortController().signal,
   ...extra,
 });
+const definition = (action, name = 'synthetic') => ({ name, description: 'x', action, handler: async () => ({}) });
 
-test('a command naming an unknown, disabled or reserved action is refused at registration', () => {
+test('a command naming an unknown or reserved action is refused at registration', () => {
   const host = fakeHost();
   apply(host.ctx, CONFIG);
   const policy = host.ctx.get('policy');
-  const definition = (action, name = 'nope') => ({ name, description: 'x', action, handler: async () => ({}) });
 
   assert.throws(
     () => policy.registerCommand(host.ctx, definition('change.read')),
     (error) => error instanceof PolicyCatalogError && error.code === 'POLICY_COMMAND_ACTION_UNKNOWN',
   );
   assert.throws(
-    () => policy.registerCommand(host.ctx, definition('gitee.pr.read')),
-    (error) => error.code === 'POLICY_COMMAND_ACTION_DISABLED',
-  );
-  assert.throws(
     () => policy.registerCommand(host.ctx, definition('gitee.review.record')),
     (error) => error.code === 'POLICY_COMMAND_ACTION_RESERVED',
     'a human-record action never gets a command face',
+  );
+  assert.throws(
+    () => policy.registerCommand(host.ctx, { name: '', description: 'x', action: 'gitee.issue.write', handler: async () => ({}) }),
+    (error) => error.code === 'POLICY_COMMAND_INVALID',
+  );
+  assert.throws(
+    () => policy.registerCommand(host.ctx, { name: 'nope', description: 'x', action: 'gitee.issue.write' }),
+    (error) => error.code === 'POLICY_COMMAND_INVALID',
   );
   assert.equal(host.registered.size, 0);
 });
@@ -84,59 +83,22 @@ test('the command face runs the same decision as the tool face', async () => {
   const policy = host.ctx.get('policy');
   let runs = 0;
   policy.registerCommand(host.ctx, {
-    name: 'forge-read',
-    description: 'read the repository',
-    action: 'gitee.repository.read',
-    handler: async () => ((runs += 1), { kind: 'success', text: 'read ok' }),
+    name: 'forge-write',
+    description: 'write an issue',
+    action: 'gitee.issue.write',
+    handler: async () => ((runs += 1), { kind: 'success', text: 'written' }),
   });
-  const command = host.registered.get('forge-read');
+  const command = host.registered.get('forge-write');
 
   assert.equal((await command.handler(invocationOf({ rawInput: 'acme/demo' }))).kind, 'success');
   const denyTarget = await command.handler(invocationOf({ rawInput: '' }));
   assert.equal(denyTarget.kind, 'error', 'the command name cannot stand in for a missing business target');
+  assert.match(denyTarget.text, /target|目标/u);
   assert.equal(runs, 1);
+  assert.deepEqual(policy.auditRecords().map((record) => record.phase), ['begin', 'settle']);
 });
 
-test('a write command asks once for the task scope and then reuses it', async () => {
-  const requests = [];
-  const approval = { async request(request) { requests.push(request); return 'allowed-once'; } };
-  const host = fakeHost({ approval });
-  apply(host.ctx, CONFIG);
-  let runs = 0;
-  host.ctx.get('policy').registerCommand(host.ctx, {
-    name: 'forge-issue-write',
-    description: 'write an issue',
-    action: 'gitee.issue.write',
-    resolveArguments: (invocation) => ({ target: invocation.rawInput, changeId: invocation.changeId, body: 'plain text' }),
-    handler: async () => ((runs += 1), { kind: 'success', text: 'written' }),
-  });
-  const command = host.registered.get('forge-issue-write');
-
-  assert.equal((await command.handler(invocationOf({ rawInput: 'acme/demo!1', changeId: 'CHG-1' }))).kind, 'success');
-  assert.equal((await command.handler(invocationOf({ rawInput: 'acme/demo!2', changeId: 'CHG-1', commandId: 'cmd-2' }))).kind, 'success');
-  assert.equal(requests.length, 1, 'the second write reuses the task scope');
-  assert.equal(runs, 2);
-});
-
-test('a refused push returns an error without running the handler', async () => {
-  const approval = { async request() { return 'rejected'; } };
-  const host = fakeHost({ approval });
-  apply(host.ctx, CONFIG);
-  let runs = 0;
-  host.ctx.get('policy').registerCommand(host.ctx, {
-    name: 'forge-push',
-    description: 'push',
-    action: 'gitee.git.push',
-    resolveArguments: (invocation) => ({ target: invocation.rawInput, branch: 'feature/x' }),
-    handler: async () => ((runs += 1), { kind: 'success', text: 'pushed' }),
-  });
-  const result = await host.registered.get('forge-push').handler(invocationOf({ rawInput: 'acme/demo' }));
-  assert.equal(result.kind, 'error');
-  assert.match(result.text, /rejected/);
-  assert.equal(runs, 0, 'no side effect on a refused confirmation');
-});
-
-test('an approved push runs the handler exactly once', async () => {
+test('a write command runs without any approval channel in the all-off configuration', async () => {
   const host = fakeHost();
   apply(host.ctx, CONFIG);
   let runs = 0;
@@ -152,41 +114,43 @@ test('an approved push runs the handler exactly once', async () => {
   assert.equal(runs, 1);
 });
 
-test('a push command without an approval channel fails closed', async () => {
-  const host = fakeHost({ approval: null });
+test('a controlled write without a resolvable IAM actor is denied before the body runs', async () => {
+  const host = fakeHost({ identity: { getView: () => ({ state: 'signed-out', signedIn: false }) } });
   apply(host.ctx, CONFIG);
   let runs = 0;
   host.ctx.get('policy').registerCommand(host.ctx, {
-    name: 'forge-push',
-    description: 'push',
-    action: 'gitee.git.push',
-    resolveArguments: (invocation) => ({ target: invocation.rawInput, branch: 'feature/x' }),
-    handler: async () => ((runs += 1), { kind: 'success', text: 'pushed' }),
+    name: 'forge-write',
+    description: 'write an issue',
+    action: 'gitee.issue.write',
+    handler: async () => ((runs += 1), { kind: 'success', text: 'written' }),
   });
-  const result = await host.registered.get('forge-push').handler(invocationOf({ rawInput: 'acme/demo' }));
+  const result = await host.registered.get('forge-write').handler(invocationOf({ rawInput: 'acme/demo' }));
   assert.equal(result.kind, 'error');
-  assert.match(result.text, /no approval channel/);
+  assert.match(result.text, /IAM 身份/u);
+  assert.match(result.text, /设置 → 账号/u);
   assert.equal(runs, 0);
 });
 
-test('a final process provider exception settles the command audit and does not run the handler', async () => {
+test('registering a command without a command host is refused with a host error', () => {
+  const host = fakeHost({ commands: false });
+  apply(host.ctx, CONFIG);
+  assert.throws(
+    () => host.ctx.get('policy').registerCommand(host.ctx, definition('gitee.issue.write')),
+    (error) => error.code === 'POLICY_HOST_UNAVAILABLE',
+  );
+});
+
+test('a command handler that throws settles the audit as an error and rethrows', async () => {
   const host = fakeHost();
   apply(host.ctx, CONFIG);
-  const failure = new TypeError('provider defect');
-  let reads = 0;
-  host.ctx.provide('processFacts', { read() {
-    if (++reads === 2) throw failure;
-    return { change: { available: true, status: 'active' }, plan: { available: true, confirmed: true } };
-  } });
-  let runs = 0;
-  const policy = host.ctx.get('policy');
-  policy.registerCommand(host.ctx, {
-    name: 'forge-push', description: 'push', action: 'gitee.git.push',
-    resolveArguments: () => ({ target: 'acme/demo', branch: 'feature/x', changeId: 'CHG-1' }),
-    handler: async () => { runs++; },
+  host.ctx.get('policy').registerCommand(host.ctx, {
+    name: 'forge-error',
+    description: 'throwing write',
+    action: 'gitee.issue.write',
+    handler: async () => { throw new Error('synthetic body error'); },
   });
-  await assert.rejects(host.registered.get('forge-push').handler(invocationOf()), (error) => error === failure);
-  assert.equal(runs, 0);
-  assert.deepEqual(policy.auditRecords().map((record) => record.phase), ['begin', 'settle']);
-  assert.equal(policy.auditRecords().at(-1).decision, 'error');
+  await assert.rejects(host.registered.get('forge-error').handler(invocationOf({ rawInput: 'acme/demo' })), /synthetic body error/u);
+  const records = host.ctx.get('policy').auditRecords();
+  assert.deepEqual(records.map((record) => record.phase), ['begin', 'settle']);
+  assert.equal(records.at(-1).decision, 'error');
 });

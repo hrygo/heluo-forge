@@ -21,7 +21,7 @@ export function toolFixture(t, { beforeSend, send, resolveArguments } = {}) {
         && Object.keys(authority.scope).every((key) => scope[key] === authority.scope[key]);
     },
   };
-  const owned = { action: 'gitee.repository.read', description: 'Read the synthetic repository', scope: authority.scope,
+  const owned = { action: 'gitee.issue.write', description: 'Read the synthetic repository', scope: authority.scope,
     async beforeSend(exec) { counts.handler++; bodyExecutions.push(exec); if (beforeSend) await beforeSend(exec); },
     async send(input) {
       counts.send++; requests.push(input);
@@ -30,8 +30,9 @@ export function toolFixture(t, { beforeSend, send, resolveArguments } = {}) {
   options.tools = [{ ...owned, name: 'synthetic.read' }];
   options.commands = [{ ...owned, name: 'synthetic-read',
     resolveArguments: resolveArguments ?? ((invocation) => ({ target: invocation.rawInput, payload: 'synthetic command' })) }];
-  const config = { audit: { sink: 'memory', allowNonDurable: true },
-    catalog: [{ action: owned.action, target: 'repository', enabled: true }],
+  host.ctx.provide('iam', { getView: () => ({ signedIn: true, principal: { subject: 'svc-policy-test' } }) });
+  const config = { audit: { sink: 'memory' },
+    catalog: [{ action: owned.action, target: 'issue', category: 'dev-write' }],
     tools: { 'synthetic.read': owned.action } };
   const installed = installIamConsumerTools(host.ctx, config, options);
   const bind = (consumer) => { registrations.set(consumer, Object.freeze({ iam: authority.iam,

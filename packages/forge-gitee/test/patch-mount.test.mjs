@@ -103,25 +103,6 @@ async function shippedRows() {
 }
 
 /**
- * 从分发补丁层里**只删掉 judge 那一条目录**（其余逐字保留）。
- *
- * AC-8：判定缺失不该阻塞挂载（`assertReadCatalog` 只要求 3 条读动作），只把判定降级成
- * denied。这里不动插件行与审计行，模拟"存量补丁层还没跟上 r7 目录"的装配后果。
- */
-async function shippedRowsWithoutJudge() {
-  const text = await readFile(PATCH_FILE, 'utf8');
-  const lines = text.split('\n');
-  const judgeLines = lines.filter((line) => /^\s*-\s*\{\s*action:\s*'gitee\.delivery\.judge'/u.test(line));
-  assert.equal(judgeLines.length, 1, `分发补丁层必须恰好一条 judge 目录（实际：${judgeLines.length}）`);
-  const rows = parsePatch(lines.filter((line) => judgeLines.includes(line) === false).join('\n'));
-  const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
-  const pluginRow = rows.find((row) => row.name === '@heluo/forge-gitee');
-  assert.ok(policyRow !== undefined && pluginRow !== undefined, '补丁层结构被改动过：策略行/插件行缺失');
-  assert.equal(policyRow.catalog.length, 11, '删掉 judge 后应剩 11 条：12 条并集去掉只读判定');
-  return { policyRow, pluginRow };
-}
-
-/**
  * 用**真服务 + 真目录**挂载，并给门禁的 operation 回调计数。
  *
  * 包装层只转发（catalog/decide/auditRecords 都是真服务的），所以"未登记即 deny"的行为
@@ -171,37 +152,35 @@ async function mountWithAdmittingPolicy({ pluginConfig } = {}) {
   return { host, calls, mounted, pluginRow, policyRow };
 }
 
-test('AC-1: 用分发补丁层挂载后，12 条并集可用（含 change.read / change.list）、六条写随包登记且按分类受控', async () => {
+test('AC-1: 用分发补丁层挂载后，6 条受控写随包登记；只读动作不登记、按 out-of-scope 透传', async () => {
   const { host, real, mounted } = await mountWithRealPolicy();
   assert.equal(mounted.ok, true, `插件挂载失败：${mounted.error?.message ?? ''}`);
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS]);
-  assert.equal(
-    real.catalog.size,
-    12,
-    '默认目录 = 6 读 + 6 写（3 条 gitee 只读 + 1 条只读判定 + devops 的 change.read / change.list + 六条写）',
-  );
+  assert.equal(real.catalog.size, 6, '默认目录 = 6 条受控写（只读动作不登记）');
 
+  // 只读动作不在控制面：未登记即 out-of-scope 放行，且不产生受控执行记录。
   for (const action of ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
-    const target = action === 'gitee.delivery.judge' || action.startsWith('change.') ? 'CHG-2026-001' : 'acme/repo';
-    const decision = real.decide({ action, target });
-    assert.equal(decision.action, 'allow', `${action} 应可用：${decision.reason}`);
-    assert.equal(decision.rule, 'registered-action');
+    assert.equal(real.catalog.has(action), false, `${action} 是只读动作，不得登记`);
+    const decision = real.decide({ action, target: 'acme/repo' });
+    assert.equal(decision.action, 'allow', `${action} 应按 out-of-scope 放行：${decision.reason}`);
+    assert.equal(decision.rule, 'out-of-scope');
   }
 
   // 写动作随包登记（未登记只会得到误导性的 unregistered-action），但登记不等于放行：
-  // 默认决策由内置分类给出，执行期还要过身份、内容、流程与范围确认。
+  // 执行期还要过身份与审计，默认决策由内置分类给出。
   for (const [action, want] of [
     ['gitee.issue.write', 'allow'],
     ['gitee.pr.write', 'allow'],
     ['gitee.review.publish', 'allow'],
     ['change.clarification.write', 'allow'],
-    ['gitee.git.push', 'confirm'],
-    ['gitee.review.record', 'deny'],
   ]) {
     assert.equal(real.catalog.has(action), true, `${action} 必须随包登记：默认分发开箱即可走受控写`);
     const decision = real.decide({ action, target: 'acme/repo' });
     assert.equal(decision.action, want, `${action} 的默认决策应为 ${want}（实际：${decision.action}/${decision.reason}）`);
   }
+  // 远端写与人工留痕的默认分类仍留在编译结果里（P0 不启用对应规则）。
+  assert.equal(real.catalog.get('gitee.git.push')?.decision, 'confirm');
+  assert.equal(real.catalog.get('gitee.review.record')?.decision, 'deny');
 });
 
 test('AC-2: 默认目录下判定默认可用：done + ready + executed false + remote_calls 0', async () => {
@@ -252,54 +231,62 @@ test('AC-3: 默认目录下 4 个写工具逐个 denied（登记不等于放行�
   assert.deepEqual(counter.actions, []);
 });
 
-test('AC-4: 默认登记全部 12 条：读开箱 allow，写按内置分类受控', async () => {
+test('AC-4: 默认目录恰好 6 条受控写：读动作不登记，写按内置分类受控（取代事实：旧实现登记 12 条并集并显式 enabled）', async () => {
   const { real } = await mountWithRealPolicy();
-  assert.equal(real.catalog.size, 12, `默认目录应恰好 12 条（6 读 + 6 写），实际 ${real.catalog.size}`);
-  assert.equal(real.catalog.get('change.read')?.category, 'read', 'devops 的变更读也在这份并集目录里（同装时唯一来源）');
-  assert.equal(real.catalog.get('change.list')?.category, 'read', 'devops 的变更清单读同样在这份并集目录里（同装时唯一来源）');
-
-  const judge = real.catalog.get('gitee.delivery.judge');
-  assert.ok(judge !== undefined, '判定必须随包登记（开箱可用），否则等于没有这个能力');
-  assert.equal(judge.category, 'read', '判定是只读能力：类别错成写就会被内容与流程规则误伤');
-  assert.equal(judge.decision, 'allow', '判定的默认决策是 allow，执行期不再需要确认');
-  assert.equal(judge.target, 'change', 'target 必须逐字 change（补丁层/README/设计文档同字面）');
-  assert.equal(judge.enabled, true);
+  assert.equal(real.catalog.size, 6, `默认目录应恰好 6 条受控写，实际 ${real.catalog.size}`);
+  for (const action of ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
+    assert.equal(real.catalog.has(action), false, `${action} 是只读动作，不得登记`);
+  }
 
   const writes = ['gitee.issue.write', 'gitee.pr.write', 'change.clarification.write', 'gitee.review.publish', 'gitee.git.push', 'gitee.review.record'];
+  const wants = {
+    'gitee.issue.write': ['issue', 'dev-write'],
+    'gitee.pr.write': ['pull-request', 'dev-write'],
+    'change.clarification.write': ['change', 'dev-write'],
+    'gitee.review.publish': ['pull-request', 'review-write'],
+    'gitee.git.push': ['repository', 'remote-write'],
+    'gitee.review.record': ['pull-request', 'human-record'],
+  };
   for (const action of writes) {
-    assert.equal(real.catalog.get(action)?.enabled, true, `${action} 必须随包登记并显式启用（否则只会得到误导性的未登记拒绝）`);
+    const entry = real.catalog.get(action);
+    assert.ok(entry !== undefined, `${action} 必须随包登记（未登记只会得到误导性的拒绝）`);
+    assert.equal(entry.target, wants[action][0], `${action} 的 target 必须与内置词表一致`);
+    assert.equal(entry.category, wants[action][1], `${action} 的 category 必须与内置词表一致`);
+    assert.equal(entry.enabled, undefined, `${action} 不得再声明 enabled：登记只决定可见性`);
+    assert.equal(entry.revision, undefined, `${action} 不得声明 revision`);
   }
-  assert.equal(
-    [...real.catalog.values()].filter((entry) => entry.category !== 'read').length,
-    6,
-    '默认目录里六条写动作随包登记：登记只决定可见性，放行由分类决定',
-  );
-  assert.equal(real.catalog.get('gitee.git.push')?.decision, 'confirm', 'push 是远端写：默认逐次确认');
+  assert.equal(real.catalog.get('gitee.git.push')?.decision, 'confirm', 'push 是远端写：分类给出逐次确认（P0 未启用确认规则）');
   assert.equal(real.catalog.get('gitee.review.record')?.decision, 'deny', '人工评审留痕不由 Agent 发起');
 
-  for (const action of [...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
+  // 全关语义：六条写都放行到执行（身份与审计仍恒开），读动作按 out-of-scope 放行。
+  for (const action of writes) {
     const decision = real.decide({ action, target: 'acme/repo' });
-    assert.equal(decision.action, 'allow', `${action} 应走"登记即可用"：${decision.reason}`);
-    assert.equal(decision.rule, 'registered-action');
+    assert.equal(decision.action, 'allow', `${action} 在全部开关关闭时应放行：${decision.reason}`);
+  }
+  for (const action of ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
+    const decision = real.decide({ action, target: action.startsWith('change.') || action === 'gitee.delivery.judge' ? 'CHG-2026-001' : 'acme/repo' });
+    assert.equal(decision.action, 'allow', `${action} 应按 out-of-scope 放行：${decision.reason}`);
+    assert.equal(decision.rule, 'out-of-scope');
   }
 });
 
-test('AC-8: 目录缺 judge 时仍可挂载，判定降级 denied', async () => {
-  const { policyRow, pluginRow } = await shippedRowsWithoutJudge();
+test('AC-8: 判定不再要求登记——未登记的判定按 out-of-scope 透传（取代事实：旧实现缺 judge 时降级 denied）', async () => {
+  const { policyRow, pluginRow } = await shippedRows();
   const { host, counter, real, mounted } = await mountWithRealPolicy({
     catalog: policyRow.catalog,
     pluginConfig: pluginRow.config,
   });
   assert.equal(mounted.ok, true, `判定缺失不得阻塞挂载：${mounted.error?.message ?? ''}`);
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS], '11 个工具照旧注册（工具面不随目录条数变）');
+  assert.equal(real.catalog.has('gitee.delivery.judge'), false, '判定是只读动作：P0 不再登记');
 
   const { body } = await invokeTool(host, 'forge_gitee_delivery_gate', DELIVERY_CALL);
-  assert.equal(body?.status, 'denied', `判定未登记时必须 denied（实际：${body?.status}）`);
-  assert.equal(body?.rule, 'unregistered-action');
-  assert.equal(body?.ok, false);
-  assert.equal(counter.operations, 0, '判定没登记就不该进 operation');
+  assert.notEqual(body?.status, 'denied', `未登记判定应按 out-of-scope 透传（实际：${body?.status}）`);
+  assert.equal(counter.operations, 1, '透传后照常进入 operation：判定能力不再依赖策略目录');
   for (const action of GITEE_READ_ACTIONS) {
-    assert.equal(real.decide({ action, target: 'acme/repo' }).action, 'allow', '3 条读目录照旧可用');
+    const decision = real.decide({ action, target: 'acme/repo' });
+    assert.equal(decision.action, 'allow', '3 条读动作同样按 out-of-scope 放行');
+    assert.equal(decision.rule, 'out-of-scope');
   }
 });
 
@@ -320,32 +307,23 @@ test('AC-3 反向: 放行的策略服务下同一工具不再 denied——默认
   assert.notEqual(body?.status, 'done', 'CLI 不存在时不得返回 done');
 });
 
-// r7 保留（编号不变）：AC-8 证明"缺判定不影响挂载"，这里反过来证明"缺读目录直接拒绝挂载"。
-// 两条合起来才说明 `assertReadCatalog` 的门槛仍是 3 条**读**动作，判定不在门槛里。
-test('AC-7 反向: 目录为空/缺一条时拒绝挂载，且不留下半个工具面', async () => {
+// r7 保留（编号不变）：AC-8 证明"缺判定不影响挂载"，这里反过来证明"目录空/缺一条同样不影响挂载"。
+// P0 取代事实：旧实现要求 3 条只读动作必须登记且 enabled，缺一条即拒绝挂载（TECH-CHANGE §3.4）。
+test('AC-7 反向: 目录为空或缺一条时仍可挂载——只读动作不参与控制面（P0 取代事实）', async () => {
   const { policyRow, pluginRow } = await shippedRows();
 
-  const empty = createFakeHost({ catalog: [], audit: policyRow.audit });
-  try {
-    apply(empty.ctx, pluginRow.config);
-    assert.fail('空目录必须拒绝挂载');
-  } catch (error) {
-    assert.equal(error.code, 'GITEE_ACTION_UNREGISTERED');
-    assert.deepEqual(error.detail.missing, [...GITEE_READ_ACTIONS]);
-  }
-  assert.deepEqual(empty.toolNames(), []);
+  const empty = createFakeHost();
+  const emptyMounted = empty.mountPolicy({ catalog: [], audit: policyRow.audit });
+  assert.equal(emptyMounted.ok, true, `空目录必须可编译：${emptyMounted.error?.message ?? ''}`);
+  apply(empty.ctx, pluginRow.config);
+  assert.deepEqual(empty.toolNames(), [...GITEE_TOOLS], '空目录下插件仍挂载：11 个工具照旧注册');
 
   const partial = createFakeHost();
-  const installed = partial.mountPolicy({
-    catalog: policyRow.catalog.filter((entry) => entry.action !== 'gitee.pr.read'),
-    audit: policyRow.audit,
-  });
-  assert.equal(installed.ok, true);
-  assert.throws(
-    () => apply(partial.ctx, pluginRow.config),
-    (error) => error.code === 'GITEE_ACTION_UNREGISTERED' && error.detail.missing.join(',') === 'gitee.pr.read',
-  );
-  assert.deepEqual(partial.toolNames(), []);
+  const partialRows = policyRow.catalog.filter((entry) => entry.action !== 'gitee.pr.write');
+  const partialMounted = partial.mountPolicy({ catalog: partialRows, audit: policyRow.audit });
+  assert.equal(partialMounted.ok, true, '缺一条受控写目录仍可编译');
+  apply(partial.ctx, pluginRow.config);
+  assert.deepEqual(partial.toolNames(), [...GITEE_TOOLS], '缺一条受控写不影响其余工具面');
 });
 
 test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（全仓扫描）', async () => {
@@ -381,16 +359,21 @@ test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（
     inserting.push(packageName);
     const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
     assert.ok(policyRow !== undefined, `${packageName} 插入 gitee 却没有自带策略行`);
-    // 只要求 3 条 gitee 只读目录：AC-8 明确"缺 judge 不阻塞挂载"，所以这里不能把判定算进门槛；
-    // 并集里的 change.read / change.list 属于 devops，也不计入 gitee 的最低要求。
-    for (const action of GITEE_READ_ACTIONS) {
-      assert.ok(
-        policyRow.catalog.some((entry) => entry.action === action),
-        `${packageName} 的策略行目录缺 gitee 只读动作 ${action}`,
-      );
+    // P0：策略目录只登记 6 条受控写（action/target/category 三元组），
+    // 只读动作不登记、不参与控制面（TECH-CHANGE §3.1 / §3.4）。
+    assert.equal(policyRow.catalog.length, 6, `${packageName} 的策略行应恰好 6 条受控写`);
+    for (const entry of policyRow.catalog) {
+      assert.equal(typeof entry.action, 'string', `${packageName} 的目录条目缺 action`);
+      assert.equal(typeof entry.target, 'string', `${packageName} 的目录条目缺 target`);
+      assert.match(entry.category, /^(?:dev-write|review-write|remote-write|human-record)$/u);
+      assert.equal(entry.enabled, undefined, `${packageName} 的目录条目不得声明 enabled`);
+      assert.equal(entry.revision, undefined, `${packageName} 的目录条目不得声明 revision`);
+      assert.equal(entry.kind, undefined, `${packageName} 的目录条目不得声明 kind`);
     }
     assert.equal(policyRow.audit.sink, 'memory', `${packageName} 的策略行缺显式审计舱`);
-    assert.equal(policyRow.audit.allowNonDurable, true);
+    assert.equal(String(policyRow.audit.buffer), '1000', `${packageName} 的策略行缺环形缓冲容量`);
+    assert.equal(String(policyRow.audit.keepDays), '7', `${packageName} 的策略行缺保留天数`);
+    assert.equal(policyRow.audit.allowNonDurable, undefined, `${packageName} 不得再声明 allowNonDurable`);
     assert.equal(typeof giteeRow.config, 'object', `${packageName} 的 gitee 行缺显式 config`);
     assert.equal(giteeRow.config === null, false);
   }

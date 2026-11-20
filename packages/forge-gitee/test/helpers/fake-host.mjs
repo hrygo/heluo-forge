@@ -26,8 +26,8 @@
 import { apply as applyPolicy } from '@heluo/forge-policy';
 import { readFile } from 'node:fs/promises';
 
-/** 试点/联调级审计舱：与分发补丁层同一口径（memory + 显式允许非持久）。 */
-export const DEFAULT_AUDIT = Object.freeze({ sink: 'memory', allowNonDurable: true });
+/** 试点/联调级审计舱：与分发补丁层同一口径（memory 环形缓冲 + 显式轮转参数）。 */
+export const DEFAULT_AUDIT = Object.freeze({ sink: 'memory', buffer: 1000, keepDays: 7 });
 
 /**
  * 宿主支持的 JSON Schema 子集（逐字取自 `@deepseek-ai/dsh-tools` 的
@@ -292,7 +292,14 @@ export function createFakeHost(options = {}) {
     mountPolicy({ catalog, audit = DEFAULT_AUDIT, isolate } = {}) {
       const scoped = createCtx(isolate);
       try {
-        applyPolicy(scoped, { catalog, audit });
+        // YAML 子集解析把数字读成字符串；这里按宿主 config 的数值类型还原（正整数语义）。
+        const normalized = {
+          ...audit,
+          buffer: audit?.buffer === undefined ? undefined : Number(audit.buffer),
+          keepDays: audit?.keepDays === undefined ? undefined : Number(audit.keepDays),
+          timeoutMs: audit?.timeoutMs === undefined ? undefined : Number(audit.timeoutMs),
+        };
+        applyPolicy(scoped, { catalog, audit: normalized });
         return { ok: true, policy: storeFor(isolate, 'policy').map.get('policy'), isolate };
       } catch (error) {
         return { ok: false, error, code: error?.code ?? error?.reason };
@@ -392,26 +399,19 @@ export async function invokeTool(host, toolName, args, extra = {}) {
 }
 
 /**
- * 等价的 GitHub（`@heluo/forge-devops`）假插件：9 个哑工具 + 同样的 fail-closed 前置
- * （少了它的只读动作就不挂载）。
+ * 等价的 GitHub（`@heluo/forge-devops`）假插件：9 个哑工具 + P0 的挂载前置
+ * （策略服务提供 admission 入口即可；只读动作不登记）。
  *
  * 只用它来跑共存三形态——真实的 devops 装配不在本包测试的导入范围（包间零源码依赖），
- * 而"两条补丁层叠加"这个后果与 devops 内部实现无关，只与它同样要求策略目录有关。
+ * 而"两条补丁层叠加"这个后果与 devops 内部实现无关，只与它同样只要求策略入口有关。
  */
-export function createEquivalentPlatformPlugin({ label = 'forge-devops-equivalent', readActions = [], toolNames = [] } = {}) {
+export function createEquivalentPlatformPlugin({ label = 'forge-devops-equivalent', toolNames = [] } = {}) {
   return {
     name: label,
     apply(ctx) {
       const policy = typeof ctx.get === 'function' ? ctx.get('policy') : undefined;
-      if (policy === undefined) {
+      if (policy === undefined || typeof policy.executeAction !== 'function') {
         throw Object.assign(new Error(`${label}：策略服务未挂载，拒绝挂载`), { code: 'POLICY_UNAVAILABLE' });
-      }
-      const missing = readActions.filter((action) => policy.catalog?.get?.(action)?.enabled !== true);
-      if (missing.length > 0) {
-        throw Object.assign(
-          new Error(`${label}：策略目录缺只读动作 ${missing.join(', ')}`),
-          { code: 'POLICY_ACTION_UNREGISTERED', detail: { missing } },
-        );
       }
       for (const toolName of toolNames) {
         ctx.tools.register({

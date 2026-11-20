@@ -3,21 +3,23 @@
  *
  * r4 时代靠 `isolate: { policy: gitee }` 把两个 bundle 隔到不同服务域，代价是同装后有两份
  * 策略实例、两套读面事实。r10 按平台切库：两份补丁层插**同一个** `id: heluo-policy`、目录是
- * 12 条并集（6 读 + 6 写）、两处都**不写** `isolate`——loader 按 id 覆盖 config，装配后果只应
- * 有一个策略实例。
+ * 6 条受控写、两处都**不写** `isolate`——loader 按 id 覆盖 config，装配后果只应有一个策略实例。
+ *
+ * P0 起（TECH-CHANGE §3.1/§3.4）只读动作不登记：目录条目只有 action/target/category，
+ * 挂载前置只要求策略提供 `executeAction`。旧事实（12 条并集、enabled:true、缺只读动作
+ * 即拒绝挂载）已被本阶段取代。
  *
  * 三种形态都是**装载后果**，不是设计偏好，所以全部用"真实策略服务 + 真实补丁层数据"离线复现：
- *   A 单装本包——11 个工具（3 读 + 4 写 + 1 判定 + 1 快照 + 2 git）、12 条目录、策略落在 root 域。
+ *   A 单装本包——11 个工具（3 读 + 4 写 + 1 判定 + 1 快照 + 2 git）、6 条受控写目录、策略落在 root 域。
  *   B 叠加两层——按 loader 语义合并（同 id 覆盖、后装者胜）后只有一个策略实例、15 个工具
  *     全枚举、0 行激活失败；两个方向的叠加必须对称。
- *   B- 反证（门禁有牙）——单边把 `gitee.pr.read` 从本包目录里删掉再叠加：幸存配置由装配
- *     顺序决定，后装的那份若缺条目，本包插件按"动作未登记"fail closed。这正是"两份目录必须
- *     逐字相同"的理由，用例锁住它不是文风要求。
- *   C 并层单一策略行——同一份 12 条目录 / 15 个工具；卸载归零；六条写随包登记但
+ *   B- 反证——单边把 `gitee.pr.write` 从本包目录里删掉再叠加：幸存配置由装配顺序决定，
+ *     但挂载不再因此失败；未登记的动作只是变成 out-of-scope，不再进入受控流水线。
+ *   C 并层单一策略行——同一份 6 条目录 / 15 个工具；卸载归零；六条写随包登记但
  *     `gitee.review.record` 恒拒、`gitee.git.push` 逐次确认。
  *
- * devops 侧用等价假插件（4 个哑工具 + 同样的"目录未登记即 fail closed"）：本包测试不导入
- * devops 源码（包间零源码依赖），而"叠加"这个后果只取决于"它也要求策略目录"这一点。
+ * devops 侧用等价假插件（4 个哑工具 + 同样只要求策略 admission 入口）：本包测试不导入
+ * devops 源码（包间零源码依赖），而"叠加"这个后果只取决于"它也要求策略入口"这一点。
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -33,20 +35,23 @@ const DEVOPS_PATCH = fileURLToPath(new URL('../../forge-devops/cordis.patch.yml'
 
 const POLICY_NAME = '@heluo/forge-policy';
 const SHARED_POLICY_ID = 'heluo-policy';
-/** r10 并集目录：devops 的两条 dop 变更读（`change.read` / `change.list`）+ 本包三条读 + 交付判定 + 六条写。 */
+/** P0 目录：六条受控写（只读动作不登记）。 */
 const UNION_ACTIONS = Object.freeze([
-  'change.read',
-  'change.list',
-  'gitee.repository.read',
-  'gitee.issue.read',
-  'gitee.pr.read',
-  'gitee.delivery.judge',
   'gitee.issue.write',
   'gitee.pr.write',
   'change.clarification.write',
   'gitee.review.publish',
   'gitee.git.push',
   'gitee.review.record',
+]);
+/** 只读动作：仍在词表里，但不再进目录、不进受控流水线。 */
+const READ_ACTIONS = Object.freeze([
+  'change.read',
+  'change.list',
+  'gitee.repository.read',
+  'gitee.issue.read',
+  'gitee.pr.read',
+  'gitee.delivery.judge',
 ]);
 /** 本包工具面（r12）：3 读 + 4 受控写 + 1 判定 + 1 快照 + 2 git = 11。 */
 const GITEE_TOOL_COUNT = 11;
@@ -70,8 +75,19 @@ async function layers() {
   assert.deepEqual(
     giteePolicy.catalog.map((entry) => entry.action),
     [...UNION_ACTIONS],
-    'gitee 侧目录必须是 12 条并集（缺一条，同装后幸存配置就取决于装配顺序）',
+    'gitee 侧目录必须是 6 条受控写（只读动作不登记）',
   );
+  for (const action of READ_ACTIONS) {
+    assert.equal(
+      giteePolicy.catalog.some((entry) => entry.action === action),
+      false,
+      `${action} 是只读动作，不得进入目录`,
+    );
+  }
+  for (const entry of giteePolicy.catalog) {
+    assert.equal(entry.enabled, undefined, 'P0 目录条目只有 action/target/category，没有 enabled');
+    assert.ok(entry.target && entry.category, `${entry.action} 必须声明 target 与 category`);
+  }
   assert.deepEqual(
     devopsPolicy.catalog,
     giteePolicy.catalog,
@@ -84,10 +100,9 @@ async function layers() {
 }
 
 function devopsEquivalent() {
-  // 只要求它真正需要的两条 dop 变更读——devops 不再持有仓库/Issue/PR 读。
+  // P0 的 devops 挂载只要求策略提供 executeAction（只读动作不登记）。
   return createEquivalentPlatformPlugin({
     label: 'forge-devops-equivalent',
-    readActions: ['change.read', 'change.list'],
     toolNames: DEVOPS_EQUIVALENT_TOOLS,
   });
 }
@@ -123,7 +138,7 @@ function mountLayer(host, rows) {
 
 const failuresOf = (results) => results.filter((result) => result.ok !== true).map((result) => `${result.row.id}:${result.code ?? 'ok'}`);
 
-test('形态 A: 单装本包——11 个工具、12 条并集目录、单实例落在 root 域', async () => {
+test('形态 A: 单装本包——11 个工具、6 条受控写目录、单实例落在 root 域', async () => {
   const { gitee } = await layers();
   const host = createFakeHost();
   const results = mountLayer(host, mergeRows([gitee]));
@@ -136,7 +151,13 @@ test('形态 A: 单装本包——11 个工具、12 条并集目录、单实例�
   assert.equal(host.realms.size, 0, '全仓不得再有 isolate 服务域');
   assert.equal(policy.catalog.size, UNION_ACTIONS.length);
   for (const action of UNION_ACTIONS) {
-    assert.equal(policy.catalog.get(action)?.enabled, true, `${action} 应随包可用`);
+    const entry = policy.catalog.get(action);
+    assert.ok(entry, `${action} 应随包登记`);
+    assert.equal(entry.enabled, undefined, `${action} 不应该再有 enabled 字段`);
+    assert.ok(['dev-write', 'review-write', 'remote-write', 'human-record'].includes(entry.category), `${action} 必须带内置分类`);
+  }
+  for (const action of READ_ACTIONS) {
+    assert.equal(policy.catalog.has(action), false, `${action} 是只读动作，不应登记`);
   }
   assert.equal(GITEE_TOOLS.length, GITEE_TOOL_COUNT);
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS]);
@@ -177,29 +198,32 @@ test('形态 B: 叠加两层——同 id 覆盖后只有一个策略实例，15 
   }
 });
 
-test('形态 B-: 单边删一条目录——幸存配置取决于装配顺序，本包插件 fail closed（门禁有牙）', async () => {
+test('形态 B-: 单边删一条目录——幸存配置取决于装配顺序，但不再阻断挂载（门禁对未登记动作放行）', async () => {
+  // 取代事实（TECH-CHANGE §3.4）：旧实现把"缺目录"变成挂载期 GITEE_ACTION_UNREGISTERED；
+  // P0 只读动作不登记，目录漂移的后果降级为"该动作不进受控流水线（out-of-scope）"。
   const { gitee, devops, giteePolicy } = await layers();
   const driftedPolicy = {
     ...giteePolicy,
-    catalog: giteePolicy.catalog.filter((entry) => entry.action !== 'gitee.pr.read'),
+    catalog: giteePolicy.catalog.filter((entry) => entry.action !== 'gitee.pr.write'),
   };
   const driftedGitee = gitee.map((row) => (row.id === SHARED_POLICY_ID ? driftedPolicy : row));
 
-  // 缺条目的一份后装 → loader 留下的就是缺条目的那份。
+  // 缺条目的一份后装 → loader 留下的就是缺条目的那份；两行都必须装配成功。
   const host = createFakeHost();
   const results = mountLayer(host, mergeRows([devops, driftedGitee]));
-  const giteeFailure = results.find((result) => result.kind === 'plugin' && result.tool === '@heluo/forge-gitee');
-  assert.equal(giteeFailure.ok, false, '没有自己那份目录时插件必须 fail closed（不能装一半）');
-  assert.equal(giteeFailure.code, 'GITEE_ACTION_UNREGISTERED');
-  assert.deepEqual(giteeFailure.detail.missing, ['gitee.pr.read'], '缺的正是被删掉的那一条');
+  assert.deepEqual(failuresOf(results), [], '目录缺一条不再拒绝挂载');
+  assert.equal(host.policyIn(undefined).catalog.size, UNION_ACTIONS.length - 1);
+  assert.equal(host.policyIn(undefined).catalog.has('gitee.pr.write'), false, '被删的写动作未登记');
+  assert.equal(host.services.get('gitee').status(), 'ready', '工具面照常就绪');
 
-  // 同一份漂移目录换个顺序就"看起来没事"——这就是必须逐字相同的原因。
+  // 换个顺序，后装的 devops 层目录获胜——幸存配置确实取决于装配顺序。
   const reverse = createFakeHost();
   assert.deepEqual(failuresOf(mountLayer(reverse, mergeRows([driftedGitee, devops]))), []);
   assert.equal(reverse.policyIn(undefined).catalog.size, UNION_ACTIONS.length);
+  assert.equal(reverse.policyIn(undefined).catalog.has('gitee.pr.write'), true, '后装层目录覆盖前者');
 });
 
-test('形态 C: 并层单一策略行——12 条目录 / 15 个工具；卸载归零；写随包登记但按分类受控', async () => {
+test('形态 C: 并层单一策略行——6 条受控写 / 15 个工具；卸载归零；写随包登记但按分类受控', async () => {
   const { gitee, devops, giteePolicy, devopsPolicy } = await layers();
   const host = createFakeHost();
 
@@ -219,17 +243,17 @@ test('形态 C: 并层单一策略行——12 条目录 / 15 个工具；卸载�
   assert.deepEqual(host.toolNames(), []);
   assert.equal(host.services.get('gitee'), undefined);
 
-  // 目录是 12 条并集，六条写随包登记：登记只决定可见性，放行由内置分类决定。
+  // 目录是 6 条受控写：登记只决定可见性，放行由内置分类决定。
   assert.equal(policy.catalog.size, devopsPolicy.catalog.length);
   assert.equal(policy.catalog.size, giteePolicy.catalog.length);
   assert.equal(
-    [...policy.catalog.values()].filter((entry) => entry.enabled !== true).length,
+    [...policy.catalog.values()].filter((entry) => entry.enabled === true || entry.enabled === false).length,
     0,
-    '12 条动作都必须 enabled（写动作的默认决策仍由分类给出）',
+    'P0 目录条目不得再有 enabled 开关',
   );
   assert.equal(policy.catalog.get('gitee.git.push')?.decision, 'confirm', 'push 每次推送都要单独确认');
   assert.equal(policy.catalog.get('gitee.review.record')?.decision, 'deny', '人工评审留痕恒拒');
-  const judge = policy.catalog.get('gitee.delivery.judge');
-  assert.equal(judge?.category, 'read', '判定仍是只读（只判定，不关闭不合并）');
-  assert.equal(judge?.decision, 'allow', '判定按只读默认放行');
+  assert.equal(policy.catalog.has('gitee.delivery.judge'), false, '判定是只读动作，不进目录');
+  assert.equal(policy.catalog.get('gitee.issue.write')?.category, 'dev-write');
+  assert.equal(policy.catalog.get('gitee.review.publish')?.category, 'review-write');
 });

@@ -6,6 +6,8 @@
  * 不能被任何确认提升；SOFT 命中记录后继续（需要询问时由门禁升级为 confirm）。
  */
 
+import { createHash } from 'node:crypto';
+
 export class PolicyContentError extends Error {
   constructor(message, code, details = undefined) {
     super(message);
@@ -19,6 +21,24 @@ export class PolicyContentError extends Error {
 export const MAX_RULES = 30;
 /** 单次检查的载荷上限；超出的部分不检查，并在结果里标出截断。 */
 export const MAX_PAYLOAD_BYTES = 256 * 1024;
+
+/** 稳定序列化：键排序后拼接，保证同一内容得到同一摘要。 */
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
+
+/**
+ * 内容摘要（D76）：衔接"这次写的是什么"与审计里的一条摘要，不落原文。
+ *
+ * @param {unknown} content
+ * @returns {string} sha256 hex
+ */
+export function digestContent(content) {
+  return createHash('sha256').update(canonicalJson(content)).digest('hex');
+}
 const SEVERITIES = new Set(['hard', 'soft']);
 const REDACT_HEAD = 4;
 const REDACT_TAIL = 4;

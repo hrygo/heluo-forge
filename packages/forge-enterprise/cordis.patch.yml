@@ -36,10 +36,10 @@
 - id: credentials
   disabled: true
 
-# 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 12 条动作目录
-# （6 读 + 6 写）与内存审计配置（无 isolate）；与 `@heluo/forge-engineering` 并存安装时由 Cordis
-# Loader 按 id 合并为单一策略实例，不依赖挂载顺序。
-# 内存审计舱属联调/试点级证据；生产或合规场景必须注入持久 sink 并去掉 allowNonDurable。
+# 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 6 条写动作目录
+# （只读动作不登记）与内存审计配置（环形缓冲，无 isolate）；与 `@heluo/forge-engineering` 并存安装时由
+# Cordis Loader 按 id 合并为单一策略实例，不依赖挂载顺序。
+# 内存审计舱属联调/试点级证据；生产或合规场景把 sink 换成 `file`（按天轮转、按 keepDays 保留）。
 - insert:
     - id: heluo-credentials-keychain
       name: '@heluo/forge-credentials-keychain'
@@ -47,20 +47,15 @@
       name: '@heluo/forge-policy'
       config:
         catalog:
-          - { action: 'change.read', target: 'change', enabled: true }
-          - { action: 'change.list', target: 'changes', enabled: true }
-          - { action: 'gitee.repository.read', target: 'repository', enabled: true }
-          - { action: 'gitee.issue.read', target: 'issue', enabled: true }
-          - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
-          - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
-          - { action: 'gitee.issue.write', target: 'issue', enabled: true }
-          - { action: 'gitee.pr.write', target: 'pull-request', enabled: true }
-          - { action: 'change.clarification.write', target: 'change', enabled: true }
-          - { action: 'gitee.review.publish', target: 'pull-request', enabled: true }
-          - { action: 'gitee.git.push', target: 'repository', enabled: true }
-          - { action: 'gitee.review.record', target: 'pull-request', enabled: true }
+          - { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }
+          - { action: 'gitee.pr.write', target: 'pull-request', category: 'dev-write' }
+          - { action: 'change.clarification.write', target: 'change', category: 'dev-write' }
+          - { action: 'gitee.review.publish', target: 'pull-request', category: 'review-write' }
+          - { action: 'gitee.git.push', target: 'repository', category: 'remote-write' }
+          - { action: 'gitee.review.record', target: 'pull-request', category: 'human-record' }
         audit:
           sink: memory
-          allowNonDurable: true
+          buffer: 1000
+          keepDays: 7
     - id: heluo-iam
       name: '@heluo/forge-iam'

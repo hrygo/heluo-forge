@@ -92,19 +92,30 @@ const DELIVERY_GATE_READY = {
   },
 };
 
-test('publishing a review rejects a private key before prComment', async () => {
+test('P0：私钥正文不再被内容闸拦截，受控写只要求身份与审计（取代事实：旧实现命中 BUILTIN-PRIVATE-KEY 即拒绝）', async () => {
   const harness = createHarness();
+  const records = [];
   const gate = createGate({
-    catalog: compileCatalog([{ action: 'gitee.review.publish', target: 'pull-request', enabled: true }]),
-    contentRules: compileContentRules().rules,
+    catalog: compileCatalog([{ action: 'gitee.review.publish', target: 'pull-request', category: 'review-write' }]),
+    rules: {},
+    audit: {
+      begin: async (record) => {
+        records.push(record);
+        return { id: 'r1' };
+      },
+      settle: async () => ({}),
+      isDegraded: () => false,
+    },
     getActor: () => 'user-a',
   });
   harness.policy.executeAction = gate.executeAction;
   const body = ['-----BEGIN', 'PRIVATE KEY-----'].join(' ');
   const result = await runTool(harness.service, 'forge_gitee_review_publish', { ...REVIEW_PUBLISH, body });
-  assert.notEqual(result.status, 'done');
-  assert.match(JSON.stringify(result), /BUILTIN-PRIVATE-KEY/);
-  assert.equal(harness.counters.invoke, 0);
+  assert.notEqual(result.status, 'denied', '内容规则在 P0 未实现，不得再拦截正文');
+  assert.doesNotMatch(JSON.stringify(result), /BUILTIN-/u, '不得再有内置内容规则命中');
+  assert.equal(records.length, 1, '受控写仍然落一条 begin 记录（身份 + 审计恒开）');
+  assert.equal(records[0].action, 'gitee.review.publish');
+  assert.equal(records[0].actor, 'user-a');
 });
 
 function reviewRecordArgs(repoRoot) {

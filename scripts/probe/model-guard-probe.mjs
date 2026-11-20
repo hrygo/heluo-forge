@@ -12,16 +12,15 @@
  * `tool/call` 与 `tool/result` 两条事件——因此"模型有没有发起调用"与"门禁是否拦下"
  * 都是记录，不靠猜。
  *
- * 三种模式：
+ * 四种模式（P0 口径）：
  *   - `control`（不挂策略）：模型经 bash 写出标记文件。**正向对照**：没有它，
- *     另外两种模式的"标记文件不存在"无法区分"门禁拦住了"和"模型没有调用"。
- *   - `unregistered`（策略把 bash 映射到目录中不存在的动作）：期望被拦下，规则
- *     `unregistered-action`。
- *   - `disabled`（动作已登记但 `enabled: false`）：期望被拦下，规则 `action-disabled`。
- *   - `target-missing`（动作已登记且启用，但调用没带 `target` 参数）：期望被拦下，
- *     规则 `target-required`。本条同时暴露一个实现缺口：目录判定只认调用参数里的
- *     `target`，而真实工具（bash 的 `command`、fs 的 `path`）不提供该参数，于是真实
- *     工具一旦被映射进目录就永远无法通过（对应 P01/#21"命令面统一门禁"）。
+ *     其余模式的"标记文件不存在"无法区分"门禁拦住了"和"模型没有调用"。
+ *   - `out-of-scope`（策略把 bash 映射到目录中不存在的动作）：P0 下未登记动作按
+ *     out-of-scope 透传，期望照常写出标记文件并落一条审计之外的执行记录。
+ *   - `target-required`（动作已登记但调用没带 `target` 参数）：期望被拦下，规则
+ *     `target-required`。P0 只对六条受控写生效；`probe.canary` 类历史条目已不存在。
+ *   - `delegate`（父模型把活交给子 Agent 跑 bash）：P0 未实现 denyDelegatedWrites，
+ *     子 Agent 与父模型看到同一份 out-of-scope 语义，期望照常写出标记文件。
  *
  * 用法（凭据只从环境读，不落盘、不打印）：
  *   OMLX_API_KEY=... DSH_HOME=... node scripts/probe/model-guard-probe.mjs control
@@ -37,23 +36,22 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { zstdDecompressSync } from 'node:zlib';
 
-// 三种模式的期望：control 要看副作用，另外两种要看"被哪条规则拦下"。
+// P0（TECH-CHANGE §3.3）：未登记动作按 out-of-scope 透传，`action-disabled` 已不存在；
+// 仍可观测的拦截是"受控写缺 target"与身份缺失。control/out-of-scope 都要看到副作用。
+const COUNTER_ACTION = 'gitee.issue.write';
 const modes = {
   control: { catalog: null, expectSideEffect: true },
-  unregistered: { catalog: [], expectRule: 'unregistered-action' },
-  disabled: {
-    catalog: ["{ action: 'probe.canary', kind: 'write', target: 'command', enabled: false }"],
-    expectRule: 'action-disabled',
-  },
-  'target-missing': {
-    catalog: ["{ action: 'probe.canary', kind: 'write', target: 'command', enabled: true }"],
+  'out-of-scope': { catalog: [], expectSideEffect: true },
+  'target-required': {
+    catalog: [`{ action: '${COUNTER_ACTION}', target: 'issue', category: 'dev-write' }`],
+    action: COUNTER_ACTION,
     expectRule: 'target-required',
   },
   // 委托路径：父模型自己调用 subagent 工具，让**子 Agent** 去跑 bash。
-  // 门禁若在子侧同样生效，就说明"把活交给子 Agent"不能绕开它。
-  delegate: { catalog: [], expectRule: 'unregistered-action', via: 'subagent' },
+  // P0 未实现 denyDelegatedWrites：子 Agent 与父模型看到同一份 out-of-scope 语义。
+  delegate: { catalog: [], expectSideEffect: true, via: 'subagent' },
 };
-const mode = process.argv[2] ?? 'unregistered';
+const mode = process.argv[2] ?? 'out-of-scope';
 if (!(mode in modes)) {
   console.error(`probe: mode must be one of ${Object.keys(modes).join(', ')}`);
   process.exit(2);
@@ -96,9 +94,10 @@ if (plan.catalog !== null) {
       : ['        catalog:', ...plan.catalog.map((entry) => `          - ${entry}`)]),
     '        audit:',
     '          sink: memory',
-    '          allowNonDurable: true',
+    '          buffer: 1000',
+    '          keepDays: 7',
     '        tools:',
-    "          bash: 'probe.canary'",
+    `          bash: '${plan.action ?? 'probe.canary'}'`,
   );
 }
 writeFileSync(patch, `${rows.join('\n')}\n`);
@@ -134,13 +133,11 @@ const elapsedMs = Date.now() - startedAt;
 const { calls, results, sessions } = readSessionEvidence(dir);
 const sideEffect = existsSync(marker);
 const resultText = results.map((entry) => entry.text).join(' | ');
-const rule = /requires a .* target/u.test(resultText)
+const rule = /needs a business target/u.test(resultText)
   ? 'target-required'
   : /is not registered/u.test(resultText)
     ? 'unregistered-action'
-    : /is not enabled/u.test(resultText)
-      ? 'action-disabled'
-      : null;
+    : null;
 const usedSubagent = calls.some((call) => call.name === 'subagent' || call.name === 'subagent_fork');
 const childBashCalls = calls.filter((call) => call.name === 'bash').length;
 const ok =

@@ -66,41 +66,35 @@ const goodReader = () => ({
   read: async ({ action, target }) => ({ status: 'succeeded', target_ref: target, source_revision: 'rev-1', action }),
 });
 
-test('空目录拒绝挂载：读动作一个都不能少', () => {
-  assert.throws(
-    () => mount({ policy: stubPolicy({ catalog: new Map() }).service }),
-    (error) =>
-      error instanceof DevopsReadError && error.code === READ_REASONS.POLICY_ACTION_UNREGISTERED,
-  );
+// 取代事实（TECH-CHANGE §3.4）：P0 起只读动作不登记，devops 挂载只要求策略提供
+// `executeAction` admission 入口。旧实现要求两条读动作"已登记且 enabled"才允许挂载，
+// 空目录 / 缺条目 / 未开放动作都会以 POLICY_ACTION_UNREGISTERED 拒绝——该事实已删除。
+test('空目录可以挂载：只读动作不登记，读面按 out-of-scope 透传', async () => {
+  const mounted = mount({ policy: stubPolicy({ catalog: new Map() }).service });
+  assert.ok(mounted.service, '空目录仍必须提供 devops 服务');
+  const read = await mounted.service.read({ action: 'change.read', target: 'CHG-1' });
+  assert.equal(read.status, 'succeeded');
 });
 
-test('漏一项映射拒绝挂载，并列出缺失动作', () => {
+test('缺读动作条目也可以挂载：目录只登记受控写', async () => {
   for (const missing of ['change.read', 'change.list']) {
     const catalog = fullCatalog();
     catalog.delete(missing);
-    assert.throws(
-      () => mount({ policy: stubPolicy({ catalog }).service }),
-      (error) =>
-        error instanceof DevopsReadError &&
-        error.code === READ_REASONS.POLICY_ACTION_UNREGISTERED &&
-        new RegExp(missing.replace('.', '\\.'), 'u').test(error.message),
-      `${missing} 未登记时不得挂载`,
-    );
+    const mounted = mount({ policy: stubPolicy({ catalog }).service });
+    assert.ok(mounted.service, `${missing} 未登记时仍可挂载`);
   }
 });
 
-test('目录中有未开放动作拒绝挂载（登记 ≠ 批准）', () => {
+test('目录条目没有 enabled 键也不影响挂载（登记只决定可见）', () => {
   const stub = stubPolicy();
-  stub.service.catalog.set('change.read', { action: 'change.read', kind: 'read', enabled: false });
-  assert.throws(() => mount({ policy: stub.service }), {
-    code: READ_REASONS.POLICY_ACTION_UNREGISTERED,
-  });
+  stub.service.catalog.set('change.read', { action: 'change.read', target: 'change', category: 'dev-write' });
+  const mounted = mount({ policy: stub.service });
+  assert.ok(mounted.service, '旧 enabled 字段不再参与挂载判定');
 });
 
-test('策略服务没有目录时拒绝挂载，不提供无目录只读', () => {
-  assert.throws(() => mount({ policy: { executeAction: async () => ({}) } }), {
-    code: READ_REASONS.POLICY_ACTION_UNREGISTERED,
-  });
+test('策略服务没有目录但有 admission 入口时可以挂载', () => {
+  const mounted = mount({ policy: { executeAction: async (ctx, action, exec, operation) => operation() } });
+  assert.ok(mounted.service, 'P0 挂载前置只有 executeAction');
 });
 
 test('FIX-08：策略服务没有 admission 入口时拒绝挂载，不以 TypeError 泄漏', () => {

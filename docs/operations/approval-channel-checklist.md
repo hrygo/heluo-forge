@@ -17,7 +17,7 @@
 | 门禁 | 内网实机验证（待回填） |
 | 交付门禁 | 内网实机验证（待回填）；回填前不作为运行手册 |
 
-> 编制依据：2026-11-18 内网测试轨迹（第 2 轮创建 PR，写动作被 `GUARD_POLICY_DENIED` 拦截，`remote_calls: 0`，全程无确认弹窗）；本仓库 `c889610` 的判定链源码（[gate.mjs](../../packages/forge-policy/src/gate.mjs) 的 `requestApproval`/`scopeAdmission`、[scope-ticket.mjs](../../packages/forge-policy/src/scope-ticket.mjs) 的 `verify`、[gitee-guard.mjs](../../packages/forge-gitee/src/gitee-guard.mjs) 的策略错误映射）；本机装配探针逐字复现同一信封；已安装 DSH 的审批子系统文档 `docs/subsystems/approval.zh.md`（`ctx.approval` 分发服务与 `approval/request` waterfall）。
+> 编制依据：2026-11-18 内网测试轨迹（第 2 轮创建 PR，写动作被 `GUARD_POLICY_DENIED` 拦截，`remote_calls: 0`，全程无确认弹窗）；本仓库 `c889610` 的判定链源码（[gate.mjs](../../packages/forge-policy/src/gate.mjs) 当时的 `requestApproval`/`scopeAdmission` 分支，该审批与范围票据通道已在 r19 P0 删除，见 [TECH-CHANGE](../teamflow/20261119-r19-policy-minimal-gates/TECH-CHANGE.md)）；[gitee-guard.mjs](../../packages/forge-gitee/src/gitee-guard.mjs) 的策略错误映射；本机装配探针逐字复现同一信封；已安装 DSH 的审批子系统文档 `docs/subsystems/approval.zh.md`（`ctx.approval` 分发服务与 `approval/request` waterfall）。
 
 本单用于定位“为什么没有出现任务范围确认”，并把确认通道接好、重跑一次写动作验证。检查项与判据仍待内网实机回填，回填前不构成运行手册，也不代表该环境已通过验收。
 
@@ -63,7 +63,7 @@
 | 有询问，结果为 `rejected` | 策略 `never`，或应答者主动拒绝 | 回到 §2-1 |
 | 结果为 `unavailable` | 无应答者 / 应答者异常 / 非其负责的 agent | 回到 §2-2 |
 | 结果为 `cancelled` | 请求被撤销、超时或界面关闭 | 重试一次并保留日志 |
-| 点了拒绝后，信封 `detail` 仍只有票据文案 | `approval/decided = rejected`，但 `detail` 未出现 `rejected` | 该环境制品未包含提示文案与失败原因修复（[gate.mjs](../../packages/forge-policy/src/gate.mjs) 的 `scopeAdmission`）：核对已装版本后回传信封 |
+| 点了拒绝后，信封 `detail` 仍只有票据文案 | `approval/decided = rejected`，但 `detail` 未出现 `rejected` | 该环境制品未包含提示文案与失败原因修复（[gate.mjs](../../packages/forge-policy/src/gate.mjs) 当时的确认文案分支，已在 r19 P0 删除）：核对已装版本后回传信封 |
 
 ## 6. 交回平台组的材料
 

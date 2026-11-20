@@ -1,10 +1,10 @@
 /**
- * 审批卡片的展示文案。
+ * 确认卡片的展示文案。
  *
  * 门禁把确认请求交给人时，界面标题只展示一句文案，宿主按界面语言取用。`reason`
- * （英文审计原文）保持不变：它进入 `approval/asked` 事件与错误正文；这里只产出
- * `displayReason`。文案要说清"对哪个仓库做什么""为什么问"，以及"允许一次意味着
- * 什么"——按钮只写"允许一次"，不解释范围放行就会让人以为只放行当前这一次动作。
+ * （英文审计原文）保持不变：它进入确认事件与错误正文；这里只产出
+ * `displayReason`。文案要说清"对哪个仓库做什么""为什么问"，以及"确认只放行
+ * 这次调用"——按钮只写"允许一次"，不解释范围就会让人误以为放行了后续同类动作。
  */
 
 /**
@@ -54,12 +54,8 @@ const SKIP_LABELS = Object.freeze({
 });
 
 const SELF = Object.freeze({
-  scope: {
-    en: 'One approval covers this action on this repository for the rest of the session; another repository, change id, or a restart asks again.',
-    zh: '允许一次＝本会话内对该仓库的同类写操作不再逐次询问；换仓库、换变更号或重启后需要重新确认。',
-  },
   call: {
-    en: 'This approval covers this call only.',
+    en: 'This confirmation covers this call only.',
     zh: '这条确认只放行本次调用。',
   },
 });
@@ -99,20 +95,6 @@ function unscanned(skipped, locale) {
     const why = SKIP_LABELS[reason] ?? { en: reason, zh: reason };
     return `${name[locale]}：${why[locale]}`;
   }).join('；');
-}
-
-/**
- * Prompt copy for a task-scope confirmation.
- *
- * @param {{action: string, repository?: string, changeId?: string, args?: object}} request
- * @returns {{en: string, zh: string}} presentation copy; `en` is the fallback
- */
-export function approvalDisplayReason({ action, repository, changeId, args = {} } = {}) {
-  const what = subject({ action, repository, changeId, args });
-  return {
-    en: `Allow ${what.en}? ${SELF.scope.en}`,
-    zh: `允许${what.zh}？${SELF.scope.zh}`,
-  };
 }
 
 /**

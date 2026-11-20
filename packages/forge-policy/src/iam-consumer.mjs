@@ -1,4 +1,4 @@
-import { digestContent } from './egress.mjs';
+import { digestContent } from './content-rules.mjs';
 
 const messages = Object.freeze({
   INPUT_INVALID: 'IAM consumption input is invalid',

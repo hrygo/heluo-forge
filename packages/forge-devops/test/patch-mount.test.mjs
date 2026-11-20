@@ -109,38 +109,38 @@ export function parsePatch(text) {
   return rows;
 }
 
-/** 挂 devops 的补丁层必须自带的策略配置：覆盖本包全部只读动作，且审计舱可用。 */
+/**
+ * 挂 devops 的补丁层必须自带的策略配置（P0 / TECH-CHANGE §3.1）：
+ * 目录只登记六条受控写，条目只有 action/target/category；审计配置显式给出。
+ * 旧事实（devops 要求两条读动作已登记且 enabled:true）已被本阶段取代。
+ */
 function assertPolicyConfigComplete(patch, label) {
   const policy = patch.find((row) => row.name === '@heluo/forge-policy');
   assert.ok(policy, `${label}：必须插入 @heluo/forge-policy（devops 的策略门禁是硬依赖）`);
-  assert.ok(
-    policy.catalog.length > 0,
-    `${label}：策略行必须带 config.catalog；空目录会让 devops 以 POLICY_ACTION_UNREGISTERED 拒绝挂载`,
-  );
+  assert.ok(policy.catalog.length > 0, `${label}：策略行必须带 config.catalog；空目录无法同装共用`);
   const registered = new Map(policy.catalog.map((entry) => [entry.action, entry]));
   for (const action of READ_ACTIONS) {
-    const entry = registered.get(action);
-    assert.ok(entry, `${label}：策略目录缺只读动作 ${action}`);
-    assert.equal(entry.enabled, true, `${label}：${action} 必须 enabled:true，否则 devops 拒绝挂载`);
-    assert.equal(entry.kind, undefined, `${label}：${action} 的登记行不再声明 kind，类别由内置词表决定为只读`);
+    assert.equal(registered.has(action), false, `${label}：只读动作 ${action} 不得登记（读面按 out-of-scope 放行）`);
+  }
+  const WRITE_CATEGORIES = new Set(['dev-write', 'review-write', 'remote-write', 'human-record']);
+  for (const entry of policy.catalog) {
+    assert.equal(entry.enabled, undefined, `${label}：${entry.action} 不得再声明 enabled`);
+    assert.equal(entry.kind, undefined, `${label}：${entry.action} 不得声明 kind，类别来自内置分类`);
+    assert.ok(WRITE_CATEGORIES.has(entry.category), `${label}：${entry.action} 必须声明受控写类别`);
     assert.ok(
       typeof entry.target === 'string' && entry.target.trim().length > 0,
-      `${label}：${action} 必须声明 target（策略按它给出"目标缺失"的可见原因）`,
+      `${label}：${entry.action} 必须声明 target`,
     );
   }
-  // 没有可用审计舱时策略对每个动作都拒绝（POLICY_AUDIT_UNAVAILABLE / NOT_DURABLE），
-  // 挂载能过但读不到任何事实——只补目录不补审计是"修了一半"。
+  // 审计与开关解耦：没有可用审计舱时受控写无法落记录，因此补丁层必须显式给配置。
   assert.ok(
     policy.audit !== undefined && Object.keys(policy.audit).length > 0,
-    `${label}：策略行必须配置 config.audit；默认空对象会让每个动作在审计前置处被拒绝`,
+    `${label}：策略行必须配置 config.audit；默认空对象会让受控写在审计前置处失败`,
   );
-  if (policy.audit.sink === 'memory') {
-    assert.equal(
-      policy.audit.allowNonDurable,
-      true,
-      `${label}：内存审计舱不是持久 sink，必须显式 allowNonDurable:true（否则每次动作都被拒）`,
-    );
-  }
+  assert.equal(policy.audit.sink, 'memory', `${label}：试点层使用内存 sink`);
+  assert.equal(String(policy.audit.buffer), '1000', `${label}：环形缓冲容量必须显式写出`);
+  assert.equal(String(policy.audit.keepDays), '7', `${label}：文件轮转保留天数必须显式写出`);
+  assert.equal(policy.audit.allowNonDurable, undefined, `${label}：内存 sink 已是 P0 默认，不再写 allowNonDurable`);
   return policy;
 }
 
@@ -231,12 +231,18 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、
   const devopsRow = patch.find((row) => row.name === '@heluo/forge-devops');
 
   const host = createHost();
-  // 1) 用补丁层里的 config 挂真实的策略服务（不造假目录）。
-  applyPolicy(host.ctx, { catalog: policyRow.catalog, audit: policyRow.audit });
+  // 1) 用补丁层里的 config 挂真实的策略服务（不造假目录）。YAML 子集解析把数字读成字符串，
+  //    这里按宿主 config 的数值类型还原（buffer/keepDays 必须是正整数）。
+  applyPolicy(host.ctx, {
+    catalog: policyRow.catalog,
+    audit: { ...policyRow.audit, buffer: Number(policyRow.audit.buffer), keepDays: Number(policyRow.audit.keepDays) },
+  });
   const policy = host.services.get('policy');
   assert.ok(policy, '策略必须提供 policy 服务');
+  // 取代事实（TECH-CHANGE §3.1）：目录只有六条受控写；只读动作不登记，读面按 out-of-scope 放行。
+  assert.equal(policy.catalog.size, 6, '策略目录只登记六条受控写');
   for (const action of READ_ACTIONS) {
-    assert.equal(policy.catalog.get(action)?.enabled, true, `${action} 必须已登记并启用`);
+    assert.equal(policy.catalog.has(action), false, `${action} 是只读动作，不得登记`);
   }
 
   // 2) 同一宿主上挂 devops：修复前这里会抛 POLICY_ACTION_UNREGISTERED。
@@ -249,13 +255,13 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、
   assert.equal(service.status(), 'ready', '注入了只读适配器后状态必须是 ready');
   assert.equal(service.toolNames().length, 4, '工具面 4 个（只读 runner + 聚合读 + 受控写 + 落盘）：仓库/Issue/PR 归 gitee');
 
-  // 3) 两条读动作都走真实门禁 + 审计：审计舱不可用会在这里变成 POLICY_DENIED。
+  // 3) 读动作不属于控制面：真实门禁直接透传，且不落受控执行记录。
   const recordsBefore = policy.auditRecords().length;
   const read = await service.read({ action: 'change.read', target: 'CHG-2026-0042' });
-  assert.equal(read.status, 'succeeded', '策略放行后读结果必须原样归一化返回');
+  assert.equal(read.status, 'succeeded', '读结果必须原样归一化返回');
   const listed = await service.read({ action: 'change.list', target: '@me', status: 'open' });
-  assert.equal(listed.status, 'succeeded', 'change.list 同样经门禁放行');
-  assert.ok(policy.auditRecords().length >= recordsBefore + 2, '前置审计必须真的写入记录，而不是跳过审计');
+  assert.equal(listed.status, 'succeeded', 'change.list 同样按 out-of-scope 放行');
+  assert.equal(policy.auditRecords().length, recordsBefore, '只读动作不登记、不审计');
 
   // 4) 目录是跨包并集：六条写动作随包登记，但 devops 的读面仍只收只读动作。
   const writeEntries = [...policy.catalog.values()].filter((entry) => entry.category !== 'read');

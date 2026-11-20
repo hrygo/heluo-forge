@@ -4,6 +4,7 @@ import { apply } from '../src/index.mjs';
 
 function host() {
   const services = new Map(), listeners = new Map(), guards = [];
+  services.set('iam', { getView: () => ({ signedIn: true, principal: { subject: 'svc-policy-test' } }) });
   const ctx = {
     get: (key) => services.get(key),
     provide: (key, value) => (services.set(key, value), () => services.delete(key)),
@@ -11,11 +12,14 @@ function host() {
     on: (event, listener) => (listeners.set(event, listener), () => listeners.delete(event)),
     tools: { guard: (callback) => (guards.push(callback), () => guards.splice(guards.indexOf(callback), 1)) },
   };
-  const dispose = apply(ctx, { audit: { sink: 'memory', allowNonDurable: true },
-    catalog: [{ action: 'gitee.repository.read', target: 'repository', enabled: true }], tools: { synthetic: 'gitee.repository.read' } });
+  const dispose = apply(ctx, {
+    audit: { sink: 'memory' },
+    catalog: [{ action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }],
+    tools: { synthetic: 'gitee.issue.write' },
+  });
   return { policy: services.get('policy'), listeners, guards, dispose };
 }
-const execution = (id) => ({ name: 'synthetic', arguments: { target: 'repo-A' }, callId: id, signal: new AbortController().signal });
+const execution = (id) => ({ name: 'synthetic', arguments: { target: 'repo-A' }, callId: id, agent: { kind: 'agent' }, signal: new AbortController().signal });
 const allow = async () => ({ kind: 'allow' });
 const accept = async () => ({ kind: 'accept' });
 
@@ -24,7 +28,6 @@ test('the final result settles a short-circuited post waterfall exactly once', a
   const pre = h.listeners.get('tools/pre-execute'), final = h.listeners.get('tools/result');
   assert.equal((await pre(first, allow)).kind, 'allow');
   assert.equal(h.guards[0](first), undefined);
-  // Emulate another post listener returning accept without calling next.
   assert.equal(final(first, { isError: false }), undefined, 'final observer is synchronous');
   final(first, { isError: false });
   assert.equal((await pre(second, allow)).kind, 'allow');
@@ -36,7 +39,7 @@ test('the final result settles a short-circuited post waterfall exactly once', a
   h.dispose();
 });
 
-test('the next prepare awaits a final-result settle and refuses its failure', async () => {
+test('the next prepare awaits a pending settlement and refuses its failure', async () => {
   const h = host(), first = execution('first'), second = execution('second');
   let rejectSettle, begins = 0;
   h.policy.setAuditSink({ durable: true, append(record) {
@@ -55,7 +58,7 @@ test('the next prepare awaits a final-result settle and refuses its failure', as
   rejectSettle(new Error('synthetic settle failure'));
   const decision = await next;
   assert.equal(decision.kind, 'deny');
-  assert.match(decision.reason, /audit|outstanding/);
+  assert.match(decision.reason, /outstanding|记录/u);
   assert.equal(begins, 1, 'no next begin or body slips through the unawaited observer window');
   assert.equal(h.policy.auditDegraded(), true);
   h.dispose();
@@ -73,7 +76,6 @@ test('the guard rejects an already-prepared call while a prior settlement is pen
   h.listeners.get('tools/result')(first, { isError: false });
   assert.match(String(h.guards[0](second)), /settlement.*pending/);
   await Promise.resolve(); release();
-  // Replace the test sink before cleanup so cancellation has a writable sink.
   h.policy.setAuditSink({ durable: true, append() {} });
   h.dispose();
 });
@@ -121,10 +123,9 @@ test('unloading an admitted call records an unknown outcome, not a fake success'
   await h.listeners.get('tools/pre-execute')(exec, allow);
   assert.equal(h.guards[0](exec), undefined);
   h.dispose();
-  assert.equal(h.policy.auditDegraded(), true);
-  assert.equal(h.policy.auditGaps()[0].kind, 'outcome-unavailable');
-  assert.equal(h.policy.auditGaps()[0].outcome, 'unknown');
   await Promise.resolve();
+  assert.equal(h.policy.auditDegraded(), false);
+  assert.equal(h.policy.auditGaps().length, 0);
   assert.equal(h.policy.auditRecords().at(-1).decision, 'unknown');
 });
 
@@ -133,6 +134,20 @@ test('a downstream pre failure settles the audit without replacing the original 
   await assert.rejects(() => h.listeners.get('tools/pre-execute')(exec, async () => { throw new Error('synthetic downstream error'); }), /synthetic downstream error/);
   assert.deepEqual(h.policy.auditRecords().map((r) => r.phase), ['begin', 'settle']);
   assert.equal(h.policy.auditRecords()[1].decision, 'error');
+  h.dispose();
+});
+
+test('an admitted call whose audit record is missing is refused by the guard', async () => {
+  const h = host(), exec = execution('no-receipt');
+  const guard = h.guards[0];
+  assert.match(String(guard(exec)), /not admitted/u);
+  h.dispose();
+});
+
+test('a call that was never admitted cannot be executed by stealing another call id', async () => {
+  const h = host(), first = execution('first'), impostor = execution('first');
+  await h.listeners.get('tools/pre-execute')(first, allow);
+  assert.match(String(h.guards[0](impostor)), /already admitted/u);
   h.dispose();
 });
 
