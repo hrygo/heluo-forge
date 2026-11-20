@@ -1055,7 +1055,7 @@ export function createTokenResolver(env) {
         }
         checkAlive();
         const timeoutMs = Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS);
-        advance('token-endpoint', { timeoutMs });
+        advance('token-endpoint', { timeoutMs, clientAuthMethod: authentication?.pin.method ?? 'none' });
         checkAlive();
         if (pendingRefused(initial)) throw pendingRefusal;
         // The claim and client-auth recheck can outlast the remaining refresh window.

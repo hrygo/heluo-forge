@@ -318,6 +318,7 @@ test('builder writes the employee package and a zip', (t) => {
   assert.match(guide, /mounted=unknown/u);
   assert.match(guide, /有旧版本时先执行\s*$/mu, '安装流程必须说明异版本先卸载再安装');
   assert.match(guide, /dsh plugin remove 卸载旧版本/u);
+  assert.match(guide, /客户端认证[\s\S]+管理员已为当前系统账号预置/u);
   const launcher = readFileSync(join(output, 'installer', 'install-macos.command'), 'utf8');
   assert.match(launcher, /--release "\$ROOT\/enterprise-plugin"/u);
   assert.match(launcher, /--profile auto --install-host/u);

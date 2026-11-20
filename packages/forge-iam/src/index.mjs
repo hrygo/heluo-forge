@@ -42,6 +42,8 @@ export function apply(ctx, rawConfig = {}) {
   // runs when the service appears and its disposer clears the binding when the
   // service goes away, so a replaced provider can never satisfy the gate.
   const current = { credentials: undefined, atomicStore: undefined };
+  const confidential = result.value.authMode === 'confidential';
+  let clientSecretBinding;
   const logRenewal = createSessionRenewalLogger({
     warn: () => ctx.logger?.warn?.('forge-iam: session renewal diagnostic could not be written'),
   });
@@ -106,6 +108,15 @@ export function apply(ctx, rawConfig = {}) {
     return Boolean(credentials && atomicStore && verifyAtomicStore(credentials)
       && current.credentials === credentials && current.atomicStore === atomicStore);
   };
+  const verifyClientSecretSource = (instance, source, scope) => {
+    const binding = clientSecretBinding;
+    if (!binding || binding.source !== source || current.credentials !== instance
+      || scope.clientId !== result.value.clientId || scope.ref !== result.value.clientSecretRef
+      || scope.method !== result.value.clientAuthMethod) return false;
+    const trusted = binding.port.verify(instance);
+    if (trusted && typeof trusted.then === 'function') Promise.resolve(trusted).catch(() => {});
+    return trusted === true && clientSecretBinding === binding && current.credentials === instance;
+  };
 
   let currentWebServer;
   let currentConnection;
@@ -114,8 +125,11 @@ export function apply(ctx, rawConfig = {}) {
   const service = createIamService(result.value, {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
-    credentials: readCredentials(),
     getCredentials: () => readCredentials(),
+    ...(confidential && hasDynamicInjection ? {
+      getClientSecretSource: () => clientSecretBinding?.source,
+      verifyClientSecretSource,
+    } : {}),
     verifyAtomicStore,
     getAtomicStoreBinding,
     getGatewayAtomicStore,
@@ -188,6 +202,9 @@ export function apply(ctx, rawConfig = {}) {
     else await offWebServer?.dispose?.();
     if (typeof offAtomicStore === 'function') offAtomicStore();
     else await offAtomicStore?.dispose?.();
+    clientSecretBinding = undefined;
+    if (typeof offClientSecret === 'function') offClientSecret();
+    else await offClientSecret?.dispose?.();
     if (typeof offAttachments === 'function') offAttachments();
     else await offAttachments?.dispose?.();
     if (typeof offCredentials === 'function') offCredentials();
@@ -202,6 +219,7 @@ export function apply(ctx, rawConfig = {}) {
   let offConnection;
   let offCredentials;
   let offAtomicStore;
+  let offClientSecret;
   let offAttachments;
   let offModelServices;
   let offManagedModels;
@@ -216,7 +234,7 @@ export function apply(ctx, rawConfig = {}) {
     if (!tornDown) void service.bridgeCapability().catch(() => {});
   };
   const hydrateBinding = () => {
-    if (tornDown || !hasTrustedBinding()) return;
+    if (tornDown || !hasTrustedBinding() || (confidential && !clientSecretBinding)) return;
     const credentials = current.credentials;
     const atomicStore = current.atomicStore;
     if (hydratedBinding?.credentials === credentials && hydratedBinding.atomicStore === atomicStore) return;
@@ -364,6 +382,24 @@ export function apply(ctx, rawConfig = {}) {
           }
         };
       });
+      if (confidential) {
+        offClientSecret = ctx.inject(['iam-client-secret-source'], (host) => {
+          const port = host['iam-client-secret-source'];
+          const source = Object.freeze({
+            read: (scope) => port.read({ ...scope, method: result.value.clientAuthMethod }),
+            isCurrent: (snapshot) => port.isCurrent(snapshot),
+          });
+          const binding = { port, source };
+          clientSecretBinding = binding;
+          hydrateBinding();
+          return () => {
+            if (clientSecretBinding !== binding) return;
+            clientSecretBinding = undefined;
+            hydratedBinding = undefined;
+            if (!tornDown) service.notifyView();
+          };
+        });
+      }
       offConnection = ctx.inject(['connection'], (host) => {
         const binding = host.connection;
         currentConnection = binding;

@@ -383,27 +383,42 @@ test('maker refuses a broadly readable configuration file', (t) => {
   assert.equal(existsSync(join(root, 'out')), false);
 });
 
-test('confidential authentication fails closed until the secret source exists', (t) => {
+test('a confidential private bundle carries only the declared IAM method and reference', (t) => {
   const root = temp(t);
-  const entries = parseEnvConfig(
-    [
-      ...ENV,
-      'HELUO_IAM_AUTH_MODE=confidential',
-      'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic',
-      'HELUO_IAM_CLIENT_SECRET_REF=file:iam-secret',
-    ].join('\n'),
-  );
-  const error = (() => {
-    try {
-      buildConfig(entries);
-    } catch (caught) {
-      return caught;
-    }
-    return undefined;
-  })();
-  assert.ok(error !== undefined);
-  assert.equal(error.code, 'CONFIG_INVALID');
-  assert.match(error.message, /not supported by this maker yet/u);
+  const publicPath = join(root, 'public.tgz');
+  writeFileSync(publicPath, publicTarball());
+  const configPath = writeConfig(root, [
+    ...ENV,
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+  ]);
+  const result = makePrivateBundle({
+    publicPath,
+    expectedSha256: inspectPublicTarball(publicPath).sha256,
+    configPath,
+    version: '0.2.0',
+    output: join(root, 'private'),
+    repoRoot: join(root, 'repo-does-not-exist'),
+  });
+  const entries = readBundleEntries(result.tarball, { withContent: true });
+  const patch = entries.find((entry) => entry.path === 'cordis.patch.yml').content.toString('utf8');
+  assert.match(patch, /authMode: "confidential"/u);
+  assert.match(patch, /clientAuthMethod: "client_secret_post"/u);
+  assert.match(patch, /clientSecretRef: "enterprise-oidc"/u);
+  assert.doesNotMatch(patch, /^\s*(?:clientSecret|client_secret):/mu);
+  const metadata = JSON.parse(entries.find((entry) => entry.path === 'heluo-private-release.json').content.toString('utf8'));
+  assert.equal(metadata.config.secretEmbedded, false);
+  assert.doesNotMatch(JSON.stringify(metadata), /enterprise-oidc/u);
+});
+
+test('a confidential configuration requires an explicit supported method and record selector', () => {
+  const mode = [...ENV, 'HELUO_IAM_AUTH_MODE=confidential'];
+  const method = 'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic';
+  const ref = 'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc';
+  for (const additions of [[method], [ref], [method, 'HELUO_IAM_CLIENT_SECRET_REF=file:iam-secret']]) {
+    expectCode(() => buildConfig(parseEnvConfig([...mode, ...additions].join('\n'))), 'CONFIG_INVALID');
+  }
 });
 
 test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {

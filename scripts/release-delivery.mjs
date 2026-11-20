@@ -296,7 +296,8 @@ dsh plugin remove 卸载旧版本）→ 执行 dsh plugin add → 读回配置�
 
 1. 在终端运行 dsh web，打开它打印的本机地址（默认安装写入的是 web profile）。
 2. 在「设置 → 插件」确认 @heluo/forge-enterprise 已加载。
-3. 按企业身份登录，首次登录时录入**你个人**的网关 Key；Key 不随交付包分发。
+3. 企业 IAM 要求客户端认证时，首次登录前确认管理员已为当前系统账号预置客户端密钥。
+   按企业身份登录后录入**你个人**的网关 Key。
 
 **不要用「打开 Desktop」代替第 1 步**：Desktop 使用自己的 desktop profile，看不到本次
 装进 web profile 的插件。

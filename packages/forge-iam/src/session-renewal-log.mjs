@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import manifest from '../package.json' with { type: 'json' };
 import { ERROR_STATUS } from './error-contract.mjs';
-import { OAUTH_ERROR_CODES, OidcError } from './oidc.mjs';
+import { OAUTH_ERROR_CODES, OAUTH_ERROR_RESPONSE_CLASSES, OidcError } from './oidc.mjs';
 import { STATES } from './state.mjs';
 
 const LOG_FILE_NAME = 'forge-iam-session-renewal.jsonl';
@@ -50,6 +50,7 @@ const reasons = [
 ];
 const enums = {
   state: STATES, previousState: STATES, reason: reasons, code: codes, causeCode: codes, oauthError: OAUTH_ERROR_CODES,
+  oauthErrorResponse: OAUTH_ERROR_RESPONSE_CLASSES, clientAuthMethod: ['none', 'client_secret_basic', 'client_secret_post'],
   authMode: ['public', 'confidential'], trigger: ['timer', 'resume', 'request', 'reconcile', 'model'],
   stage: ['store-read', 'client-auth', 'discovery', 'jwks', 'claim', 'client-auth-recheck', 'token-endpoint',
     'validate-response', 'restore', 'commit', 'wait-for-peer'],
@@ -66,9 +67,12 @@ export function renewalErrorFields(cause) {
     const code = cause?.code;
     const fields = { causeCode: codes.includes(code) ? code : 'IAM_INTERNAL' };
     if (cause instanceof OidcError) {
-      const { status, oauthError, requestUnsent, timedOut } = cause.details;
+      const { status, oauthError, oauthErrorResponse, requestUnsent, timedOut } = cause.details;
       if (Number.isInteger(status) && status >= 100 && status <= 599) fields.httpStatus = status;
       if (OAUTH_ERROR_CODES.includes(oauthError)) fields.oauthError = oauthError;
+      else if (status === 401 && OAUTH_ERROR_RESPONSE_CLASSES.includes(oauthErrorResponse)) {
+        fields.oauthErrorResponse = oauthErrorResponse;
+      }
       if (requestUnsent === true) fields.requestUnsent = true;
       if (timedOut === true) fields.timedOut = true;
     }

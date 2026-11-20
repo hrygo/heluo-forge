@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 // `heluo-forge auth …`: read-only identity and token access for scripts.
 //
-// The CLI opens the credential store read-only and never refreshes tokens
+// Identity and token commands open the credential store read-only and never refresh tokens
 // itself. Without a Host URL it reads the current, unexpired access token.
 // With a Host URL it requests a token over the loopback bridge; the Host may
 // refresh the session, and the CLI checks the returned token against the store.
 
+import { parseArgs } from 'node:util';
 import {
-  accessTokenOf, EXIT, isBridgeReadableSession, isSameBridgeSession, sessionFromRecord, SESSION_RECORD_KEY,
+  accessTokenOf, classifySessionRecord, EXIT, isBridgeReadableSession, isSameBridgeSession, sessionFromRecord, SESSION_RECORD_KEY,
 } from '../src/cli-session.mjs';
 import { BRIDGE_REF } from '../src/bridge.mjs';
 import { ERROR_STATUS } from '../src/error-contract.mjs';
+import { sessionView } from '../src/session-read.mjs';
 
 const USAGE = `用法：
   heluo-forge auth whoami [--json]   输出当前身份与登录状态
   heluo-forge auth token             输出当前可用的访问令牌（CLI 不直接刷新）
+  heluo-forge client-secret set --issuer URL --client-id ID --method METHOD --ref REF
+                                     从标准输入读取密钥并写入专用凭据记录
 
 环境变量：
   HELUO_FORGE_IAM_URL                 运行中的 DSH 地址（如 http://127.0.0.1:49196）；设置后
@@ -41,15 +45,59 @@ function credentialError(error) {
 async function openReader() {
   try {
     const keychain = await import('@heluo/forge-credentials-keychain');
-    const reader = await keychain.openCredentialReader({
-      directory: process.env.HELUO_FORGE_STORE_DIRECTORY || undefined,
-      service: process.env.HELUO_FORGE_KEYCHAIN_SERVICE || 'heluo-forge',
-      accountPrefix: process.env.HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX || 'iam',
-    });
+    const reader = await keychain.openCredentialReader(storeOptions());
     return { reader };
   } catch (error) {
     return { error: credentialError(error) };
   }
+}
+
+function storeOptions() {
+  return {
+    directory: process.env.HELUO_FORGE_STORE_DIRECTORY || undefined,
+    service: process.env.HELUO_FORGE_KEYCHAIN_SERVICE || 'heluo-forge',
+    accountPrefix: process.env.HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX || 'iam',
+  };
+}
+
+async function provisionClientSecret(args) {
+  let scope;
+  try {
+    const { values, tokens } = parseArgs({
+      args, tokens: true,
+      options: { issuer: { type: 'string' }, 'client-id': { type: 'string' }, method: { type: 'string' }, ref: { type: 'string' } },
+    });
+    if (tokens.length === 4 && Object.keys(values).length === 4) {
+      scope = { issuer: values.issuer, clientId: values['client-id'], method: values.method, ref: values.ref };
+    }
+  } catch { /* Only the fixed usage is shown. */ }
+  if (!scope || process.stdin.isTTY) {
+    process.stderr.write(USAGE);
+    return EXIT.USAGE;
+  }
+  try {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const value = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks));
+    const { setIamClientSecret } = await import('@heluo/forge-credentials-keychain');
+    await setIamClientSecret(scope, value, storeOptions());
+  } catch (error) {
+    if (error.code === 'IAM_CLIENT_SECRET_BINDING_MISMATCH') {
+      fail(error.code, '该凭据引用已绑定其他 IAM 客户端配置', false);
+    } else {
+      fail('IAM_CLIENT_SECRET_PROVISION_FAILED', '无法预置密钥，请核对输入、客户端登记与凭据存储', false);
+    }
+    return EXIT.UNAVAILABLE;
+  }
+  process.stdout.write('已预置 IAM 客户端密钥。\n');
+  return EXIT.OK;
+}
+
+async function isCurrentClientSecret(reader, record) {
+  const { grant } = classifySessionRecord(record);
+  if (grant?.version !== 2) return true;
+  const { method, secretRef: ref, secretRevision } = grant.authContext;
+  return reader.verifyIamClientSecret({ issuer: grant.issuer, clientId: grant.clientId, ref, method }, secretRevision);
 }
 
 /** Ask the running Host for a token through the loopback bridge. */
@@ -93,6 +141,7 @@ async function tokenFromHost(reader, baseUrl) {
 
 async function main(argv) {
   const args = argv.slice(2);
+  if (args[0] === 'client-secret' && args[1] === 'set') return provisionClientSecret(args.slice(2));
   const json = args.includes('--json');
   if (args[0] !== 'auth' || (args[1] !== 'whoami' && args[1] !== 'token')) {
     process.stderr.write(USAGE);
@@ -107,9 +156,13 @@ async function main(argv) {
   const reader = opened.reader;
 
   try {
+    const hostUrl = process.env.HELUO_FORGE_IAM_URL;
+    const useBridge = args[1] === 'token' && Boolean(hostUrl);
     let record;
+    let authentic = true;
     try {
       record = await reader.readRecord(SESSION_RECORD_KEY);
+      if (!useBridge) authentic = await isCurrentClientSecret(reader, record);
     } catch (error) {
       const failure = credentialError(error);
       fail(failure.code, failure.message, json);
@@ -117,15 +170,14 @@ async function main(argv) {
     }
 
     if (args[1] === 'whoami') {
-      const session = sessionFromRecord(record);
+      const session = authentic ? sessionFromRecord(record) : sessionView(undefined, 'error');
       if (json) process.stdout.write(`${JSON.stringify(session)}\n`);
       else if (session.principal) process.stdout.write(`${session.principal.subject} (${session.principal.issuer ?? 'unknown issuer'})\n`);
       else process.stdout.write('未登录\n');
       return EXIT.OK;
     }
 
-    const hostUrl = process.env.HELUO_FORGE_IAM_URL;
-    if (typeof hostUrl === 'string' && hostUrl.length > 0) {
+    if (useBridge) {
       if (!isBridgeReadableSession(record)) {
         const code = accessTokenOf(record).code;
         fail(code, '当前没有可用的访问令牌', json);
@@ -134,14 +186,17 @@ async function main(argv) {
       const fromHost = await tokenFromHost(reader, hostUrl);
       if (fromHost.ok) {
         let latest;
-        try { latest = await reader.readRecord(SESSION_RECORD_KEY); }
+        try {
+          latest = await reader.readRecord(SESSION_RECORD_KEY);
+          authentic = await isCurrentClientSecret(reader, latest);
+        }
         catch (error) {
           const failure = credentialError(error);
           fail(failure.code, failure.message, json);
           return EXIT.UNAVAILABLE;
         }
         const current = accessTokenOf(latest);
-        if (!isSameBridgeSession(record, latest) || !current.ok || current.token !== fromHost.token) {
+        if (!authentic || !isSameBridgeSession(record, latest) || !current.ok || current.token !== fromHost.token) {
           fail('IAM_CREDENTIALS_UNAVAILABLE', '凭据存储不可用或读取失败', json);
           return EXIT.UNAVAILABLE;
         }
@@ -153,7 +208,7 @@ async function main(argv) {
         : fromHost.code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.UNAVAILABLE;
     }
 
-    const result = accessTokenOf(record);
+    const result = authentic ? accessTokenOf(record) : { ok: false, code: 'IAM_REAUTH_REQUIRED' };
     if (!result.ok) {
       fail(result.code, result.code === 'IAM_REAUTH_REQUIRED' ? '访问令牌已过期，请回到 DSH 重新登录' : '当前没有可用的访问令牌', json);
       return result.code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.REAUTH_REQUIRED;

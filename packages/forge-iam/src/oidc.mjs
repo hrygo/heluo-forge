@@ -14,6 +14,7 @@ export const OAUTH_ERROR_CODES = Object.freeze([
   'unsupported_grant_type', 'invalid_scope', 'unsupported_token_type',
   'access_denied', 'unsupported_response_type', 'server_error', 'temporarily_unavailable',
 ]);
+export const OAUTH_ERROR_RESPONSE_CLASSES = Object.freeze(['empty', 'nonstandard', 'unreadable']);
 
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
@@ -288,9 +289,20 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
   }
   if (!response.ok) {
     let oauthError;
+    let oauthErrorResponse;
     let timedOut = false;
     try {
-      const payload = await response.json();
+      let payload;
+      if (response.status === 401) {
+        // Read once so a missing body is distinguishable from a non-OAuth
+        // response. The contents stay local to this error parser.
+        oauthErrorResponse = 'unreadable';
+        const content = await response.text();
+        oauthErrorResponse = content.trim() ? 'nonstandard' : 'empty';
+        if (oauthErrorResponse === 'nonstandard') payload = JSON.parse(content);
+      } else {
+        payload = await response.json();
+      }
       const candidate = payload?.error;
       // Copy only exact standard codes, never provider text that may echo credentials.
       if (OAUTH_ERROR_CODES.includes(candidate)) oauthError = candidate;
@@ -300,7 +312,7 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
     }
     throw new OidcError('IAM_HTTP_ERROR', `IAM endpoint returned ${response.status}`, {
       status: response.status,
-      ...(oauthError ? { oauthError } : {}),
+      ...(oauthError ? { oauthError } : oauthErrorResponse ? { oauthErrorResponse } : {}),
       ...(timedOut ? { timedOut: true } : {}),
     });
   }

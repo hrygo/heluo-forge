@@ -183,6 +183,7 @@ export function createSignIn(env) {
     let callbackUri;
     let authorizationUrl;
     try {
+      assertClientAuthCurrent(authentication);
       callbackUri = grants.redirectUri();
       authorizationUrl = buildAuthorizationUrl({
         authorizationEndpoint: meta.authorizationEndpoint,

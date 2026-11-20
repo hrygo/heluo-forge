@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { createDefaultBackend } from './backend-registry.mjs';
 import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
 import { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
+import { createIamClientSecretSource, storeIamClientSecret } from './iam-client-secret.mjs';
 import { selectDefaultStoreDirectory } from './default-store-directory.mjs';
 
 export const name = 'forge-credentials-keychain';
@@ -194,12 +195,26 @@ function storeDirectory(directory) {
 /** Open only the read operations needed by offline CLI clients. */
 export async function openCredentialReader({ directory, service, accountPrefix } = {}) {
   const { backend } = createDefaultBackend({ directory: storeDirectory(directory), readOnly: true });
-  const provider = createKeychainProvider(backend, { service, accountPrefix });
+  const namespace = { service, accountPrefix };
+  const provider = createKeychainProvider(backend, namespace);
+  const clientSecrets = createIamClientSecretSource(backend, namespacePrefixes(namespace));
   return Object.freeze({
     readRecord: (key) => provider.readRecord(key),
     resolve: (ref) => provider.resolve(ref),
+    async verifyIamClientSecret(scope, revision) {
+      const snapshot = await clientSecrets.read(scope);
+      return snapshot !== undefined && snapshot.revision === revision && clientSecrets.isCurrent(snapshot);
+    },
     close: () => provider.close(),
   });
+}
+
+/** Provision only the dedicated IAM client record in the built-in store. */
+export async function setIamClientSecret(scope, value, { directory, service, accountPrefix } = {}) {
+  const { backend } = createDefaultBackend({ directory: storeDirectory(directory) });
+  const provider = createKeychainProvider(backend, { service, accountPrefix });
+  try { await storeIamClientSecret(provider, scope, value); }
+  finally { await provider.close(); }
 }
 
 export const Config = {
@@ -257,9 +272,9 @@ export function apply(ctx, rawConfig = {}) {
   }
   warnNonProduction(ctx, backend);
 
+  const namespace = { service: result.value.service, accountPrefix: result.value.accountPrefix };
   const provider = createKeychainProvider(backend, {
-    service: result.value.service,
-    accountPrefix: result.value.accountPrefix,
+    ...namespace,
     notifyReference: (ref) => notifyContained(ctx, 'credentials/reference-updated', ref),
     notifyRecord: (key) => notifyContained(ctx, 'credentials/record-updated', key),
     onForeignKeys: ({ count }) => {
@@ -283,16 +298,24 @@ export function apply(ctx, rawConfig = {}) {
   // Only the registered, built-in implementation is eligible for the trust
   // service. An injected backend cannot grant itself trust by exposing methods.
   const registeredCapabilities = registered?.capabilities;
+  const prefixes = namespacePrefixes(namespace);
   const jointStore = registeredCapabilities?.crossProcessLock === true && registeredCapabilities?.jointAtomic === true
-    ? createJointStore(backend, namespacePrefixes(result.value)) : undefined;
+    ? createJointStore(backend, prefixes) : undefined;
   const trust = jointStore === undefined ? undefined : Object.freeze({
     verify: (candidate) => candidate === provider,
     adapter: () => jointStore,
+  });
+  // Independent of the transaction capability, only the built-in composition
+  // can bind this read-only client secret port to the actual provider.
+  const clientSecretPort = registered === undefined ? undefined : Object.freeze({
+    ...createIamClientSecretSource(backend, prefixes),
+    verify: (candidate) => !closed && candidate === provider,
   });
 
   let closed = false;
   let disposeProvide;
   let disposeTrust;
+  let disposeClientSecret;
   const teardown = async () => {
     if (closed) return;
     closed = true;
@@ -301,6 +324,7 @@ export function apply(ctx, rawConfig = {}) {
     } finally {
       // Unprovide even when the backend fails to close: leaving a provider that
       // points at a half-closed backend behind is worse than the close error.
+      disposeClientSecret?.();
       disposeTrust?.();
       disposeProvide?.();
     }
@@ -308,6 +332,7 @@ export function apply(ctx, rawConfig = {}) {
   ctx.effect(() => {
     disposeProvide = ctx.provide('credentials', provider);
     if (trust) disposeTrust = ctx.provide(JOINT_STORE_SERVICE, trust);
+    if (clientSecretPort) disposeClientSecret = ctx.provide('iam-client-secret-source', clientSecretPort);
     return teardown;
   }, 'forge-credentials-keychain');
   return teardown;

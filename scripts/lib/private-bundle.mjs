@@ -13,10 +13,8 @@
  *      add a redacted `heluo-private-release.json`;
  *   4. rebuild the archive from the original bytes and recompute the manifest.
  *
- * Confidential client secrets are deliberately NOT accepted yet: the IAM plugin
- * has no approved bundle-backed secret source (issue #222 work item ⑨), and
- * writing a secret into `cordis.patch.yml` would either be ignored or unlock
- * nothing. Refusing is the honest failure; see `BUNDLE_SECRET_EMBED_UNSUPPORTED`.
+ * Confidential IAM settings carry only the method and non-secret reference.
+ * The endpoint administrator supplies the secret outside the artifact.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -253,7 +251,7 @@ export function parseEnvConfig(text) {
     if (SECRET_ENV_KEYS.includes(entry.key)) {
       fail(
         'BUNDLE_SECRET_EMBED_UNSUPPORTED',
-        `${entry.key} must not be written into a bundle yet: forge-iam has no approved bundle-backed client-secret source (issue #222 item 9). Keep the secret in the installer/credential backend and do not place it in this file.`,
+        `${entry.key} is forbidden in bundle configuration. Provision the client's secret separately in the target credential store.`,
       );
     }
   }
@@ -388,8 +386,7 @@ export function buildConfig(entries) {
     if (iam.clientSecretRef !== undefined) problems.push('public authentication must not contain HELUO_IAM_CLIENT_SECRET_REF');
   } else {
     if (!['client_secret_basic', 'client_secret_post'].includes(iam.clientAuthMethod)) problems.push('confidential authentication requires HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic|client_secret_post');
-    if (typeof iam.clientSecretRef !== 'string' || iam.clientSecretRef.trim() === '') problems.push('confidential authentication requires HELUO_IAM_CLIENT_SECRET_REF');
-    problems.push('confidential authentication is not supported by this maker yet (issue #222 item 9: no approved bundle-backed secret source)');
+    if (iam.clientSecretRef === undefined) problems.push('confidential authentication requires HELUO_IAM_CLIENT_SECRET_REF');
   }
   for (const field of ['issuer', 'discoveryUrl', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri', 'revocationEndpoint', 'endSessionEndpoint', 'userInfoEndpoint', 'gatewayConsoleUrl']) {
     const value = iam[field];

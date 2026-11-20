@@ -520,11 +520,18 @@ test('logs a credential read lock timeout before any claim or token request', as
   assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-path/);
 });
 
-for (const [response, reason, oauthError] of [
+for (const [response, reason, oauthError, oauthErrorResponse] of [
   [() => Response.json({ error: 'invalid_grant', error_description: 'synthetic-private-response' }, { status: 401 }), 'rejected', 'invalid_grant'],
+  [() => Response.json({ error: 'invalid_client' }, { status: 401 }), 'rejected', 'invalid_client'],
+  [() => new Response(null, { status: 401 }), 'rejected', undefined, 'empty'],
+  [() => new Response('  \n', { status: 401 }), 'rejected', undefined, 'empty'],
+  [() => new Response('synthetic-private-response', { status: 401 }), 'rejected', undefined, 'nonstandard'],
+  [() => Response.json({ error: 'synthetic-private-response' }, { status: 401 }), 'rejected', undefined, 'nonstandard'],
+  [() => new Response(new ReadableStream({ start(body) { body.error(new Error('synthetic-private-response')); } }), { status: 401 }),
+    'rejected', undefined, 'unreadable'],
   [() => Response.json({ ...rotated, refresh_token: original.refreshToken }), 'rotation-unchanged', undefined],
 ]) {
-  test(`logs ${oauthError ?? reason} and preserves the pending grant without retry`, async (t) => {
+  test(`logs ${oauthError ?? oauthErrorResponse ?? reason} and preserves the pending grant without retry`, async (t) => {
     const host = await startHost(t, { fetchToken: response });
     t.mock.timers.tick(900);
     await until(() => host.iam.getView(), (view) => view.state === 'error', 'expected session failure');
@@ -533,7 +540,10 @@ for (const [response, reason, oauthError] of [
     assert.equal(failure.reason, reason);
     assert.equal(failure.code, 'IAM_REAUTH_REQUIRED');
     assert.equal(failure.oauthError, oauthError);
-    assert.equal(failure.httpStatus, oauthError ? 401 : undefined);
+    assert.equal(failure.oauthErrorResponse, oauthErrorResponse);
+    assert.equal(failure.httpStatus, reason === 'rejected' ? 401 : undefined);
+    assert.ok(rows.some((row) => row.event === 'refresh-stage' && row.stage === 'token-endpoint'
+      && row.clientAuthMethod === 'none'));
     assert.equal((await host.credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'pending');
     assert.equal(host.posts(), 1);
     assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-response/);

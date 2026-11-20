@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { assertCredentialValue, assertWellFormed } from './text.mjs';
 
@@ -27,9 +28,9 @@ function ownerOf(kind, value) {
 
 /** Encrypt values while depending only on the supplied storage, cipher and key ports. */
 export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind = 'unknown', durable = false }) {
-  function read(id) {
+  function read(id, row) {
     const kind = kindOf(id);
-    const row = backend.get(id);
+    row ??= backend.get(id);
     if (!row) return undefined;
     if (row.id !== id || row.kind !== kind) throw error('CRED_DECRYPT_FAILED', 'credential decryption failed');
     const data = cipher.open({ kind, id, owner: row.owner, kid: row.kid, envelope: row.envelope });
@@ -72,6 +73,28 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
     durable,
     available: true,
     async get(id) { kindOf(id); return backend.withRead(() => backend.open() ? read(id) : undefined); },
+    async pinRecord(id) {
+      if (kindOf(id) !== 'record') throw error('CRED_STORE_INVALID', 'invalid credential record key');
+      return backend.withRead(() => {
+        if (!backend.open()) return undefined;
+        const row = backend.get(id);
+        if (!row) return undefined;
+        const value = read(id, row);
+        const envelope = Buffer.from(row.envelope);
+        // A fresh GCM envelope distinguishes even identical rewrites and
+        // delete/recreate. A session never persists a hash of the secret itself.
+        const revision = createHash('sha256').update(envelope).digest('base64url');
+        return {
+          value,
+          revision,
+          isCurrent() {
+            const current = backend.get(id);
+            return current?.kind === row.kind && current.owner === row.owner && current.kid === row.kid
+              && current.revision === row.revision && envelope.equals(current.envelope);
+          },
+        };
+      });
+    },
     async set(id, value) { return withLock((token) => commit(token, () => write(id, value))); },
     async delete(id) { return withLock((token) => commit(token, () => { kindOf(id); read(id); backend.delete(id); })); },
     async list(prefix) { return backend.withRead(() => backend.open() ? backend.list().map((row) => row.id).filter((id) => id.startsWith(prefix)) : []); },

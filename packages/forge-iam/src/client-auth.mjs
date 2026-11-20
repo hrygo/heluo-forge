@@ -92,7 +92,7 @@ function guardedMaterial(provenance, original, copy, guard) {
     return true;
   };
 }
-/** IAM-002 private source/mock seam; context is local lifecycle state, not config. */
+/** The trusted composition supplies the source and the current Host scope. */
 export async function prepareClientAuthentication(rawConfig, options = {}, context = {}) {
   const checked = validateConfig(rawConfig);
   if (checked.issues) throw fail('IAM_CONFIG_INVALID');
