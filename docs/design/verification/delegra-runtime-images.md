@@ -107,14 +107,30 @@ Delegra 的工作流规划和发布逻辑通过 8 个 Node 测试及 `actionlint
 
 在临时 OCI 仓库用两个合成 ARM64 镜像复验发布路径，耗时 17.86 秒。与发布工作流同一摘要的 `docker-container` BuildKit 只按摘要上传候选。发布脚本校验 ARM64 manifest、SBOM 与来源证明，添加版本标签并重跑后，标签对应的 OCI 索引字节保持一致。预置冲突标签时，发布脚本拒绝该批次，同批其他镜像的版本标签仍不存在。本机 Docker Engine 直连虚拟机回环仓库的尝试返回连接拒绝。通过独立 BuildKit 实例执行 `docker buildx build --pull --platform linux/arm64`，从仓库按索引摘要加载合成镜像，随后在断网容器中执行并核对 `linux/arm64`。
 
+## 首版发布验收
+
+2026-11-20 核验 Delegra `expert-images-v1.0.0`，源提交为 `59f62538e19992a246ddce0f964d9dc83c86c183`。GitHub Actions 在原生 ARM64 作业中分别按摘要上传、拉回并冒烟 17 个镜像，随后设置 GHCR `v1.0.0` 标签。发布运行耗时 35 分 36 秒。同期 `deploy` 验证与标签发布各以 3 为矩阵上限，实测原生 ARM64 作业并发峰值合计为 6。 [发布运行](https://github.com/hrygo/Delegra/actions/runs/44700443096) · [deploy 验证](https://github.com/hrygo/Delegra/actions/runs/44700049166)
+
+用 `gh run download` 下载制品 `expert-images-release-v1.0.0` 中的首版回执和签名包，通过 `gh attestation verify` 同时核对仓库、签名工作流、源标签和完整源提交。签名主题的 SHA-256 为 `33c8148898b7f2b6d2d56a6a2a0395bf8d73497bb6bb5c78622384cb80c509dc`。 [签名回执与证明](https://github.com/hrygo/Delegra/actions/runs/44700443096#artifacts)
+
+用 `docker buildx imagetools inspect --raw` 独立读取全部 17 个版本标签和摘要，核对 OCI 索引字节、唯一可运行 ARM64 manifest、其关联的 SPDX SBOM 和 SLSA 来源声明，以及回执中的压缩层总字节数，耗时 33.02 秒。Java 21 已核对包含公共镜像的全部压缩层，额外层去重后增加 165,760,713 字节。
+
+| 参考镜像 | OCI 索引 digest | ARM64 manifest digest | 压缩层字节 |
+| --- | --- | --- | ---: |
+| `codex-min` | `sha256:2f48bd51d46266c1755d1b771eaaafb5feb55df1beacc0fa20ad24595525de9b` | `sha256:59496fd847130d7dd32bfbf3d5a174a3a8c7e25104663483d834b51957af6001` | 327,776,314 |
+| `codex-java-21` | `sha256:464ca7b6d9cb8347b035d603813c44c4537024bf3c9252138fcc4da658afda9e` | `sha256:dacadc4362ce243ef733e8615f3302dcd210aa6f6d907b50d5a83d335e88063d` | 493,537,027 |
+
+在本机原生 ARM64 节点使用 `docker pull --platform linux/arm64` 按回执索引摘要依次拉取两份参考镜像，耗时 51.32 秒和 24.55 秒。核对两份镜像均以 UID/GID `1000:1000` 运行，使用 Delegra 统一冒烟入口复验公共工具、Codex stdio 和 JDK 21，合计耗时 4.76 秒。
+
 ## 按摘要选用发布镜像
 
-在 Delegra 的镜像工作流中选择成功的专用版本发布运行。用其运行 ID 和 Git 标签中的版本下载回执，核对回执的签名仓库、工作流和源标签。下例使用 `codex-min`，执行前将 `run_id` 和 `version` 替换为选中的运行值。 [Delegra ARM64 镜像发布](https://github.com/hrygo/Delegra/actions/workflows/delegra-expert-images.yml)
+在 Delegra 的镜像工作流中选择成功的专用版本发布运行。用运行 ID 和版本下载回执，核对签名仓库、工作流、源标签和该次运行的完整源提交。下例选用首版的 `codex-min`。选用其他版本时，按所选运行替换 `run_id`、`version` 和 `source_commit`。 [Delegra ARM64 镜像发布](https://github.com/hrygo/Delegra/actions/workflows/delegra-expert-images.yml)
 
 ```sh
 set -eu
-run_id=1234567890
-version=v1.2.3
+run_id=44700443096
+version=v1.0.0
+source_commit=59f62538e19992a246ddce0f964d9dc83c86c183
 target=codex-min
 receipt_dir=$(mktemp -d)
 gh run download "$run_id" --repo hrygo/Delegra \
@@ -122,9 +138,10 @@ gh run download "$run_id" --repo hrygo/Delegra \
 receipt="$receipt_dir/expert-images-release.json"
 gh attestation verify "$receipt" --repo hrygo/Delegra \
   --signer-workflow hrygo/Delegra/.github/workflows/delegra-expert-images.yml \
-  --source-ref "refs/tags/expert-images-$version"
-image_ref=$(jq -er --arg target "$target" --arg version "$version" '
-  select(.version == $version and .platform == "linux/arm64")
+  --source-ref "refs/tags/expert-images-$version" \
+  --source-digest "$source_commit"
+image_ref=$(jq -er --arg target "$target" --arg version "$version" --arg commit "$source_commit" '
+  select(.version == $version and .commit == $commit and .platform == "linux/arm64")
   | [.images[] | select(.target == $target)] | select(length == 1) | .[0]
   | select(.name == ("ghcr.io/hrygo/delegra/" + $target)
       and (.digest | test("^sha256:[0-9a-f]{64}$")))
@@ -136,8 +153,8 @@ printf '%s\n' "$image_ref"
 
 将输出的 `name@digest` 用于目标运行环境登记和任务受理。回执中的 `digest` 是 OCI 索引，`platformDigest` 用于对照 Runner 实际使用的 ARM64 manifest。保存发布回执、签名包和目标环境实测证据，回退时使用上一份已验收的 `name@digest`。首次拉取需要目标环境具备对应 GHCR 包的读取权限。
 
-摘要提取已使用从本地构建结果生成的 17 项回执验证。提取结果匹配 OCI 索引。缺少场景、目标重复、版本不匹配、平台错误、仓库错误或摘要格式错误时，命令退出失败。
+摘要提取已使用本地构建回执与首版 17 项签名回执验证，结果匹配 OCI 索引。缺少场景、目标重复、版本或源提交不匹配、平台错误、仓库错误或摘要格式错误时，命令退出失败。
 
 ## 待联调
 
-真实 Delegra Runner 的按摘要拉取、选择、取消、进程回收及回退在 #394 验收。GHCR 上传、签名回执下载与校验、远端扫描、实际集群版本与企业网关访问按目标环境验收。 [镜像实施计划](../delegra-runtime-images.md#8-实施计划)
+真实 Delegra Runner 的按摘要拉取、选择、取消、进程回收及回退在 #394 验收。制品库访问、镜像扫描、实际集群版本和企业网关访问按目标环境验收。 [镜像实施计划](../delegra-runtime-images.md#8-实施计划)
