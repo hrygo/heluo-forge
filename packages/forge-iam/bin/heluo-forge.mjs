@@ -102,11 +102,11 @@ async function provisionClientSecret(operation, args) {
   return EXIT.OK;
 }
 
-async function isCurrentClientSecret(reader, record) {
+function sessionClientSecretBinding(record) {
   const { grant } = classifySessionRecord(record);
-  if (grant?.version !== 2) return true;
-  const { method, secretRef: ref, secretRevision } = grant.authContext;
-  return reader.verifyIamClientSecret({ issuer: grant.issuer, clientId: grant.clientId, ref, method }, secretRevision);
+  if (grant?.version !== 2) return undefined;
+  const { method, secretRef: ref, secretRevision: revision } = grant.authContext;
+  return { issuer: grant.issuer, clientId: grant.clientId, ref, method, revision };
 }
 
 /** Ask the running Host for a token through the loopback bridge. */
@@ -169,19 +169,19 @@ async function main(argv) {
   try {
     const hostUrl = process.env.HELUO_FORGE_IAM_URL;
     const useBridge = args[1] === 'token' && Boolean(hostUrl);
-    let record;
-    let authentic = true;
+    let stored;
     try {
-      record = await reader.readRecord(SESSION_RECORD_KEY);
-      if (!useBridge) authentic = await isCurrentClientSecret(reader, record);
+      stored = useBridge ? { record: await reader.readRecord(SESSION_RECORD_KEY) }
+        : await reader.readIamSession(sessionClientSecretBinding);
     } catch (error) {
       const failure = credentialError(error);
       fail(failure.code, failure.message, json);
       return EXIT.UNAVAILABLE;
     }
+    const { record, clientSecretCurrent } = stored;
 
     if (args[1] === 'whoami') {
-      const session = authentic ? sessionFromRecord(record) : sessionView(undefined, 'error');
+      const session = clientSecretCurrent ? sessionFromRecord(record) : sessionView(undefined, 'error');
       if (json) process.stdout.write(`${JSON.stringify(session)}\n`);
       else if (session.principal) process.stdout.write(`${session.principal.subject} (${session.principal.issuer ?? 'unknown issuer'})\n`);
       else process.stdout.write('未登录\n');
@@ -196,18 +196,17 @@ async function main(argv) {
       }
       const fromHost = await tokenFromHost(reader, hostUrl);
       if (fromHost.ok) {
-        let latest;
+        let confirmed;
         try {
-          latest = await reader.readRecord(SESSION_RECORD_KEY);
-          authentic = await isCurrentClientSecret(reader, latest);
-        }
-        catch (error) {
+          confirmed = await reader.readIamSession(sessionClientSecretBinding);
+        } catch (error) {
           const failure = credentialError(error);
           fail(failure.code, failure.message, json);
           return EXIT.UNAVAILABLE;
         }
+        const { record: latest } = confirmed;
         const current = accessTokenOf(latest);
-        if (!authentic || !isSameBridgeSession(record, latest) || !current.ok || current.token !== fromHost.token) {
+        if (!confirmed.clientSecretCurrent || !isSameBridgeSession(record, latest) || !current.ok || current.token !== fromHost.token) {
           fail('IAM_CREDENTIALS_UNAVAILABLE', '凭据存储不可用或读取失败', json);
           return EXIT.UNAVAILABLE;
         }
@@ -219,7 +218,7 @@ async function main(argv) {
         : fromHost.code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.UNAVAILABLE;
     }
 
-    const result = authentic ? accessTokenOf(record) : { ok: false, code: 'IAM_REAUTH_REQUIRED' };
+    const result = clientSecretCurrent ? accessTokenOf(record) : { ok: false, code: 'IAM_REAUTH_REQUIRED' };
     if (!result.ok) {
       fail(result.code, result.code === 'IAM_REAUTH_REQUIRED' ? '访问令牌已过期，请回到 DSH 重新登录' : '当前没有可用的访问令牌', json);
       return result.code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.REAUTH_REQUIRED;

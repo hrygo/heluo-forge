@@ -1,4 +1,4 @@
-import { assertClientAuthCurrent, assertClientAuthEndpoint, clientAuthDescriptor, isClientAuthReadUnavailable } from './client-auth.mjs';
+import { assertClientAuthCurrent, assertClientAuthEndpoint, clientAuthDescriptor, isClientAuthReadUnavailable, withCurrentClientAuth } from './client-auth.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { credentialReadError } from './error-contract.mjs';
@@ -655,6 +655,7 @@ export function createTokenResolver(env) {
       checkReplacement();
     };
     const checkAlive = () => { checkLifecycle(); assertClientAuthCurrent(authentication); };
+    const recheck = () => withCurrentClientAuth(authentication, checkLifecycle);
     const rejectSession = (code = 'IAM_REAUTH_REQUIRED', reason = 'rejected', cause, signOutIdentity) => {
       reportFailure(code, reason, cause);
       const signOutPending = reason === 'sign-out-pending';
@@ -974,7 +975,8 @@ export function createTokenResolver(env) {
         } finally {
           claimGateOpen = false;
         }
-        checkAlive();
+        if (authentication) await recheck();
+        else checkLifecycle();
         const claimedRecord = claim.record?.kind === 'grant' ? claim.record.payload : null;
         if (!claimed) {
           if (pendingRefused(initial)) return useRefusedGrant(initial);
@@ -1054,15 +1056,12 @@ export function createTokenResolver(env) {
           if (!isClientAuthReadUnavailable(cause)) throw cause;
           return await restoreUnsent(cause);
         }
-        checkAlive();
         const timeoutMs = Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS);
         advance('token-endpoint', { timeoutMs, clientAuthMethod: authentication?.pin.method ?? 'none' });
-        checkAlive();
-        if (pendingRefused(initial)) throw pendingRefusal;
         // The claim and client-auth recheck can outlast the remaining refresh window.
         if (!isRefreshUsable(claimedGrant, now())) return await restoreUnsent();
         const exchange = { store: targetStore, credentials: targetCredentials, binding: claimBinding, pending, signOut: false, complete: undefined };
-        refreshExchange = exchange;
+        const expiredBeforeSend = new Error('IAM refresh token expired before dispatch');
         const ownsSignOut = () => !ctx.disposed && isSigningOut() && auth + 1 === getAuthEpoch()
           && epoch === getSessionEpoch() && ctx.state !== 'authenticating';
         const checkHandoff = () => {
@@ -1074,6 +1073,15 @@ export function createTokenResolver(env) {
           if (!ownsSignOut()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         };
         const checkResult = () => exchange.signOut ? checkHandoff() : checkAlive();
+        const recheckResult = async () => {
+          try { await recheck(); }
+          catch (cause) {
+            // Sign-out may take ownership of a dispatched response while the read waits.
+            if (!exchange.signOut || cause?.code !== 'IAM_DISPOSED') throw cause;
+          }
+          if (exchange.signOut) checkHandoff();
+          else checkLifecycle();
+        };
         let token;
         try {
           token = await refreshTokens({
@@ -1084,13 +1092,21 @@ export function createTokenResolver(env) {
             resource: config.gatewayResource,
             fetchImpl,
             timeoutMs,
+            beforeSend: () => {
+              checkLifecycle();
+              if (pendingRefused(initial)) throw pendingRefusal;
+              if (!isRefreshUsable(claimedGrant, now())) throw expiredBeforeSend;
+              refreshExchange = exchange;
+            },
           });
         } catch (cause) {
+          if (cause === expiredBeforeSend) return await restoreUnsent();
           if (!(cause instanceof OidcError) || cause.code !== 'IAM_UNREACHABLE' || cause.details.requestUnsent !== true) throw cause;
           return await restoreUnsent(cause);
         }
         advance('validate-response');
-        checkResult();
+        if (authentication && !exchange.signOut) await recheckResult();
+        else checkResult();
         // C9（2026-11-03 书面答复）已确认轮换：旧刷新令牌即时作废、重用只拒本次请求。
         // 因此响应里缺少新令牌、或原样返回旧令牌，都说明这条授权链不能再续用；
         // 不得把已经发出的刷新令牌当成可以再次使用。
@@ -1137,7 +1153,8 @@ export function createTokenResolver(env) {
           committed = true;
           return next;
         }, { guard: () => { checkAlive(); return true; } });
-        checkAlive();
+        if (authentication) await recheck();
+        else checkLifecycle();
         if (!committed || result.record?.kind !== 'grant'
           || !isDeepStrictEqual(result.record.payload, next)) return rejectSession(undefined, 'commit-unconfirmed');
         trace('refresh-committed', renewalDeadlines(next));

@@ -383,6 +383,33 @@ test('maker refuses a broadly readable configuration file', (t) => {
   assert.equal(existsSync(join(root, 'out')), false);
 });
 
+test('the maker accepts only immutable snapshots issued by configuration validation', (t) => {
+  const root = temp(t);
+  const publicPath = join(root, 'public.tgz');
+  const bytes = publicTarball();
+  const entries = readBundleEntries(bytes, { withContent: true });
+  writeFileSync(publicPath, bytes);
+  const configPath = writeConfig(root, [
+    ...ENV,
+    'HELUO_IAM_MANAGED_MODELS_BASE_URL=https://gateway.corp.example/v1',
+    'HELUO_IAM_DEFAULT_PROVIDER=route-1',
+    'HELUO_GITEE_AUTH_ENV=FORGE_GITEE_TOKEN',
+  ]);
+  const config = buildConfig(parseEnvConfig(readFileSync(configPath, 'utf8')));
+  const unvalidated = { ...config, iam: { ...config.iam, allowInsecureClientAuthHttp: true } };
+  const version = '0.2.0';
+  const output = join(root, 'out');
+  const baseSha256 = inspectPublicTarball(publicPath).sha256;
+
+  expectCode(() => makePrivateBundle({ publicPath, expectedSha256: baseSha256, configPath, config: unvalidated, version, output }), 'CONFIG_INVALID');
+  expectCode(() => buildPrivateTarball({ entries, config: structuredClone(config), version, baseSha256 }), 'CONFIG_INVALID');
+  assert.equal(existsSync(output), false);
+  for (const object of [config, config.iam, config.gitee, config.iam.scopes, config.iam.managedModels, config.gitee.authEnv, config.keys]) {
+    assert.ok(object && Object.isFrozen(object));
+  }
+  assert.equal(makePrivateBundle({ publicPath, expectedSha256: baseSha256, config, version, output }).verified, true);
+});
+
 test('a confidential private bundle carries only the declared IAM method and reference', (t) => {
   const root = temp(t);
   const publicPath = join(root, 'public.tgz');

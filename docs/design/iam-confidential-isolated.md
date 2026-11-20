@@ -28,7 +28,7 @@
 
 ## 1. 结论与范围
 
-私版配置携带 clientId、认证方式及 clientSecretRef。管理员在目标终端通过独立运维入口预置 client secret，Host 从内置加密凭据组合注入来源，并对 code、refresh 与回调清理的撤销 POST 应用同一种方法。默认退出使用访问令牌自证的 GET 撤销路径。
+私版配置携带 clientId、认证方式及 clientSecretRef。管理员在目标终端通过独立运维入口预置 client secret，Host 从内置加密凭据组合注入来源。授权码换票、刷新及 `rfc7009` 模式的撤销 POST 应用同一种客户端认证方法。标准私版的退出和失败回调清理使用访问令牌自证 GET。
 
 两种客户端模式均要求 PKCE S256。public/none 是通用插件兼容默认，适用于明确允许两个 grant 均无客户端认证的部署。secret 来源、grant 单记录提交和网关联合变更各自验证具体能力。IAM 登记方法、远端轮换和计划续期由 G1 实测确认。
 
@@ -69,14 +69,14 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ### 3.3 退出、轮换与缓存
 
-- signOut 校验受信存储、issuer 和客户端绑定并读取 grant 快照，锁内写入匹配该快照的 pending；网络请求在锁外以 AT 自证 GET 撤销，成功后才在同记录锁内核验并写墓碑。未配置撤销端点时可直接本地完成，不宣称远端撤销。
-- secret 缺失不阻止满足上述条件的冷启动 V2 退出；普通 signOut 不读取 secret。远端撤销拒绝或结果不明时保留 pending，不报告清理完成、不重发旧令牌。不同 issuer/client/mode 或不匹配快照的记录保留，不盲删。回调失败后的机密认证 POST cleanup 仍要求原来源及认证上下文有效，不借新 secret 补发。
+- signOut 校验受信存储、issuer 和客户端绑定并读取 grant 快照，锁内写入匹配该快照的 pending。默认在锁外以访问令牌自证 GET 撤销，成功后在同记录锁内核验并写墓碑。没有撤销端点时只完成本地退出。
+- 默认 GET 退出不读取 secret，缺失 secret 时仍允许通过其他门禁的冷启动 V2 退出。远端撤销拒绝或结果不明时保留 pending，不重发旧令牌。不同 issuer/client/mode 或不匹配快照的记录保留。显式启用 `rfc7009` 时，退出和回调失败清理均发送认证 POST，要求原来源及认证上下文有效。
 - 管理员在 IAM 侧轮换，再将对应值预置到同一引用。每次写入都产生新 revision。旧会话需重新登录。已发出请求和服务端令牌撤销由 IAM 自身的处理与生效时序决定。
 - getView/getPrincipal 保持缓存只读，不做 secret I/O，不扩充 view、诊断、Remote 或路由。缓存展示不是实时授权；模型严格只读编排不连接认证写入或 cleanup。
 
 ## 4. 网络与失败边界
 
-授权码与刷新 POST、回调清理的撤销 POST 使用机密认证编码。普通 signOut 默认使用 AT 自证 GET。机密 POST 发出前按实际端点核验 HTTPS，只有管理员显式允许的部署可使用 HTTP。HTTP 会以明文传输客户端 secret 和令牌。请求保留 `redirect: 'error'`、超时和取消边界。构造的 Basic header、Post body 和 snapshot 仅在操作局部使用。
+机密认证 POST 发出前按实际端点核验 HTTPS，只有管理员显式允许的部署可使用 HTTP。HTTP 会以明文传输客户端 secret 和令牌。请求保留 `redirect: 'error'`、超时和取消边界。构造的 Basic header、Post body 和 snapshot 仅在操作局部使用。
 
 机密认证的 code、refresh 与清理操作在相关边界核对当前 getter 的 source 身份、独立 verifier 字面 true、原 snapshot 仍为 current、私有副本与原数据一致、mode/method/issuer/client/ref/revision、credentials/store、现有认证/操作代际；普通 signOut 按 §3.3 的独立路径校验，不读取 secret。local 失效错误不得被网络 catch 误包装为 IAM_UNREACHABLE。来源异常与任意 HTTP error 原文不输出；合法 invalid_grant 的既有分类保留。
 

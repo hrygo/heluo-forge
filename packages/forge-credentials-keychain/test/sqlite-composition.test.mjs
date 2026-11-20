@@ -88,8 +88,6 @@ test('a provisioned IAM client secret is confined to its dedicated storage port'
     await assert.rejects(credentials.describeRecord(recordKey), { code: 'KEYCHAIN_KEY_INVALID' });
     await assert.rejects(credentials.readRecord(recordKey), { code: 'KEYCHAIN_KEY_INVALID' });
     await assert.rejects(reader.readRecord(recordKey), { code: 'KEYCHAIN_KEY_INVALID' });
-    assert.equal(await reader.verifyIamClientSecret(scope, pinned.revision), true);
-    assert.equal(await reader.verifyIamClientSecret({ ...scope, clientId: 'wrong' }, pinned.revision), false);
     await assert.rejects(joint.snapshot(jointScope), { code: 'KEYCHAIN_SCOPE_INVALID' });
   });
 
@@ -115,6 +113,17 @@ test('a provisioned IAM client secret is confined to its dedicated storage port'
     await assert.rejects(backend.snapshot(storageScope), { code: 'CRED_STORE_INVALID' });
     await assert.rejects(backend.compareAndSwap(storageScope, {}, {}, () => true), { code: 'CRED_STORE_INVALID' });
     assert.equal(source.isCurrent(pinned), true);
+  });
+
+  await t.test('offline session reads reveal only whether the reserved record matches', async () => {
+    const binding = { ...scope, revision: pinned.revision };
+    const session = { kind: 'grant', payload: binding };
+    await credentials.modifyRecord('heluo-iam/session', () => session);
+    assert.deepEqual(await reader.readIamSession((record) => record.payload), { record: session, clientSecretCurrent: true });
+    for (const change of [{ clientId: 'other-client' }, { method: 'client_secret_post' }, { ref: 'absent' }, { revision: 'old-revision' }]) {
+      assert.deepEqual(await reader.readIamSession((record) => ({ ...record.payload, ...change })),
+        { record: session, clientSecretCurrent: false });
+    }
   });
 });
 

@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -97,7 +98,7 @@ async function deployment(t, { method, authMode, useDiscovery = false }) {
   const service = services.get('iam');
   const args = ['client-secret', 'set', '--issuer', mock.issuer, '--client-id', mock.clientId, '--method', method, '--ref', ref];
   return {
-    service, mock, events, args,
+    service, mock, events, args, storeDirectory, credentials: services.get('credentials'),
     readGrant: async () => (await services.get('credentials').readRecord(GRANT_KEY))?.payload,
     setSecret: (input, commandArgs = args) => command(storeDirectory, commandArgs, input),
     auth: (...commandArgs) => command(storeDirectory, ['auth', ...commandArgs]),
@@ -128,6 +129,45 @@ test('the enterprise endpoint rejects a public session at its first scheduled re
   await assert.rejects(() => app.service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
   assert.equal(app.mock.counts.token, 2);
   assert.equal(app.mock.counts.refresh, 0);
+});
+
+test('scheduled confidential renewal tolerates a SQLite writer after persisting its claim', async (t) => {
+  const app = await deployment(t, { method: 'client_secret_basic', authMode: 'confidential' });
+  const provisioned = await app.setSecret(secret);
+  assert.equal(provisioned.code, 0, provisioned.stderr);
+  await signIn(app);
+
+  const writer = new DatabaseSync(join(app.storeDirectory, 'credentials.sqlite'));
+  let locked = false;
+  let lockedAfterClaim = false;
+  let releaseTimer;
+  const release = () => {
+    if (!locked) return;
+    writer.exec('ROLLBACK');
+    locked = false;
+  };
+  t.after(() => {
+    clearTimeout(releaseTimer);
+    release();
+    writer.close();
+  });
+  const modifyRecord = app.credentials.modifyRecord.bind(app.credentials);
+  t.mock.method(app.credentials, 'modifyRecord', async (...args) => {
+    const result = await modifyRecord(...args);
+    if (!lockedAfterClaim && result?.payload.refreshOperation?.state === 'pending') {
+      writer.exec('BEGIN EXCLUSIVE');
+      locked = lockedAfterClaim = true;
+      releaseTimer = setTimeout(release, 25);
+    }
+    return result;
+  });
+
+  await app.renew();
+  const rows = await app.events((row) => ['refresh-committed', 'renewal-failed'].includes(row.event));
+  assert.equal(lockedAfterClaim, true);
+  assert.ok(rows.some((row) => row.event === 'refresh-committed'), JSON.stringify(rows.filter((row) => row.event === 'refresh-failed')));
+  assert.equal(app.mock.counts.refresh, 1);
+  assert.equal((await app.readGrant()).refreshOperation.state, 'complete');
 });
 
 test('an administrator can replace the exact misbound client secret before first login', async (t) => {

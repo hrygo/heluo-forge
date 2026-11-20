@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { createDefaultBackend } from './backend-registry.mjs';
 import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
 import { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
-import { createIamClientSecretSource, storeIamClientSecret } from './iam-client-secret.mjs';
+import { createIamClientSecretSource, readIamSession, storeIamClientSecret } from './iam-client-secret.mjs';
 import { selectDefaultStoreDirectory } from './default-store-directory.mjs';
 
 export const name = 'forge-credentials-keychain';
@@ -197,13 +197,13 @@ export async function openCredentialReader({ directory, service, accountPrefix }
   const { backend, iamClientSecretRecords } = createDefaultBackend({ directory: storeDirectory(directory), readOnly: true });
   const namespace = { service, accountPrefix };
   const provider = createKeychainProvider(backend, namespace);
-  const clientSecrets = iamClientSecretRecords && createIamClientSecretSource(iamClientSecretRecords, namespacePrefixes(namespace));
+  const { recordPrefix } = namespacePrefixes(namespace);
   return Object.freeze({
     readRecord: (key) => provider.readRecord(key),
     resolve: (ref) => provider.resolve(ref),
-    async verifyIamClientSecret(scope, revision) {
-      const snapshot = await clientSecrets?.read(scope);
-      return snapshot !== undefined && snapshot.revision === revision && clientSecrets.isCurrent(snapshot);
+    async readIamSession(selectBinding) {
+      if (!iamClientSecretRecords) throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', 'IAM client secret storage is unavailable');
+      return readIamSession(iamClientSecretRecords, recordPrefix, selectBinding);
     },
     close: () => provider.close(),
   });

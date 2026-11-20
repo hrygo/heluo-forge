@@ -52,7 +52,7 @@ function validateNamespacePart(value, name) {
   return value;
 }
 
-function decodeRecord(key, raw) {
+export function decodeRecord(key, raw) {
   let value;
   try {
     value = JSON.parse(raw);

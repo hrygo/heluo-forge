@@ -45,14 +45,12 @@ import { fileURLToPath } from 'node:url';
 
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import {
-  buildConfig,
   inspectPublicTarball,
   isLoginConfigured,
   makePrivateBundle,
-  parseEnvConfig,
   planDigest,
   PrivateBundleError,
-  readConfigFile,
+  resolveBundleConfig,
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
@@ -122,9 +120,7 @@ function parseArguments(argv) {
 }
 
 export function readDeliveryConfig(configPath) {
-  const text = readConfigFile(configPath);
-  const entries = parseEnvConfig(text);
-  return { config: buildConfig(entries) };
+  return { config: resolveBundleConfig({ configPath }) };
 }
 
 function assertOutsideRepo(path, repoRoot, label) {
@@ -335,8 +331,9 @@ Desktop 的 desktop profile 由应用独占，本启动器不会写入它（只�
 - 提示 pnpm 安装失败：确认 npm 能访问企业允许的 registry；也可由管理员预先执行 npm install -g pnpm 后重跑。
 - 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。确认安装脚本输出的 profile 与随后启动的 DSH profile 一致。
 - 页面仍提示「企业登录尚未设置」：确认安装脚本输出 loginReady 或已包含管理员配置，并确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员。
-- 页面提示「凭据存储不可用」：Windows 检查 %LOCALAPPDATA%\\HeluoForge 的目录权限、磁盘空间，以及 credentials.key 是否被改动；macOS 对应路径为 ~/Library/Application Support/HeluoForge；Linux 没有默认凭据后端，需先由管理员配置企业后端，属预期拒绝。
-- 企业内网地址使用 HTTP 时，登录令牌与个人 Key 会明文传输，请只在可信内网使用。
+- 页面提示「凭据存储不可用」：请管理员核对 Host 使用的 SQLite 目录、磁盘空间与权限，以及同级 <目录>.keys/keyring.json 是否可用。
+  Linux 优先使用绝对路径 $XDG_DATA_HOME/HeluoForge，否则使用 ~/.local/share/HeluoForge。Windows 默认为 %LOCALAPPDATA%\\HeluoForge，macOS 为 ~/Library/Application Support/HeluoForge。
+- 启用企业内网 HTTP 时，对应请求会明文传输凭据。机密 IAM 请求可能携带客户端密钥与令牌，网关请求可能携带个人 Key。
 
 ## 不要做
 
@@ -351,7 +348,8 @@ function launcherFiles() {
 /**
  * Build the delivery directory and zip.
  *
- * @param {{publicPath: string, publicSha256: string, configPath: string, version: string,
+ * @param {{publicPath: string, publicSha256: string, configPath?: string,
+ *   config?: ReturnType<typeof import('./lib/private-bundle.mjs').buildConfig>, version: string,
  *   output: string, toolRoot?: string, dryRun?: boolean, confirm?: string, zipCommand?: string,
  *   warn?: (message: string) => void}} input
  *   `zipCommand` 仅供测试注入（默认 `zip`）：打包失败必须什么也不发布。
@@ -369,7 +367,7 @@ export function buildDelivery(input) {
   }
   const toolRoot = resolve(input.toolRoot ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
   const installer = installerSource(toolRoot);
-  const { config } = readDeliveryConfig(resolve(input.configPath));
+  const config = resolveBundleConfig(input);
   const digest = planDigest({
     publicSha256: publicInfo.sha256,
     version: input.version,
@@ -438,7 +436,7 @@ export function buildDelivery(input) {
     const made = makePrivateBundle({
       publicPath,
       expectedSha256: publicInfo.sha256,
-      configPath: resolve(input.configPath),
+      config,
       version: input.version,
       output: pluginDir,
       repoRoot: toolRoot,
@@ -526,14 +524,14 @@ export function buildDelivery(input) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  const { config } = readDeliveryConfig(resolve(options.configPath));
+  const { config } = readDeliveryConfig(options.configPath);
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }
     : await verifyDiscovery(config.iam);
   const result = buildDelivery({
     publicPath: options.publicPath,
     publicSha256: options.publicSha256,
-    configPath: options.configPath,
+    config,
     version: options.version,
     output: options.output,
     toolRoot: options.toolRoot,

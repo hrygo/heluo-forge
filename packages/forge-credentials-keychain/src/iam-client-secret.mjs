@@ -1,5 +1,7 @@
+import { decodeRecord as decodeCredentialRecord } from './provider.mjs';
 import { assertCredentialValue, IAM_CLIENT_SECRET_RECORD_SCOPE } from './text.mjs';
 
+const IAM_SESSION_RECORD_KEY = 'heluo-iam/session';
 const METHOD = new Set(['client_secret_basic', 'client_secret_post']);
 const REF = /^[a-z][a-z0-9-]*$/u;
 const recordKey = (recordPrefix, ref) => `${recordPrefix}${IAM_CLIENT_SECRET_RECORD_SCOPE}/${ref}`;
@@ -18,6 +20,28 @@ function decodeRecord(value) {
   }
 }
 
+function boundSecretValue(pinned, scope) {
+  const record = decodeRecord(pinned.value);
+  const payload = record?.payload;
+  if (record?.kind !== 'grant' || !matches(payload, scope) || Object.keys(payload).length !== 4
+    || typeof payload.value !== 'string' || !payload.value.length) return undefined;
+  return payload.value;
+}
+
+/** `selectBinding` synchronously projects the binding of a usable confidential grant. */
+export function readIamSession(records, recordPrefix, selectBinding) {
+  return records.withRecordAndPin(`${recordPrefix}${IAM_SESSION_RECORD_KEY}`, (raw, readPin) => {
+    const record = raw === undefined ? undefined : decodeCredentialRecord(IAM_SESSION_RECORD_KEY, raw);
+    const binding = selectBinding(record);
+    if (binding === undefined) return { record, clientSecretCurrent: true };
+    if (!validBinding(binding)) return { record, clientSecretCurrent: false };
+    const pinned = readPin(recordKey(recordPrefix, binding.ref));
+    const clientSecretCurrent = pinned !== undefined && pinned.revision === binding.revision
+      && boundSecretValue(pinned, binding) !== undefined;
+    return { record, clientSecretCurrent };
+  });
+}
+
 export function createIamClientSecretSource(records, { recordPrefix }) {
   const snapshots = new WeakMap();
   return Object.freeze({
@@ -25,17 +49,16 @@ export function createIamClientSecretSource(records, { recordPrefix }) {
       if (!validBinding(scope)) return undefined;
       const pinned = await records.pin(recordKey(recordPrefix, scope.ref));
       if (!pinned) return undefined;
-      const record = decodeRecord(pinned.value);
-      const payload = record?.payload;
-      if (record?.kind !== 'grant' || !matches(payload, scope) || Object.keys(payload).length !== 4
-        || typeof payload.value !== 'string' || !payload.value.length) return undefined;
+      const value = boundSecretValue(pinned, scope);
+      if (value === undefined) return undefined;
       const snapshot = Object.freeze({
-        issuer: scope.issuer, clientId: scope.clientId, ref: scope.ref, revision: pinned.revision, value: payload.value,
+        issuer: scope.issuer, clientId: scope.clientId, ref: scope.ref, revision: pinned.revision, value,
       });
-      snapshots.set(snapshot, pinned.isCurrent);
+      snapshots.set(snapshot, pinned);
       return snapshot;
     },
-    isCurrent(snapshot) { return snapshots.get(snapshot)?.() === true; },
+    isCurrent(snapshot) { return snapshots.get(snapshot)?.isCurrent() === true; },
+    async retryRead(snapshot, check) { return snapshots.get(snapshot)?.retryRead(check); },
   });
 }
 

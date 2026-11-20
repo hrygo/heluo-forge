@@ -94,6 +94,7 @@ export const SECRET_ENV_KEYS = Object.freeze(['HELUO_IAM_CLIENT_SECRET', 'HELUO_
 const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...SECRET_ENV_KEYS]);
 const INTEGER_KEYS = new Set(['HELUO_IAM_CALLBACK_PORT', 'HELUO_GITEE_TIMEOUT_MS']);
 const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
+const validatedConfigs = new WeakSet();
 // Mirror the plugin's callbackAddress enum. `auto` tries 127.0.0.1 first and
 // only falls back to ::1 when that family is missing; a pinned literal is used
 // verbatim. `localhost` is not a host the IAM prefix covers, and the bracketed
@@ -433,14 +434,34 @@ export function buildConfig(entries) {
     fail('CONFIG_INVALID', 'configuration is invalid:\n- IAM login is incomplete: set HELUO_IAM_DISCOVERY_URL (preferred) or HELUO_IAM_ISSUER plus HELUO_IAM_AUTHORIZATION_ENDPOINT, HELUO_IAM_TOKEN_ENDPOINT and HELUO_IAM_JWKS_URI');
   }
 
-  return {
+  const config = freezeConfig({
     iam,
     gitee,
     keys: [
       ...Object.keys(iam).map((key) => `iam.${key}`),
       ...Object.keys(gitee).map((key) => `gitee.${key}`),
     ].sort(),
-  };
+  });
+  validatedConfigs.add(config);
+  return config;
+}
+
+function freezeConfig(config) {
+  for (const value of Object.values(config)) {
+    if (value !== null && typeof value === 'object') freezeConfig(value);
+  }
+  return Object.freeze(config);
+}
+
+function requireValidatedConfig(config) {
+  if (!validatedConfigs.has(config)) fail('CONFIG_INVALID', 'configuration snapshot must come from buildConfig');
+  return config;
+}
+
+/** Use the validated configuration from the caller or read it once from the file. */
+export function resolveBundleConfig({ config, configPath }) {
+  if (config !== undefined) return requireValidatedConfig(config);
+  return buildConfig(parseEnvConfig(readConfigFile(resolve(configPath))));
 }
 
 /** Only double-quoted JSON strings are emitted; JSON escapes are valid YAML scalars. */
@@ -693,9 +714,10 @@ export function assertIamValidatorMatches(entries, { toolRoot } = {}) {
  * Build the private tarball bytes from public entries.
  *
  * @param {{entries: Array<{path: string, content: Buffer, mode: string}>, version: string,
- *   config: {iam: object, gitee: object, keys: string[]}, baseSha256: string, requireVersionChange?: boolean}} input
+ *   config: ReturnType<typeof buildConfig>, baseSha256: string, requireVersionChange?: boolean}} input
  */
 export function buildPrivateTarball({ entries, version, config, baseSha256, requireVersionChange = true }) {
+  requireValidatedConfig(config);
   if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) {
     fail('VERSION_INVALID', 'private version must be a semver string with an explicit bump');
   }
@@ -803,7 +825,8 @@ function assertArtifactClosure(bytes, { code, label }) {
 /**
  * Full maker flow. Returns the written paths and a redacted summary.
  *
- * @param {{publicPath: string, expectedSha256: string, configPath: string, version: string,
+ * @param {{publicPath: string, expectedSha256: string, configPath?: string,
+ *   config?: ReturnType<typeof buildConfig>, version: string,
  *   output: string, repoRoot?: string, requireVersionChange?: boolean}} input
  */
 export function makePrivateBundle(input) {
@@ -835,9 +858,8 @@ export function makePrivateBundle(input) {
     const entries = readdirSync(output);
     if (entries.length > 0) fail('OUTPUT_EXISTS', `output directory is not empty: ${output}`);
   }
-  const text = readConfigFile(resolve(input.configPath));
-  const entries = parseEnvConfig(text);
-  const config = buildConfig(entries);
+  // The CLI passes the validated configuration used for Discovery and confirmation.
+  const config = resolveBundleConfig(input);
   const privateEntries = readBundleEntries(publicBytes, { withContent: true });
   const built = buildPrivateTarball({
     entries: privateEntries,

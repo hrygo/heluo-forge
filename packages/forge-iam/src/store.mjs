@@ -54,9 +54,10 @@ function isNonEmptyString(value) {
 // bound ID packs a four-byte tag, a 12-byte nonce and a 16-byte context hash.
 const SIGN_OUT_BOUND_TAG = Buffer.from('ISO1', 'ascii');
 const SIGN_OUT_HASH_OFFSET = 16;
-function signOutContextHash(grant, { mode, endpoint, resource, discovery }, prefix) {
+function signOutContextHash(grant, { mode, endpoint, resource, discovery, endpointRefused }, prefix) {
   const context = [mode, endpoint, resource, grantIdentity(grant), grant.accessToken ?? null, grant.refreshToken];
   if (discovery) context.push([discovery.stage, discovery.url, discovery.issuer, discovery.configuredEndpoint]);
+  if (endpointRefused) context.push('endpoint-refused-before-dispatch');
   return createHash('sha256').update('heluo-iam/sign-out-context/v1\0').update(prefix)
     .update(JSON.stringify(context))
     .digest().subarray(0, 16);
@@ -127,7 +128,7 @@ export function createGrantStore(credentials, options = {}) {
   }
 
   async function claimSignOut(expected, confirmedRefresh, options, authorized) {
-    const { expectedRecord, revocationContext, discoveryIntent, allowLegacyRecovery } = options;
+    const { expectedRecord, revocationContext, revocationIntents = [], allowLegacyRecovery } = options;
     if (expected !== null && !validateGrant(expected).ok) return { ok: false };
     let decision;
     let called = 0;
@@ -166,7 +167,7 @@ export function createGrantStore(credentials, options = {}) {
             decision = 'resumed';
             return undefined;
           }
-          if (canResumeSignOut(parsed.value, discoveryIntent)) return claim(parsed.value);
+          if (revocationIntents.some((intent) => canResumeSignOut(parsed.value, intent))) return claim(parsed.value);
         }
         const completesRefresh = parsed.value.refreshOperation?.state === 'pending'
           && isDeepStrictEqual(parsed.value, confirmedRefresh?.pending)

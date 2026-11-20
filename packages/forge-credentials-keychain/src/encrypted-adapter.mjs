@@ -122,23 +122,38 @@ export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind 
     return backend.list().filter(({ id }) => id.startsWith(prefix) && !isIamClientSecretId(id));
   }
 
+  function readPin(id, row) {
+    if (!row) return undefined;
+    const value = read(id, row);
+    // A fresh GCM envelope distinguishes identical rewrites without hashing the secret itself.
+    const revision = createHash('sha256').update(row.envelope).digest('base64url');
+    return { value, revision };
+  }
+
   // Keep the stored row and its authenticated envelope compatible with existing pins.
   // Only this port can address the reserved IAM client secret scope.
   const iamClientSecrets = Object.freeze({
+    async withRecordAndPin(id, inspect) {
+      if (publicKindOf(id) !== 'record') throw error('CRED_STORE_INVALID', 'expected a credential record key');
+      const pin = (secretId) => {
+        assertIamClientSecretId(secretId);
+        return readPin(secretId, backend.get(secretId));
+      };
+      // `inspect` is synchronous and read-only so contention can retry the whole snapshot.
+      return backend.withRead(() => backend.open()
+        ? backend.transaction(() => inspect(read(id), pin))
+        : inspect(undefined, () => undefined));
+    },
     async pin(id) {
       assertIamClientSecretId(id);
       return backend.withRead(() => {
         if (!backend.open()) return undefined;
         const row = backend.get(id);
         if (!row) return undefined;
-        const value = read(id, row);
         const envelope = Buffer.from(row.envelope);
-        // A fresh GCM envelope distinguishes even identical rewrites and
-        // delete/recreate. A session never persists a hash of the secret itself.
-        const revision = createHash('sha256').update(envelope).digest('base64url');
         return {
-          value,
-          revision,
+          ...readPin(id, row),
+          retryRead: (check) => backend.withRead(check),
           isCurrent() {
             try {
               if (!backend.open()) return false;

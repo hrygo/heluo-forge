@@ -388,6 +388,7 @@ export function apply(ctx, rawConfig = {}) {
           const source = Object.freeze({
             read: (scope) => port.read({ ...scope, method: result.value.clientAuthMethod }),
             isCurrent: (snapshot) => port.isCurrent(snapshot),
+            ...(typeof port.retryRead === 'function' ? { retryRead: (snapshot, check) => port.retryRead(snapshot, check) } : {}),
           });
           const binding = { port, source };
           clientSecretBinding = binding;

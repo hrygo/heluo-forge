@@ -31,7 +31,7 @@
 | 字段 | 提案值与约束 | 语义 |
 |---|---|---|
 | authMode | public / confidential；省略等价 public | public 适用于 IAM 明确允许无客户端认证换票与刷新的部署；要求客户端认证时显式使用 confidential |
-| clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | 授权码换票、刷新、回调失败清理的撤销 POST 共用登记方法 |
+| clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | 授权码换票、刷新和 `rfc7009` 模式的撤销 POST 共用登记方法 |
 | clientSecretRef | 仅 confidential 必填；匹配 `^[a-z][a-z0-9-]*$` | 指向当前凭据命名空间内的 IAM 专用记录 `iam-client-secret/<ref>` |
 | allowInsecureClientAuthHttp | 仅 confidential 接受可选布尔值；缺省为 `false` | 仅在显式为 `true` 时允许携带客户端密钥的 POST 使用 HTTP |
 
@@ -81,9 +81,9 @@ verifyClientSecretSource?: (
 | client_secret_basic | Basic；clientId、secret 分别 form-urlencoded 后以冒号连接，再 UTF-8/Base64 | 不放 client_id/client_secret 认证参数 |
 | client_secret_post | 无 | URLSearchParams 编码 client_id/client_secret |
 
-共享纯构造函数供 code、refresh 及回调失败的撤销 POST 使用。发送前按实际选定的端点校验协议，包括运行时 Discovery 返回的端点。机密 POST 默认要求 HTTPS，显式启用 `allowInsecureClientAuthHttp` 时允许 HTTP。拒绝换票或刷新时返回 `IAM_CONFIG_INVALID`，撤销端点拒绝归入 `failed` / `IAM_REVOKE_ENDPOINT_INVALID`。刷新在写入 pending 前预检端点。保留 `redirect: 'error'`、超时、取消和现有资源/回调上下文。HTTP 会以明文传输 secret 与令牌。secret 和 Basic 编码串仅在必要的 POST 中使用。每次请求固定使用已配置的方法。
+共享纯构造函数供授权码换票、刷新及 `rfc7009` 模式的撤销 POST 使用。发送前按实际选定的端点校验协议，包括运行时 Discovery 返回的端点。机密 POST 默认要求 HTTPS，显式启用 `allowInsecureClientAuthHttp` 时允许 HTTP。拒绝换票或刷新时返回 `IAM_CONFIG_INVALID`，撤销端点拒绝归入 `failed` / `IAM_REVOKE_ENDPOINT_INVALID`。刷新在写入 pending 前预检端点。保留 `redirect: 'error'`、超时、取消和现有资源/回调上下文。HTTP 会以明文传输 secret 与令牌。secret 和 Basic 编码串仅在必要的 POST 中使用。每次请求固定使用已配置的方法。
 
-依 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)，有客户端凭据时撤销也认证；真实 IAM 的方法、token/revoke 能否采用同一选择仍待供应商确认。本地 fixture 接受某方法不证明真实端点接受。
+退出和失败回调清理共用 `revocationMode`。标准私版使用默认的 `access_token_query`，向 D1 端点发送访问令牌自证 GET。D1 回执只覆盖访问令牌。Host 显式配置 `rfc7009` 时，两个入口均使用表单 POST 及配置的客户端认证；有刷新令牌时优先撤销刷新令牌。目标端点对该方法的支持须独立验证。 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)
 
 ## 4. 会话与记录隔离
 

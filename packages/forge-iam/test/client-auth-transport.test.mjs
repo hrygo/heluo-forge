@@ -17,6 +17,42 @@ const calls = [
     token: 'synthetic-refresh', clientId, fetchImpl, clientAuthentication })],
 ];
 
+test('cancelling revocation while the pin read waits prevents dispatch', async () => {
+  const fixture = createClientSecretFixture({}, { clientId });
+  const waiting = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const finished = Promise.withResolvers();
+  let pause = false;
+  const source = {
+    ...fixture.source,
+    async retryRead(_snapshot, check) {
+      if (!pause) return check();
+      waiting.resolve();
+      await release.promise;
+      try { return check(); } finally { finished.resolve(); }
+    },
+  };
+  const clientAuthentication = await prepareClientAuthentication(fixture.config, {
+    ...fixture.options,
+    getClientSecretSource: () => source,
+    verifyClientSecretSource: (credentials, candidate, scope) => candidate === source
+      && fixture.options.verifyClientSecretSource(credentials, fixture.source, scope),
+  });
+  pause = true;
+  const controller = new AbortController();
+  let posts = 0;
+  const pending = revokeSessionToken({ revocationMode: 'rfc7009', revocationEndpoint: endpoint,
+    refreshToken: 'synthetic-refresh', clientId, clientAuthentication, signal: controller.signal,
+    fetchImpl: async () => { posts++; return new Response(null, { status: 200 }); },
+  });
+  await waiting.promise;
+  controller.abort();
+  release.resolve();
+  assert.deepEqual(await pending, { state: 'unknown', code: 'IAM_REVOKE_CANCELLED' });
+  await finished.promise;
+  assert.equal(posts, 0);
+});
+
 for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {
   for (const [kind, invoke] of calls) {
     test(`${kind} applies exactly one ${method} authentication and keeps the request protocol`, async () => {

@@ -79,7 +79,7 @@ function copySnapshot(original, binding) {
 }
 function guardedMaterial(provenance, original, copy, guard) {
   const localGuard = () => { if (guard && !literalTrue(guard())) throw fail('IAM_CLIENT_AUTH_CHANGED'); };
-  return () => {
+  return (retrying = false) => {
     localGuard();
     try {
       assertClientAuthProvenance(provenance);
@@ -88,7 +88,11 @@ function guardedMaterial(provenance, original, copy, guard) {
       if (!unchanged() || !literalTrue(data.source.isCurrent(original))) throw 0;
       assertClientAuthProvenance(provenance);
       if (!unchanged()) throw 0;
-    } catch { throw fail('IAM_CLIENT_AUTH_CHANGED'); }
+    } catch (cause) {
+      // Only the built-in reader's bounded retry loop can handle SQLite contention.
+      if (retrying && (cause?.errcode === 5 || cause?.errcode === 6)) throw cause;
+      throw fail('IAM_CLIENT_AUTH_CHANGED');
+    }
     localGuard();
     return true;
   };
@@ -127,12 +131,14 @@ export async function prepareClientAuthentication(rawConfig, options = {}, conte
     throw fail(context.expectedProvenance === undefined ? 'IAM_CLIENT_AUTH_CONTEXT_INVALID' : 'IAM_CLIENT_AUTH_CHANGED');
   }
   const assertCurrent = guardedMaterial(provenance, original, copy, context.guard);
-  assertCurrent();
+  const retryRead = typeof source.retryRead === 'function' ? (check) => source.retryRead(original, check) : undefined;
   const operation = Object.freeze({ pin, provenance });
   operations.set(operation, {
-    clientId: scope.clientId, method: scope.method, secret: copy.value, assertCurrent,
+    clientId: scope.clientId, method: scope.method, secret: copy.value, assertCurrent, retryRead,
     allowInsecureClientAuthHttp: config.allowInsecureClientAuthHttp === true,
   });
+  if (retryRead) await withCurrentClientAuth(operation);
+  else assertCurrent();
   return operation;
 }
 export function isClientAuthReadUnavailable(error) {
@@ -161,6 +167,26 @@ export function assertClientAuthCurrent(operation) {
   const material = operations.get(operation);
   if (!material) throw fail('IAM_CLIENT_AUTH_UNVERIFIED');
   return material.assertCurrent();
+}
+
+/** Retry reading the same pin; start the action once with no intervening await. */
+export function withCurrentClientAuth(operation, action = () => true) {
+  const material = operations.get(operation);
+  if (!material?.retryRead) {
+    assertClientAuthCurrent(operation);
+    return action();
+  }
+  let started;
+  const start = async () => action();
+  return material.retryRead(() => {
+    if (started !== undefined) throw fail('IAM_CLIENT_AUTH_CHANGED');
+    material.assertCurrent(true);
+    // An async result keeps even a synchronous action failure out of the read retry.
+    started = start();
+  }).then(() => {
+    if (started === undefined) throw fail('IAM_CLIENT_AUTH_CHANGED');
+    return started;
+  });
 }
 
 /** Validate and pin the destination before dispatching client credentials. */

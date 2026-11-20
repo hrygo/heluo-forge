@@ -129,9 +129,9 @@ Host 的 `storeDirectory` 与 CLI 的 `HELUO_FORGE_STORE_DIRECTORY` 应指向同
 
 未设置 `HELUO_FORGE_IAM_URL` 时，`auth token` 只读本地记录，不请求 Host 或 IAM，不写存储或刷新令牌；剩余有效期不超过 30 秒时拒绝返回，刷新或退出 pending 时也不返回旧令牌。离线 CLI 没有 Host 配置，不能核验当前 issuer、clientId 或 resource 是否与 Host 匹配；本地返回令牌不证明服务端授权。
 
-离线命令采用机密客户端的 V2 会话前，还会在同一存储与命名空间核对预置记录的绑定与修订版本。预置记录缺失、不匹配或轮换后，旧会话须重新登录。V1 公开客户端会话不读取客户端密钥。
+离线命令在同一 SQLite 只读事务中读取机密客户端的 V2 会话，并核对预置记录的绑定与修订版本。预置记录缺失、不匹配或轮换后，旧会话须重新登录。V1 公开客户端会话不读取客户端密钥。
 
-设置 `HELUO_FORGE_IAM_URL` 后，`auth token` 通过本机 Host 桥获取令牌。Host 校验配置上下文并可按需刷新；CLI 回读存储，只接受属于同一会话且与当前记录一致的令牌；发生刷新时还须匹配该操作。缺少 `sessionInstanceId` 的会话不被采用。退出进行中、结果未确认或回读不匹配时不返回令牌。
+设置 `HELUO_FORGE_IAM_URL` 后，`auth token` 通过本机 Host 桥获取令牌。Host 校验配置上下文并可按需刷新。CLI 回读时使用同一 SQLite 事务核对 V2 会话和密钥绑定，只接受属于同一会话且与当前记录一致的令牌。发生刷新时还须匹配该操作。缺少 `sessionInstanceId`、退出进行中、结果未确认或回读不匹配的会话不返回令牌。
 
 ```sh
 # 将端口替换为运行中的 DSH Host 地址；whoami 仍只读本地记录。
