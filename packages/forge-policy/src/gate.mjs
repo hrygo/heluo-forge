@@ -425,6 +425,7 @@ function callIdOf(exec) {
     }
     const entry = {
       exec,
+      contentDigest,
       action,
       target,
       actor,
@@ -485,6 +486,12 @@ function callIdOf(exec) {
     if (exec?.signal?.aborted === true) return { reason: 'the call was cancelled after it was admitted', rule: 'cancelled' };
     if (staticDigestOf(exec) !== entry.staticDigest) {
       return { reason: 'the arguments changed before the call started', rule: 'arguments-changed' };
+    }
+    if (entry.contentDigest !== undefined && typeof exec?.content === 'function') {
+      const current = await contentDigestOf(exec);
+      if (current !== entry.contentDigest) {
+        return { reason: 'the content changed before the call started', rule: 'content-changed' };
+      }
     }
     if (typeof getActor === 'function') {
       const current = normalizeActor(await getActor(ctx));
@@ -547,6 +554,7 @@ function businessDecisionOf(result) {
     if (rule === 'cancelled') return `受控写「${action}」已取消：调用在排队等待期间被取消，本次未执行。`;
     if (rule === 'identity-changed') return `受控写「${action}」未执行：等待期间登录身份发生变化，请重新发起该动作。`;
     if (rule === 'arguments-changed') return `受控写「${action}」未执行：等待期间参数发生变化，请重新发起该动作。`;
+    if (rule === 'content-changed') return `受控写「${action}」未执行：等待期间正文内容发生变化，请重新发起该动作。`;
     if (rule === 'unloaded') return `受控写「${action}」未执行：策略插件已卸载，本次未执行。`;
     return `受控写「${action}」未执行：放行后状态发生变化。`;
   }

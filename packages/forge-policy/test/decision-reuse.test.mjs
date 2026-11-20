@@ -187,3 +187,19 @@ test('a failed or unknown business result is not reusable', async () => {
   assert.equal(h.policy.decisionCacheSize(), 1, 'only a completed write becomes reusable');
   h.dispose();
 });
+
+test('a body that changes between admission and execution is refused', async () => {
+  const channel = answering();
+  const h = mount({ userQuestions: channel });
+  let reads = 0;
+  const content = () => ({ title: 't', body: reads++ === 0 ? '正文一' : '正文二' });
+  let ran = 0;
+  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', { ...exec('call-1'), content }, async () => {
+    ran += 1;
+    return { ok: true };
+  });
+  assert.equal(ran, 0, '正文在执行前变了，就不能再执行');
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /正文/u);
+  h.dispose();
+});
