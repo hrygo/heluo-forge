@@ -31,7 +31,7 @@ const LABELS = Object.freeze({
   },
 });
 
-/** 逐次确认里最常见的流程规则：说清缺什么，用户才知道该补哪里。 */
+/** 流程规则里最常见的几条：说清缺什么，用户才知道该补哪里（规则本身在 P2 接入判定）。 */
 const PROCESS_LABELS = Object.freeze({
   'pr-acceptance-section': { en: 'the pull request body has no acceptance section', zh: 'PR 描述缺少「验收」小节' },
   'change-in-progress': { en: 'the change is not in progress', zh: '变更没有处于进行中状态' },

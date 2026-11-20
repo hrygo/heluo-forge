@@ -6,8 +6,8 @@
  * 2) 放行路径**透明返回**下游结果——守卫不下场做事，也不改写下游的结论；
  * 3) 前置裁决在"只有 catalog + executeAction"的桩策略上也成立（不假设 `decide` 一定存在，
  *    否则离线装配与真实门禁会走两条不同的判定路径）；
- * 4) 与真实 `@heluo/forge-policy` 门禁装配后行为一致：写动作按分类放行、内容闸拒绝时零下游、
- *    推送走逐次确认且没有确认通道时拒绝（AC-16「写动作前必须显示目标并走确认」）。
+ * 4) 与真实 `@heluo/forge-policy` 门禁装配后行为一致：写动作按分类放行、门禁拒绝时零下游
+ *    （P0 不弹确认：确认卡片由 `confirmDopWrite` 控制，开关置真在装载期即被拒绝）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

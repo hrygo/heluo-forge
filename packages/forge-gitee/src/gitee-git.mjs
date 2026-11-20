@@ -5,10 +5,10 @@
  * 1. **执行只有一个出口**。本模块不 import `node:child_process`、不建子进程，只接收
  *    `runner.runGit(...)`（唯一出口在 `gitee-cli.mjs`：固定 argv、`shell:false`、env allowlist、
  *    超时与 1MiB 截断）。argv 表与输出解析集中在这里，工具层永远拿不到「让模型自己拼命令」的入口。
- * 2. **commit 是本地动作，push 是远端写**。`@heluo/forge-policy` 只对登记的动作放行，且非读动作
- *    恒须身份与范围票据，commit 若入目录就只能「默认拒绝」或「每次等范围确认」，与「提交必须做」冲突；
+ * 2. **commit 是本地动作，push 是远端写**。`@heluo/forge-policy` 只对目录登记的受控写负责，且受控写
+ *    恒须 IAM 身份与前置执行记录，commit 若入目录就只能「默认拒绝」，与「提交必须做」冲突；
  *    因此 commit 只在本地做 `[变更号]` 强校验（`git-message.mjs`），push 走 guard + 动作
- *    `gitee.git.push`：随包目录已登记，默认 `confirm` 逐次确认，并要求 `confirm{repo,object}` 逐字匹配。
+ *    `gitee.git.push`：随包目录已登记，确认卡片由 `confirmPush` 控制，并要求 `confirm{repo,object}` 逐字匹配。
  * 3. **只做一件事**：不关闭 PR、不打标签、不改写历史。上面四个动词就是全部能力。
  */
 

@@ -32,11 +32,11 @@
 四条决定性判断：
 
 1. **平台靠常量声明，不靠调用点推断**。`GITEE_PLATFORM='gitee'` 落在每个信封与返回体上；`gitee-guard` 在入口断言动作前缀，非 `gitee.*` 动作直接拒绝且**零子进程**。本包只服务 Gitee 一个平台，「结果来自别的 provider」不是可发生的事实，因此没有对应原因码，字段表也只有白名单一份。
-2. **共存 = 同一策略行单实例，不是服务域隔离**。两份补丁层写**同一个** `id: heluo-policy` 与**逐字相同**的 12 条并集目录（6 读 + 6 写）、两处都**不写** `isolate`——loader 按 id 覆盖 `config`，两处内容相同，幸存者就不取决于装配顺序；同装时工具面为 Gitee 11 个、DevOps 4 个，共 15 个。目录逐字一致由 `tests/plugin-patch-layers.test.mjs` 静态检查，`test/coexistence.test.mjs` 用真实策略服务及四个 DevOps 等价测试工具复现单实例、15 工具和卸载归零；这不是企业宿主联调证据。
+2. **共存 = 同一策略行单实例，不是服务域隔离**。两份补丁层写**同一个** `id: heluo-policy` 与**逐字相同**的六条写动作目录（读动作不登记）、两处都**不写** `isolate`——loader 按 id 覆盖 `config`，两处内容相同，幸存者就不取决于装配顺序；同装时工具面为 Gitee 11 个、DevOps 4 个，共 15 个。目录逐字一致由 `tests/plugin-patch-layers.test.mjs` 静态检查，`test/coexistence.test.mjs` 用真实策略服务及四个 DevOps 等价测试工具复现单实例、15 工具和卸载归零；这不是企业宿主联调证据。
 3. **受控重复 + 静态门禁替代抽公共包**。唯一子进程出口、幂等键公式、审查渲染各自实现，用禁项扫描、枚举一致性、出口唯一性测试防漂移（§13）。
 4. **配置为 5 个扁平键**。设置页与配置端点见 §5.4；`host` 与 `authEnv` 可省略，未配 `authEnv` 时 `preflight()` 的 `tokenSource: 'none'` 只表明未从命名变量观察到令牌，不代表 CLI 无凭据或服务端允许访问。
 
-边界：查询为已实现基线；四个受控写与 `git push` 共**五个**写动作随包登记，但登记只决定可见，放行由内置分类与门禁决定（无身份、内容/流程规则不通过或确认不符时 `denied`）。`git commit` 是**本地动作**、不进策略目录：非读动作恒需身份与范围票据，而提交必须发生，两者冲突；首行 `[变更号]` 由 `git-message.mjs` 强校验（不合规即 `COMMIT_MESSAGE_INVALID`）。`gitee.delivery.judge` 是**只读判定**：随包登记、开箱可用，但只判定不执行（`executed: false`、`remote_calls: 0`），不构成写能力开闸。不代理用户权限，授权由 Gitee 服务端校验；包内没有合并、关闭、发版、触发流水线的入口。
+边界：查询为已实现基线；四个受控写与 `git push` 共**五个**写动作随包登记，但登记只决定由门禁负责，放行由内置分类与门禁决定（无 IAM 身份或审计不可写时 `denied`）。`git commit` 是**本地动作**、不进策略目录：受控写恒需身份与前置执行记录，而提交必须发生，两者冲突；首行 `[变更号]` 由 `git-message.mjs` 强校验（不合规即 `COMMIT_MESSAGE_INVALID`）。`gitee.delivery.judge` 是**只读判定**：随包登记、开箱可用，但只判定不执行（`executed: false`、`remote_calls: 0`），不构成写能力开闸。不代理用户权限，授权由 Gitee 服务端校验；包内没有合并、关闭、发版、触发流水线的入口。
 
 ## 2. 目标与非目标
 
@@ -142,7 +142,7 @@
 | `commit` | 提交已暂存改动 | `changeId`、`message` | `message` 必须先过 `assertCommitMessage()`（首行 `[变更号]`、描述非空），不合规即 `COMMIT_MESSAGE_INVALID`，零子进程 |
 | `head` | 读当前 commit | — | 只读，供判定与证据取 sha |
 | `branch` | 读当前分支 | — | 只读 |
-| `push` | 推送既有提交 | `remote`（默认 `origin`）、`branch` | 远端写，动作 `gitee.git.push`：随包登记、默认 `confirm` 逐次确认，需 `confirm{repo,object}` 逐字匹配 |
+| `push` | 推送既有提交 | `remote`（默认 `origin`）、`branch` | 远端写，动作 `gitee.git.push`：随包登记、分类默认 `allow`，`confirmPush` 开启后弹确认卡片；`confirm{repo,object}` 逐字匹配 |
 
 `commit` 是**本地动作**（不进策略目录，理由见 §1 边界），`push` 是**远端写**（进 `CONFIRM_REQUIRED_ACTIONS`）。两者都不接受任意参数：`--force`/`-f`、`--no-verify`、`--amend`、`--tags` 等不在表内，原样拒绝。
 
@@ -188,13 +188,9 @@
 
 IAM 与插件可能并发装载，broker 尚未就绪的窗口按 standalone 环境处理；补丁行顺序本身不证明就绪。不能仅凭已安装 IAM 宣称全程不会使用环境凭据，依赖该保证的部署须另行验证就绪与配置。
 
-策略目录：补丁层预置 **12 条并集（6 读 + 6 写）**——读面是本包 3 读 + 1 只读判定（`gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`，`target` 分别为 `repository`/`issue`/`pull-request`；`gitee.delivery.judge`，`target` 逐字 `change`）+ DevOps 的 `change.read`/`change.list`；写面是 `gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`、`gitee.git.push` 与 `change.clarification.write`。目录与 devops 补丁层逐字相同，对应工具面 **11 个 = 3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**。条目字段只有 `action`/`target`/`enabled`，类别与默认决策由内置词表给出；版本快照 `forge_gitee_delivery_snapshot` 是本地只读动作、不进策略目录（只读工作区版本，不碰远端也不写文件）。判定工具只判定不执行，返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。两条 DevOps 读动作属于共享并集，不赋予写权限。
+策略目录：补丁层预置**六条写动作**（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`、`gitee.git.push`、`change.clarification.write`），与 devops 补丁层逐字相同；条目字段只有 `action`/`target`/`category`，类别与默认决策由内置词表给出，旧键 `enabled` 与其他未知字段在装载期拒绝。**读动作不登记**：本包 3 读与只读判定 `gitee.delivery.judge`（`target` 逐字 `change`）都按 out-of-scope 出闸、不读身份、不写审计，`denyUnknownAction` 开启后才硬拒。工具面 **11 个 = 3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**；版本快照 `forge_gitee_delivery_snapshot` 是本地只读动作、不进策略目录（只读工作区版本，不碰远端也不写文件）；判定工具只判定不执行，返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。
 
-**五个**受控写随包登记，但**登记不等于放行**：默认决策来自内置分类——研发/评审写过身份、内容与流程规则；`gitee.git.push` 逐次确认（进 `CONFIRM_REQUIRED_ACTIONS`，要 `confirm{repo,object}` 逐字匹配）；`gitee.review.record` 恒拒（人工留痕）。未登记只会得到 `unregistered-action`（profile 删行或组织信封收紧时才可见），拒绝时适配器 0 次调用。
-
-读动作的 fail-closed 不因判定放宽：`apply()` 的 `assertReadCatalog` 仍只要求上述 3 条读动作，缺 `gitee.delivery.judge` 时挂载照常成功、只有判定工具降级为 `denied`（`unregistered-action`），挂载语义与错误码不变。
-
-审计 provider 槽：`forge-policy` 的审计字段白名单不含 `provider`，gitee 侧以动作前缀 `gitee.*` 与固定 `subject='gitee'` 自证，门禁后断言，不一致即 `GITEE_AUDIT_PROVIDER_MISMATCH`（不改策略包）。
+**六个**受控写随包登记，但**登记不等于放行**：默认决策来自内置分类，放行前还要解析 IAM 身份、先落一条前置执行记录并签发一次性收据，执行前复验、执行后结清；`gitee.review.record` 恒拒（人工留痕）。`gitee.git.push` 与 `change.clarification.write` 的确认卡片分别由 `confirmPush`/`confirmDopWrite` 控制，代码默认关闭，本阶段置真会在装载期 fail closed；内容与流程规则同属 P1–P3。否认语义：未登记只是"不归门禁管"（out-of-scope 放行），`denyUnknownAction` 开启后才得到 `unregistered-action`，拒绝时适配器 0 次调用。
 
 ## 7. 流程
 
@@ -219,7 +215,7 @@ flowchart LR
 
 - **读**：`read(action, target, params)` → 适配器 `argvFor`（`--json` 开关 + 本地投影选择）→ runner → 剥壳与投影 → 归一到信封；`provider` 不符、主机不是企业域、缺 `source_revision` 分别降级为 `unknown`/`failed`，**不编版本**。
 - **写**：确认（`confirm{repo,object}` 形状）→ 幂等键 `sha256(changeId|action|objectType|target|title)` 前 16 位（变更号大写，目标与标题都做 NFKC 归一；目标的反斜杠/尾部斜杠与 `!12`/`#12` 写法归一，不做大小写折叠）→ 门禁 `executeAction` → 子进程 → 回读条目比对（编号/链接/正文一致才算 `done`）。键必须包含动作与目标：同一变更、同一标题可能落在不同对象上（`review.publish` 写远端 PR 评论，`review.record` 写本地 `review.md`），缺任一项都会让后一次写命中前一次的 `done` 台账并静默返回旧结果。
-- **下一步**：`denied`/`failed`/`unknown` 信封带 `next_action`（固定动词，映射集中在 `src/gitee-next-action.mjs`；状态不是 `done` 就必须有下一步，常规由 `reason` 映射，交付判定未通过这类无原因码的确定失败由调用方显式给 `complete-delivery-criteria`；沿用 `@heluo/forge-devops` 失败面的措辞风格，gitee 侧独有处置（如 `use-native-http-credential`、`register-policy-action`、`verify-remote-state`）才新增动词）；`done` 不带。动作未登记时 `next_action: register-policy-action`，`detail` 指明到所属 profile 的 `heluo-policy` 目录登记（分发层默认已登记全部 12 条，未登记通常来自 profile 删行或组织信封收紧）。
+- **下一步**：`denied`/`failed`/`unknown` 信封带 `next_action`（固定动词，映射集中在 `src/gitee-next-action.mjs`；状态不是 `done` 就必须有下一步，常规由 `reason` 映射，交付判定未通过这类无原因码的确定失败由调用方显式给 `complete-delivery-criteria`；沿用 `@heluo/forge-devops` 失败面的措辞风格，gitee 侧独有处置（如 `use-native-http-credential`、`register-policy-action`、`verify-remote-state`）才新增动词）；`done` 不带。动作未登记时 `next_action: register-policy-action`，`detail` 指明到所属 profile 的 `heluo-policy` 目录登记（分发层默认登记六条写动作；出现这条拒绝通常意味着部署者开启了 `denyUnknownAction`，或组织信封收紧了动作集）。
 - **快照**：`NOT_A_REPOSITORY` 时对一层直接子目录做只读探测（`rev-parse --show-toplevel` + `rev-parse HEAD`，argv 写死、候选上限 8、跳过隐藏与依赖/产物目录、不跟随软链），只认子目录自身为仓库根；命中仅改写提示与下一步，不改变 `failed` 结论，不带回绝对路径或 stderr。
 - **git**：`commit` 先过 `git-message`（首行 `[变更号]`、描述非空），不合规零子进程；合规则经 `runGit()` 单一出口执行，成功以"新 HEAD 与提交前不同"为据。`push` 是远端写：门禁 `executeAction`（动作 `gitee.git.push`：随包登记、默认 `confirm`，未登记或确认不符即 `denied`）→ `confirm{repo,object}` 逐字匹配 → `runGit()`；失败不重放，超时按 `unknown`。push 非零退出时先做认证传输判定：先剔除 `remote:` 服务端诊断行，再命中 MSYS/sh 命名管道崩溃特征即 `AUTH_TRANSPORT_UNAVAILABLE`（failed，`next_action: use-native-http-credential`，detail 说明"不是用户名缺失、命令未离开本机"），普通 401/403 与孤立 `could not read Username` 仍按 `COMMAND_FAILED`；本地 commit/head/branch 不参与该归类。
 - **并发**：允许并发调用，环境变量按调用隔离；幂等台账命中返回 `reused` 且远端 0 次调用。
@@ -233,7 +229,7 @@ flowchart LR
 | 令牌缺失或过期 | 照常执行，由 `gh` 与服务端裁决 | `AUTH_MISSING`（服务端 401/403）或 CLI 非零退出 | 终端运行 `gh auth login`；无桌面凭据库或 CI 才用 `authEnv` |
 | CLI 配置目录含持久令牌 | 默认 `warn` 照常执行；`persistentToken: 'block'` 才阻断 | `GITEE_PERSISTENT_TOKEN`（`denied`，仅 block） | 删除明文令牌后运行 `gh auth login` |
 | 主机不是企业地址 | 拒绝 | `HOST_NOT_ENTERPRISE` | 修配置后重试 |
-| 动作未登记（profile 删行或信封收紧） | 拒绝，适配器 0 调用 | `denied` + `rule: unregistered-action` + `next_action: register-policy-action` | 在 `heluo-policy` 目录补登记（分发层默认已登记全部 12 条） |
+| 动作未登记且 `denyUnknownAction` 开启（profile 删行或信封收紧） | 拒绝，适配器 0 调用 | `denied` + `rule: unregistered-action` + `next_action: register-policy-action` | 在 `heluo-policy` 目录补登记（分发层默认登记六条写动作） |
 | 交付判定条件未满足 | 只判定、不执行 | `failed` + `reason: null` + `next_action: complete-delivery-criteria` | 补齐阻塞的关闭条件后重新判定 |
 | 对象不存在（404，或 500 + 未找到文本） | 不重试、不重放 | `failed` + `reason: ITEM_NOT_FOUND` + `next_action: check-target-exists`，`mayHaveSideEffect: false` | 核对编号/仓库后改目标重试 |
 | 快照目录不是仓库、但一层子目录是仓库根 | 只读探测（固定 argv、最多 8 个候选） | 仍 `failed` + `GIT_SNAPSHOT_NOT_A_REPOSITORY`，message 提示「子目录 <名>/ 是仓库根（HEAD=<7 位>）」 | 切换会话工作目录后重试；探测不改变失败结论 |
@@ -272,15 +268,15 @@ flowchart LR
 
 浏览器半（r15）：`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`，`exports['./client'] = './client.js'`，`peerDependencies = {react:'>=18'}` 且 `peerDependenciesMeta.react.optional = true`——react 由宿主 Web 外壳提供，写进 peer 是为了装错环境时立刻报错，而不是在页面里炸成 `Cannot find module`。构建期的 `HOST_PEERS` 规则只放行"键在白名单 + `optional:true` + 具体 semver 范围"的 peer，peer 不进闭包、不进 `bundledDependencies`、不出现在 tarball 的 `node_modules/` 里；其余 peer 仍是 `unclosed peerDependencies`。
 
-补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy`，**12 条并集目录** = 6 读 + 6 写，与 devops 层逐字相同，加内存审计舱 `allowNonDurable`）在前，插件行（`id: heluo-gitee`、`name: '@heluo/forge-gitee'`，`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行的 `name` 都用**包根名**：写成子路径宿主会静默跳过该包。**两行都不写 `isolate`**：两个 bundle 同处 root 域、共用唯一一个策略实例（派生的策略行 id 与 `isolate` 一律不出现，验收用 grep 兜底）。同一行 `id` 与逐字相同的目录是与 devops 补丁层的硬约定——`tests/plugin-patch-layers.test.mjs` 静态比较两处原文。
+补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy`，**六条写动作目录**，与 devops 层逐字相同，审计落内存舱 `sink: memory`、缓冲 1000 条）在前，插件行（`id: heluo-gitee`、`name: '@heluo/forge-gitee'`，`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行的 `name` 都用**包根名**：写成子路径宿主会静默跳过该包。**两行都不写 `isolate`**：两个 bundle 同处 root 域、共用唯一一个策略实例（派生的策略行 id 与 `isolate` 一律不出现，验收用 grep 兜底）。同一行 `id` 与逐字相同的目录是与 devops 补丁层的硬约定——`tests/plugin-patch-layers.test.mjs` 静态比较两处原文。
 
-目录**随包分发**：12 条条目写在包内 `cordis.patch.yml`，由 `buildBundle` 原样打进 tgz（`tests/bundle-gitee.test.mjs` 解包断言含 `gitee.delivery.judge` / `target: change`），装包即登记，不靠 profile 手改。
+目录**随包分发**：六条写动作写在包内 `cordis.patch.yml`，由 `buildBundle` 原样打进 tgz（`tests/bundle-gitee.test.mjs` 解包断言目录恰为 6 条、读动作一律不出现、每行只含 `action`/`target`/`category`），装包即登记，不靠 profile 手改。
 
 共存形态：
 
 | 形态 | 结果 | 建议 |
 |---|---|---|
-| 只装一个 | 12 条并集目录 + 自己的插件行；本包工具 11 个，目录里除自己四条外还有两条 devops 的变更读与 `change.clarification.write`（登记只决定可见，写仍受分类与门禁约束） | **推荐** |
+| 只装一个 | 六条写动作目录 + 自己的插件行；本包工具 11 个，目录里的 `change.clarification.write` 供 devops 使用（登记只决定由谁负责，写仍受分类、身份与审计约束） | **推荐** |
 | 同 profile 叠加两层（默认） | 两行同 `id`，loader 留下**唯一**一个策略实例；两处目录逐字相同，幸存者不取决于装配顺序；本地共存夹具枚举 15 个工具、0 行激活失败 | **默认可行**（不改配置） |
 | 单边改过目录再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按未登记 `GITEE_ACTION_UNREGISTERED` fail closed，先挂载方工具仍在 | 不采用（门禁会红） |
 | 想回到 r4 的隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
@@ -337,7 +333,7 @@ flowchart LR
 
 ## 实现与验证记录
 
-**实现边界**：独立 CLI 接入包（单安装单元）：11 个 `forge_gitee_*` 工具（3 读 + 4 受控写 + 1 只读判定 + 1 版本快照 + 2 git；判定随包默认登记可用、六条写随包登记但按分类受控（研发/评审写受规则约束、push 逐次确认、review.record 恒拒））、`gitee.*` 动作命名空间、`GITEE_*` 白名单字段子集（`GITEE_PLATFORM`）、唯一 `execFile` 出口（`run()`/`runGit()` 共用）、幂等台账、`review.md` 渲染与关闭条件判定；14 个源模块 + `cordis.patch.yml`（策略行 `heluo-policy` + 插件行 `forge-gitee`，与 devops 补丁层同 id、目录逐字相同、无 `isolate`）。
+**实现边界**：独立 CLI 接入包（单安装单元）：11 个 `forge_gitee_*` 工具（3 读 + 4 受控写 + 1 只读判定 + 1 版本快照 + 2 git；判定是读动作、按 out-of-scope 出闸可用，六条写随包登记但按分类受控（研发/评审写需身份与前置审计、push 与 DOP 回写在开关开启后弹卡片、review.record 恒拒））、`gitee.*` 动作命名空间、`GITEE_*` 白名单字段子集（`GITEE_PLATFORM`）、唯一 `execFile` 出口（`run()`/`runGit()` 共用）、幂等台账、`review.md` 渲染与关闭条件判定；14 个源模块 + `cordis.patch.yml`（策略行 `heluo-policy` + 插件行 `forge-gitee`，与 devops 补丁层同 id、目录逐字相同、无 `isolate`）。
 
 **验证结果与限制**：2026-10-29 `node --test "packages/forge-gitee/test/*.test.mjs"` 171 例、`node --test tests/bundle-gitee.test.mjs tests/plugin-patch-layers.test.mjs` 8 例离线通过（覆盖只读信封降级、写动作四状态与回读、默认禁用零调用、宿主 `register()` 判据、真实补丁层装载、共存形态与跨包策略行一致性、`buildBundle` 闭包与产物逐字节一致）；**未验**企业 Gitee CLI 联调、aarch64 产物、真实 profile 装入与 `--json` 字段稳定性；r10 增删模块后的条数与结果以本需求 QA 实测为准，明细见包 README 证据表与 NOT RUN 清单。
 

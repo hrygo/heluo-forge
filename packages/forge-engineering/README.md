@@ -25,6 +25,6 @@
 pnpm --filter @heluo/forge-engineering test
 ```
 
-- 策略目录默认以 `sink: memory` + `allowNonDurable: true` 满足本地与离线试点核验；生产或合规审计需要持久 sink 并关闭 `allowNonDurable`。当前配置仅支持 `none` 和 `memory`，服务提供程序注入入口，持久适配器及其接入和验证尚待完成。
+- 策略审计默认落 `sink: memory`（缓冲 1000 条），满足本地与离线试点核验；生产或合规审计改用 `sink: file`（按天 JSONL、保留 `keepDays` 天），组织信封要求持久审计时 `memory` 会被拒（`POLICY_AUDIT_NOT_DURABLE`）。服务另提供 `setAuditSink` 程序注入入口。
 - 单独安装本包（未安装 `@heluo/forge-enterprise` / `@heluo/forge-iam`）时，`DevOps` 与 `Gitee` 面板的独立 Token 接口返回无错误码的 `404`/`501` 会安静降级为本机环境提示，不阻塞配置与检查；带错误码的响应按错误分流。
 - 本包不含企业登录账号、AI 网关或通用模型管理；真实企业 DevOps/Gitee 环境凭据注入与双端交互体验尚待企业环境联调。

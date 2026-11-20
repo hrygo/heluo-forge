@@ -79,4 +79,4 @@ DSH 版本与 profile 名、会话 id 与大致时间、`approval/*` 日志片�
 
 仓库内可用 `node scripts/probe/run-host-probe.mjs` 对目标 DSH 复核审批签名与 `never` 行为（无 `dsh` 时跳过，不伪装通过）；信封字段的本地用例在 [packages/forge-gitee/test](../../packages/forge-gitee/test) 与 [packages/forge-policy/test](../../packages/forge-policy/test)。
 
-相关设计：[策略判定模型 §8](../design/policy-model.md#8-身份批准与确认) 与 [策略与审计详细设计 §5.4](../design/plugins/forge-policy.md#54-有限委托与可信确认生命周期)。
+相关设计：[策略判定模型 §8](../design/policy-model.md#8-身份批准与确认) 与 [策略与审计详细设计 §5.4](../design/plugins/forge-policy.md#53-受控写的确认卡片)。

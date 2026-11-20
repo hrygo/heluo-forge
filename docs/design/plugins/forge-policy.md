@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.17.2 |
+| 版本 | V0.17.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -15,7 +15,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-11-20 |
 | 门禁 | G2 |
-| 模块状态 | 可用（门禁骨架；实现与验证见设计索引 §2.2） |
+| 模块状态 | 可用（P0 受控写最小门禁；内容/流程/路径/确认四类规则待 P1–P3，见[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)；实现与验证见设计索引 §2.2） |
 
 > 编制依据：2026-10-20 对目标环境已安装 DSH 包做字符串级核验：`dsh-sandbox`、`dsh-sandbox-local`、`dsh-sandbox-policy`、`dsh-fs-sandbox`、`dsh-fs-observation-policy`、`dsh-bash-sandbox`、`dsh-pwsh-sandbox`、`dsh-sandbox-windows-acl`、`dsh-permission-presets`、`dsh-client-ui-permission-presets`、`dsh-client-ui-approval`、`dsh-tool-ask-user`、`dsh-tool-call-timeout-policy`、`dsh-spill-policy`。
 > **2026-10-24 宿主接口契约核验**（目标环境 DSH `0.2.1-rc.2`，macOS arm64；读取 live Host 的 Service/Event 契约，**不是行为实验**）：
@@ -28,7 +28,7 @@
 > **2026-10-24 候选平台只读事实（Ubuntu 24.04.5 / Linux aarch64，未做沙箱实验）**：`bwrap` 0.9.0 可用；Landlock 在活跃 LSM 列表中，`landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` 返回 ABI **8**；glibc 2.39；`node-pty` 未安装（`MODULE_NOT_FOUND`，不能据此判断 ABI 或不兼容）。这只说明 Linux aarch64 上存在可用的沙箱原语，未验证具体规则能否满足产品需求，也不改变"策略与沙箱叠加顺序仍未实验"的结论。
 > **仍未实验**：审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。有模型提供方的环境里“模型自决调用”与策略×沙箱叠加顺序已于 2026-10-24 实测（见 §9.2.2/§9.2.3）。
 > **仍未核验**：审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
-> **2026-11-16 内网 UAT 观测**：活动 profile 未覆盖本插件，生效目录来自三份 bundle 补丁层折叠，只有六条只读动作，六个写动作全部 `deny / unregistered-action`；同日源码核验 `packages/forge-policy/src/catalog.mjs:66,68`、`installer.mjs:223-226`、`approvals.mjs:142`、`gate.mjs:65-88`。目标判定规则见[策略判定模型设计](../policy-model.md)，实现状态以设计索引为准。
+> **2026-11-16 内网 UAT 观测**：活动 profile 未覆盖本插件，生效目录来自三份 bundle 补丁层折叠，只有六条只读动作，六个写动作全部 `deny / unregistered-action`；同日源码核验 `packages/forge-policy/src/catalog.mjs:66,68`、`installer.mjs:223-226`、`approvals.mjs:142`、`gate.mjs:65-88`。目标判定规则见[策略判定模型设计](../policy-model.md)，实现状态以设计索引为准。**该观测对应 P0 之前的实现**：审批与范围票据通道已在 r19 P0 删除，现行判定见 §5.1「现行实现」。
 >
 > 关联文档：[总体架构 §7.2](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md)、[策略判定模型设计](../policy-model.md)、[设计索引](../README.md)。
 
@@ -36,11 +36,11 @@
 
 本模块是企业侧的最后一道闸：在工具真正执行前判断"该不该做"，在数据离开本机前判断"能不能发"。
 
-边界：它不实现沙箱（复用 DSH 沙箱），不实现审批界面（复用审批 UI），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
+边界：它不实现沙箱（复用 DSH 沙箱），不实现确认界面（复用宿主 `userQuestions` 卡片），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-门禁骨架已实现；审批 UI 的注册与超时语义仍待核验。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
+P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；内容闸、流程规则、受保护路径拦截与确认卡片待 P1–P3。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
 
-**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 逐次确认。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。
+**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现只有分类默认决策加身份与审计两段，规则开关八条全部未实现。
 
 **IAM隔离消费进展**：独立许可/私有operation算法B已通过62新例及210项policy全包回归，独立peer与arguments身份变异已关闭。普通apply未注入该算法；C合成工具/命令的共享installer、发送体与owned finalizer已通过31新例/241项policy回归及独立审阅/变异。D合成模型入口已通过29新例/270项policy回归，包含最终错误桥修复及独立审阅/桥接增量复核；E根16项已验证实际IAM工厂与mock IdP的联合执行，独立审阅与本批完整检查已通过。B/C/D局部fixture本身不是联合证据，E仍不证明生产授权；普通apply不启用合成模型。会话见证、许可字段与整体边界见[IAM-003](<../../contracts/iam-consumer-isolated.md>)和[PLAN-007](<../../plans/2026-11-02-iam-consumer-isolated.md>)。
 
@@ -70,17 +70,17 @@
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
 | 沙箱策略包 | 包 | 随目标 DSH | 不启动策略模块，工具面整体禁用 |
-| 审批 UI | 包 | 随目标 DSH | 需确认的动作直接拒绝 |
+| 交互卡片（`ctx.userQuestions`） | 服务 | 随目标 DSH | 需要确认的动作直接拒绝 |
 | 审计落点 | 配置 | 本地文件或转发 | 写失败即拒绝高风险动作 |
 
 ## 4. 扩展形态与边界
 
 | 项 | 内容 |
 |---|---|
-| 形态 | Host 插件；确认识别用既有审批 UI，不自建对话框 |
+| 形态 | Host 插件；确认用宿主既有问答卡片（`ctx.userQuestions`），不自建对话框 |
 | 运行位置 | 本机 Host |
 | 目标 DSH 与 SDK | 随目标版本，钩子以实测为准 |
-| 使用的 seam 或服务 | 工具调用拦截、沙箱策略、审批交互、会话事件 |
+| 使用的 seam 或服务 | 工具调用拦截、沙箱策略、问答卡片、会话事件 |
 | 不修改的核心 | 沙箱实现、工具实现、模型调用链 |
 
 取舍：策略判断与沙箱隔离分开。沙箱负责"做不到"，策略负责"不该做"，两者叠加取最严。
@@ -105,35 +105,52 @@
 
 策略不可用（未挂载、加载失败、必要依赖缺失）时，依赖该策略的入口关闭；**不提供 fail-open 开关**，也不以"显式声明只读模式"作为降级通道。流程事实源（dop 变更状态、计划状态等）不可用不属于此列：它跳过相关流程规则、记录 `unevaluated` 并继续执行，见[判定模型 §7](../policy-model.md)。
 
-```ts title="导出面（钩子名已按 2026-10-24 live Host 契约核验）"
+```ts title="导出面（policy 服务，P0 现行）"
+export interface PolicyService {
+  /** 已编译的动作目录；只含目录登记的写动作 */
+  catalog: ReadonlyMap<string, PolicyCatalogEntry>;
+  actions(): string[];
+  decide(request: { action: string; target?: string }): PolicyDecision;
+  authorize(toolName: string, request?: { target?: string }): PolicyDecision;
+  protectedPaths(): string[];
+  checkPath(candidate: string): boolean;
+  orgPolicy(): OrgPolicyState;
+  policyVersion(): string;
+  mode(): 'managed' | 'personal';
+  contentRuleIds(): string[];
+  auditRecords(): AuditRecord[];
+  auditGaps(): AuditGap[];
+  acknowledgeAuditGaps(): number;
+  auditDegraded(): boolean;
+  setAuditSink(sink: AuditSink): void;
+  executeAction(commandCtx: unknown, action: string, exec: Exec, operation: () => Promise<unknown>): Promise<unknown>;
+  registerCommand(commandCtx: unknown, definition: CommandDefinition): () => void;
+  observations(): ObservationState;
+}
 export interface PolicyDecision {
   action: 'allow' | 'confirm' | 'deny';
   reason: string;
   rule: string;
 }
-export interface PolicyEngine {
-  check(input: { kind: 'fs' | 'bash' | 'egress'; target: string; meta?: unknown }): Promise<PolicyDecision>;
-}
 ```
 
-宿主接线：`ctx.tools.guard()` 承载硬拒绝（**必须挂在作用域上**：guard 会约束该作用域下的子 Agent，而 agent 视图级的 `restrict` 不会传播给子 Agent，见编制依据 2026-10-24 实测）（受保护路径与凭据，返回拒绝理由即阻断，且任何 guard 不能放行另一 guard 的拒绝）；`ctx.on('tools/pre-execute')` 承载需确认动作（返回 `{ kind: 'ask', reason }`，由 `ctx.approval` 决定，无 agent 或通道不可用时降级为拒绝）；`ctx.on('tools/result')` 只做观察投影，不参与判定；命令面不经工具管线，须显式接线（见 #21）。插件以 `inject: ['tools']` 声明对工具服务的硬依赖，依赖缺失即不挂载。
+宿主接线：`ctx.on('tools/pre-execute')` await 判定、身份与前置审计，返回 `{ kind: 'allow' }` 或 `{ kind: 'deny', reason }`；`ctx.tools.guard()` 同步核验并消费一次性收据（**必须挂在作用域上**：guard 会约束该作用域下的子 Agent，而 agent 视图级的 `restrict` 不会传播给子 Agent，见编制依据 2026-10-24 实测）；`ctx.on('tools/post-execute')` 与 `ctx.on('tools/result')` 结清同一条前置记录，后者只做兜底观察、不参与判定；命令面不经工具管线，由 `policy.registerCommand` 显式接线并复用同一屏障。插件以 `inject: ['tools']` 声明对工具服务的硬依赖，依赖缺失即不挂载。确认卡片不复用 `ctx.approval`：P1 起用 `ctx.userQuestions` 的问答卡片，见 §5.3。
 
 ### 5.1 受控动作目录与统一门禁
 
 动作目录由策略维护者登记，不从工具自报的读写属性推导；对已映射到策略或显式调用门禁的动作，**未登记或未开放即拒绝**。未映射的普通宿主工具处于该策略范围之外，空目录本身不使它们自动受控。
 
-目标目录 schema 仅包含以下字段；未知键在加载时拒绝，迁移规则见[判定模型 §12](../policy-model.md#12-迁移与实施)。
+目录 schema 只包含以下字段；未知键（含旧键 `revision`、`enabled`、`kind`、`egress`）在装载期拒绝。
 
 | 登记字段 | 说明 |
 |---|---|
 | `action` | 业务动作标识，与[工程工具契约 §3](../../contracts/engineering-tools.md) 的动作标识同源，不另立命名 |
-| `target` | 执行时必须按时给出的目标类型；缺失或错配一律拒绝 |
-| `revision` | 目标版本要求；需要版本的动作缺少或错配时拒绝 |
-| `enabled` | 显式开放标记；只读、普通研发写、人工确认动作分别开关 |
+| `target` | 执行时必须按时给出的目标类型；缺失一律拒绝 |
+| `category` | 类别覆盖；只能落在分类表已允许的范围内，决定默认决策 |
 
-**目标判定顺序**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后复验写动作的任务范围并完成必要的逐次确认和前置审计；执行前复验身份、策略摘要、范围及受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未知或未开放动作、缺失目标、范围不符以及工具自报 `readOnly` 的越权企图必须零执行。
+**目标判定顺序（P1–P3）**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后完成必要的确认卡片与前置审计；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现有实现与迁移边界**：逐动作批准台账已在 2026-11 的门禁重构中移除，目录 schema 只接受 `action` / `target` / `revision` / `enabled`，`kind`、`egress`、`retry` 一类旧键在装载时被拒绝；写动作的授权改由分类默认决策、内容/流程规则与范围票据共同承担。策略级批准（组织签名信封）与新判定流程的其余部分尚待实现；在迁移完成前不能把目标 schema 的未实现部分视为当前可用接口。
+**现行实现（P0）**：判定流水线只装配 `resolve → identity → audit → receipt` 四个常开阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。八条规则开关（`denyDelegatedWrites`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，置真在装载期被拒绝；未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content`）同样在装载期拒绝，避免"配了却静默不生效"。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -146,28 +163,34 @@ export interface PolicyEngine {
 
 **结果语义**：[工程工具契约 §4.2](../../contracts/engineering-tools.md) 为唯一真源；最小要求是区分未执行拒绝、可能执行与 `partial`/`unknown`，保留 `operation_id`，重试默认 `none` 或 `read_recheck`，每个具体写仍须提供自身平台的回查证据。
 
-#### 5.1.1 动作分类与默认决策（2026-11-16 调整）
+#### 5.1.1 动作分类与默认决策
 
 判定按动作类别给出默认决策，再叠加内容与流程规则；规则语义见[判定模型 §5](../policy-model.md)。动作标识与[工程工具契约 §3.1](../../contracts/engineering-tools.md) 的实现映射同源，不另立命名；`issue.create_or_update`、`pr.create_or_update`、`review.ai.publish`、`review.human.record`、`branch.create`、`commit.record`、`issue.close` 不是运行期标识，按这些名称登记不会生效。
 
-| 动作 | 类别 | 默认决策 | 确认方式 |
+下表是随包内置的动作词表与各自默认决策；**补丁层只登记其中六条写动作**，读动作不进目录（未登记即出闸），`git commit` 不进闸。
+
+| 动作 | 类别 | 默认决策 | 确认方式（开关开启后） |
 |---|---|---|---|
-| `change.read`、`change.list` | 只读 | allow | 无 |
-| `gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read`、`gitee.delivery.judge` | 只读 | allow | 无 |
-| `gitee.issue.write` | 研发写 | allow | 范围票据 |
-| `gitee.pr.write` | 研发写 | allow | 范围票据 |
-| `gitee.review.publish` | 评审写 | allow | 范围票据；正文须标注 AI 来源与 PR 版本（HARD） |
-| `change.clarification.write` | 研发写 | allow | 范围票据 |
-| `gitee.git.push` | 远端写 | confirm | 逐次确认 |
+| `change.read` | 只读 | allow | 无（不登记，出闸放行） |
+| `change.list` | 只读 | allow | 无（不登记，出闸放行） |
+| `gitee.repository.read` | 只读 | allow | 无（不登记，出闸放行） |
+| `gitee.issue.read` | 只读 | allow | 无（不登记，出闸放行） |
+| `gitee.pr.read` | 只读 | allow | 无（不登记，出闸放行） |
+| `gitee.delivery.judge` | 只读 | allow | 无（不登记，出闸放行） |
+| `gitee.issue.write` | 研发写 | allow | 无；内容闸开启后逐次判定 |
+| `gitee.pr.write` | 研发写 | allow | 无；内容闸开启后逐次判定 |
+| `gitee.review.publish` | 评审写 | allow | 无；正文须标注 AI 来源与 PR 版本（HARD） |
+| `change.clarification.write` | 研发写 | allow | `confirmDopWrite` 开启后弹确认卡片 |
+| `gitee.git.push` | 远端写 | confirm | `confirmPush` 开启后弹确认卡片；开关未接入前按注册写放行 |
 | `gitee.review.record` | 人工评审留痕 | deny | Agent 不可发起；宿主在人工确认后写入并记录 IAM subject |
 | `git commit` | 本地动作 | 出闸 | 无；首行 `[变更号]` 由 `git-message.mjs` 校验 |
 
 登记语义：
 
-- **未登记即拒绝**：目录中没有的动作在 guard 处硬拒绝、零副作用（`unregistered-action`）；`deny` 类动作（`gitee.review.record`）即使登记也拒绝，理由是动作语义不允许 Agent 发起。
-- **默认决策不是批准**：`allow` 只表示"不因动作名本身拒绝"，内容与流程规则仍逐次判定；HARD 命中不可被确认提升。
+- **未登记即出闸**：目录中没有的动作属于本门禁作用域之外，直接放行、不读身份、不写审计（`out-of-scope`）；`denyUnknownAction` 开启后才改为 `unregistered-action` 硬拒绝。
+- **默认决策不是批准**：`allow` 只表示"不因动作名本身拒绝"，进入身份与审计两段后才真正放行；内容与流程规则在 P1–P3 接入后仍逐次判定，HARD 命中不可被确认提升。
 - **内容与流程规则不在本文复制**：内置规则集、阈值与降级语义见[判定模型 §6、§7](../policy-model.md)；分级阈值与误报只能在真实仓库上评估后冻结。
-- **断言现状**：`packages/forge-policy/test/write-register.test.mjs` 断言本表的动作、类别与默认决策同代码词表逐条一致，并断言四个分发补丁层登记本表全部动作、四层逐字同序、默认决策与设计一致（登记只决定可见，放行仍由分类承担）；判定链路的其余断言在 `packages/forge-policy/test/apply.test.mjs`。
+- **断言现状**：`packages/forge-policy/test/write-register.test.mjs` 断言本表的动作、类别与默认决策同代码词表逐条一致；`packages/forge-policy/test/apply.test.mjs`、`gate-path.test.mjs`、`execution-lifecycle.test.mjs`、`execution-audit.test.mjs` 覆盖判定、一次性收据、执行前复验与审计字段。
 
 #### 5.1.2 策略级批准
 
@@ -189,7 +212,7 @@ export interface PolicyEngine {
 
 **机制边界**：策略签名证明"内容来自组织签发机且未被改动"，不证明规则正确，也不代替 IAM 与平台服务端权限。托管模式下签名缺失或验签失败只降级写动作，只读与本地研发不受影响。
 
-**证据现状**：`packages/forge-policy/test/approvals.test.mjs` 与 `approval-execution.test.mjs` 覆盖的是逐动作台账模型（挂载期校验、执行期复验）；P1 实现策略级批准时按新字段重写，重写前这些用例不构成对本文的验证。
+**证据现状**：逐动作批准台账与对应用例已在 r19 P0 随确认与票据通道一并移除；策略级批准（本文 §5.1.2）尚未实现，P1 接入时按本节字段补用例，实现前不构成对本文的验证。
 
 #### 5.1.3 策略签发与登记（2026-11-16）
 
@@ -271,59 +294,40 @@ export interface PolicyEngine {
 | 与沙箱取严 | 沙箱与策略结论不一致取更严；沙箱或策略缺失、被禁用时，依赖路径保护的动作关闭并记录阻塞，不降级 |
 | 不保证的终端 | 宿主无法给出可核验路径的调用（例如不透明远程执行）标阻塞，不放行 |
 
-### 5.3 C3 外发确认
+### 5.3 受控写的确认卡片
 
-外发确认绑定一次具体的动作、目标与内容摘要，且只展示"将要发出什么"的范围，不展示正文与凭据值。
-
-| 规则 | 要求 |
-|---|---|
-| 绑定 | 确认覆盖 `(action, target, contentDigest)`；任一变化即失效，必须重新确认 |
-| 展示 | 动作、目标、内容字段名与摘要前缀；确认文本与错误回显都不得出现凭据值（金丝雀检查） |
-| 拒绝 | 取消、过期、超时、通道不可用、无 UI、策略 `never` 全部按拒绝处理，不伪造同意 |
-| 白名单 | 允许出网的主机只说明"可去"，不等于该次写已获授权；写仍逐动作判定 |
-| 回退 | 内容摘要变化或目标变化后旧确认不可复用；写不自动重放，读取重试须重新核验，结果语义以工程工具契约为准 |
-
-### 5.4 有限委托与可信确认生命周期
-
-入口由用户明确触发并给出变更号；宿主可校验的上下文把委托绑定到**当前用户、变更、仓库、已开放动作与版本**。委托与确认的"可信"来自宿主给出的事实，不来自模型参数或正文。
+确认只覆盖两件事：本地分支推送到远端（`gitee.git.push`）与 DOP 变更状态流转（`change.clarification.write`，即 `forge_devops_change_update`）。其余登记写动作不弹卡，只受内容与流程规则约束。两者各有独立开关（`confirmPush`、`confirmDopWrite`），默认关闭。
 
 | 规则 | 要求 |
 |---|---|
-| 委托来源 | 委托只能由宿主侧事实创建（`source = host`）；模型自填的 `approved`、`principal`、`readOnly`、`review_kind`、聊天内容或摘要一律不能创建委托 |
-| 绑定范围 | 错人、错变更、错仓库、未开放或未登记动作一律拒绝；动作集只减不增 |
-| 版本 | 内容、要求与 PR 版本变化后旧确认失效；**不以"执行前重读一次"冒充条件写** |
-| 确认生命周期 | 确认绑定 `(action, target, contentDigest)` 与版本，一次性消费；取消、过期、版本漂移、已消费、来源不可信都按拒绝 |
-| 恢复与分叉 | 宿主重启、会话分叉或子 Agent 重新验证身份与范围，最多维持同等或更小范围；临时表或聊天记录不能恢复写授权，依据不足时重新承接（重新委托） |
-| C3 与人工确认 | C3 动作分类批准前自动研发写不生效；`approval = never`、answerer 缺失或异常都不产生同意；`allowed-once` 不等于真实人工 review |
-| 确认提示文案 | 范围确认同时给出审计原文（英文 `reason`）与本地化 `displayReason`（`en` 兜底，`zh` 为界面语言）；提示写明动作（按 `args.op` 区分创建与评论）、仓库、分支走向与"允许一次"覆盖的会话范围，逐次确认写明缺失项（如 PR 描述缺少验收小节）与未完整扫描的内容（二进制、超限截断），不让用户按按钮字面猜含义 |
-| 失败原因 | 范围确认未获 `allowed-once` 时，拒绝理由优先报审批侧真实原因（用户拒绝、无应答者、通道异常），不以票据文案覆盖 |
-| 不可证明即关闭 | 宿主无法证明某类确认时，相关动作确实不可调用（拒绝并给出缺口理由），不以提示词替代 |
+| 通道 | 走宿主的 `ctx.userQuestions` 问答卡片，不复用 `ctx.approval`：审批策略为 `never` 时审批服务在分发前就返回拒绝，卡片永远不会到达用户 |
+| 绑定 | 卡片绑定 `(action, target, contentDigest)`；参数、目标或正文任一变化即失效，必须重新询问 |
+| 展示 | 只展示动作名、目标与定位信息（仓库、分支走向、变更号），不展示正文与凭据值；不出现卡片通道以外的内部术语 |
+| 答案 | 只接受卡片返回的允许或拒绝；取消、超时（默认 120 秒）、会话卸载、卡片通道异常一律按拒绝处理，不伪造同意 |
+| 子 Agent | 子 Agent 不能发起确认（宿主对委派调用方不派发问答），受控写必须在主会话发起；需要确认的动作在子会话一律拒绝并说明原因 |
+| 审计 | 询问与应答各写一条审计记录（`phase: asked` / `phase: answered`），确认结果本身也是决策证据 |
+| 无 UI 场景 | 没有可用问答通道时按拒绝处理，不降级为"放行并记录" |
 
-**恢复/分叉/子 Agent 承接（#23 AC3，`resumeDelegation()`，2026-10-24）**：与 `authorizeDelegation` 一样只返回判定对象、从不抛错，任何无法复验的情况都按拒绝处理。
+### 5.4 规则开关与准入
 
-| 情况 | 判定 |
-|---|---|
-| 无委托 / 非宿主来源 / 已撤销 / 已过期 | `delegation-missing` / `delegation-untrusted-source` / `delegation-revoked` / `delegation-expired` |
-| 快照来源是聊天、摘要、临时表或模型 | `delegation-resume-untrusted-source`（**不能恢复写授权**） |
-| 未给当前身份、变更，或身份/变更与委托不符 | `delegation-resume-unverifiable` / `-principal-changed` / `-change-mismatch` |
-| 仓库越界、版本漂移、版本项不属于委托 | `delegation-resume-repository-out-of-scope` / `-revision-drift` / `delegation-resume-unverifiable` |
-| 子 Agent 承但没有宿主背书的 agent 身份 | `delegation-resume-unverifiable`（必须重新承接） |
-| 请求动作集超出原委托 | `delegation-resume-scope-widened`（**只减不增**） |
-| 复验通过 | `delegation-resumed`，返回收窄后的委托：范围＝请求子集，`expiresAt` **只继承不延长**，并记录 `resumeKind`/`forkedFrom`/`delegatedTo` |
-| 缺少可复验依据 | `delegation-resume-unverifiable` → 调用方必须重新承接（重新委托），不得沿用旧快照 |
+八条规则开关各自独立、默认全关，由部署者在插件配置里逐条开启；代码里没有隐式默认开启的拦截。每条开关必须能回答"宿主为什么覆盖不了"，答不出来就不加规则。
 
-**实测（2026-10-24）**：
+| 开关 | 拦截什么 | 为什么必须在策略层 |
+|---|---|---|
+| `denyDelegatedWrites` | 子 Agent 发起的受控写 | 宿主 quas 不区分调用来源，委派调用与主会话调用共用同一套工具权限 |
+| `denyUnknownAction` | 未登记的写动作 | 目录是白名单，登记之外的写动作默认不属于本门禁 |
+| `denyHumanRecord` | Agent 写入人工评审留痕 | 留痕的语义要求由人发起，宿主无法从工具参数判断发起者 |
+| `protectPaths` | 落在受保护根内的写入 | 沙箱管得住路径越界，管不住"动作语义上不该写这里" |
+| `enforceProcessRules` | 违反 SDD 顺序的写（变更未开始、计划未确认、保护分支、强制推送、缺验收小节、审查来源） | 宿主持久化里没有 SDD 顺序，只有策略层知道 |
+| `contentGate` | 正文命中凭据、私钥、内网地址、绝对路径等内容规则 | 沙箱只看路径，不看内容 |
+| `confirmPush` | `gitee.git.push` 每次推送 | 宿主没有"这次推送要不要问人"的概念 |
+| `confirmDopWrite` | DOP 变更状态流转 | 同上，状态流转需要业务侧确认 |
 
-| 证据 | 结果 |
-|---|---|
-| 离线用例 `packages/forge-policy/test/delegation.test.mjs`（新增 6 项） | 身份/变更/仓库/版本漂移逐项拒绝；聊天/摘要/临时表/模型快照一律拒绝；范围放宽被拒、收窄返回 `scopeReduced` 且到期时间不变；收窄后的委托经 `authorizeDelegation` 仍按收窄范围执行（被移除的动作 `delegation-action-out-of-scope`）；fork/subagent 记录宿主背书来源，子 Agent 缺 agent 身份即拒绝；撤销/过期/退化输入全部 fail closed |
-| 宿主探针 `delegation-resume-needs-host-facts`（`dsh 0.2.1-rc.2`，profile `sdk`） | 探针进程本身是"重启后的新会话"：内存无上次委托 → 写请求 `delegation-missing`；`source: 'chat'` 建委托被拒 `POLICY_DELEGATION_UNTRUSTED_SOURCE`；临时表快照承接被拒 `delegation-resume-untrusted-source`；宿主背书承接可放行且收窄生效；放宽为 `delegation-resume-scope-widened` |
-
-覆盖率：`delegation.mjs` 行 100% / 分支 96.30% / 函数 100%。
+共同约束：开关只能收紧权限；置真但规则未实现时装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`）；事实源不可用时流程规则记 `unevaluated` 并继续，不把"不知道"当成"不满足"；审计恒开，与开关状态无关。
 
 ### 5.5 必要审计前置与执行后缺口
 
-必要审计是"执行的前提"，不是事后的旁路日志。**未配置可用审计落点时，所有受门禁约束的动作（含只读与 command）一律拒绝**；这是本设计的默认值，不做降级放行。
+必要审计是"执行的前提"，不是事后的旁路日志。**未配置可用审计落点时，受门禁约束的登记写动作与登记命令一律拒绝**；这是本设计的默认值，不做降级放行。审计随包默认启用 `memory` 落点，受控动作不会因为"没配审计"而不可用；落点不可写时中止调用并给出可操作提示。
 
 | 规则 | 要求 |
 |---|---|
@@ -336,9 +340,9 @@ export interface PolicyEngine {
 
 宿主接线：`tools/pre-execute` await 前置审计并保存绑定同一执行对象、调用身份与参数摘要的私有收据；`tools.guard` 同步核验并消费一次，故较早 listener 返回 `allow` 也不能绕过必要审计。`tools/post-execute` 的 `(exec, result, next)` waterfall await 结清；它可能被其他 listener 短路，所以 `tools/result` 的同步观察回调另登记异步兜底结清。**emit 本身不是 awaited 屏障**：pending 在 observer 返回前登记，下一受控动作的 prepare 必须等待，guard 同时拒绝 pending 窗口；双路径按同一收据幂等结清。
 
-`policy.registerCommand` 不借用工具事件，而直接调用同一准备、路径、确认、审计及结清屏障。简单命令要求明确业务目标；结构化或带路径的命令提供可信 `resolveArguments(invocation)`，规范化参数作为处理函数第二参数。空输入不得以命令名充当目标。审批仍复用原生服务，真实命令确认通道与其 open-turn 前提未联调时保持关闭。
+`policy.registerCommand` 不借用工具事件，而直接调用同一准备、审计及结清屏障（路径与确认两段在 P1–P3 接入）。简单命令要求明确业务目标；结构化或带路径的命令提供可信 `resolveArguments(invocation)`，规范化参数作为处理函数第二参数。空输入不得以命令名充当目标。需要确认的命令在确认通道未联调前保持关闭。
 
-卸载或取消发生在审批、audit begin、下游 pre listener 的等待期间时，异步返回后须再次拒绝，不能依赖已被卸载的 guard。已获准而结果未明的调用在卸载时记录 `unknown` 缺口，不声称未执行或自动重放。参数摘要仅留私有内存，不写入最小审计记录。
+卸载或取消发生在 audit begin 或下游 pre listener 的等待期间时，异步返回后须再次拒绝，不能依赖已被卸载的 guard。已获准而结果未明的调用在卸载时记录 `unknown` 缺口，不声称未执行或自动重放。参数摘要仅留私有内存，不写入最小审计记录。
 
 ## 6. 权限、凭据与数据
 
@@ -364,7 +368,9 @@ flowchart TD
 
 **并发**：判断无共享可变状态，可并发；审计写入串行，避免交错。
 
-**超时**：确认等待默认 120 秒，超时按拒绝处理；判断本身 1 秒内完成，超时即拒绝。
+**超时**：确认等待默认 120 秒，超时按拒绝处理；判断本身 1 秒内完成，超时即拒绝。P0 没有确认阶段，判定与前置审计的等待由 `audit.timeoutMs`（默认 2 秒）约束。
+
+**现行顺序（P0）**：判定（分类默认决策）→ 身份（IAM actor）→ 前置审计 → 一次性收据 → 执行 → 结清；执行前 `recheck` 复验卸载、取消、参数与身份变化。确认与内容/流程两个阶段在 P1–P3 接入。
 
 **取消**：用户取消工具调用时不写"已执行"审计，只写"已取消"。
 
@@ -373,7 +379,7 @@ flowchart TD
 | 场景 | 行为 | 用户可见结果 | 是否可重试 |
 |---|---|---|---|
 | 策略文件缺失或损坏 | 全部拒绝 | 明确报错并指向配置 | 修复后重试 |
-| 审计不可写（必要审计） | 拒绝一切需要该保障的动作，含只读查询与 command | 提示审计不可用 | 恢复后重试 |
+| 审计不可写（必要审计） | 拒绝受门禁约束的登记写动作与经本包登记的命令，中止本次调用 | 提示执行记录无法写入，指明检查权限/磁盘/路径 | 恢复后重试 |
 | 本机日志或可选指标不可用 | 记录缺口，不阻塞研发，不放宽必要审计 | 显示缺口计数 | 恢复后自动继续 |
 | 确认界面不可用 | 视为拒绝 | 提示无法确认 | 可重试 |
 | 沙箱与策略结论冲突 | 取更严的一方 | 说明冲突规则 | 否 |
@@ -462,18 +468,20 @@ flowchart TD
 
 **未验**：企业环境的沙箱实现差异（本机 darwin 为 seatbelt；其他平台按其运行时能力核验）。
 
-**写动作规则**：写动作按类别判定，并应用内容规则、流程规则与策略级批准；决策依据见 ADR-27。
+**写动作规则**：写动作按类别判定，并应用内容规则、流程规则与策略级批准（三者在 P1–P3 接入）；决策依据见 ADR-27。P0 只应用分类默认决策、身份校验与前置审计。
 
-有限委托内普通研发写的目标见[需求 §2.3](../../requirements/requirements-baseline.md)。内容闸不判定"谁可以写"，最终授权仍来自 IAM 与平台服务端权限，"缺原生可靠控制时禁用、不自建第二授权系统"继续成立。入口确认不自动豁免内容与流程规则，业务决定与正式人工评审仍需真实确认。
+普通研发写的目标见[需求 §2.3](../../requirements/requirements-baseline.md)。内容闸不判定"谁可以写"，最终授权仍来自 IAM 与平台服务端权限，"缺原生可靠控制时禁用、不自建第二授权系统"继续成立。卡片确认不豁免内容与流程规则，业务决定与正式人工评审仍需真实确认。
 
 ## 10. 测试矩阵
+
+下表是目标测试矩阵；P0 的实际覆盖见包内 `test/`（判定 `apply`/`catalog`/`config`，收据与复验 `gate-path`/`execution-lifecycle`，审计 `audit`/`audit-file`/`execution-audit`，命令面 `command`，组织信封 `org-envelope`，观察 `observe`，包体 `package-shape`）。
 
 
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
 | 单元 | 三类动作判定、fail-closed、规则优先级 | `node --test` |
 | 契约 | 结论与审计字段稳定 | 契约用例 |
-| 集成 | 命中受保护路径、确认超时、必要审计不可写零执行、补记失败保留结果并限制后续动作、委托越界与版本漂移零执行 | 本地夹具 |
+| 集成 | 命中受保护路径、确认超时、必要审计不可写零执行、补记失败保留结果并限制后续动作 | 本地夹具 |
 | 等价路径负测 | 未登记 command 拒绝、bash/pwsh 与通用 HTTP 按类别受控、包装与别名不提权、不向解释器注入业务凭据 | 本地夹具 + 宿主探针 |
 | 内容闸 | HARD 命中零执行且脱敏回显、规则数上限、256 KiB 截断、二进制跳过、内置集不可删除 | `node --test` |
 | 流程与事实源 | 事实源不可用时动作继续并记 `unevaluated`、保护分支与 force push 恒判定、变更号缺失拒绝 | 本地夹具 |
@@ -496,7 +504,7 @@ flowchart TD
 |---|---|---|---|
 | 企业环境与双端实机下的门禁行为（本机已实测模型自决调用、委托路径与策略×沙箱叠加顺序，见 §9.2.2/§9.2.3） | 平台组（企业环境实测） | 企业侧门禁完整性结论 | G2前 |
 | 企业模型面的门禁行为（本机 oMLX 只作机制证据，不代表企业模型面） | 平台组（企业环境实测） | 企业侧完整性结论 | G2 |
-| 审批 UI 的注册方式与超时语义 | 平台组（实测） | 确认流程（P02、P04） | G1 编码前 |
+| 问答卡片的超时与并发语义（`userQuestions` 的渲染与回传已在隔离 profile 实测，超时与多卡并存未验） | 平台组（实测） | 确认卡片（P1） | P1 编码前 |
 | `$DSH_HOME` 内部范围（哪些子目录含凭据、会话与指令）与 `$DSH_AGENTS_HOME` 是否在某些 profile 出现 | 平台组（实测） | 受保护路径默认集（P04） | G1 编码前 |
 | 审计如何接入持久落点和集中平台 | 安全团队 | 持久落点契约与留存 | G2 前 |
 | dop 变更状态、计划状态的可用字段与接口稳定性 | dop 提供方 | 流程规则（变更进行中、计划已确认） | P2 编码前 |

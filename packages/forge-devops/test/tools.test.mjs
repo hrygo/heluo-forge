@@ -812,7 +812,7 @@ test('写回经装配层：变更号与正文进到门禁，身份与取消信�
   );
   const write = seenExec.filter((entry) => entry.action === FLOW_ACTIONS.CHANGE_UPDATE).at(-1);
   assert.ok(write !== undefined, `写回没有进到门禁：${JSON.stringify(result)}`);
-  assert.equal(write.exec.arguments.changeId, 'ARD123456', '范围票据要按变更号绑定');
+  assert.equal(write.exec.arguments.changeId, 'ARD123456', '变更号要同时进 arguments 供确认卡片与审计定位');
   assert.equal(write.exec.arguments.target, 'ARD123456');
   assert.equal(write.exec.content.title, '新标题');
   assert.equal(write.exec.content.body, '新描述');

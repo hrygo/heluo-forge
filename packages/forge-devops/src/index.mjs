@@ -723,8 +723,7 @@ export function apply(ctx, rawConfig = {}) {
         FLOW_ACTIONS.CHANGE_UPDATE,
         {
           name: 'devops.change.update',
-          // 变更号同时进 arguments：范围票据按"身份 + 变更号 + 仓库 + 动作"绑定，
-          // 只给 target 会让每一次写都因为"没有变更号"被拒。
+          // 变更号同时进 parameters 供确认卡片与审计摘要定位，正文走私有通道、审计只记摘要。
           arguments: { target: id, changeId: id },
           // 正文走私有通道过内容闸；审计只记摘要。
           content: { title: summary, body: description, ...(aiAc === undefined || aiAc === '' ? {} : { text: aiAc }) },
