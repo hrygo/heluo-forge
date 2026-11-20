@@ -16,6 +16,8 @@ const config = {
   issuer: 'https://iam.corp.example', clientId: 'synthetic-client',
   authorizationEndpoint: 'https://iam.corp.example/authorize',
   tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
+  // The enterprise preset owns the gateway target (issue #226).
+  managedModels: { baseURL: 'https://gateway.corp.example/v1' },
 };
 const input = { key: 'synthetic-new-key', deviceLabel: 'test-device' };
 
@@ -34,7 +36,7 @@ async function setup(t, { existing = false, gatewayBaseURL, serviceConfig } = {}
     value: 'synthetic-existing-key', ownerSubject: 'synthetic-subject', enteredAt: new Date(now).toISOString(),
     baseURL,
   });
-  const service = createIamService(serviceConfig ?? { ...config, managedModels: { baseURL } }, {
+  const service = createIamService(serviceConfig ?? config, {
     credentials: fixture.credentials, now: () => now, ...fixture.options,
     fetch: async () => { throw new Error('unexpected network'); },
   });
@@ -327,7 +329,7 @@ for (const newerPublication of [false, true]) {
       async save(data, { guard }) {
         assert.equal(guard(), true);
         const { value: _value, ...metadata } = data;
-        payload = { ...metadata, writeOperationId: 'synthetic-own-generation' };
+        payload = { ...metadata, version: 3, writeOperationId: 'synthetic-own-generation' };
         // Model a later operation having published while this receipt waited.
         provider.gatewayEpoch += 1;
         provider.gatewaySummary = { state: 'configured', generation: 'synthetic-prior-generation' };
