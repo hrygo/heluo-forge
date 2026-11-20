@@ -20,6 +20,11 @@ import {
 } from './content-rules.mjs';
 import { DEFAULT_CONFIRMATION_TIMEOUT_MS } from './config.mjs';
 import {
+  WIRED_PROCESS_RULES,
+  evaluateProcessRules,
+  factsFromArguments,
+} from './process-rules.mjs';
+import {
   CONFIRM_CODES,
   CONFIRM_REASONS,
   buildConfirmationCard,
@@ -121,6 +126,37 @@ const CONTENT_HARD_COPY = (action, findings) => {
   return `受控写「${action}」已拒绝：提交内容命中了不允许放行的高风险信息（${ids}）。`
     + '请从正文中移除后重试；这类内容不能通过人工确认放行。';
 };
+
+const PROCESS_DENIED_COPY = (action, denials) => {
+  const ids = [...new Set(denials.map((item) => item.rule))].join('、');
+  const detail = denials.map((item) => item.reason).join('；');
+  return `受控写「${action}」已拒绝：不满足流程前置条件（${ids}）。${detail}。`
+    + '请按流程补齐后重试；流程条件不接受人工确认放行。';
+};
+
+/**
+ * 流程闸只接已接线的规则（`WIRED_PROCESS_RULES`）：依赖外部事实源的两条要等
+ * 事实源注入后再启用，否则"查不到状态"会被误读成"不满足流程"。
+ */
+function evaluateProcess(exec, action) {
+  try {
+    return evaluateProcessRules({
+      rules: WIRED_PROCESS_RULES,
+      facts: factsFromArguments(exec?.arguments ?? {}),
+      action,
+    });
+  } catch {
+    // 求值抛错不等于没有违反：按不可确认拒绝，与内容扫描失败同口径。
+    return Object.freeze({
+      deny: Object.freeze([Object.freeze({
+        rule: 'process-rule-error',
+        reason: 'the process rules could not be evaluated',
+      })]),
+      confirm: Object.freeze([]),
+      unevaluated: Object.freeze([]),
+    });
+  }
+}
 
 /**
  * `subject` 是 provider 自证（Gitee guard 要求 `gitee`），与 IAM `actor` 是两个字段。
@@ -373,6 +409,25 @@ export function createGate({
     }
     const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
+    const subject = subjectOf(exec?.name, action);
+    // 流程闸先于内容闸：先判"这一步该不该发生"，再看"内容能不能发出去"。
+    const process = rules?.enforceProcessRules === true ? evaluateProcess(exec, action) : undefined;
+    if (process !== undefined && process.deny.length > 0) {
+      const processRuleIds = [...new Set(process.deny.map((item) => item.rule))];
+      return denyWithEvidence({
+        ...(subject === undefined ? {} : { subject }),
+        actor,
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'deny',
+        rule: 'process-rule-denied',
+        operationId,
+        agent: { kind },
+        ruleIds: processRuleIds,
+        summary: `受控写 ${action} 不满足流程前置条件（${processRuleIds.join('、')}）`,
+      }, PROCESS_DENIED_COPY(action, process.deny), 'POLICY_PROCESS_DENIED');
+    }
     // 内容闸开启时正文只解析一次（摘要与扫描看同一份内容）；关闭时走原有摘要路径，
     // 不额外插一次 await——放行路径上的时序变化会改变宿主看到的执行顺序。
     const scanning = rules?.contentGate === true;
@@ -382,13 +437,15 @@ export function createGate({
       : typeof exec?.content === 'function'
         ? await contentDigestOf(exec)
         : contentDigestOf(exec);
-    const subject = subjectOf(exec?.name, action);
     const scanned = scanning ? scanContent(action, exec?.arguments, content) : undefined;
     // 命中的规则与未扫全的字段：拒绝、确认两段记录与 begin 共用这一份元数据，
     // 审计才能说明"为什么问"以及"哪里没扫全"（`字段:原因`，如 `body:truncated`）。
-    const ruleIds = scanned === undefined || scanned.findings.length === 0
-      ? undefined
-      : [...new Set(scanned.findings.map((finding) => finding.rule))];
+    // 流程（软命中）与内容的命中规则合成一份：审计据此说明"为什么问"。
+    const hitRules = [
+      ...(process === undefined ? [] : process.confirm.map((item) => item.rule)),
+      ...(scanned === undefined ? [] : scanned.findings.map((finding) => finding.rule)),
+    ];
+    const ruleIds = hitRules.length === 0 ? undefined : [...new Set(hitRules)];
     const contentSkipped = scanned === undefined || scanned.skipped.length === 0
       ? undefined
       : [...new Set(scanned.skipped.map((item) => `${item.field}:${item.reason}`))];
@@ -429,7 +486,13 @@ export function createGate({
     }
     // 确认原因按顺序合并：动作确认在前、内容风险在后，客户端据此走分步表单（D25）。
     const reasons = [];
+    const cardChannel = rules?.confirmPush === true || rules?.confirmDopWrite === true;
     if (decision.action === 'confirm') reasons.push('action');
+    // 软流程命中只有在"本来就要弹卡"或"有卡片通道"时才升级为确认；
+    // 否则按放行 + 审计处理（与内容软命中同口径，D36）。
+    if ((process?.confirm.length ?? 0) > 0 && (decision.action === 'confirm' || cardChannel)) {
+      reasons.push('process');
+    }
     if (scanned !== undefined
       && (scanned.confirm.length > 0 || (scanned.soft.length > 0 && decision.action === 'confirm'))) {
       reasons.push('content');

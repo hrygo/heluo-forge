@@ -156,10 +156,10 @@
 0  动作解析：工具名 → action；未登记 → out-of-scope（denyUnknownAction 开则拒，否则放行）
 1  子代理（开关开）→ 拒绝，不弹卡
 2  身份解析（仅主代理的写动作）→ 失败即拒
-3  denyUnknownAction：未在分类表出现 → 拒
+3  denyUnknownAction：严格白名单模式（默认关=未登记放行；开启=未登记一律拒）
 4  denyHumanRecord：category === human-record → 拒
 5  protectPaths：命中保护路径 → 拒
-6  enforceProcessRules：流程规则不满足 → 拒
+6  enforceProcessRules：流程规则不满足 → 拒（硬规则拒、软规则进确认）
 7  contentGate：hard → 拒；soft → 记待确认
 8  确认判定：confirmPush（`gitee.git.push`）/ confirmDopWrite（`change.clarification.write`）/ 内容软命中 → 弹卡；多条原因合并为同一请求
 9  审计 begin（失败 → 中止并给出可操作建议）
@@ -280,7 +280,7 @@ audit:
 |---|---|---|
 | P0 骨架 | 已合并 | PR #400（`60e5cf6`） |
 | P1 安全基线 | 已合并 | PR #401（`09e4bdb`） |
-| P2 内容闸 | 已实现，待评审 | 9 条内置规则、按动作字段映射、跨字段 256 KiB 预算、截断与读不到语义、HARD/可确认/SOFT 三档与分步卡片合并 |
-| P3 收尾 | 未开始 | `protectPaths`、`enforceProcessRules`、`denyHumanRecord`、`denyUnknownAction`、`/policy-audit`、文档同步 |
+| P2 内容闸 | 已合并 | PR #411；9 条内置规则、按动作字段映射、跨字段 256 KiB 预算、截断与读不到语义、HARD/可确认/SOFT 三档与分步卡片合并 |
+| P3 收尾 | 进行中 | **已接入**：`enforceProcessRules` 的四条纯参数规则（保护分支、强制推送、验收小节、审查来源）；**待做**：`protectPaths`、`denyHumanRecord`、`denyUnknownAction`、`/policy-audit`、文档同步 |
 
 草案已按裁决台账完成。U1（子代理继承父会话身份）已核对；U2（企业侧 `user-questions` API）仍待企业环境核验。
