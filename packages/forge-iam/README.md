@@ -13,6 +13,7 @@
 | 按运行位置读取身份、令牌或存取业务凭据 | [凭据接入指南](docs/credential-access.md) |
 | 使用模拟 IAM 完成本地验证 | [本地模拟验收指南](docs/local-mock-testing.md) |
 | 查询服务、路由、状态机与配置 | [IAM 开发指南](docs/developer-guide.md) |
+| 预置和轮换企业 IAM 客户端密钥 | [管理员预置与轮换](docs/credential-access.md#9-管理员预置与轮换-iam-客户端密钥) |
 | 从常驻入口查找接入示例 | [issue #260](https://github.com/hrygo/heluo-forge/issues/260) |
 
 ## 当前实现
@@ -28,7 +29,7 @@
 | 形态 | Host + Client 插件；Client 使用同源 SSE 共享状态，连接不可用时回退 2 秒轮询；Client Remote/watch 未接 |
 | 配置 | `src/config.mjs`：显式端点/discovery、issuer、clientId、可选 `gatewayResource`/`gatewayConsoleUrl`、redirectUri/callbackPort、超时与安全开关；`scopes` 必须含 `openid`，回调路径不得占用 `/api/forge-iam` |
 | 状态机 | `src/state.mjs`：`unconfigured` / `signed-out` / `authenticating` / `ready` / `expired` / `unreachable` / `error` |
-| 凭据记录 | `src/record.mjs`：`IamGrantV1` 校验、到期/刷新判定；写入 `credentials` 的 GrantRecord |
+| 凭据记录 | `src/record.mjs`：公开 V1、机密 V2 会话校验与到期/刷新判定；写入 `credentials` 的 GrantRecord |
 | 凭据适配 | `src/store.mjs`：GrantRecord、网关凭据（`ENTERPRISE_STATIC_KEY` + `kind: grant` 的不透明元数据记录）、锁内 `mutate`、旧镜像清理方法（启动不调用）、官方旧记录检测 |
 | 网关凭据 | 录入/替换/清除与状态（未配置/已配置/属于其他账号/记录损坏）；显示存储来源，非 keychain 时提示未受系统保护；不签发、不刷新、不探测；退出与卸载保留 |
 | Host 服务 | `src/service.mjs`：OIDC 登录、state/nonce、PKCE S256、token 交换、ID Token/JWKS 校验、刷新、撤销 |
@@ -90,6 +91,7 @@
 ### 授权与回调
 
 - 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名（RS256/PS256/ES256，拒绝 `none`/HS*）、issuer、audience（含多 audience 的 `azp`）、nonce、exp；`kid` 未命中时重取一次 JWKS。
+- 企业 IAM 要求客户端认证时显式配置 `confidential`、登记一致的 `client_secret_basic` 或 `client_secret_post` 及预置引用；换票和刷新共用该认证方法。兼容默认 `public` / `none` 只适用于允许无客户端认证换票和刷新的部署。
 - token 交换与刷新只由 Host 发起。账户页和引导使用授权 URL 与非敏感 `IamView`；已通过 Connection 鉴权的同源页面可按需调用令牌接口，见[凭据接入指南](docs/credential-access.md)。
 - 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；不得为站点根或以 `/` 结尾（DSH 路由是不带尾斜杠的绝对路径）。显式 `redirectUri` 必须为 HTTP(S) 地址，其 path 与 `redirectPath` 一致且不含 query/fragment；运行时还须与实时回调 Origin 同源，否则以 `IAM_CONFIG_INVALID` 拒绝。生产值须符合 IAM 的登记规则。
 - 生产形态配置 `callbackPort: 0`：插件自建回环监听，端口由系统分配，回调地址在登录发起时才确定，监听也只在这次尝试期间存在（RFC 8252 §8.3）。需要固定端口时填 1024–65535；绑定失败直接拒登录并报 `IAM_CALLBACK_PORT_UNAVAILABLE`。省略 `callbackPort` 时仅使用宿主实时 Origin，供开发与兼容；配置后仅使用已绑定回环监听的实时 Origin，两者不互相回落。Origin 缺失、获取异常或不是有效 HTTP(S) 地址时，以 `IAM_CALLBACK_UNAVAILABLE` 拒绝登录，不生成授权链接。`callbackAddress` 默认 `auto`，始终先试 `127.0.0.1`，只在该地址族不可用时退到 `::1`；IPv6 需另行登记前缀 `http://[::1]`。

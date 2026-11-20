@@ -6,18 +6,18 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.7.1 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-19 |
+| 最后更新 | 2026-11-20 |
 | 门禁 | 轻量集成方案待用户确认；问答式交付打包与员工启动器已本地验证；企业接口与目标平台待实测 |
 | 交付门禁 | 启动器自动准备宿主/web profile；已配置的 IAM Discovery 可由制作器校验；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；异版本先卸载再安装的编排已由离线用例覆盖、`dsh plugin remove` 已在 0.2.1-rc.5 上取证，企业私版 tgz 的升级路径未端到端实测；企业 IAM/宿主目标平台待实测 |
 
-> 编制依据：项目负责人确认企业采用 public 客户端、以官方宿主集成企业插件、不重新签名或公证，轻量安装方式由 miniceM 调研选择；具体范围见 §1。文档为技术方案草案，不表示企业接口、安装流程或目标平台已实测。现有实现与验证见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)。
+> 编制依据：官方宿主集成及 IAM 客户端认证分别依据[总体架构 ADR-26 和 ADR-31](<platform-architecture.md#14-架构决策记录>)，具体范围见 §1。文档为技术方案草案，不表示企业接口、安装流程或目标平台已实测。现有实现与验证见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)。
 >
 > 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[总体架构](<platform-architecture.md>)、[企业插件制品源决策](<plugin-registry-source-decision.md>)、[企业组合包设计](<../design/plugins/forge-enterprise.md>)、[IAM 机密认证契约](<../contracts/iam-client-auth-isolated.md>)、[工程开发与发布约定](<../engineering/development-conventions.md>)。
 
@@ -32,7 +32,7 @@ GitHub Actions 使用公开源码生成包含目标平台组件的公版 DSH 插
 | 宿主 | 保持官方 DSH 宿主及签名载荷原样，以受支持的插件机制集成企业插件；不修改 DSH 核心或创建 fork |
 | 安装 | 不要求自建双击安装器；允许企业内成套提供原样官方宿主和插件，或通过官方渠道取得宿主后执行企业初始化；由 miniceM 调研选择 |
 | 签名与公证 | 不重新签名或公证官方宿主；上游载荷来源、实际签名状态及系统信任分别核验，不预设全部平台可用 |
-| 企业 IAM | 企业支持并采用 `authMode=public`、`clientAuthMethod=none`；使用授权码与 PKCE S256，不在私版提供共享 `client_secret` |
+| 企业 IAM | 目标企业部署显式使用 `authMode=confidential`，预注册授权码与刷新权限，两个 grant 共用 IAM 登记的客户端认证方法，授权码使用 PKCE S256。私版只携带对交付对象可见的非秘密认证元数据 |
 | 个人 Key | 员工首次登录后录入，不进入企业配置或私版；与 issuer / 网关地址绑定的增强另由 [issue #226](<https://github.com/hrygo/heluo-forge/issues/226>) 跟踪 |
 | 制包机与 Skill | 本地制作在 macOS 执行；制作端与员工端既有研发 Skill 按 Agent Skills 标准整理 |
 | 目标平台 | Windows x64 / ARM64、麒麟 x86_64 / ARM64、macOS Intel / Apple；目标环境验收由 [issue #123](<https://github.com/hrygo/heluo-forge/issues/123>) 跟踪，未运行不能宣称交付通过 |
@@ -73,16 +73,16 @@ flowchart LR
 |---|---|---|
 | 基础制品 | 公版来源、版本及可核对摘要；选定路径所需官方宿主及目标架构 | 文件、来源、架构或版本不匹配时停止 |
 | 输出信息 | 企业包版本、输出目录、目标能力 | 必填项缺失或目标文件已存在时停止 |
-| IAM 企业配置 | 企业 `clientId`、OIDC Discovery 地址（优先，`issuer` 由文档提供）或显式端点模式下的 `issuer` 与授权/token/JWKS 端点、回调路径、端口及地址族；`authMode=public`、`clientAuthMethod=none` | 缺失必填字段、同时在 Discovery URL 之外再固定 `issuer`，或显式端点模式缺少 `issuer` 时停止；不要求也不写入共享 secret |
+| IAM 企业配置 | 企业 `clientId`、OIDC Discovery 地址（优先，`issuer` 由文档提供）或显式端点模式下的 `issuer` 与授权/token/JWKS 端点、回调路径、端口及地址族；`authMode=confidential`、与登记的 `token_endpoint_auth_method` 一致的 `clientAuthMethod`（`client_secret_basic` 或 `client_secret_post`）及非秘密 `clientSecretRef` | 缺失必填字段、同时在 Discovery URL 之外再固定 `issuer`，或显式端点模式缺少 `issuer` 时停止；原始密钥及文件引用不接受 |
 | 网关企业配置 | 企业网关地址及所启用能力需要的默认配置 | 能力启用而配置缺失时停止 |
 | 其他企业配置 | 企业统一且与个人无关的已启用能力配置 | 按能力检查，未启用能力不强加字段 |
 | 个人数据 | 个人 Key、账号、token、密码 | 不作为企业配置或私版输入 |
 
 真实企业配置保存在仓库根目录被 Git 忽略且未跟踪的 `.env` 中，可由制作人员复用；独立工具链没有 Git 仓库时，配置文件保存在不受版本管理的位置。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。密钥、个人凭据与令牌不作为配置输入。制作器复用 IAM 运行时配置校验，并核对配套工具链与公版内校验模块；除 LF / CRLF 换行外存在差异时拒绝制作。Discovery 预检的结果与错误不回显企业地址；预览和回执仍包含本地路径，分享前须脱敏。静态校验不证明企业登录、网关或撤销协议可用。
 
-使用 OIDC Discovery 时私版不固定 `issuer`：运行时采用 Discovery 文档声明的 `issuer`，并以 ID Token 的 `iss` 与其精确比对；制作器校验文档包含合法 issuer 及授权、token、JWKS 端点。显式端点模式不使用 Discovery，必须在私版中提供 `issuer`。同一份配置同时给出 `discoveryUrl` 与 `issuer` 会被制作器拒绝：企业环境已验证，两者不一致时固定 issuer 会使登录无法跳转，Discovery 已是该模式的唯一 issuer 来源。运行时在冷启动恢复已保存会话前解析该文档；文档不可达或声明的 issuer 与记录不一致时不恢复身份并保留记录，需重新启动或重新登录后重试。生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。企业接入采用 public 与 PKCE S256；厂商历史回函曾给出不同口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
+使用 OIDC Discovery 时私版不固定 `issuer`：运行时采用 Discovery 文档声明的 `issuer`，并以 ID Token 的 `iss` 与其精确比对；制作器校验文档包含合法 issuer 及授权、token、JWKS 端点。显式端点模式不使用 Discovery，必须在私版中提供 `issuer`。同一份配置同时给出 `discoveryUrl` 与 `issuer` 会被制作器拒绝：企业环境已验证，两者不一致时固定 issuer 会使登录无法跳转，Discovery 已是该模式的唯一 issuer 来源。运行时在冷启动恢复已保存会话前解析该文档；文档不可达或声明的 issuer 与记录不一致时不恢复身份并保留记录，需重新启动或重新登录后重试。生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。企业 IAM 登记、S256 和回调行为均须在企业环境验证。
 
-Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。`release-delivery` 从权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；secret 和完整 `.env` 不进入交付物。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。该开关只约束制作器检查，运行时不能依靠它阻止 HTTP。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用）。随后以本次交付版本为准收敛：profile 内没有企业插件时只执行一次 `dsh plugin add`；已装版本与交付版本不同时先 `dsh plugin remove` 卸载旧版本，成功后再 `dsh plugin add`；已装版本与交付版本相同则不再写入。卸载失败即停止，不执行安装、也不留下半程状态。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。包含企业配置的暂存文件与私版插件置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
+Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、客户端认证模式、方法和非秘密引用、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。`release-delivery` 从权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；secret 和完整 `.env` 不进入交付物。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。该开关只约束制作器检查，运行时不能依靠它阻止 HTTP。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用）。随后以本次交付版本为准收敛：profile 内没有企业插件时只执行一次 `dsh plugin add`；已装版本与交付版本不同时先 `dsh plugin remove` 卸载旧版本，成功后再 `dsh plugin add`；已装版本与交付版本相同则不再写入。卸载失败即停止，不执行安装、也不留下半程状态。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。包含企业配置的暂存文件与私版插件置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
 
 ## 4. 公版构建与本地二次制作
 
@@ -162,17 +162,19 @@ Skill 不依赖 Codex 专有接口、工具名或路径；由具备读取技能�
 
 ## 6. IAM、个人 Key 与升级
 
-企业登录基线是 public 客户端，`clientAuthMethod=none`；授权码使用 PKCE S256 与系统浏览器、回环回调。企业私版不包含共享 `client_secret`，也不为本交付路径实现真实 secret 来源和轮换。用户对 public 支持的确认不等于真实服务端对 S256、注册回调和令牌生命周期的联调结论；这些事实由 #123 验证，旧厂商回函保留原貌。
+目标企业部署使用预注册的机密客户端，授权码采用 PKCE S256 与系统浏览器、回环回调。管理员通过受控运维流程在目标终端预置密钥，使用 `heluo-forge client-secret set --issuer ... --client-id ... --method ... --ref ...` 从标准输入将原始密钥写入现有加密 SQLite 凭据库。Host 通过独立受信来源读取。制品及制作配置中的 IAM 字段限于企业地址与非秘密元数据，安装器、启动器和运行时均无环境变量、文件或配置密钥回退。预置操作与制包、安装分离，要求在首登前完成。
 
-public 模式不免除 IAM grant、个人 Key 存储和模型 / 工具消费的原子性、可信来源与 fail-closed 门禁。当前默认装配及目标平台证据仍须按 [#121](<https://github.com/hrygo/heluo-forge/issues/121>)、[#182](<https://github.com/hrygo/heluo-forge/issues/182>) 分别核验；不以缓存 `ready`、provider 自报或测试替身代替。机密模式的隔离契约继续适用于未来另行获准的使用，不因本次 public 决策打开真实 secret 来源。
+public / none 是兼容默认值，仅适用于已验证授权码换票与刷新均允许免客户端认证的部署。机密授权使用 V2，公共授权使用 V1。模式、认证方法或密钥修订变化后重新登录，旧授权禁止迁移或重放。企业登记、实际方法、回调与首次计划续期由 [#408](https://github.com/hrygo/heluo-forge/issues/408) 和平台验收 [#123](https://github.com/hrygo/heluo-forge/issues/123) 取证。
+
+两种模式均执行 IAM grant、个人 Key 存储和模型 / 工具消费的原子性、可信来源与 fail-closed 门禁。凭据组合和目标平台分别按 [#121](<https://github.com/hrygo/heluo-forge/issues/121>)、[#182](<https://github.com/hrygo/heluo-forge/issues/182>) 核验。
 
 个人 Key 与可信 issuer、用户和规范化网关地址的绑定、旧记录迁移、地址变更提示和 A→B→A 并发处理由 [#226](<https://github.com/hrygo/heluo-forge/issues/226>) 单独跟踪，不作为 #222 的验收条件。在该项完成前不能宣称现有实现已防止旧 Key 向新地址发送；网关地址切换的运行安排须考虑这一已知缺口。
 
 ## 7. 与受控文档的关系
 
-[需求基线](<../requirements/requirements-baseline.md>)定义范围；[总体架构](<platform-architecture.md>)记录 public 登录和官方宿主集成决策；[IAM 主设计](<../design/plugins/forge-iam.md>)定义身份与凭据准入。历史企业回函保留原文，真实支持情况以实际联调为准。企业组合、制品源和推广实施文档明确内部文件交付与官方宿主的许可边界；根 README 保持产品宣介职责。
+[需求基线](<../requirements/requirements-baseline.md>)定义范围；[总体架构](<platform-architecture.md>)记录 IAM 客户端认证和官方宿主集成决策；[IAM 主设计](<../design/plugins/forge-iam.md>)定义身份与凭据准入。历史企业回函保留原文，真实支持情况以实际联调为准。企业组合、制品源和推广实施文档明确内部文件交付与官方宿主的许可边界；根 README 保持产品宣介职责。
 
-[机密认证隔离契约](<../contracts/iam-client-auth-isolated.md>)不因 public 基线放宽：机密模式的真实来源依旧关闭，用户后续另行选择时须单独设计和核验。仓库已有制作与公版构建脚本及离线测试，制作脚本、发布工作流和员工初始化脚本的实现及本地验证边界见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)；实际公开 Release、员工终端安装与企业环境须分别验收。
+[机密认证隔离契约](<../contracts/iam-client-auth-isolated.md>)定义受信来源、配置校验与登录授权隔离。仓库已有制作与公版构建脚本及离线测试，制作脚本、发布工作流和员工初始化脚本的实现及本地验证边界见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)；实际公开 Release、员工终端安装与企业环境须分别验收。
 
 ## 8. 验证与验收
 
@@ -182,7 +184,7 @@ public 模式不免除 IAM grant、个人 Key 存储和模型 / 工具消费的�
 | 制作器 | 必填项、来源摘要、特殊字符、路径越界、已有输出和取消操作均有正反例；日志和报告不含敏感值 |
 | 制品一致性 | 仅约定配置 / 清单发生变化，平台组件字节、模式与依赖闭包保持，私版摘要从最终文件计算 |
 | 宿主集成 | miniceM 对候选作记录并选定简便方式；本地可重复检查插件实际安装挂载、权限、失败提示和数据保留，不重新签名或公证 |
-| 身份与存储 | 本地验证 public 配置、S256 参数、issuer、回调与既有凭据门禁；不把本地替身当企业 IAM 或网关联调 |
+| 身份与存储 | 本地核验私版仅含非秘密配置、密钥独立预置、双 grant 认证、S256、issuer、回调与凭据门禁。企业 IAM 和网关另做目标环境联调 |
 | 目标环境 | Windows x64 / ARM64、麒麟 x86_64 / ARM64、macOS Intel / Apple 的安装、升级、回退及安全检查由 [#123](<https://github.com/hrygo/heluo-forge/issues/123>) 独立验收；缺环境标 BLOCKED，未运行标 NOT RUN |
 | 网关地址绑定 | 由 [#226](<https://github.com/hrygo/heluo-forge/issues/226>) 独立设计、实现和验收，不作为本方案实施 issue 的关闭条件 |
 
@@ -191,7 +193,7 @@ public 模式不免除 IAM grant、个人 Key 存储和模型 / 工具消费的�
 ## 9. 实施顺序
 
 1. 完成受控文档同步；miniceM 调研并选择官方宿主轻量集成方式，记录成本、许可与未验条件。
-2. 构建公版、制作 Skill 与私版制作器，并完成可重复的离线正反例；采用 public 配置，保持现有 IAM 与凭据安全门禁。
+2. 构建公版、制作 Skill 与私版制作器，并完成可重复的离线正反例；核验机密认证配置与凭据隔离，同时覆盖 public 兼容路径。
 3. 按选定方案完成宿主与插件的安装引导及本地核验；个人 Key 网关绑定按 #226 独立排期。
 4. #123 在六类目标环境及原有 UOS 目标记录真实安装、运行、安全和企业联调结果；目标平台开放以各自证据为准。
 
@@ -200,7 +202,7 @@ public 模式不免除 IAM grant、个人 Key 存储和模型 / 工具消费的�
 | 事项 | 责任与处理 |
 |---|---|
 | 两条低成本宿主集成候选 | miniceM 比较用户步骤、平台可用性、许可、数据保留及实现 / 运维成本，选择并记录 |
-| public、S256、Discovery 或显式 issuer 与回调 | 企业 IAM 与目标环境联调；保留历史回函冲突，不以 mock 宣称通过 |
+| 机密客户端登记、两个 grant 的认证、S256、issuer、回调和首次计划续期 | 在实际企业 IAM 与目标终端取证，包含首次计划续期提交新授权及会话维持可用 |
 | 各架构官方宿主及企业再分发许可 | 按实际版本、来源、架构、签名状态和上游许可核验；不假定所有平台有官方预编译发行物 |
 | 本项目公开插件及工具许可 | 公开 Release 前明确下载、使用与再分发范围 |
 | 平台凭据与运行依赖 | #182 负责后端逐目标取证，#123 负责端到端和安装生命周期；未取证不开放相关能力 |

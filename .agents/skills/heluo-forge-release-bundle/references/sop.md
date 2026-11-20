@@ -6,14 +6,14 @@
 - 使用与公版配套的制作工具链；工具检查其 IAM 校验模块与公版内的运行时一致，只允许 LF / CRLF 换行差异。
 - 打包人员能提供：企业 IAM Discovery URL（优先），或显式 issuer 与授权/token/JWKS 端点、client_id、访问令牌撤销端点、网关 baseURL 和 provider、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
 - 输出目录在仓库之外，且不存在或为空；磁盘空间足够。
-- 企业交付采用公开客户端 + PKCE S256，不使用 `client_secret`。企业 IAM 支持该方式；真实登录、刷新与回调仍须在企业环境验证。制作器不接收 secret 或个人 Key。
+- 企业目标部署显式使用机密客户端与 PKCE S256。打包人员须知道 IAM 登记的 token 认证方法及非秘密引用，终端管理员另行预置密钥。制作器只接收非秘密配置。
 
 ## 2. 问答（逐项确认）
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
 2. IAM issuer：只在不用 Discovery、改用显式端点时必填；`https://` 绝对地址，不带 query/fragment，企业内网只有 http 时先说明明文风险并取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。配置 Discovery URL 时不要提供 issuer：issuer 以文档声明为准，制作器拒绝两者并存。
 3. Discovery URL：优先由管理员提供，不自行推定实际地址。maker 请求后检查文档声明了合法 `issuer`，并检查 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；未显式指定时也校验发现的撤销、登出和用户信息端点格式。Discovery 模式不把文档 issuer 与另一份配置比对，也不再要求单独的 issuer。回显只给 `checked` 与匹配到的字段名，不含端点原值。无 Discovery 时显式提供 issuer 与三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
-4. client_id：企业的公开客户端 ID，不是员工个人标识。
+4. client_id、认证模式、方法与引用：企业 IAM 登记的客户端 ID，目标部署配置 `HELUO_IAM_AUTH_MODE=confidential`、`HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic` 或 `client_secret_post`（须与登记的 `token_endpoint_auth_method` 一致）、`HELUO_IAM_CLIENT_SECRET_REF=<ref>`（匹配 `^[a-z][a-z0-9-]*$`）。只有明确允许无客户端认证换票和刷新的部署才使用兼容默认 `public` / `none`，同时省略引用。
 5. 网关 baseURL 和 provider：地址用于 `managedModels.baseURL`，按网关实际路径填写；provider 使用准确的模型路由标识。http 同上需显式确认。
 6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`（不接受 `localhost` 或 `[::1]`）。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。
 7. Gitee host：只填主机名（可带端口，如 `gitee.corp.example`），不带 `https://`、路径或用户名密码；带协议会被插件拒绝加载，maker 也会在制作前拒绝。没有企业 Gitee 就跳过，不写空键。
@@ -21,7 +21,7 @@
 9. 输出目录：仓库外、不存在或为空。
 10. 凭据存储：插件使用 SQLite 值级加密存储和文件 keyring，`.env` 不需要相关配置；Windows、Linux/麒麟与 macOS 的目标宿主兼容性和权限仍须实测。
 11. IAM 撤销：显式提供访问令牌 D1 撤销端点 `HELUO_IAM_REVOCATION_ENDPOINT`，地址不含查询参数；确认其 GET 回执。Discovery 预检不请求撤销端点或验证协议。没有显式或发现的端点时运行时跳过远端撤销，不能当作退出闭环。回调失败时，当前代码还会向同一字段尝试 POST 撤销刷新令牌；D1 只提供访问令牌 GET 撤销，不能据此声称刷新令牌已撤销。
-12. IAM 刷新：当前插件将 `HELUO_IAM_TOKEN_ENDPOINT` 同时用于授权码换票与刷新。核对企业服务是否支持这种方式；若刷新使用独立端点，当前工具和插件均不能配置它，须先完成适配并联调。
+12. IAM 刷新：插件用同一 token 端点及登记认证方法完成授权码换票与刷新。核对企业端点是否接受所选方法和两种 grant；若刷新使用独立端点，须另行适配和联调。
 
 答案保存在仓库根目录的专用 `.env`，确认被 Git 忽略且未跟踪，权限为 `600`；该文件可复用，已有文件不得自动覆盖或删除。不要在可提交的 `.env.example` 中填写企业配置。配置行见 [Skill 入口](../SKILL.md#问答协议)；内网 http 经明确确认后追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
 
@@ -73,12 +73,30 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。启动器把同一份
 
 脚本回显 `mounted=unknown` 是预期行为：运行期挂载只能在宿主内确认。
 
+### 5.1 终端管理员预置与轮换
+
+在员工首次登录前，管理员用目标 Host 的本机用户、凭据目录及命名空间预置密钥。通过 `HELUO_FORGE_STORE_DIRECTORY`、`HELUO_FORGE_KEYCHAIN_SERVICE` 与 `HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX` 对齐 Host 的非默认配置。`--issuer` 使用实际 issuer（Discovery 模式读取文档的 `issuer`）；`--client-id`、`--method`、`--ref` 与登记和私版配置一致。
+
+```sh
+heluo-forge client-secret set --issuer https://iam.corp.example \
+  --client-id forge-console --method client_secret_post --ref enterprise-oidc
+```
+
+使用 profile 内的标准安装时，从安装企业插件的 profile 目录运行随包 Node 入口。安装器写入的 Web profile 路径为 `$DSH_HOME/profiles/web`，未设置 `DSH_HOME` 时从当前用户的 `.dsh` 目录定位。
+
+```sh
+node node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs client-secret set --issuer https://iam.corp.example --client-id forge-console --method client_secret_post --ref enterprise-oidc
+```
+
+由获准的密钥分发工具通过管道或重定向向命令的标准输入发送原始 UTF-8 字节。禁止交互输入、回显、将值放入参数或环境变量；只有密钥原文包含尾部换行时保留该换行。内置 provider 单独保存值级加密的 `iam-client-secret/<ref>`，并绑定 issuer、client ID 和方法。轮换使用相同命令更新绑定一致的记录；轮换后须重新登录。由公开模式切换到机密模式时也须新登录，V1 和 V2 会话彼此隔离。
+
 ## 6. 允许的输出与证据
 
 - 脱敏报告可以出现配置键名、profile 名、版本号、摘要前缀、成功/失败结论、文件清单。
 - 脱敏报告不得包含配置值、密钥、令牌、完整 `.env`、本机绝对路径或未脱敏的原始错误；原始制作输出仍可能包含路径，不能直接作为脱敏报告。
 - 应保留：公版文件名/摘要/来源、配置的键名与权限检查、确认摘要前缀、私版与 zip 摘要、员工安装回显与设置页确认结果。
 - 企业内实测记录：宿主版本与架构、Desktop/Web profile、是否离线、升级/回退、数据保留、员工步数。
+- IAM 联调记录所登记方法、新登录和首轮正常计划续期。确认 `refresh-committed` 后会话仍为 `ready`；真实环境和目标双端安装均需实际取证。
 
 ## 7. 失败处理
 

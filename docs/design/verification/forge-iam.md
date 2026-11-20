@@ -40,10 +40,12 @@
 | 事项 | 可在隔离环境验证的部分 | 决定与剩余边界 |
 |---|---|---|
 | 宿主默认模型选择 | 实际 Host 与受管模型运行时均只读观察；离线用例覆盖目录刷新、启用集变化与并发选择，见[实施计划](<../../plans/2026-11-02-iam-default-model-readonly.md>) | 用户在宿主中选择模型，插件不自动保存；当前选择不可用时，由用户选择其他已启用模型。 |
-| 机密客户端与 secret 生命周期 | 已确认管理员预置隔离基线；[设计](<../iam-confidential-isolated.md>)与[字段契约](<../../contracts/iam-client-auth-isolated.md>)定义 code/refresh/revoke 与来源失效边界；实际隔离服务已接入 | 独立建造审阅无重要剩余问题，用户已批准完整 source/mock 设计，[实施计划](<../../plans/2026-11-02-iam-confidential-isolated.md>)已登记，实际 Basic/Post、V2 生产/恢复、共享刷新 pin 与 cleanup 已接入，54项新服务用例和851项必要合并通过，最终冻结验收见计划。真实来源不开启；供应商 Basic/Post、存储与生产生命周期仍待 G1，不能把 fixture 写成正式能力。2026-11-03 IAM 对机密客户端的历史答复涉及单 client_id、人工轮换与缓存两分钟生效，以及刷新携带 secret；当前 public 交付不使用 secret。撤销/登出按现行 IAM 接入材料核验。 |
+| 机密客户端与 secret 生命周期 | [部署组合回归](../../../packages/forge-iam/test/client-auth-deployment.test.mjs)、[续期诊断回归](../../../packages/forge-iam/test/session-renewal-log.test.mjs)、[私版制作回归](../../../tests/private-bundle.test.mjs) | 实际 Host apply、内置加密 SQLite、管理员 CLI 和本地 IAM 模拟覆盖无客户端认证换票后首次续期收到 401、pending 防重放，及 Basic/Post 换票、`refresh-committed` 和会话保持 `ready`。轮换后拒绝旧授权，私版仅写非秘密配置。目标环境的客户端类型、两种 grant 权限、认证方法和实际计划续期仍待 G1 核验。 [issue #408 的 IAM 核对结论](https://github.com/hrygo/heluo-forge/issues/408#issuecomment-7034227656) |
 | 模型与工具执行入口 | SDK 形状接缝的本地必要条件拒绝、下游零调用与失效交错；[DESIGN-017](<../iam-consumer-isolated.md>)与[IAM-003](<../../contracts/iam-consumer-isolated.md>)为已批准的私有source/mock设计 | 用户已批准完整“假账号、假模型、假工具、不动真实环境” source/mock 设计。实际工厂会话见证A已实现并通过57新例/760项必要合并，peer与代表性变异已关闭；按[PLAN-007](<../../plans/2026-11-02-iam-consumer-isolated.md>)已验收B局部许可算法（62新例/210项policy回归及独立变异），C合成工具/命令已验收（31新例/241回归及独立变异），D合成模型已验收（29新例/270项policy回归，含最终错误桥修复与独立复核）；E根16项实际IAM联合已验收（含不同issuer/person整体替换），分段/联合独立审阅已关闭；Root最终完整检查1889总项、1887通过、0失败/取消、2平台跳过、exit0。首次discovery ready不补见证票，不开放真实调用。不能随 IAM 卸载撤闸，也不能以缓存 ready 代替人员/用途授权；真实 provider/action 与授权契约独立待核。 |
 
 Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍按模块准入单独处理。网关路线 B 与既有 P0 原生 Key 路线的能力差距按[网关契约 §4.1.2](../../contracts/gateway-contract.md#412-阶段能力矩阵)的阶段判据收口，不由本清单替责任方裁决生产授权。
+
+2026-11-20 在 macOS 使用 DSH `0.2.2-rc.5` 自带的 Cordis 运行时、临时加密存储和本机模拟 IAM，以 `client_secret_post` 完成一次换票和一次正常排程刷新，收到 `refresh-committed` 后会话保持 `ready`。Node `24.21.0` 下的 [安装回归](../../../tests/bundle-install-rehearsal.test.mjs)从已安装制品直接调用管理员 CLI，验证合成密钥可写入隔离存储。
 
 2026-11-02 的剩余边界盘点将“能够模拟”与“协议已经决定”分开：
 
@@ -68,4 +70,4 @@ Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍
 
 **设计与接入边界**：O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型隔离写入适配、调用失败自愈、内部码到用户码映射及安全本地诊断（离线测试覆盖，未实机）；禁用插件/独占冲突 fail closed 本地验证；新对话默认模型由用户选择，插件只读观察，不自动写入；[受控模型运行时](../../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录与手动模型边界、七行禁用与回灌检查）本地实现，见 [IAM 离线验收清单](#iam-离线验收清单)；Host watch 与 HTTP SSE 已接线，Client Remote 未接线。
 
-**准入关注点**：IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测。
+**准入关注点**包括目标环境的客户端登记、密钥预置与续期、目标平台存储、官方行运行时模型面、企业联调及 UAG 凭据探测。

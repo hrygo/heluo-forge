@@ -9,7 +9,7 @@
 | 适用读者 | 开发 DSH Host 插件、同源页面或需要用户身份的 DevOps、Gitee 等命令行工具的开发者 |
 | 可读取的信息 | 发行者、用户标识、登录状态、访问令牌与过期时间 |
 | IAM 的职责 | 登录、会话保存、令牌刷新和退出 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-20 |
 
 先按代码的运行位置选择入口；身份接口返回的快照不含访问令牌。
 
@@ -104,7 +104,7 @@ export async function currentToken() {
 
 ### 3.1 独立进程：`heluo-forge`
 
-命令只有两条，退出码固定：
+身份读取和令牌取用命令如下：
 
 | 命令 | 用途 | 成功输出 |
 |---|---|---|
@@ -128,6 +128,8 @@ Host 的 `storeDirectory` 与 CLI 的 `HELUO_FORGE_STORE_DIRECTORY` 应指向同
 `auth token` 失败时 stdout 为空、错误输出到 stderr；调用方应检查退出码。
 
 未设置 `HELUO_FORGE_IAM_URL` 时，`auth token` 只读本地记录，不请求 Host 或 IAM，不写存储或刷新令牌；剩余有效期不超过 30 秒时拒绝返回，刷新或退出 pending 时也不返回旧令牌。离线 CLI 没有 Host 配置，不能核验当前 issuer、clientId 或 resource 是否与 Host 匹配；本地返回令牌不证明服务端授权。
+
+离线命令采用机密客户端的 V2 会话前，还会在同一存储与命名空间核对预置记录的绑定与修订版本。预置记录缺失、不匹配或轮换后，旧会话须重新登录。V1 公开客户端会话不读取客户端密钥。
 
 设置 `HELUO_FORGE_IAM_URL` 后，`auth token` 通过本机 Host 桥获取令牌。Host 校验配置上下文并可按需刷新；CLI 回读存储，只接受属于同一会话且与当前记录一致的令牌；发生刷新时还须匹配该操作。缺少 `sessionInstanceId` 的会话不被采用。退出进行中、结果未确认或回读不匹配时不返回令牌。
 
@@ -272,6 +274,27 @@ bash scripts/probe/run-iam-local-uat.sh
 - 身份字段中的 `subject` 是身份提供方返回的标识；姓名等资料应从获授权的来源取得。
 - 退出或刷新结果未确认时拒绝返回旧令牌，需要重新登录或按实际错误处理。
 
+## 9. 管理员预置与轮换 IAM 客户端密钥
+
+要求客户端认证的企业部署使用 `authMode: confidential`、显式 `clientAuthMethod` 及非秘密 `clientSecretRef`。方法为 `client_secret_basic` 或 `client_secret_post`，须与目标 IAM 客户端的 `token_endpoint_auth_method` 一致。授权码换票与刷新使用同一方法，授权码始终使用 PKCE S256。`clientSecretRef` 匹配 `^[a-z][a-z0-9-]*$`。公开客户端默认 `public` / `none`，仅适用于允许无客户端认证换票和刷新的部署。
+
+管理员在目标 Host 使用的本机用户、凭据目录及命名空间预置密钥。[附录 A](#附录-a存储目录与命名空间)列出目录、service 与账号前缀的环境变量。`--issuer` 使用 Host 实际校验的 issuer（Discovery 模式采用文档声明的 `issuer`，不是 Discovery URL）；`--client-id`、`--method` 与 `--ref` 与部署配置精确对应。
+
+```sh
+heluo-forge client-secret set --issuer https://iam.corp.example \
+  --client-id forge-console --method client_secret_post --ref enterprise-oidc
+```
+
+使用 profile 内的标准安装时，从安装企业插件的 profile 目录运行随包 Node 入口。Web 安装器写入 `$DSH_HOME/profiles/web`，未设置 `DSH_HOME` 时从当前用户的 `.dsh` 目录定位。
+
+```sh
+node node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs client-secret set --issuer https://iam.corp.example --client-id forge-console --method client_secret_post --ref enterprise-oidc
+```
+
+由获准的密钥分发工具通过管道或重定向将原始 UTF-8 字节送入上述命令的标准输入。禁止在终端交互输入或回显密钥。末尾换行只有在属于密钥原文时才保留。原值不得进入命令参数、环境变量、配置补丁、制品或日志。内置 provider 将其单独写入值级加密的 SQLite `iam-client-secret/<ref>` 记录，绑定 issuer、client ID 和方法；Host 通过独立受信端口读取。
+
+在 IAM 管理端轮换后，通过同一命令更新绑定一致的记录。每次写入产生新的修订版本。切换公开／机密模式、修改方法或引用、轮换密钥后，均须重新登录；两种模式的 V1／V2 会话隔离。首次部署与每次轮换均须在目标 IAM 核对实际生效时间，以新会话验证计划续期提交成功（`refresh-committed`）并继续处于 `ready`。
+
 ## 附录 A：存储目录与命名空间
 
 | 变量 | 默认 | 作用 |
@@ -294,6 +317,8 @@ bash scripts/probe/run-iam-local-uat.sh
 | `IAM_BRIDGE_FORBIDDEN` | HTTP 403 | 非本机来源 |
 | `IAM_REQUEST_HEADER_REQUIRED` | HTTP 403 | 缺 `x-forge-iam-request: 1` |
 | `IAM_HOST_UNREACHABLE` | 退出码 4 | 配置的 DSH 地址连不上 |
+| `IAM_CLIENT_SECRET_BINDING_MISMATCH` | 退出码 4（密钥预置） | 引用已绑定其他 issuer、客户端或认证方法 |
+| `IAM_CLIENT_SECRET_PROVISION_FAILED` | 退出码 4（密钥预置） | 密钥输入、登记参数或本机凭据写入失败 |
 
 ---
 

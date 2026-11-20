@@ -28,3 +28,9 @@ Web 端建议使用支持 `AbortSignal.any()` 的新版 Chrome 或 Chromium；Ch
 - 安装包与配置不得内置用户凭据或共享密钥。
 - 签名、公证、MDM 与软件源由 IT 确认，仓库只保存可审查的构建与配置输入。
 - 两端凭据与执行隔离须实机验证，配置文本不能证明隔离有效。
+
+## IAM 安装准入
+
+目标企业私版配置机密客户端与 PKCE S256。打包人员确认授权码换票和刷新使用 IAM 登记的同一种客户端认证方法。终端管理员在首次登录前向 Host 使用的凭据库预置密钥，私版配置仅携带非秘密引用。见[管理员预置与轮换](../../packages/forge-iam/docs/credential-access.md#9-管理员预置与轮换-iam-客户端密钥)。
+
+Windows 与麒麟分别安装实际交付制品。新登录后验证计划续期日志出现 `refresh-committed` 且会话保持 `ready`。当前登记与两端闭环均待实测。见[双端验收矩阵](../../docs/plans/2026-11-04-iam-dual-platform-acceptance.md)。
