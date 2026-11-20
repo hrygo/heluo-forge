@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-018 |
 | 文档名称 | 企业设置菜单统一与 Token 收敛详细设计 |
-| 版本 | V2.2.0 |
+| 版本 | V2.2.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-20 |
 | 门禁 | G2（双独立预装包拆分设计、仓内代码与离线契约/探针闭环已落地；目标环境专项证据待补充） |
 | 交付门禁 | 不改 DSH；双独立预装包拆分、四包源码、双定位 UI 契约与合成探针离线闭环；容器级汇总属后续项，企业网关/OS 凭据库/双端 GUI 与联邦换票未联调 |
 | 确认人 | 用户（项目唯一决策人） |
@@ -99,7 +99,7 @@ flowchart TB
 
 ### 3.4 与 `CORP-DSH-PLAN-021`（手动添加模型）协同边界
 
-[企业模型设置手动添加模型实施方案](../plans/2026-11-13-enterprise-manual-model-add-luna-guide.md)（`CORP-DSH-PLAN-021` 草案）对应的 `renderModelsCard`、`useModelCatalogue`、`modelAccess` 与 `/api/forge-iam/models/manual` 统一承接在独立的 **`企业模型`（`forge-models`, `order: 10`）** 分区内：对内共享统一 `model-selection` 存储与网关凭据门禁；对外呈现为简洁的次级“手动添加模型”动作，不暴露内部合流与缓存刷新状态词。
+[企业模型设置手动添加模型实施方案](../plans/2026-11-13-enterprise-manual-model-add-luna-guide.md)（`CORP-DSH-PLAN-021`）对应的 `renderModelsCard`、`useModelCatalogue`、`modelAccess` 与 `/api/forge-iam/models/manual` 统一承接在独立的 **`企业模型`（`forge-models`, `order: 10`）** 分区内：对内共享统一 `model-selection` 存储与网关凭据门禁；对外呈现为简洁的次级“手动添加模型”动作，不暴露内部合流与缓存刷新状态词。
 
 ## 4. 双定位用户旅程与极简化交互规范
 
