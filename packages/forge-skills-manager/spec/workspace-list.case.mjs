@@ -1,12 +1,14 @@
 // 项目页按所有已登记工作区取数：折叠行不扫描，展开才读技能；多路径同一项目根合并。
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createTestFetchBridge } from "./fixtures/test-fetch-server.mjs";
 
-const temporary = await mkdtemp(join(tmpdir(), "dssm-ws-list-"));
+// 服务端用 realpath 归一项目根；macOS 的 tmpdir 位于 /var → /private/var 符号链接
+// 之后，fixture 根目录创建后先解析到真实位置，登记与断言同口径。
+const temporary = await realpath(await mkdtemp(join(tmpdir(), "dssm-ws-list-")));
 process.env.DSH_HOME = join(temporary, "home");
 process.env.HOME = process.env.USERPROFILE = join(temporary, "user");
 for (const key of ["AGENTS", "CODEX", "CLAUDE", "GEMINI", "OPENCODE", "CURSOR", "COPILOT"]) process.env[`DSH_${key}_HOME`] = join(temporary, `configured-${key.toLowerCase()}`);

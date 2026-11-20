@@ -1,10 +1,12 @@
 // 工作区目标：只接受已登记工作区，解析出该项目的 .dsh/skills，且沿用链接与重叠防护。
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const temp = await mkdtemp(join(tmpdir(), "dssm-workspace-target-"));
+// 服务端按 realpath 归一项目根；macOS 的 tmpdir 位于 /var → /private/var 符号链接
+// 之后，fixture 根目录创建后先解析到真实位置，断言与解析结果同口径。
+const temp = await realpath(await mkdtemp(join(tmpdir(), "dssm-workspace-target-")));
 process.env.HOME = join(temp, "home");
 process.env.USERPROFILE = join(temp, "home");
 for (const key of [

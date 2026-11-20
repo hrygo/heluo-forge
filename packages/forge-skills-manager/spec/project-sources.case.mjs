@@ -1,10 +1,12 @@
 // 隔离目录验证新增来源、项目隔离、策略持久化及实际正文加载。
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const temp = await mkdtemp(join(tmpdir(), "dssm-project-sources-"));
+// 服务端按 realpath 归一项目根；macOS 的 tmpdir 位于 /var → /private/var 符号链接
+// 之后，fixture 根目录创建后先解析到真实位置，断言与解析结果同口径。
+const temp = await realpath(await mkdtemp(join(tmpdir(), "dssm-project-sources-")));
 process.env.HOME = join(temp, "home");
 process.env.USERPROFILE = join(temp, "home");
 for (const key of [
