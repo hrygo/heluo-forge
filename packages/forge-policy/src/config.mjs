@@ -31,9 +31,10 @@ export const RULE_KEYS = Object.freeze([
   'confirmDopWrite',
 ]);
 
-/** P1 实现三键：来源拒绝与两条逐次确认；其余五个开关仍在后续阶段。 */
+/** 已实现四键：来源拒绝、两条逐次确认与内容闸；其余四个开关仍在后续阶段。 */
 export const IMPLEMENTED_RULES = Object.freeze([
   'denyDelegatedWrites',
+  'contentGate',
   'confirmPush',
   'confirmDopWrite',
 ]);
@@ -182,9 +183,6 @@ function checkUnwiredSurfaces(issues, input) {
   if (Array.isArray(input.paths?.append) && input.paths.append.length > 0) {
     issues.push('paths.append: not implemented in this phase; setting it would be silently ignored');
   }
-  if (isPlainObject(input.content) && Object.keys(input.content).length > 0 && !sameAsDefault(input.content, DEFAULTS.content)) {
-    issues.push('content: not implemented in this phase; setting it would be silently ignored');
-  }
 }
 
 /** 结构相等的默认值判定；只用于纯 JSON 面（数字/字符串/数组/普通对象）。 */
@@ -266,8 +264,9 @@ export function validateConfig(input = {}) {
       rules: Object.freeze({ ...DEFAULT_RULES, ...(input.rules ?? {}) }),
       // 已接入判定链路（P1）：`confirmation.timeoutMs` 真的会传给确认通道。
       confirmation: Object.freeze({ ...DEFAULTS.confirmation, ...(input.confirmation ?? {}) }),
-      // 未接入判定链路的三层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
-      content: DEFAULTS.content,
+      // 已接入内容闸（P2）：`content.maxBytes` 会作为单次调用的扫描预算传下去。
+      content: Object.freeze({ ...DEFAULTS.content, ...(input.content ?? {}) }),
+      // 未接入判定链路的两层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
       paths: DEFAULTS.paths,
       audit: Object.freeze({ ...DEFAULTS.audit, ...(input.audit ?? {}) }),
       tools: input.tools ?? {},

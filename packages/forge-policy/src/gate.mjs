@@ -10,7 +10,13 @@
  */
 
 import { decideAction } from './catalog.mjs';
-import { digestContent } from './content-rules.mjs';
+import {
+  compileContentRules,
+  digestContent,
+  payloadsForAction,
+  payloadsFromArguments,
+  scanPayloads,
+} from './content-rules.mjs';
 import { DEFAULT_CONFIRMATION_TIMEOUT_MS } from './config.mjs';
 import {
   CONFIRM_CODES,
@@ -83,6 +89,34 @@ function contentDigestOf(exec) {
     }
   })();
 }
+
+/**
+ * 正文通道只解析一次：摘要与内容闸必须看同一份文本，否则"扫过的"与"记下的"可能不是同一段。
+ * 读不到就如实标记（内容闸按 D48 放行并告警，不因为读不到正文而阻断业务）。
+ */
+async function resolveContent(exec) {
+  if (typeof exec?.content !== 'function') return { readable: true, value: exec?.content };
+  try {
+    return { readable: true, value: await exec.content() };
+  } catch {
+    return { readable: false, value: undefined };
+  }
+}
+
+/** 待扫字段 = 动作声明字段 ∪ 正文通道里的文本键；正文读不到时只扫参数。 */
+function contentPayloads(action, args, content) {
+  const payloads = payloadsForAction(action, args ?? {});
+  if (content.readable && content.value !== undefined && content.value !== null) {
+    payloads.push(...payloadsFromArguments(content.value));
+  }
+  return payloads;
+}
+
+const CONTENT_HARD_COPY = (action, findings) => {
+  const ids = [...new Set(findings.map((finding) => finding.rule))].join('、');
+  return `受控写「${action}」已拒绝：提交内容命中了不允许放行的高风险信息（${ids}）。`
+    + '请从正文中移除后重试；这类内容不能通过人工确认放行。';
+};
 
 /**
  * `subject` 是 provider 自证（Gitee guard 要求 `gitee`），与 IAM `actor` 是两个字段。
@@ -177,8 +211,11 @@ export function createGate({
   confirmations,
   decisionCache,
   timeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS,
+  maxContentBytes,
 } = {}) {
   const stages = Object.freeze([...(pipeline ?? [])]);
+  // 内置规则集随包编译一次；v1 不接受自定义规则（D49），组织规则留到后续阶段。
+  const contentRules = compileContentRules().rules;
   const clock = now ?? (() => Date.now());
   const approved = new WeakMap();
   const admitting = new WeakSet();
@@ -192,6 +229,24 @@ export function createGate({
     const header = exec?.agent?.session?.header;
     const id = header?.id;
     return typeof id === 'string' && id.trim() !== '' ? id.trim() : undefined;
+  }
+
+  /** 内容闸：hard 由调用方拒绝；confirm/soft 只回报，是否弹卡由判定流程决定。 */
+  function scanContent(action, args, content) {
+    try {
+      return scanPayloads(contentRules, contentPayloads(action, args, content), {
+        ...(maxContentBytes === undefined ? {} : { maxBytes: maxContentBytes }),
+      });
+    } catch {
+      return Object.freeze({
+        findings: Object.freeze([]),
+        hard: Object.freeze([]),
+        confirm: Object.freeze([]),
+        soft: Object.freeze([]),
+        skipped: Object.freeze([{ field: 'content', reason: 'unreadable' }]),
+        truncated: false,
+      });
+    }
   }
 
   function callIdOf(exec) {
@@ -316,13 +371,51 @@ export function createGate({
     }
     const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
-    const contentDigest = typeof exec?.content === 'function'
-      ? await contentDigestOf(exec)
-      : contentDigestOf(exec);
+    // 内容闸开启时正文只解析一次（摘要与扫描看同一份内容）；关闭时走原有摘要路径，
+    // 不额外插一次 await——放行路径上的时序变化会改变宿主看到的执行顺序。
+    const scanning = rules?.contentGate === true;
+    const content = scanning ? await resolveContent(exec) : undefined;
+    const contentDigest = scanning
+      ? digestContent(digestInput(exec, content.readable ? content.value : '[content-unavailable]'))
+      : typeof exec?.content === 'function'
+        ? await contentDigestOf(exec)
+        : contentDigestOf(exec);
     const subject = subjectOf(exec?.name, action);
+    const scanned = scanning ? scanContent(action, exec?.arguments, content) : undefined;
+    if (scanned !== undefined && scanned.hard.length > 0) {
+      // H1/H2 不可确认：连卡片都不弹，直接留证据拒绝。
+      return denyWithEvidence({
+        ...(subject === undefined ? {} : { subject }),
+        actor,
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'deny',
+        rule: 'content-hard-block',
+        operationId,
+        agent: { kind },
+        ruleIds: [...new Set(scanned.hard.map((finding) => finding.rule))],
+        summary: `受控写 ${action} 的正文命中不可放行的内容风险`,
+      }, CONTENT_HARD_COPY(action, scanned.hard), 'POLICY_CONTENT_HARD');
+    }
+    // 命中的规则与未扫全的字段：确认两段记录与 begin 都要带上，审计才能说明"为什么问"。
+    const ruleIds = scanned === undefined || scanned.findings.length === 0
+      ? undefined
+      : [...new Set(scanned.findings.map((finding) => finding.rule))];
+    const contentSkipped = scanned?.skipped?.length > 0
+      ? scanned.skipped.map((item) => item.field)
+      : undefined;
+    // 确认原因按顺序合并：动作确认在前、内容风险在后，客户端据此走分步表单（D25）。
+    const reasons = [];
+    if (decision.action === 'confirm') reasons.push('action');
+    if (scanned !== undefined
+      && (scanned.confirm.length > 0 || (scanned.soft.length > 0 && decision.action === 'confirm'))) {
+      reasons.push('content');
+    }
+    const reasonsKey = reasons.join(',');
     let rule = decision.rule;
     let cacheKey;
-    if (decision.action === 'confirm') {
+    if (reasons.length > 0) {
       // 来源判定在查缓存之前：子代理没有确认通道，命中缓存也不能替它跳过人工确认。
       if (persona === PERSONA.CHILD) {
         return denyWithEvidence({
@@ -345,13 +438,13 @@ export function createGate({
         && hit.contentDigest === contentDigest
         && hit.action === action
         && hit.actor === actor
-        && hit.session === sessionId) {
+        && hit.session === sessionId
+        && hit.reasons === reasonsKey) {
         // 同一个决定的重试：不再打扰用户，但仍要过身份复验、一次性收据与执行后复验。
         decisionCache.touch(key);
         cacheKey = key;
         rule = 'reused-decision';
       } else {
-        const reasons = ['action'];
         const card = buildConfirmationCard({ action, target, args: exec?.arguments ?? {}, reasons });
         const askedAt = clock();
         const asked = await writeRecord({
@@ -365,6 +458,8 @@ export function createGate({
           operationId,
           agent: { kind },
           summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）`,
+          ...(ruleIds === undefined ? {} : { ruleIds }),
+          ...(contentSkipped === undefined ? {} : { contentSkipped }),
           phase: 'asked',
         });
         // 先有记录，再问人：asked 写不进去时连卡片都不该弹。
@@ -391,6 +486,8 @@ export function createGate({
           agent: { kind },
           durationMs: clock() - askedAt,
           summary: `受控写 ${action} 的确认结论：${answerSummary(verdict.decision, verdict.code)}`,
+          ...(ruleIds === undefined ? {} : { ruleIds }),
+          ...(contentSkipped === undefined ? {} : { contentSkipped }),
           phase: 'answered',
         });
         if (!answeredOk) return deny(CONFIRM_RECORD_FAILED_COPY(action), CONFIRM_CODES.ERROR);
@@ -407,6 +504,7 @@ export function createGate({
             contentDigest,
             actor,
             session: sessionId,
+            reasons: reasonsKey,
             decidedAt: clock(),
           });
           cacheKey = key;
@@ -430,6 +528,10 @@ export function createGate({
         summary: `受控写 ${action}（目标 ${target ?? '(未提供)'}）`,
         params: summarizeArguments(exec?.arguments ?? {}),
         contentDigest,
+        ...(ruleIds === undefined ? {} : { ruleIds }),
+        ...(content?.readable === false
+          ? { contentSkipped: ['content-unreadable'] }
+          : contentSkipped === undefined ? {} : { contentSkipped }),
       });
     } catch (error) {
       // 放行结论没能落成记录：本次不算一次成功的"允许"，撤掉复用缓存，重试仍要重新确认。

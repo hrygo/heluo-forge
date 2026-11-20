@@ -38,7 +38,7 @@
 
 边界：它不实现沙箱（复用 DSH 沙箱），不实现确认界面（复用宿主 `userQuestions` 卡片），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；内容闸、流程规则、受保护路径拦截与确认卡片待 P1–P3。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
+P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；P1 交付人工确认卡片与决策复用；P2 交付内容闸（9 条内置规则、按动作字段映射、跨字段字节预算）；流程规则与受保护路径拦截待 P3。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
 
 **判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现只有分类默认决策加身份与审计两段，规则开关八条全部未实现。
 
@@ -152,7 +152,7 @@ export interface PolicyDecision {
 
 **目标判定顺序（P1–P3）**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后完成必要的确认卡片与前置审计；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现行实现（P0）**：判定流水线只装配 `resolve → identity → audit → receipt` 四个常开阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。八条规则开关（`denyDelegatedWrites`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，置真在装载期被拒绝；未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content`）同样在装载期拒绝，避免"配了却静默不生效"。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
+**现行实现（P0–P2）**：判定流水线常开 `resolve → identity → audit → receipt` 四段，`contentGate` 开启时在审计之前插入内容闸阶段，`confirmPush`/`confirmDopWrite` 开启时再插入确认阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。八条规则开关（`denyDelegatedWrites`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，已接入的四条（`denyDelegatedWrites`、`contentGate`、`confirmPush`、`confirmDopWrite`）可以开启，其余四条置真在装载期被拒绝；仍未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`）同样在装载期拒绝，避免"配了却静默不生效"。`confirmation` 与 `content` 已接入，可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -278,6 +278,22 @@ export interface PolicyDecision {
 | `process_rules` | `pr_requires_acceptance_section: soft` | 变更号、保护分支与 force push 由内置集恒为 HARD |
 
 首版信封的作用是**把机器纳入托管模式并给审计一个版本锚点**，不是追加限制；后续版本按实测逐步收紧。装机包内只有信封、签名与公钥，私钥留在签发机。
+
+#### 5.1.5 内容闸的现行实现（P2）
+
+内容闸只在 `contentGate` 开启时运行，扫描对象是**动作声明的字段**，不是整个参数对象：
+
+| 动作 | 扫描字段 |
+|---|---|
+| `gitee.issue.write`、`gitee.pr.write` | `title`、`body` |
+| `gitee.review.publish` | `body`、`comment` |
+| `change.clarification.write` | `summary`、`description`、`aiAc` |
+| `gitee.git.push` | `commits[].message`、`commits[].diff`（或 `exec.content()` 读到的提交区间正文） |
+| `gitee.review.record` | 不扫描（人工留痕动作，Agent 不可发起） |
+
+未在表中的动作退回全局白名单（`title`/`body`/`description`/`content`/`message`/`comment`/`review`/`summary`/`text`/`diff`/`patch` 与 `commits[].message|diff`）。九条内置规则分三档：`BUILTIN-PRIVATE-KEY`、`BUILTIN-CLOUD-ACCESS-KEY` 为 HARD（不可确认，命中即零执行）；`BUILTIN-CREDENTIAL-URL`、`BUILTIN-TOKEN` 为可确认（有卡片通道时并入分步确认，无通道即拒绝）；`BUILTIN-ENV-COMMIT`、`BUILTIN-INTERNAL-ADDRESS`、`BUILTIN-ABSOLUTE-HOME`、`BUILTIN-LONG-BASE64`、`BUILTIN-ENV-FILE` 为 SOFT（放行并记录；动作本身需要确认时并入同一张分步卡）。口令赋值与强制推送不在内容闸里判定——前者误报过高，后者属于 `gitee.git.push` 的参数校验。
+
+一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`）：超出预算的字段按已扫部分判定并记 `truncated`，二进制字段跳过，正文读不到时放行并在审计留 `content-unreadable`。命中的规则 id 只进审计，命中值与正文既不进审计也不进卡片与错误文案，只保留首尾各 4 字符的脱敏摘录。
 
 ### 5.2 受保护路径、别名归一与沙箱取严
 
