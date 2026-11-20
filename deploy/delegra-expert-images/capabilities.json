@@ -6,7 +6,8 @@
   "runner": "25c86a283a9c787a01911c714618d78df7552af7",
   "common": [
     "paperclip-runnerd", "codex", "node", "python", "python3", "uv", "uvx", "tini",
-    "bash", "sh", "git", "rg", "curl", "jq", "file", "make", "patch", "unzip", "zip"
+    "bash", "sh", "git", "rg", "curl", "jq", "file", "make", "patch", "unzip", "zip",
+    "bzip2", "lsof", "rsync", "tree", "xxd", "xz", "zstd"
   ],
   "scenes": {
     "codex-min": [],

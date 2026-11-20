@@ -91,4 +91,22 @@ patch --batch --silent extracted/河洛.txt <<'PATCH'
 +patched 样例
 PATCH
 test "$(cat extracted/河洛.txt)" = 'patched 样例'
+
+tree -if --noreport extracted-zip | grep -Fxq 'extracted-zip/河洛.txt'
+test "$(xxd -p -l 4 snapshot.zip)" = 504b0304
+rsync -a extracted-zip/ synced-zip/
+cmp 河洛.txt synced-zip/河洛.txt
+sync_changes=$(rsync -ani extracted-zip/ synced-zip/)
+test -z "$sync_changes"
+
+exec 3<snapshot.tar
+lsof -a -p "$$" -d 3 -Fn > open-files.txt
+exec 3<&-
+grep -Fxq "n$PWD/snapshot.tar" open-files.txt
+
+for suffix in bz2 xz zst; do
+    tar -caf "snapshot.tar.$suffix" 河洛.txt
+    tar -xOf "snapshot.tar.$suffix" 河洛.txt > restored.txt
+    cmp 河洛.txt restored.txt
+done
 printf '%s\n' COMMON_OK
