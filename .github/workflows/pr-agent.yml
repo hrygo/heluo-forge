@@ -168,7 +168,9 @@ jobs:
           # precedence; keep the two in sync when changing either.
           CONFIG__MODEL: "openai/muse-spark-1.3-contributor"
           CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"
-          CONFIG__MAX_MODEL_TOKENS: "256000"
+          CONFIG__MAX_MODEL_TOKENS: "64000"
+          CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"
+          CONFIG__PROPAGATE_TOOL_ERRORS: "true"
           # Expose structured review data and mirror the repository policy.
           GITHUB_ACTION_CONFIG__ENABLE_OUTPUT: "true"
           PR_REVIEWER__REQUIRE_MERGE_RECOMMENDATION: "true"
@@ -177,6 +179,9 @@ jobs:
           PR_REVIEWER__PERSISTENT_COMMENT: "true"
           PR_REVIEWER__PERSISTENT_FINDING_STATE: "false"
           PR_REVIEWER__FINAL_UPDATE_MESSAGE: "false"
+          PR_REVIEWER__ENABLE_LARGE_PR_CHUNKING: "true"
+          PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"
+          PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"
           # Refresh the description and review after every eligible push.
           GITHUB_ACTION_CONFIG__HANDLE_PUSH_TRIGGER: "true"
           GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '["/describe", "/review"]'
@@ -186,7 +191,7 @@ jobs:
           PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"
           PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT_PERSISTENT: "true"
           # Describe and review on PR open; code suggestions stay on demand
-          # (`/improve`) so a review stays a single LLM call.
+          # (`/improve`).
           github_action_config.auto_describe: "true"
           github_action_config.auto_review: "true"
           github_action_config.auto_improve: "false"

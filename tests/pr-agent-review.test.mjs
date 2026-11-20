@@ -291,6 +291,36 @@ test('pushes refresh the summary and review, including bot and merge commits', a
   assert.match(settings, /push_trigger_ignore_merge_commits = false/u);
 });
 
+test('model requests use a smaller budget than the custom model context window', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const action = stepDefinition('Run PR-Agent');
+  assert.match(action, /^ {10}CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"$/mu);
+  assert.match(action, /^ {10}CONFIG__MAX_MODEL_TOKENS: "64000"$/mu);
+  assert.match(settings, /^custom_model_max_tokens = 256000$/mu);
+  assert.match(settings, /^max_model_tokens = 64000$/mu);
+});
+
+test('large reviews use bounded chunking and show coverage gaps', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const action = stepDefinition('Run PR-Agent');
+  assert.match(action, /^ {10}PR_REVIEWER__ENABLE_LARGE_PR_CHUNKING: "true"$/mu);
+  assert.match(action, /^ {10}PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"$/mu);
+  assert.match(action, /^ {10}PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"$/mu);
+  assert.match(settings, /^enable_large_pr_chunking = true$/mu);
+  assert.match(settings, /^max_number_of_calls = 5$/mu);
+  assert.match(settings, /^enable_review_coverage_footer = true$/mu);
+});
+
+test('model timeouts advance to fallback and exhausted attempts fail the action', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const action = stepDefinition('Run PR-Agent');
+  assert.match(action, /^ {10}CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"$/mu);
+  assert.match(action, /^ {10}CONFIG__PROPAGATE_TOOL_ERRORS: "true"$/mu);
+  assert.match(settings, /^fallback_models = \["openai\/deepseek-v4\.1-flash"\]$/mu);
+  assert.match(settings, /^retry_same_model_on_timeout = false$/mu);
+  assert.match(settings, /^propagate_tool_errors = true$/mu);
+});
+
 test('only PR lifecycle and commit changes trigger automatic review', () => {
   const types = /^  pull_request:\n    types: \[([^\n]+)\]/mu.exec(workflow)?.[1].split(', ');
   assert.deepEqual(types, ['opened', 'reopened', 'ready_for_review', 'synchronize']);
