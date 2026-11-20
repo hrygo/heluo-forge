@@ -110,3 +110,21 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 - 评审关注：设计一致性、失败模式、权限边界、测试是否覆盖负向路径。
 - 文档变更同时检查编号与链接，不把“格式正确”当作内容正确。
 - 未经确认的接口、性能和恢复能力标注为未验，不写成既定事实。
+
+### 9.1 OCR PR 自动评审
+
+[OCR 工作流](.github/workflows/ocr-pr-review.yml)在同仓 PR 打开、推送新提交或重新打开时，使用 `ocr review` 评审该 PR 的差异。评审辅助脚本取自事件的目标基线，合入目标分支后可用。模型端点接收差异和评审所需的代码上下文。Actions 摘要显示预览范围，运行制品 `ocr-report-pr-<编号>-<尝试次数>` 包含脱敏后的完整 `result.json`，同一 PR 的机器人评论原位更新。评论回写作业单独持有 `pull-requests: write` 权限。
+
+在仓库 Settings → Secrets and variables → Actions → Secrets 中配置 `OCR_LLM_URL`（模型 API 地址）、`OCR_LLM_TOKEN`（API Key）和 `OCR_LLM_MODEL`（模型名）。任何一项缺失时，作业在检出前结束。使用 Anthropic 兼容端点时，将可选 Secret `OCR_LLM_USE_ANTHROPIC` 设为 `true`。[GitHub Actions Secrets 配置说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
+
+| Actions Variable | 默认值 | 作用 |
+| --- | --- | --- |
+| `OCR_ENABLED` | `true` | 设为 `false` 跳过同仓 PR 的 OCR 评审 |
+| `OCR_CONCURRENCY` | `4` | 评审并发数 |
+| `OCR_NO_PLAN` | `1` | `1` 使用低努力档位 |
+| `OCR_MAX_TOKENS_BUDGET` | `2000000` | 评审 token 预算 |
+| `OCR_EXCLUDES` | `__DEFAULT__` | 自定义逗号分隔的排除 glob，`__NONE__` 关闭工作流附加的排除集 |
+| `OCR_OUTPUT_LANGUAGE` | `中文` | 模型输出语言 |
+| `OCR_RUN_PREVIEW` | `1` | `1` 在正式评审前生成免模型调用的预览 |
+
+OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启时，同一 PR 可收到两份评审。

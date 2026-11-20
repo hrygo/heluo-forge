@@ -1,0 +1,181 @@
+name: ocr-pr-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ocr-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  OCR_VERSION: '1.13.10'
+  OCR_NO_UPDATE: '1'
+  OCR_CONCURRENCY: ${{ vars.OCR_CONCURRENCY || '4' }}
+  OCR_NO_PLAN: ${{ vars.OCR_NO_PLAN || '1' }}
+  OCR_MAX_TOKENS_BUDGET: ${{ vars.OCR_MAX_TOKENS_BUDGET || '2000000' }}
+  OCR_EXCLUDES: ${{ vars.OCR_EXCLUDES || '__DEFAULT__' }}
+  OCR_OUTPUT_LANGUAGE: ${{ vars.OCR_OUTPUT_LANGUAGE || '中文' }}
+  OCR_RUN_PREVIEW: ${{ vars.OCR_RUN_PREVIEW || '1' }}
+  OCR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  OCR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  OCR_PR_NUMBER: ${{ github.event.pull_request.number }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  review:
+    if: vars.OCR_ENABLED != 'false' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      ready: ${{ steps.source.outputs.ready }}
+      report-id: ${{ steps.report.outputs.artifact-id }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        env:
+          OCR_LLM_URL: ${{ secrets.OCR_LLM_URL }}
+          OCR_LLM_TOKEN: ${{ secrets.OCR_LLM_TOKEN }}
+          OCR_LLM_MODEL: ${{ secrets.OCR_LLM_MODEL }}
+        run: |
+          if [[ -z "$OCR_LLM_URL" || -z "$OCR_LLM_TOKEN" || -z "$OCR_LLM_MODEL" ]]; then
+            echo 'OCR 跳过评审。需要配置 OCR_LLM_URL、OCR_LLM_TOKEN 和 OCR_LLM_MODEL。'
+            exit 0
+          fi
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR source
+        if: steps.cfg.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
+
+      - name: Prepare PR review
+        if: steps.cfg.outputs.ready == 'true'
+        id: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$OCR_HEAD_SHA"
+          git cat-file -e "${OCR_BASE_SHA}^{commit}"
+          if ! git cat-file -e "$OCR_BASE_SHA:.github/workflows/ocr-pr.mjs" 2>/dev/null; then
+            echo 'PR 目标基线尚未包含 OCR 辅助脚本，跳过评审。'
+            exit 0
+          fi
+          git show "$OCR_BASE_SHA:.github/workflows/ocr-pr.mjs" > "$RUNNER_TEMP/ocr-pr.mjs"
+          git show "$OCR_BASE_SHA:.node-version" > "$RUNNER_TEMP/ocr-node-version"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: steps.source.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ${{ runner.temp }}/ocr-node-version
+          package-manager-cache: false
+
+      - name: Install OCR CLI
+        if: steps.source.outputs.ready == 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          npm install --global --ignore-scripts --no-audit --no-fund \
+            --prefix "$RUNNER_TEMP/ocr-cli" --registry=https://registry.npmjs.org \
+            "@alibaba-group/open-code-review@$OCR_VERSION"
+          "$RUNNER_TEMP/ocr-cli/bin/ocr" --version
+
+      - name: Preview review scope
+        if: steps.source.outputs.ready == 'true' && env.OCR_RUN_PREVIEW == '1'
+        continue-on-error: true
+        working-directory: ${{ runner.temp }}
+        run: |
+          node ocr-pr.mjs args --mode preview --null > ocr-preview-args
+          mapfile -d '' -t ocr_args < ocr-preview-args
+          "$RUNNER_TEMP/ocr-cli/bin/ocr" review --repo "$GITHUB_WORKSPACE" \
+            --from "$OCR_BASE_SHA" --to "$OCR_HEAD_SHA" --format json \
+            --output preview.json --preview --audience agent "${ocr_args[@]}"
+          node ocr-pr.mjs preview-summary preview.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare review arguments
+        if: steps.source.outputs.ready == 'true'
+        working-directory: ${{ runner.temp }}
+        run: node ocr-pr.mjs args --mode review --null > ocr-review-args
+
+      - name: Run OCR review
+        if: steps.source.outputs.ready == 'true'
+        id: review
+        working-directory: ${{ runner.temp }}
+        env:
+          OCR_LLM_URL: ${{ secrets.OCR_LLM_URL }}
+          OCR_LLM_TOKEN: ${{ secrets.OCR_LLM_TOKEN }}
+          OCR_LLM_MODEL: ${{ secrets.OCR_LLM_MODEL }}
+          OCR_LLM_USE_ANTHROPIC: ${{ secrets.OCR_LLM_USE_ANTHROPIC }}
+        run: |
+          if [[ -n "$OCR_LLM_USE_ANTHROPIC" ]]; then
+            export OCR_LLM_USE_ANTHROPIC=true
+          else
+            unset OCR_LLM_USE_ANTHROPIC
+          fi
+          mapfile -d '' -t ocr_args < ocr-review-args
+          status=0
+          "$RUNNER_TEMP/ocr-cli/bin/ocr" review --repo "$GITHUB_WORKSPACE" \
+            --from "$OCR_BASE_SHA" --to "$OCR_HEAD_SHA" --format json \
+            --output ocr-raw.json --audience human --concurrency "$OCR_CONCURRENCY" \
+            "${ocr_args[@]}" || status=$?
+          if [[ -s ocr-raw.json ]]; then
+            node ocr-pr.mjs sanitize-report ocr-raw.json result.json
+          fi
+          exit "$status"
+
+      - name: Upload OCR report
+        if: ${{ !cancelled() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure') }}
+        id: report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ocr-report-pr-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: ignore
+
+  publish:
+    needs: review
+    if: ${{ !cancelled() && needs.review.outputs.ready == 'true' }}
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the PR base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Download OCR report
+        if: needs.review.outputs.report-id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.review.outputs.report-id }}
+          path: ${{ runner.temp }}/ocr-report
+
+      - name: Update PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/workflows/ocr-pr.mjs comment \
+            --result "$RUNNER_TEMP/ocr-report/result.json" \
+            --repo "$GITHUB_REPOSITORY" --pr "$OCR_PR_NUMBER" --sha "$OCR_HEAD_SHA" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --ocr-version "$OCR_VERSION"
