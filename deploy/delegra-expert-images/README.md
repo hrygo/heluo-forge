@@ -39,4 +39,26 @@ node tests/runner-e2e/expert-runtime-oci-size.mjs \
   "$oci_dir/codex-java-21.oci.tar" "$oci_dir/codex-min.oci.tar"
 ```
 
-测量输出包含 ARM64 manifest digest、压缩层总字节数和去重后的父层增量。获准的制品发布启用 `--sbom=true --provenance=mode=min`，登记实际摘要及部署环境的验收记录。
+测量输出包含 ARM64 manifest digest、压缩层总字节数和去重后的父层增量。
+
+
+## GitHub Actions
+
+| 触发 | 执行 |
+| --- | --- |
+| 面向 `main` 的 PR 或 `main` 推送，镜像配方、锁文件、冒烟夹具、工作流或 Node 版本有改动 | 在原生 ARM64 节点验证 18 个发布目标和 2 个对照目标。每批最多 3 个镜像，同时运行最多 3 批。旧验证任务随新提交取消。 |
+| 在 Actions 手动选择分支 | 执行同一套只读验证。 |
+| 推送或手动选择专用标签 `expert-images-v1.2.3` | 检查标签指向 `origin/main` 历史中的提交，构建并发布 18 个场景镜像。同版任务串行。 |
+
+缓存按目标隔离，默认分支验证负责更新缓存。PR 与发布作业读取缓存，发布作业重新验证制品。相关文件的路径过滤只用于验证任务，镜像工作流适合作为可选 PR 检查。[工作流](../../.github/workflows/delegra-expert-images.yml)
+
+发布以 `GITHUB_TOKEN` 写入 `ghcr.io/hrygo/heluo-forge/<目标>`。工作流先按 OCI 摘要上传候选，核对 ARM64 manifest、SPDX SBOM 和 SLSA 来源证明，并拉回同一摘要运行冒烟。收到全部场景回执后，生成并签署 `expert-images-release.json`，再将每个已验证的索引加上 `v1.2.3` 这样的精确版本标签。已有标签指向相同摘要时复用，指向其他摘要时发布失败。GitHub Container Registry 首次创建的软件包默认为 private。 [GitHub 容器仓库](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) · [Docker 摘要发布和标签复制](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/)
+
+发布回执及签名证明保留在 Actions 制品中，可通过下列命令验证。登记和回退使用回执中的 `name@digest`。如果加标签阶段中途失败，在回执有效期内重跑失败作业以沿用原候选。制品库扫描和真实 Delegra Runner 仍按目标环境验收。 [GitHub 构建证明](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations) · [issue #394](https://github.com/hrygo/heluo-forge/issues/394)
+
+```sh
+gh attestation verify expert-images-release.json --repo hrygo/heluo-forge \
+  --signer-workflow hrygo/heluo-forge/.github/workflows/delegra-expert-images.yml
+```
+
+策略依据核验于 2026-11-20。 [GitHub 事件](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows) · [操作安全](https://docs.github.com/en/actions/reference/security/secure-use) · [Docker 构建缓存](https://docs.docker.com/build/cache/backends/gha/)
