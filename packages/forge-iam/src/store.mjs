@@ -54,9 +54,10 @@ function isNonEmptyString(value) {
 // bound ID packs a four-byte tag, a 12-byte nonce and a 16-byte context hash.
 const SIGN_OUT_BOUND_TAG = Buffer.from('ISO1', 'ascii');
 const SIGN_OUT_HASH_OFFSET = 16;
-function signOutContextHash(grant, { mode, endpoint, resource, discovery }, prefix) {
+function signOutContextHash(grant, { mode, endpoint, resource, discovery, endpointRefused }, prefix) {
   const context = [mode, endpoint, resource, grantIdentity(grant), grant.accessToken ?? null, grant.refreshToken];
   if (discovery) context.push([discovery.stage, discovery.url, discovery.issuer, discovery.configuredEndpoint]);
+  if (endpointRefused) context.push('endpoint-refused-before-dispatch');
   return createHash('sha256').update('heluo-iam/sign-out-context/v1\0').update(prefix)
     .update(JSON.stringify(context))
     .digest().subarray(0, 16);
@@ -126,8 +127,8 @@ export function createGrantStore(credentials, options = {}) {
     return () => atomicVerified() && (guard === undefined || guard() === true);
   }
 
-  async function claimSignOut(expected, confirmedRefresh, options, authorized) {
-    const { expectedRecord, revocationContext, discoveryIntent, allowLegacyRecovery } = options;
+  async function claimSignOut(expected, refreshHandoff, options, authorized) {
+    const { expectedRecord, revocationContext, revocationIntents = [], allowLegacyRecovery } = options;
     if (expected !== null && !validateGrant(expected).ok) return { ok: false };
     let decision;
     let called = 0;
@@ -166,17 +167,26 @@ export function createGrantStore(credentials, options = {}) {
             decision = 'resumed';
             return undefined;
           }
-          if (canResumeSignOut(parsed.value, discoveryIntent)) return claim(parsed.value);
+          // A fallback intent identifies the pending operation. Claim pins the selected revocation context.
+          if (revocationIntents.some((intent) => canResumeSignOut(parsed.value, intent))) return claim(parsed.value);
         }
-        const completesRefresh = parsed.value.refreshOperation?.state === 'pending'
-          && isDeepStrictEqual(parsed.value, confirmedRefresh?.pending)
-          && validateGrant(confirmedRefresh.complete).ok
-          && Boolean(confirmedRefresh.complete.accessToken)
-          && !confirmedRefresh.complete.signOutOperation
-          && isDeepStrictEqual(grantIdentity(parsed.value), grantIdentity(confirmedRefresh.complete))
-          && isDeepStrictEqual(confirmedRefresh.complete.refreshOperation, { ...parsed.value.refreshOperation, state: 'complete' })
-          && confirmedRefresh.complete.refreshToken !== parsed.value.refreshToken;
-        if (parsed.value.signOutOperation || (parsed.value.refreshOperation?.state === 'pending' && !completesRefresh)) {
+        const pendingRefresh = parsed.value.refreshOperation?.state === 'pending';
+        let revocationGrant = parsed.value;
+        if (pendingRefresh && isDeepStrictEqual(parsed.value, refreshHandoff?.pending)) {
+          const { complete, unsentGrant } = refreshHandoff;
+          if (validateGrant(complete).ok && complete.accessToken && !complete.signOutOperation
+            && isDeepStrictEqual(grantIdentity(parsed.value), grantIdentity(complete))
+            && isDeepStrictEqual(complete.refreshOperation, { ...parsed.value.refreshOperation, state: 'complete' })
+            && complete.refreshToken !== parsed.value.refreshToken) {
+            revocationGrant = complete;
+          } else if (validateGrant(unsentGrant).ok && !unsentGrant.signOutOperation
+            && unsentGrant.refreshOperation?.state !== 'pending'
+            && isDeepStrictEqual({ ...unsentGrant, refreshOperation: parsed.value.refreshOperation }, parsed.value)) {
+            // Turn the proven unsent claim directly into the sign-out fence.
+            revocationGrant = unsentGrant;
+          }
+        }
+        if (parsed.value.signOutOperation || (pendingRefresh && revocationGrant === parsed.value)) {
           decision = 'pending';
           unchanged = structuredClone(current);
           return undefined;
@@ -186,7 +196,7 @@ export function createGrantStore(credentials, options = {}) {
           unchanged = structuredClone(current);
           return undefined;
         }
-        return claim(completesRefresh ? confirmedRefresh.complete : parsed.value);
+        return claim(revocationGrant);
       });
       if (!authorized() || called !== 1 || !decision) return { ok: false };
       if (!['claimed', 'resumed'].includes(decision)) return isDeepStrictEqual(phaseResult, unchanged)
@@ -281,18 +291,18 @@ export function createGrantStore(credentials, options = {}) {
     },
 
     // Persist or verify the fence before resolving an external prerequisite.
-    async fenceSignOut(expected, confirmedRefresh, options) {
-      return claimSignOut(expected, confirmedRefresh, options, signOutAuthorized(options.guard));
+    async fenceSignOut(expected, refreshHandoff, options) {
+      return claimSignOut(expected, refreshHandoff, options, signOutAuthorized(options.guard));
     },
 
     /**
      * Pin or recheck a sign-out under the record lock. The external revoke
      * runs after the lock releases and only that exact pending record can finish.
      */
-    async signOutSnapshot(expected, beforeClear, confirmedRefresh, options = {}) {
+    async signOutSnapshot(expected, beforeClear, refreshHandoff, options = {}) {
       if (typeof beforeClear !== 'function') return { ok: false };
       const authorized = signOutAuthorized(options.guard);
-      const claim = await claimSignOut(expected, confirmedRefresh, options, authorized);
+      const claim = await claimSignOut(expected, refreshHandoff, options, authorized);
       if (!claim.ok || !claim.pending) return claim;
       const { pending, original } = claim;
       try {

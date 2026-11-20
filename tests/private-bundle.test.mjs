@@ -383,27 +383,73 @@ test('maker refuses a broadly readable configuration file', (t) => {
   assert.equal(existsSync(join(root, 'out')), false);
 });
 
-test('confidential authentication fails closed until the secret source exists', (t) => {
+test('the maker accepts only immutable snapshots issued by configuration validation', (t) => {
   const root = temp(t);
-  const entries = parseEnvConfig(
-    [
-      ...ENV,
-      'HELUO_IAM_AUTH_MODE=confidential',
-      'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic',
-      'HELUO_IAM_CLIENT_SECRET_REF=file:iam-secret',
-    ].join('\n'),
-  );
-  const error = (() => {
-    try {
-      buildConfig(entries);
-    } catch (caught) {
-      return caught;
-    }
-    return undefined;
-  })();
-  assert.ok(error !== undefined);
-  assert.equal(error.code, 'CONFIG_INVALID');
-  assert.match(error.message, /not supported by this maker yet/u);
+  const publicPath = join(root, 'public.tgz');
+  const bytes = publicTarball();
+  const entries = readBundleEntries(bytes, { withContent: true });
+  writeFileSync(publicPath, bytes);
+  const configPath = writeConfig(root, [
+    ...ENV,
+    'HELUO_IAM_MANAGED_MODELS_BASE_URL=https://gateway.corp.example/v1',
+    'HELUO_IAM_DEFAULT_PROVIDER=route-1',
+    'HELUO_GITEE_AUTH_ENV=FORGE_GITEE_TOKEN',
+  ]);
+  const config = buildConfig(parseEnvConfig(readFileSync(configPath, 'utf8')));
+  const unvalidated = { ...config, iam: { ...config.iam, allowInsecureClientAuthHttp: true } };
+  const version = '0.2.0';
+  const output = join(root, 'out');
+  const baseSha256 = inspectPublicTarball(publicPath).sha256;
+
+  expectCode(() => makePrivateBundle({ publicPath, expectedSha256: baseSha256, configPath, config: unvalidated, version, output }), 'CONFIG_INVALID');
+  expectCode(() => buildPrivateTarball({ entries, config: structuredClone(config), version, baseSha256 }), 'CONFIG_INVALID');
+  assert.equal(existsSync(output), false);
+  for (const object of [config, config.iam, config.gitee, config.iam.scopes, config.iam.managedModels, config.gitee.authEnv, config.keys]) {
+    assert.ok(object && Object.isFrozen(object));
+  }
+  assert.equal(makePrivateBundle({ publicPath, expectedSha256: baseSha256, config, version, output }).verified, true);
+});
+
+test('a confidential private bundle carries only the declared IAM method and reference', (t) => {
+  const root = temp(t);
+  const publicPath = join(root, 'public.tgz');
+  writeFileSync(publicPath, publicTarball());
+  const configPath = writeConfig(root, [
+    ...ENV,
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+  ]);
+  const result = makePrivateBundle({
+    publicPath,
+    expectedSha256: inspectPublicTarball(publicPath).sha256,
+    configPath,
+    version: '0.2.0',
+    output: join(root, 'private'),
+    repoRoot: join(root, 'repo-does-not-exist'),
+  });
+  const entries = readBundleEntries(result.tarball, { withContent: true });
+  const patch = entries.find((entry) => entry.path === 'cordis.patch.yml').content.toString('utf8');
+  assert.match(patch, /authMode: "confidential"/u);
+  assert.match(patch, /clientAuthMethod: "client_secret_post"/u);
+  assert.match(patch, /clientSecretRef: "enterprise-oidc"/u);
+  assert.doesNotMatch(patch, /^\s*(?:clientSecret|client_secret):/mu);
+  const metadata = JSON.parse(entries.find((entry) => entry.path === 'heluo-private-release.json').content.toString('utf8'));
+  assert.equal(metadata.config.secretEmbedded, false);
+  assert.doesNotMatch(JSON.stringify(metadata), /enterprise-oidc/u);
+});
+
+test('a confidential configuration requires an explicit supported method and record selector', () => {
+  const mode = [...ENV, 'HELUO_IAM_AUTH_MODE=confidential'];
+  const method = 'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic';
+  const ref = 'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc';
+  for (const additions of [[method], [ref], [method, 'HELUO_IAM_CLIENT_SECRET_REF=file:iam-secret']]) {
+    expectCode(() => buildConfig(parseEnvConfig([...mode, ...additions].join('\n'))), 'CONFIG_INVALID');
+  }
+  for (const value of ['', '"   "']) {
+    const input = [...mode, method, `HELUO_IAM_CLIENT_SECRET_REF=${value}`];
+    expectCode(() => buildConfig(parseEnvConfig(input.join('\n'))), 'CONFIG_INVALID');
+  }
 });
 
 test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
@@ -429,6 +475,28 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
   assert.equal(config.iam.allowInsecureHttp, true);
   const built = buildPrivateTarball({ entries: readBundleEntries(publicTarball(), { withContent: true }), version: '0.2.0', config, baseSha256: 'a'.repeat(64) });
   assert.doesNotMatch(built.patch, /allowInsecureHttp/u, 'the packaging-only opt-in must not be represented as a runtime guard');
+  assert.doesNotMatch(built.patch, /allowInsecureClientAuthHttp/u);
+});
+
+test('confidential private patches carry the explicit HTTP opt-in for either Discovery protocol', () => {
+  const env = [
+    ...ENV.filter((line) => !line.startsWith('HELUO_IAM_ISSUER=')),
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+  ];
+  const entries = readBundleEntries(publicTarball(), { withContent: true });
+  const httpEnv = env.map((line) => line.replace('https://iam.corp.example/', 'http://iam.corp.example/'));
+  for (const [endpoints, optIn] of [[env, undefined], [env, 'false'], [env, 'true'], [httpEnv, 'true']]) {
+    const input = optIn === undefined ? endpoints : [...endpoints, `HELUO_IAM_ALLOW_INSECURE_HTTP=${optIn}`];
+    const config = buildConfig(parseEnvConfig(input.join('\n')));
+    const { patch } = buildPrivateTarball({ entries, version: '0.2.0', config, baseSha256: 'a'.repeat(64) });
+    assert.ok(patch.includes(`discoveryUrl: "${config.iam.discoveryUrl}"`));
+    assert.doesNotMatch(patch, /allowInsecureHttp/u);
+    if (optIn === 'true') assert.match(patch, /^\s+allowInsecureClientAuthHttp: true$/mu);
+    else assert.doesNotMatch(patch, /allowInsecureClientAuthHttp/u);
+  }
 });
 
 test('discovery is sufficient for login; an issuer without endpoints is incomplete', () => {

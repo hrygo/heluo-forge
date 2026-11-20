@@ -67,6 +67,7 @@ test('a registered non-SQLite row backend shares the HFSE cipher across Host and
   assert.equal(provider.durable, false);
   assert.equal(provider.crossProcessLock, false);
   assert.equal(ctx.provided.has('iam-atomic-store'), false);
+  assert.equal(ctx.provided.has('iam-client-secret-source'), false);
 
   const refSecret = 'synthetic-ref-secret-alpha';
   const record = { kind: 'grant', payload: { subject: 'fixture-owner', accessToken: 'synthetic-record-secret-beta' } };

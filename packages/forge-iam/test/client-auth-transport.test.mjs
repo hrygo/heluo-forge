@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareClientAuthentication, buildClientAuthRequest } from '../src/client-auth.mjs';
-import { exchangeCode, refreshTokens, revokeToken, buildAuthorizationUrl } from '../src/oidc.mjs';
+import { prepareClientAuthentication, buildClientAuthRequest, isClientAuthReadLockTimeout, withCurrentClientAuth } from '../src/client-auth.mjs';
+import { exchangeCode, refreshTokens, revokeToken, revokeSessionToken, buildAuthorizationUrl } from '../src/oidc.mjs';
 import { createClientSecretFixture } from './support/client-secret-source.mjs';
 
 const endpoint = 'https://iam.corp.example/token';
@@ -9,13 +9,94 @@ const clientId = 'c: +é';
 const secret = 's: +é ';
 const basic = `Basic ${Buffer.from('c%3A+%2B%C3%A9:s%3A+%2B%C3%A9+').toString('base64')}`;
 const calls = [
-  ['code', (fetchImpl, clientAuthentication) => exchangeCode({ tokenEndpoint: endpoint, code: 'synthetic-code',
+  ['code', (fetchImpl, clientAuthentication, target = endpoint) => exchangeCode({ tokenEndpoint: target, code: 'synthetic-code',
     codeVerifier: 'synthetic-verifier', redirectUri: 'http://127.0.0.1:9/iam/callback', clientId, fetchImpl, clientAuthentication })],
-  ['refresh', (fetchImpl, clientAuthentication) => refreshTokens({ tokenEndpoint: endpoint,
+  ['refresh', (fetchImpl, clientAuthentication, target = endpoint) => refreshTokens({ tokenEndpoint: target,
     refreshToken: 'synthetic-refresh', clientId, fetchImpl, clientAuthentication })],
-  ['revoke', (fetchImpl, clientAuthentication) => revokeToken({ revocationEndpoint: endpoint,
+  ['revoke', (fetchImpl, clientAuthentication, target = endpoint) => revokeToken({ revocationEndpoint: target,
     token: 'synthetic-refresh', clientId, fetchImpl, clientAuthentication })],
 ];
+
+test('cancelling revocation while the pin read waits prevents dispatch', async () => {
+  const fixture = createClientSecretFixture({}, { clientId });
+  const waiting = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const finished = Promise.withResolvers();
+  let pause = false;
+  const source = {
+    ...fixture.source,
+    async retryRead(_snapshot, check) {
+      if (!pause) return check();
+      waiting.resolve();
+      await release.promise;
+      try { return check(); } finally { finished.resolve(); }
+    },
+  };
+  const clientAuthentication = await prepareClientAuthentication(fixture.config, {
+    ...fixture.options,
+    getClientSecretSource: () => source,
+    verifyClientSecretSource: (credentials, candidate, scope) => candidate === source
+      && fixture.options.verifyClientSecretSource(credentials, fixture.source, scope),
+  });
+  pause = true;
+  const controller = new AbortController();
+  let posts = 0;
+  const pending = revokeSessionToken({ revocationMode: 'rfc7009', revocationEndpoint: endpoint,
+    refreshToken: 'synthetic-refresh', clientId, clientAuthentication, signal: controller.signal,
+    fetchImpl: async () => { posts++; return new Response(null, { status: 200 }); },
+  });
+  await waiting.promise;
+  controller.abort();
+  release.resolve();
+  assert.deepEqual(await pending, { state: 'unknown', code: 'IAM_REVOKE_CANCELLED' });
+  await finished.promise;
+  assert.equal(posts, 0);
+});
+
+test('only the exhausted pin read identifies an action as unsent', async () => {
+  const fixture = createClientSecretFixture({}, { clientId });
+  const timeout = Object.assign(new Error('synthetic private SQLite message'), { code: 'CRED_LOCK_TIMEOUT' });
+  let blocked = false;
+  let lateCheck;
+  const source = {
+    ...fixture.source,
+    isCurrent(snapshot) {
+      if (blocked) throw Object.assign(new Error('synthetic busy'), { errcode: 5 });
+      return fixture.source.isCurrent(snapshot);
+    },
+    async retryRead(_snapshot, check) {
+      if (!blocked) return check();
+      lateCheck = check;
+      try { return check(); } catch (cause) {
+        if (cause.errcode === 5) throw timeout;
+        throw cause;
+      }
+    },
+  };
+  const authentication = await prepareClientAuthentication(fixture.config, {
+    ...fixture.options,
+    getClientSecretSource: () => source,
+    verifyClientSecretSource: (credentials, candidate, scope) => candidate === source
+      && fixture.options.verifyClientSecretSource(credentials, fixture.source, scope),
+  });
+  let starts = 0;
+  blocked = true;
+  await assert.rejects(withCurrentClientAuth(authentication, () => { starts++; }), (cause) => {
+    assert.equal(isClientAuthReadLockTimeout(cause), true);
+    assert.equal(cause.constructor, Error);
+    assert.equal(cause.code, 'CRED_LOCK_TIMEOUT');
+    assert.notEqual(cause.message, timeout.message);
+    return true;
+  });
+  blocked = false;
+  assert.throws(lateCheck, { code: 'IAM_CLIENT_AUTH_CHANGED' });
+  assert.equal(starts, 0);
+  await assert.rejects(withCurrentClientAuth(authentication, () => {
+    starts++;
+    throw timeout;
+  }), (cause) => cause === timeout && !isClientAuthReadLockTimeout(cause));
+  assert.equal(starts, 1);
+});
 
 for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {
   for (const [kind, invoke] of calls) {
@@ -57,6 +138,27 @@ for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {
 }
 
 for (const [kind, invoke] of calls) {
+  test(`${kind} accepts HTTP for public authentication and explicitly opted-in confidential authentication`, async () => {
+    const target = endpoint.replace('https:', 'http:');
+    for (const method of ['none', 'client_secret_basic', 'client_secret_post']) {
+      const f = createClientSecretFixture({}, { clientId, value: secret, method });
+      const config = method === 'none' ? { clientId, allowInsecureHttp: true } : { ...f.config, allowInsecureClientAuthHttp: true };
+      const operation = await prepareClientAuthentication(config, f.options);
+      let requests = 0;
+      await invoke(async (url, init) => {
+        requests++;
+        assert.equal(url, target);
+        assert.equal(init.redirect, 'error');
+        const form = new URLSearchParams(init.body);
+        assert.equal(init.headers.authorization === basic, method === 'client_secret_basic');
+        assert.equal(form.get('client_secret') === secret, method === 'client_secret_post');
+        return kind === 'revoke' ? new Response(null, { status: 200 })
+          : Response.json({ access_token: 'synthetic-access', token_type: 'Bearer', expires_in: 300 });
+      }, operation, target);
+      assert.equal(requests, 1);
+    }
+  });
+
   test(`${kind} refuses raw secret/options pretending to be an authenticated operation`, async () => {
     let requests = 0;
     await assert.rejects(invoke(async () => { requests++; }, { method: 'client_secret_basic', secret, guard: () => true }),
@@ -86,6 +188,18 @@ test('pure construction neither mutates the caller form nor permits duplicate cr
       { code: 'IAM_CONFIG_INVALID' });
   }
   assert.throws(() => buildClientAuthRequest('other-client', form, operation), { code: 'IAM_CLIENT_AUTH_CONTEXT_INVALID' });
+});
+
+test('a refused HTTP revocation is reported as failed locally and never attempts transport', async () => {
+  const f = createClientSecretFixture({}, { clientId, value: secret });
+  const operation = await prepareClientAuthentication(f.config, f.options);
+  let requests = 0;
+  const result = await revokeSessionToken({ revocationEndpoint: endpoint.replace('https:', 'http:'),
+    revocationMode: 'rfc7009', refreshToken: 'synthetic-refresh', clientId, clientAuthentication: operation,
+    fetchImpl: async () => { requests++; return new Response(null, { status: 200 }); },
+  });
+  assert.deepEqual(result, { state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' });
+  assert.equal(requests, 0);
 });
 
 for (const change of ['issuer', 'clientId', 'ref', 'revision', 'value', 'source', 'credentials']) {

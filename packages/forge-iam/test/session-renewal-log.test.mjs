@@ -520,22 +520,47 @@ test('logs a credential read lock timeout before any claim or token request', as
   assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-path/);
 });
 
-for (const [response, reason, oauthError] of [
-  [() => Response.json({ error: 'invalid_grant', error_description: 'synthetic-private-response' }, { status: 401 }), 'rejected', 'invalid_grant'],
-  [() => Response.json({ ...rotated, refresh_token: original.refreshToken }), 'rotation-unchanged', undefined],
+for (const [response, oauthError, oauthErrorResponse, httpStatus = 401] of [
+  [() => Response.json({ error: 'invalid_grant', error_description: 'synthetic-private-response' }, { status: 401 }), 'invalid_grant'],
+  [() => Response.json({ error: 'invalid_grant' }, { status: 400 }), 'invalid_grant', undefined, 400],
+  [() => Response.json({ error: 'invalid_client' }, { status: 401 }), 'invalid_client'],
+  [() => new Response(null, { status: 401 }), undefined, 'empty'],
+  [() => new Response('  \n', { status: 401 }), undefined, 'empty'],
+  [() => new Response('synthetic-private-response', { status: 401 }), undefined, 'nonstandard'],
+  [() => Response.json({ error: 'synthetic-private-response' }, { status: 401 }), undefined, 'nonstandard'],
+  [() => new Response(new ReadableStream({ start(body) { body.error(new Error('synthetic-private-response')); } }), { status: 401 }),
+    undefined, 'unreadable'],
 ]) {
-  test(`logs ${oauthError ?? reason} and preserves the pending grant without retry`, async (t) => {
+  test(`logs token HTTP ${httpStatus} ${oauthError ?? oauthErrorResponse} with the request method and keeps pending`, async (t) => {
     const host = await startHost(t, { fetchToken: response });
     t.mock.timers.tick(900);
     await until(() => host.iam.getView(), (view) => view.state === 'error', 'expected session failure');
     const rows = await host.events((row) => row.event === 'refresh-failed');
     const failure = rows.find((row) => row.event === 'refresh-failed');
-    assert.equal(failure.reason, reason);
+    assert.equal(failure.reason, 'rejected');
     assert.equal(failure.code, 'IAM_REAUTH_REQUIRED');
     assert.equal(failure.oauthError, oauthError);
-    assert.equal(failure.httpStatus, oauthError ? 401 : undefined);
+    assert.equal(failure.oauthErrorResponse, oauthErrorResponse);
+    assert.equal(failure.httpStatus, httpStatus);
+    assert.equal(failure.clientAuthMethod, 'none');
+    assert.ok(rows.some((row) => row.event === 'refresh-stage' && row.stage === 'token-endpoint'
+      && row.clientAuthMethod === 'none'));
     assert.equal((await host.credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'pending');
     assert.equal(host.posts(), 1);
     assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-response/);
   });
 }
+
+test('logs an unchanged refresh token as a response validation failure and keeps pending', async (t) => {
+  const host = await startHost(t, { fetchToken: () => Response.json({ ...rotated, refresh_token: original.refreshToken }) });
+  t.mock.timers.tick(900);
+  const rows = await host.events((row) => row.event === 'refresh-failed');
+  const failure = rows.find((row) => row.event === 'refresh-failed');
+  assert.equal(failure.reason, 'rotation-unchanged');
+  assert.equal(failure.code, 'IAM_REAUTH_REQUIRED');
+  assert.equal(failure.httpStatus, undefined);
+  assert.equal(failure.oauthErrorResponse, undefined);
+  assert.equal(failure.clientAuthMethod, undefined);
+  assert.equal((await host.credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'pending');
+  assert.equal(host.posts(), 1);
+});

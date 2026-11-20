@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { buildDelivery } from '../scripts/release-delivery.mjs';
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
-import { PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
+import { buildConfig, parseEnvConfig, PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
 
 const TOOL_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -121,6 +121,16 @@ test('dry-run prints the redacted plan and writes nothing', (t) => {
   assert.equal(existsSync(output), false);
   assert.equal(existsSync(`${output}.zip`), false);
   assert.match(result.digest, /^[0-9a-f]{64}$/u);
+});
+
+test('delivery rejects unvalidated snapshots and preserves the preview digest for validated input', (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const output = join(root, 'delivery');
+  const input = { publicPath, publicSha256: sha256, configPath, version: '0.1.0-corp.1', output, dryRun: true };
+  const config = buildConfig(parseEnvConfig(readFileSync(configPath, 'utf8')));
+  expectCode(() => buildDelivery({ ...input, config: structuredClone(config) }), 'CONFIG_INVALID');
+  assert.equal(buildDelivery({ ...input, configPath: undefined, config }).digest, buildDelivery(input).digest);
+  assert.equal(existsSync(output), false);
 });
 
 test('a login-only plan reports that gateway and revocation are not configured', (t) => {
@@ -235,6 +245,53 @@ test('both packaging CLIs redact discovery on success and failure', async (t) =>
   }
 });
 
+for (const script of ['release-delivery.mjs', 'make-private-bundle.mjs']) {
+  test(`${script} packages the same config snapshot used for Discovery and confirmation`, async (t) => {
+    const { root, publicPath, configPath, sha256 } = fixture(t);
+    const output = join(root, 'delivery');
+    let replacement;
+    let document;
+    const server = createServer((_request, response) => {
+      if (replacement) writeFileSync(configPath, replacement);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(document));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+    const issuer = `http://127.0.0.1:${server.address().port}`;
+    const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
+    document = { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks` };
+    const initial = [
+      'HELUO_IAM_AUTH_MODE=confidential',
+      'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+      'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+      `HELUO_IAM_DISCOVERY_URL=${discoveryUrl}`,
+      'HELUO_IAM_CLIENT_ID=test-client',
+      'HELUO_IAM_ALLOW_INSECURE_HTTP=true',
+    ].join('\n');
+    writeFileSync(configPath, initial);
+    const args = ['--public', publicPath, '--public-sha256', sha256, '--config', configPath, '--version', '0.1.0-corp.1', '--output', output];
+    const isDelivery = script === 'release-delivery.mjs';
+    const preview = await runCli(script, isDelivery ? [...args, '--dry-run'] : args);
+    assert.equal(preview.code, 1);
+    assert.match(preview.stderr, /CONFIRM_REQUIRED/u);
+    const digest = /"planDigest":\s*"([a-f0-9]{64})"/u.exec(preview.stderr)?.[1];
+    assert.ok(digest);
+    replacement = initial.replace(discoveryUrl, 'https://iam.corp.example/discovery').replace('HTTP=true', 'HTTP=false');
+
+    const built = await runCli(script, [...args, '--confirm', digest]);
+    assert.equal(built.code, 0, built.stderr);
+    assert.equal(readFileSync(configPath, 'utf8'), replacement);
+    const summary = JSON.parse(built.stdout);
+    assert.equal(summary.discovery.checked, true);
+    const tarball = isDelivery ? summary.private.tarball : summary.tarball;
+    const files = readBundleEntries(readFileSync(tarball), { withContent: true });
+    const patch = files.find((file) => file.path === 'cordis.patch.yml').content.toString('utf8');
+    assert.ok(patch.includes(`discoveryUrl: "${discoveryUrl}"`));
+    assert.match(patch, /allowInsecureClientAuthHttp: true/u);
+  });
+}
+
 test('a missing configuration file does not leak its path in CLI errors', async (t) => {
   const { root, publicPath, sha256 } = fixture(t);
   const marker = 'sensitive-config-path-marker';
@@ -318,6 +375,10 @@ test('builder writes the employee package and a zip', (t) => {
   assert.match(guide, /mounted=unknown/u);
   assert.match(guide, /有旧版本时先执行\s*$/mu, '安装流程必须说明异版本先卸载再安装');
   assert.match(guide, /dsh plugin remove 卸载旧版本/u);
+  assert.match(guide, /客户端认证[\s\S]+管理员已为当前系统账号预置/u);
+  assert.match(guide, /Linux[^\n]+XDG_DATA_HOME[^\n]+\.local\/share\/HeluoForge/u);
+  assert.match(guide, /\.keys\S*keyring\.json/u);
+  assert.match(guide, /HTTP[^\n]+明文[^\n]+客户端密钥/u);
   const launcher = readFileSync(join(output, 'installer', 'install-macos.command'), 'utf8');
   assert.match(launcher, /--release "\$ROOT\/enterprise-plugin"/u);
   assert.match(launcher, /--profile auto --install-host/u);

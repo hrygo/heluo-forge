@@ -14,11 +14,13 @@
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-20 |
-| 门禁 | 机密客户端 source/mock 批次已验收，见验收记录；真实来源与生产准入关闭 |
+| 门禁 | 机密客户端 source/mock 批次已验收，见验收记录。该批次的真实来源与生产准入关闭 |
 
 > 编制依据：用户于 2026-11-02 批准完整 [DESIGN-016](<../design/iam-confidential-isolated.md>) 与 [IAM-002](<../contracts/iam-client-auth-isolated.md>) 进入 source/mock 实施；独立建造审阅无重要剩余问题。批准不包含真实 secret、当前 profile、团队 G1/G2、安装或提交发布。
 >
 > 关联文档：[实现验收索引](<../design/README.md#221-iam-离线验收清单>)、[开发约定](<../engineering/development-conventions.md>)。
+
+> 本计划记录 2026-11-02 隔离开发的范围与离线证据。下文涉及真实 `apply` 和管理员预置的限制适用于该批次。内置凭据来源和运维入口由当前契约规定。 [客户端认证契约](../contracts/iam-client-auth-isolated.md)
 
 ## 1. 目标与实施路径
 

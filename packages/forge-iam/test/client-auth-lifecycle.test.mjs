@@ -12,9 +12,30 @@ test('reusing a cached authorization URL still validates its original confidenti
   assert.equal(h.mock.counts.token, 0);
 });
 
+test('rotation during callback listener setup releases the listener before publishing a login URL', async (t) => {
+  const binding = hold();
+  let opened;
+  let closed;
+  const h = await confidentialHarness(t, 'client_secret_basic', {
+    async openCallback(owner) { opened = owner; await binding.pause(); },
+    closeCallback(owner) { closed = owner; },
+  });
+  const result = h.service.startSignIn();
+  const rejected = assert.rejects(result, { code: 'IAM_CLIENT_AUTH_CHANGED' });
+  await binding.entered;
+  h.fixture.replace();
+  binding.release();
+  await rejected;
+  assert.equal(closed, opened);
+  assert.equal(h.service.getView().state, 'signed-out');
+  assert.equal(h.mock.counts.token, 0);
+});
+
 test('public cancellation cannot be lost in a newly introduced source-free await', async (t) => {
   const h = await confidentialHarness(t);
-  const config = { ...h.config, authMode: 'public', clientAuthMethod: 'none' }; delete config.clientSecretRef;
+  const config = { ...h.config, authMode: 'public', clientAuthMethod: 'none' };
+  delete config.clientSecretRef;
+  delete config.allowInsecureClientAuthHttp;
   let service; let checks = 0;
   service = createIamService(config, { credentials: h.credentials,
     verifyAtomicStore: () => { if (++checks === 2) queueMicrotask(() => service.cancelSignIn()); return true; },

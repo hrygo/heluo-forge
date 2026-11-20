@@ -43,7 +43,6 @@ export function createIamService(rawConfig, options = {}) {
     throw new IamError('IAM_CONFIG_INVALID', safeMessage('IAM_CONFIG_INVALID'), { issues: checked.issues });
   }
   const config = checked.value;
-  // Real apply supplies neither private function; configuration cannot unlock it.
   assertClientAuthConfigured(config, options);
   const configured = isConfigured(config).ok;
   const now = options.now ?? (() => Date.now());
@@ -214,6 +213,7 @@ export function createIamService(rawConfig, options = {}) {
     token,
     now,
     fetchImpl,
+    logRenewal,
     openCallback: options.openCallback,
     closeCallback: options.closeCallback,
     recoverCredentialStore: reconcile.recoverCredentialStore,

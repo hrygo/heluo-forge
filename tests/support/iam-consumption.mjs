@@ -98,6 +98,7 @@ export async function jointFixture(t, { confidential = false, beforeTool, modelS
     return () => { if (registration === entry) { registration = undefined; offered.clear(); counts.unregistered++; } };
   }
   const config = { ...mock.endpoints, clientId: mock.clientId, ...secret?.config,
+    ...(confidential ? { allowInsecureClientAuthHttp: true } : {}),
     redirectUri: 'http://127.0.0.1:4567/iam/callback', httpTimeoutMs: 2000 };
   const iam = createIamService(config, { ...secret?.options,
     getCredentials: binder.getCredentials, getCredentialsBindingScope: binder.getCredentialsBindingScope,

@@ -1,6 +1,6 @@
 # DSH 插件与工具方案配套材料
 
-本目录按主题存放主计划的配套 Markdown 与必要 Excel，便于在 IDE 中直接打开、检索和引用。主计划、门禁与版本以 [推广实施方案](../rollout-plan.md) 为准；历史方案对机密客户端的前提不替代当前 [ADR-26](../../architecture/platform-architecture.md#14-架构决策记录) 的 public + PKCE S256 基线。
+本目录按主题存放主计划的配套 Markdown 与必要 Excel，便于在 IDE 中直接打开、检索和引用。主计划、门禁与版本以 [推广实施方案](../rollout-plan.md) 为准。历史方案的认证和密钥存放假设以文内日期为准。现行客户端认证见[契约](../../contracts/iam-client-auth-isolated.md)。
 
 ## 文件
 

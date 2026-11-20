@@ -1,13 +1,13 @@
-# IAM 机密客户端隔离开发设计
+# IAM 机密客户端认证设计
 
 ## 文档信息
 
 | 项 | 内容 |
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-016 |
-| 文档名称 | IAM 机密客户端隔离开发设计 |
-| 版本 | V1.0.0 |
-| 文档状态 | 生效 |
+| 文档名称 | IAM 机密客户端认证设计 |
+| 版本 | V1.1.1 |
+| 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
@@ -17,23 +17,22 @@
 | 确认人 | 项目负责人 |
 | 确认日期 | 2026-11-02 |
 | 确认事项 | 采用管理员预置的隔离开发基线，批准 DESIGN-016 与 IAM-002 进入 source/mock 实施 |
-| 适用范围 | 可选机密客户端的隔离设计与模拟实现；真实凭据来源与生产准入关闭 |
-| 门禁 | 用户已批准完整 source/mock 设计；不开放真实来源与生产 |
-| 交付门禁 | 用户已批准 source/mock 设计；不开放真实来源与生产 |
+| 适用范围 | 可选机密客户端的隔离设计与模拟实现 |
+| 门禁 | 客户端登记、部署预置与实际计划续期须通过 G1，双端交付须通过 G2 |
 
-> 适用范围：企业交付采用公开客户端 + PKCE S256，本机密客户端路径不启用、不进入本期验收；本文只保留可选隔离路径的设计与证据。
+> 适用范围：要求客户端认证的企业 IAM 部署。授权码换票与刷新统一使用预注册机密客户端及 PKCE S256。
 >
-> 编制依据：用户于 2026-11-02 选择管理员预置的隔离开发基线，并批准完整设计进入 source/mock 实施；同日只读 Inspect 核验 credentials 契约。设计的隔离服务实现已接入；本地验证不代表正式团队审批或供应商支持。
+> 编制依据：[issue #408 的 IAM 核对结论](https://github.com/hrygo/heluo-forge/issues/408#issuecomment-7034227656)、[总体架构 ADR-31](../architecture/platform-architecture.md)及本机组合与凭据接口。实现验证和未验项见 [IAM 实现与验证记录](verification/forge-iam.md)。
 >
 > 关联文档：[字段与错误契约](<../contracts/iam-client-auth-isolated.md>)、[现行 IAM 模块](<plugins/forge-iam.md>)、[需求基线](<../requirements/requirements-baseline.md>)、[开发约定](<../engineering/development-conventions.md>)。
 
 ## 1. 结论与范围
 
-本阶段把 code、refresh 与回调清理用的 revoke 机密认证接入实际服务代码，并以管理员/测试控制器预置的 synthetic source 验证。普通退出使用访问令牌自证的 GET 撤销路径，不使用客户端 secret。没有登记服务、enrollment UI、真实 secret 获取器、生产存储格式、管理员写工具、核心补丁或新服务包。真实 apply 不注入来源、不发现隐藏来源，配置本身不能解除门禁。
+私版配置携带 clientId、认证方式及 clientSecretRef。管理员在目标终端通过独立运维入口预置 client secret，Host 从内置加密凭据组合注入来源。授权码换票、刷新及 `rfc7009` 模式的撤销 POST 应用同一种客户端认证方法。标准私版的退出和失败回调清理使用访问令牌自证 GET。
 
-保持公共原型的兼容默认和 mandatory PKCE S256。secret 来源、grant 单记录提交、网关联合变更是三个不同信任边界，不互相证明。标准请求编码可离线验证，真实 IAM 是否接受某方法、客户端注册和远端轮换仍由 G1 证据决定。
+两种客户端模式均要求 PKCE S256。public/none 是通用插件兼容默认，适用于明确允许两个 grant 均无客户端认证的部署。secret 来源、grant 单记录提交和网关联合变更各自验证具体能力。IAM 登记方法、远端轮换和计划续期由 G1 实测确认。
 
-**当前状态**：实际服务已接入 Basic/Post 的 code/refresh 与回调清理用 revoke、V2 生成与恢复、有效 AT、共享刷新完整认证 pin 和 cleanup。普通 signOut 使用当前 AT 自证的 GET，不要求 secret；刷新令牌不由该路径撤销。54 项新服务用例及合并回归 851 项通过；完整检查与独立审查以[实施计划](<../plans/2026-11-02-iam-confidential-isolated.md>)最终证据为准。public 不采用、返回或盲删 V2。真实 apply 仍不注入来源，配置本身不能启用，供应商与生产能力没有因此获准。
+Host 支持 Basic/Post、V2 会话生成与恢复、共享刷新及回调清理。来源缺失、来源与凭据实例不匹配，或记录与 issuer/clientId/method/ref 不符时，机密操作拒绝。public 会话使用 V1。V1/V2 不能相互采用。
 
 ## 2. 证据与选择
 
@@ -44,7 +43,7 @@
 | 升级前 V1 reader | 旧 record 仅校验 version=1、保留未知扩展，旧 service 仅绑定 issuer/client/resource；可选机密标记可能被旧 reader 忽略，因此 confidential 采用 format2。现行 V1 codec 已另加认证标记拒绝，但不能追溯改变已部署旧 reader |
 | 标准 HTTP | [RFC 6749 §2.3.1](<https://www.rfc-editor.org/rfc/rfc6749.html#section-2.3.1>)定义 Basic 的双端 form 编码和可选 Post，不允许一请求多方法；[RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)要求撤销时认证 |
 
-采用最少新增机制的只读 fixture source：snapshot、独立精确认可与同步本地 current 检查。不选择把真实秘密塞入新 CredentialRecord：那还需要批准持久格式、key selector、平台来源及生命周期，单记录成组也没有消除与会话记录的检查/使用窗口。
+运行期来源复用内置值级加密存储。`iam-client-secret/<ref>` 是凭据命名空间中的保留记录域，绑定 issuer、clientId 和 method。通用凭据读写、离线读取和联合操作拒绝访问，通用枚举在解密前略过。预置和轮换通过专用端口执行单记录提交。已认证的加密信封产生非秘密 revision；同步检查采用当前密文行身份。管理员运维路径、隔离 fixture 与 Host 源的详细要求见[客户端认证契约](../contracts/iam-client-auth-isolated.md)。
 
 SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的证据。引用的标准在 2026-11-02 核验，不替代供应商 client authentication 配置与实测。
 
@@ -57,7 +56,7 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 1. 校验完整配置。confidential 缺私有 getter/verifier 时在产生授权 URL 或发送凭据请求前固定失败；不能回落 public。
 2. 显式登录取得并验证 metadata，才形成可信 issuer/端点上下文。读取一次被具体认可的 snapshot，核对 issuer/client/ref 与 revision，再检查来源、credentials/store、独占与认证代际。
 3. 建立 attempt，只留非秘密 auth pin、source 身份和已有 nonce/state/verifier/redirect/resource/端点上下文，不长期保存 value。
-4. callback 沿现有唯一 attempt/state 检查；重新 read，要求同一 revision 与上下文，再发送 code POST。请求构造后至真正 fetch 之间不再 await；pre-send guard 失败零请求。
+4. callback 沿现有唯一 attempt/state 检查。重新读取同一 revision 与上下文后发送 code POST。进入 fetch 前同步检查源和快照，检查失败不发请求。
 5. HTTP、解析、验签及其他 await 后复查。写 grant 的现有单记录 guard 内只做同步本地检查，失败不得采用 token 响应或写新 grant。
 6. 失败 cleanup 只能在原 attempt pin 仍有效时使用原认证上下文撤销一次。轮换、取消或来源消失就标未确认，不借新 secret 为旧 code/RT 补发。
 
@@ -70,14 +69,14 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ### 3.3 退出、轮换与缓存
 
-- signOut 校验受信存储、issuer 和客户端绑定并读取 grant 快照，锁内写入匹配该快照的 pending；网络请求在锁外以 AT 自证 GET 撤销，成功后才在同记录锁内核验并写墓碑。未配置撤销端点时可直接本地完成，不宣称远端撤销。
-- secret 缺失不阻止满足上述条件的冷启动 V2 退出；普通 signOut 不读取 secret。远端撤销拒绝或结果不明时保留 pending，不报告清理完成、不重发旧令牌。不同 issuer/client/mode 或不匹配快照的记录保留，不盲删。回调失败后的机密认证 POST cleanup 仍要求原来源及认证上下文有效，不借新 secret 补发。
-- fixture 控制器轮换仅替换不可变 current 快照并换 revision；它的写方法不交给服务。不承诺远端 IdP 已吊销旧 secret，或已签发 AT/RT 后代自动失效。
+- signOut 校验受信存储、issuer 和客户端绑定并读取 grant 快照，锁内写入匹配该快照的 pending。默认在锁外以访问令牌自证 GET 撤销，成功后在同记录锁内核验并写墓碑。没有撤销端点时只完成本地退出。
+- 默认 GET 退出不读取 secret，缺失 secret 时仍允许通过其他门禁的冷启动 V2 退出。远端撤销拒绝或结果不明时保留 pending，不重发旧令牌。不同 issuer/client/mode 或不匹配快照的记录保留。显式启用 `rfc7009` 时，退出和回调失败清理均发送认证 POST，要求原来源及认证上下文有效。
+- 管理员在 IAM 侧轮换，再将对应值预置到同一引用。每次写入都产生新 revision。旧会话需重新登录。已发出请求和服务端令牌撤销由 IAM 自身的处理与生效时序决定。
 - getView/getPrincipal 保持缓存只读，不做 secret I/O，不扩充 view、诊断、Remote 或路由。缓存展示不是实时授权；模型严格只读编排不连接认证写入或 cleanup。
 
 ## 4. 网络与失败边界
 
-授权码与刷新 POST、回调清理的撤销 POST 使用机密认证编码；普通 signOut 使用不带客户端认证的 AT 自证 GET。各路径保持各自的 HTTP(S) 端点校验、redirect:error、超时与取消边界。HTTP 不提供传输加密或端点身份认证，机密客户端 secret 和令牌可能被窃取或篡改。构造的 Basic header、Post body 和 snapshot 只在操作局部保留；不进入错误或制品。
+机密认证 POST 发出前按实际端点核验 HTTPS，只有管理员显式允许的部署可使用 HTTP。HTTP 会以明文传输客户端 secret 和令牌。请求保留 `redirect: 'error'`、超时和取消边界。构造的 Basic header、Post body 和 snapshot 仅在操作局部使用。
 
 机密认证的 code、refresh 与清理操作在相关边界核对当前 getter 的 source 身份、独立 verifier 字面 true、原 snapshot 仍为 current、私有副本与原数据一致、mode/method/issuer/client/ref/revision、credentials/store、现有认证/操作代际；普通 signOut 按 §3.3 的独立路径校验，不读取 secret。local 失效错误不得被网络 catch 误包装为 IAM_UNREACHABLE。来源异常与任意 HTTP error 原文不输出；合法 invalid_grant 的既有分类保留。
 
@@ -85,17 +84,10 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ## 5. 实施归属与验收
 
-一个 source writer 顺序维护[配置](<../../packages/forge-iam/src/config.mjs>)、[OIDC](<../../packages/forge-iam/src/oidc.mjs>)、[记录 codec](<../../packages/forge-iam/src/record.mjs>)、[存储](<../../packages/forge-iam/src/store.mjs>)和[服务](<../../packages/forge-iam/src/service.mjs>)；必要的小型认证 helper 单职责，不跨包引源码。真实 [apply](<../../packages/forge-iam/src/index.mjs>)不注入秘密来源。root 维护文档，独立 reviewer 不同时写 source。
+凭据包负责加密记录、快照与独立来源注册。IAM Host 只读该来源并管理请求、会话和日志。私版制作器只注入结构化配置。
 
-批准后按 TDD 分四个可审查交付：
-
-1. 配置 tagged union、可信 fixture source 与三种纯 HTTP 构造；缺/错/Promise verifier 先 RED，PKCE 与原公共路径不变。
-2. V1/V2 parser、严格 authContext、双向模式/方法/ref/revision 规则及完整 base；旧 V1 不自动迁移，秘密不进 attempt/grant/pending。
-3. 实际 service 的 code/refresh/revoke/cleanup 与共享刷新；受控 Promise 覆盖 pre-send、HTTP pending、响应后、提交内、provider/来源替换及 cancel/signout/dispose。每条异常路径断言请求次数与下游零重放。
-4. 独立审查、用户/开发文档同步、定向及一次有效完整检查；关闭真实 keychain spike，不安装当前 profile、不提交/发布，不把 mock 写成生产验收。
-
-必须覆盖 Basic/Post 的 code/refresh/revoke、冒号/空格/加号/非 ASCII 编码、无双发 secret、授权 URL 不含 secret、错误字段回显和 Basic 串、成功业务数据未被误删。真实 apply 的 confidential 配置在无来源时零 secret I/O、零带凭据 POST；public 旧行为与模型只读回归保持。
+回归覆盖无客户端认证的刷新请求收到 401 且保留 pending、Basic/Post 下的实际 Host 换票与计划续期、已确认提交后保持 `ready`，以及删除或轮换来源后拒绝采用旧授权。验证同时检查 secret 排除于授权 URL、会话记录、错误、诊断及交付物之外。
 
 ## 6. 完成判断与后续门禁
 
-本阶段的完成仅指当前 source 与隔离 fixture 的规定功能和时序可验证、所有安全断言保留、文档一致。管理员真实预置/轮换工具、钥匙串 native source、真实 IAM 方法与 revoke 契约、客户端注册、双端 GUI、跨进程一致、远端撤权及团队准入仍独立待证；没有 env/file/static-secret 后备。
+G1 使用已核对客户端类型、两个 grant 权限及 `token_endpoint_auth_method` 的实际登记，在目标环境预置凭据后新登录，观察计划续期的 `refresh-committed`、新 AT 可用和会话保持 `ready`。远端撤销、轮换生效和双端交付各自取证。

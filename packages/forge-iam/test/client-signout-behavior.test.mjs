@@ -198,6 +198,26 @@ test('a sign-in response begun before sign-out cannot revive an old attempt', as
   assert.doesNotMatch(text, /等待浏览器登录|synthetic-user|浏览器未打开/);
 });
 
+for (const [code, status, notice] of [
+  ['IAM_CLIENT_AUTH_UNVERIFIED', 503, /联系管理员核对本机预置的客户端密钥/u],
+  ['IAM_CLIENT_AUTH_CHANGED', 409, /客户端认证已变化，请刷新登录状态后重新登录/u],
+  ['IAM_CLIENT_AUTH_CONTEXT_INVALID', 401, /当前会话与企业登录配置不匹配，请重新登录/u],
+]) {
+  test(`the account sign-in panel guides recovery from ${code}`, async (t) => {
+    const panel = await mountPanel(async (url) => {
+      if (url === '/api/forge-iam/view') return Response.json(signedOut);
+      assert.equal(url, '/api/forge-iam/sign-in');
+      return Response.json({ error: { code } }, { status });
+    });
+    t.after(() => panel.close());
+    await panel.findButton(panel.render(), '登录企业账号').props.onClick();
+    const text = panel.text(panel.render());
+    assert.ok(notice.test(text), `the account panel must show recovery guidance for ${code}`);
+    assert.doesNotMatch(text, /操作未完成，请重试/u);
+    assert.deepEqual(panel.locations, []);
+  });
+}
+
 test('a failed remote revocation remains visible after local sign-out', async (t) => {
   const panel = await mountPanel(async (url) => {
     if (url === '/api/forge-iam/view') return Response.json(ready);

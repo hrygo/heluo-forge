@@ -2,12 +2,12 @@ import { isDeepStrictEqual } from 'node:util';
 import { fetchJson, loadMetadata, OidcError, randomToken, verifyIdToken } from './oidc.mjs';
 import { fetchUserInfo, projectUserInfo } from './userinfo.mjs';
 import {
-  assertClientAuthCurrent,
   assertGrantAuthBinding,
   clientAuthContext,
   clientAuthDescriptor,
   grantAuthPin,
   prepareClientAuthentication,
+  withCurrentClientAuth,
 } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
 import { parseHttpUrl, parseRedirectUri } from './http-url.mjs';
@@ -50,7 +50,7 @@ export function createServiceGrant(env) {
     current();
     const operation = await prepareClientAuthentication(config, options, { issuer, credentials,
       expectedPin: grantAuthPin(targetGrant) ?? expected?.pin, expectedProvenance: expected?.provenance, guard: current });
-    assertClientAuthCurrent(operation);
+    await withCurrentClientAuth(operation);
     return operation;
   }
 

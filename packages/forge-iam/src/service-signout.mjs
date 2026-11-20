@@ -124,8 +124,8 @@ export function createSignOut(env) {
     // Waiting for our flight must not retarget logout to a concurrently
     // installed login, even when the subject is identical.
     if (ownedRefresh && (!handoff || !(isDeepStrictEqual(grant, handoff.pending)
-      || isDeepStrictEqual(grant, handoff.complete)))) return unknownSignOut();
-    const confirmedRefresh = handoff?.complete ? handoff : undefined;
+      || isDeepStrictEqual(grant, handoff.complete)
+      || isDeepStrictEqual(grant, handoff.unsentGrant)))) return unknownSignOut();
     // A locally authenticated session must not clear a grant that another
     // process replaced; the check needs no client secret.
     if (ctx.sessionAuthentication && grant
@@ -142,9 +142,13 @@ export function createSignOut(env) {
     let revocation = 'skipped';
     let revocationError = null;
     const revocationMode = config.revocationMode ?? 'access_token_query';
+    const confidentialRevocation = revocationMode === 'rfc7009' && config.authMode === 'confidential';
+    const refusesEndpoint = (target) => confidentialRevocation && target?.protocol === 'http:'
+      && config.allowInsecureClientAuthHttp !== true;
     let endpoint = parseHttpUrl(config.revocationEndpoint);
     if (config.revocationEndpoint && !endpoint) return unknownSignOut();
     const localContext = { mode: revocationMode, endpoint: endpoint?.href ?? null, resource: config.gatewayResource || null };
+    const preflightIntent = endpoint && confidentialRevocation ? { ...localContext, endpoint: null, endpointRefused: true } : undefined;
     let discoveryIntent;
     let revocationContext = localContext;
     if (grant && config.discoveryUrl && (!endpoint || !config.issuer)) {
@@ -152,12 +156,13 @@ export function createSignOut(env) {
       if (!url) return unknownSignOut();
       const source = { url: url.href, issuer: config.issuer || null, configuredEndpoint: localContext.endpoint };
       discoveryIntent = { ...localContext, discovery: { ...source, stage: 'intent' } };
+      if (preflightIntent) preflightIntent.discovery = { ...source, configuredEndpoint: null, stage: 'intent' };
       // Optional discovery may fail without affecting an otherwise usable
       // grant. Fence it first when its issuer is already independently known.
       // A cold discovery-only Host must establish the issuer before any write.
       if (expectedIssuer && !grant.signOutOperation) {
-        const fenced = await targetStore.fenceSignOut(grant, confirmedRefresh,
-          { expectedRecord: record, revocationContext: discoveryIntent, guard: assertCurrent });
+        const fenced = await targetStore.fenceSignOut(grant, handoff,
+          { expectedRecord: record, revocationContext: refusesEndpoint(endpoint) ? preflightIntent : discoveryIntent, guard: assertCurrent });
         checkDisposed();
         if (!fenced.ok || !fenced.pending) return unknownSignOut();
         record = fenced.pending;
@@ -178,6 +183,8 @@ export function createSignOut(env) {
     try { grants.assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
     checkDisposed();
     const revocable = Boolean(grant && endpoint && (revocationMode === 'rfc7009' || (handoff?.complete ?? grant).accessToken));
+    const requiresClientAuthentication = revocable && confidentialRevocation;
+    const revocationIntents = [discoveryIntent, preflightIntent].filter(Boolean);
     const operation = grant?.signOutOperation;
     // Legacy markers predate protocol/endpoint pinning. Their only supported
     // retry uses a configured, same-origin D1 endpoint for the verified issuer.
@@ -186,8 +193,19 @@ export function createSignOut(env) {
       && endpoint.origin === parseHttpUrl(expectedIssuer)?.origin
       && (grant.resource || '') === (config.gatewayResource || ''));
     if (operation && !targetStore.canResumeSignOut(grant, revocationContext, allowLegacyRecovery)
-      && !targetStore.canResumeSignOut(grant, discoveryIntent)) {
+      && !revocationIntents.some((intent) => targetStore.canResumeSignOut(grant, intent))) {
       return unknownSignOut();
+    }
+
+    if (revocable && refusesEndpoint(endpoint)) {
+      // Fence further local use without pinning an endpoint that cannot receive a request.
+      if (!operation) {
+        const fenced = await targetStore.fenceSignOut(grant, handoff,
+          { expectedRecord: record, revocationContext: preflightIntent ?? discoveryIntent, guard: assertCurrent });
+        checkDisposed();
+        if (!fenced.ok || !fenced.pending) return unknownSignOut();
+      }
+      return unknownSignOut({ state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' });
     }
 
     let authentication;
@@ -200,11 +218,11 @@ export function createSignOut(env) {
     };
     try {
       assertCurrent();
-      if (revocable && revocationMode === 'rfc7009' && config.authMode === 'confidential') {
+      if (requiresClientAuthentication) {
         // Client authentication can also be unavailable. Pin before reading
         // it, and verify that exact record again after the lock-free lookup.
-        const pinned = await targetStore.fenceSignOut(grant, confirmedRefresh,
-          { expectedRecord: record, revocationContext, discoveryIntent, guard: assertCurrent });
+        const pinned = await targetStore.fenceSignOut(grant, handoff,
+          { expectedRecord: record, revocationContext, revocationIntents, guard: assertCurrent });
         if (!pinned.ok || !pinned.pending) return unknownSignOut();
         record = pinned.pending;
         grant = record.payload;
@@ -235,8 +253,8 @@ export function createSignOut(env) {
       }
       guard();
     };
-    const cleared = await targetStore.signOutSnapshot(grant, revokeCurrent, confirmedRefresh,
-      { expectedRecord: record, revocationContext, discoveryIntent, allowLegacyRecovery, guard });
+    const cleared = await targetStore.signOutSnapshot(grant, revokeCurrent, handoff,
+      { expectedRecord: record, revocationContext, revocationIntents, allowLegacyRecovery, guard });
     checkDisposed();
     try { assertCurrent(); } catch { return unknownSignOut(); }
     if (!cleared.ok || !['cleared', 'absent'].includes(cleared.decision)) {

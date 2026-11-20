@@ -282,13 +282,81 @@ test('pushes refresh the summary and review, including bot and merge commits', a
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   assert.match(workflow, /github\.event\.sender\.type != 'Bot' \|\| github\.event\.action == 'synchronize'/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__HANDLE_PUSH_TRIGGER: "true"/u);
-  assert.match(workflow, /GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '\["\/describe", "\/review"\]'/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__PUSH_TRIGGER_IGNORE_BOT_COMMITS: "false"/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__PUSH_TRIGGER_IGNORE_MERGE_COMMITS: "false"/u);
   assert.match(settings, /handle_push_trigger = true/u);
   assert.match(settings, /push_commands = \["\/describe", "\/review"\]/u);
   assert.match(settings, /push_trigger_ignore_bot_commits = false/u);
   assert.match(settings, /push_trigger_ignore_merge_commits = false/u);
+});
+
+test('model requests use a smaller budget than the custom model context window', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  assert.match(workflow, /^ {6}CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__MAX_MODEL_TOKENS: "64000"$/mu);
+  assert.match(settings, /^custom_model_max_tokens = 256000$/mu);
+  assert.match(settings, /^max_model_tokens = 64000$/mu);
+});
+
+test('large reviews use bounded chunking and show coverage gaps', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const action = stepDefinition('Run PR-Agent');
+  assert.match(action, /^ {10}PR_REVIEWER__ENABLE_LARGE_PR_CHUNKING: "true"$/mu);
+  assert.match(action, /^ {10}PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"$/mu);
+  assert.match(action, /^ {10}PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"$/mu);
+  assert.match(settings, /^enable_large_pr_chunking = true$/mu);
+  assert.match(settings, /^max_number_of_calls = 5$/mu);
+  assert.match(settings, /^enable_review_coverage_footer = true$/mu);
+});
+
+test('model timeouts advance to fallback and exhausted attempts fail the action', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  assert.match(workflow, /^ {6}CONFIG__AI_TIMEOUT: "180"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__PROPAGATE_TOOL_ERRORS: "true"$/mu);
+  assert.match(workflow, /^ {6}GITHUB_ACTION_CONFIG__FAIL_ON_TOOL_ERRORS: "true"$/mu);
+  assert.match(settings, /^fallback_models = \["openai\/deepseek-v4\.1-flash"\]$/mu);
+  assert.match(settings, /^ai_timeout = 180$/mu);
+  assert.match(settings, /^retry_same_model_on_timeout = false$/mu);
+  assert.match(settings, /^propagate_tool_errors = true$/mu);
+});
+
+test('a base branch without PR-Agent settings gets the same fallback as a configured base', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const configured = /^fallback_models = (.+)$/mu.exec(settings)?.[1];
+  const bootstrap = /^ {6}CONFIG__FALLBACK_MODELS: "([^"]+)"$/mu.exec(workflow)?.[1];
+  assert.ok(bootstrap, 'the workflow must provide a fallback before the base has .pr_agent.toml');
+  // The pinned runner accepts a comma-separated fallback string even with Dynaconf auto-casting disabled.
+  assert.deepEqual(bootstrap.split(',').map((model) => model.trim()), JSON.parse(configured));
+});
+
+test('a failing automatic summary still allows review and keeps the attempt failed', () => {
+  for (const { summary, review, revision } of [
+    { summary: 'Run PR-Agent summary', review: 'Run PR-Agent', revision: 'revision' },
+    { summary: 'Retry PR-Agent summary', review: 'Retry PR-Agent', revision: 'retry_revision' },
+  ]) {
+    const summaryStep = stepDefinition(summary);
+    const reviewStep = stepDefinition(review);
+    assert.ok(summaryStep, `${summary} must run independently of ${review}`);
+    assert.ok(workflow.indexOf(`- name: ${summary}\n`) < workflow.indexOf(`- name: ${review}\n`));
+    assert.match(summaryStep, /github\.event_name == 'pull_request'/u);
+    assert.doesNotMatch(summaryStep, /continue-on-error:/u);
+    const condition = /^ {8}if: \$\{\{ (.+) \}\}$/mu.exec(reviewStep)?.[1];
+    assert.match(condition ?? '', /!cancelled\(\)/u);
+    const canReview = new Function('cancelled', 'steps', `return (${condition});`);
+    assert.equal(canReview(() => false, {
+      [revision]: { outcome: 'success', outputs: { head } },
+    }), true);
+    assert.equal(canReview(() => false, {
+      [revision]: { outcome: 'failure', outputs: { head } },
+    }), false);
+    assert.equal(canReview(() => false, {
+      [revision]: { outcome: 'success', outputs: { head: '' } },
+    }), false);
+    assert.equal(canReview(() => true, {
+      [revision]: { outcome: 'success', outputs: { head } },
+    }), false);
+  }
 });
 
 test('only PR lifecycle and commit changes trigger automatic review', () => {
@@ -455,7 +523,6 @@ test('automated and manual reviews for a PR share a queue without canceling pend
 
 test('the workflow runs result handling even when the action produced no output', () => {
   const gate = /^        if: \$\{\{ steps\.revision\.outputs\.head != '' \}\}$/mu;
-  assert.match(stepDefinition('Run PR-Agent'), gate);
   assert.match(stepDefinition('Validate PR-Agent review'), gate);
   assert.match(stepDefinition('Validate PR-Agent review'), /REVIEW_RESULT: \$\{\{ steps\.pr_agent\.outputs\.review \}\}/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__ENABLE_OUTPUT: "true"/u);
@@ -478,10 +545,13 @@ test('only a completed automatic review is recorded in the job steps', () => {
   assert.equal(records('issue_comment', 'review output'), false);
 });
 
-test('the workflow preserves the PR description before base settings are available', () => {
-  const action = workflow.split('      - name: Run PR-Agent\n')[1]?.split('\n      - name: ')[0] ?? '';
-  assert.match(action, /PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"/u);
-  assert.match(action, /PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT_PERSISTENT: "true"/u);
+test('the workflow posts a persistent PR summary with a diagram before base settings are available', async () => {
+  assert.match(workflow, /^ {6}PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"$/mu);
+  assert.match(workflow, /^ {6}PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT_PERSISTENT: "true"$/mu);
+  assert.match(workflow, /^ {6}PR_DESCRIPTION__ENABLE_PR_DIAGRAM: "true"$/mu);
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const description = settings.split('[pr_description]\n')[1]?.split('\n[')[0] ?? '';
+  assert.match(description, /^enable_pr_diagram = true$/mu);
 });
 
 test('a changed head or base reports an out-of-date review', async () => {
@@ -532,11 +602,20 @@ test('an advancing target causes a bounded automatic refresh of the review', asy
   });
 });
 
-test('the workflow retries once with the same pinned PR-Agent and validates the new revision', () => {
-  const retry = workflow.split('      - name: Retry PR-Agent\n')[1]?.split('\n      - name: ')[0] ?? '';
-  assert.match(retry, /if: \$\{\{ steps\.validation\.outputs\.retry == 'true' \}\}/u);
-  assert.match(retry, /uses: the-pr-agent\/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b/u);
-  const recheck = workflow.split('      - name: Validate refreshed PR-Agent review\n')[1]?.split('\n      - name: ')[0] ?? '';
+test('the workflow retries both tools once with the same pinned image and validates the new revision', () => {
+  const uses = /^ {8}uses: (\S+)/mu;
+  const image = uses.exec(stepDefinition('Run PR-Agent'))?.[1] ?? '';
+  assert.match(image, /^docker:\/\/pragent\/pr-agent@sha256:[0-9a-f]{64}$/u);
+  const summary = stepDefinition('Run PR-Agent summary');
+  const retrySummary = stepDefinition('Retry PR-Agent summary');
+  const retry = stepDefinition('Retry PR-Agent');
+  assert.match(stepDefinition('Capture refreshed PR revision'), /if: \$\{\{ steps\.validation\.outputs\.retry == 'true' \}\}/u);
+  assert.equal(uses.exec(summary)?.[1], image);
+  assert.equal(uses.exec(retrySummary)?.[1], image);
+  assert.equal(uses.exec(retry)?.[1], image);
+  assert.match(retrySummary, /env: \*pr_agent_summary_env/u);
+  assert.match(retry, /env: \*pr_agent_env/u);
+  const recheck = stepDefinition('Validate refreshed PR-Agent review');
   assert.match(recheck, /steps\.retry_revision\.outputs\.base/u);
   assert.match(recheck, /steps\.pr_agent_retry\.outputs\.review/u);
 });
@@ -665,11 +744,18 @@ test('a clean model review does not automatically dismiss an earlier formal requ
   });
 });
 
-test('pushes refresh the description before reviewing the current change', async () => {
+test('PR lifecycle events and pushes run the summary and review in separate steps', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   assert.match(settings, /push_commands = \["\/describe", "\/review"\]/u);
   assert.match(settings, /publish_description_as_comment_persistent = true/u);
-  assert.match(workflow, /GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '\["\/describe", "\/review"\]'/u);
+  const summary = stepDefinition('Run PR-Agent summary');
+  const review = stepDefinition('Run PR-Agent');
+  assert.match(summary, /GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "true"/u);
+  assert.match(summary, /GITHUB_ACTION_CONFIG__AUTO_REVIEW: "false"/u);
+  assert.match(summary, /GITHUB_ACTION_CONFIG__PUSH_COMMANDS: "\/describe"/u);
+  assert.match(review, /GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "false"/u);
+  assert.match(review, /GITHUB_ACTION_CONFIG__AUTO_REVIEW: "true"/u);
+  assert.match(review, /GITHUB_ACTION_CONFIG__PUSH_COMMANDS: "\/review"/u);
 });
 
 test('a push fails when either persistent summary or review was not refreshed', async () => {

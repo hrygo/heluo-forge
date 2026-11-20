@@ -3,6 +3,74 @@ import assert from 'node:assert/strict';
 import { createIamService } from '../src/service.mjs';
 import { GRANT_KEY } from '../src/store.mjs';
 import { confidentialHarness, authorization, signIn, hold } from './support/client-auth-service.mjs';
+import { createClientSecretFixture } from './support/client-secret-source.mjs';
+import { MemoryCredentials } from './support/memory-credentials.mjs';
+
+for (const method of ['client_secret_basic', 'client_secret_post']) {
+  for (const flow of ['exchange', 'refresh', 'callback cleanup']) {
+    test(`HTTPS Discovery cannot send ${method} over HTTP during ${flow}`, async (t) => {
+      const credentials = new MemoryCredentials();
+      const fixture = createClientSecretFixture(credentials, { method });
+      const { issuer, clientId, ref } = fixture.binding;
+      const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
+      const httpIssuer = issuer.replace('https:', 'http:');
+      const discovery = { issuer, authorization_endpoint: `${issuer}/authorize`, jwks_uri: `${issuer}/jwks`,
+        token_endpoint: `${flow === 'callback cleanup' ? issuer : httpIssuer}/token`,
+        revocation_endpoint: flow === 'callback cleanup' ? `${httpIssuer}/revoke` : undefined };
+      const now = Date.parse('2030-01-01T00:00:00.000Z');
+      const before = { kind: 'grant', payload: {
+        version: 2, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, clientId,
+        subject: 'synthetic-user', scope: 'openid', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+        obtainedAt: new Date(now - 600_000).toISOString(), accessExpiresAt: new Date(now + 1000).toISOString(),
+        authContext: { mode: 'confidential', method, secretRef: ref, secretRevision: fixture.snapshot().revision },
+      } };
+      if (flow === 'refresh') credentials.records.set(GRANT_KEY, structuredClone(before));
+      const sessionWrites = t.mock.method(credentials, 'modifyRecord');
+      let discoveryRequests = 0;
+      let httpPosts = 0;
+      let httpsPosts = 0;
+      const service = createIamService({ ...fixture.config, discoveryUrl, revocationMode: 'rfc7009', allowInsecureHttp: true,
+        ...(flow === 'refresh' ? { issuer } : {}) }, {
+        ...fixture.options, now: () => now, verifyAtomicStore: (candidate) => candidate === credentials,
+        getOrigin: () => 'http://127.0.0.1:4567',
+        async fetch(target, init) {
+          const url = new URL(target);
+          if (url.href === discoveryUrl) {
+            discoveryRequests++;
+            return Response.json(discovery);
+          }
+          if (url.href === discovery.jwks_uri) return Response.json({ keys: [] });
+          assert.equal(init.method, 'POST');
+          if (url.protocol === 'http:') httpPosts++;
+          else httpsPosts++;
+          if (url.href === discovery.revocation_endpoint) return new Response(null, { status: 200 });
+          return Response.json({ access_token: 'synthetic-issued-access', refresh_token: 'synthetic-next',
+            token_type: 'Bearer', expires_in: 300 });
+        },
+      });
+      t.after(() => service.dispose());
+      let result;
+      if (flow === 'refresh') {
+        result = service.resolveToken();
+      } else {
+        const { authorizationUrl } = await service.startSignIn();
+        const params = new URL(authorizationUrl).searchParams;
+        const callback = new URL(params.get('redirect_uri'));
+        callback.searchParams.set('state', params.get('state'));
+        callback.searchParams.set('code', 'synthetic-code');
+        result = service.handleCallback(callback.href);
+      }
+      const [{ reason }] = await Promise.allSettled([result]);
+      assert.ok(discoveryRequests > 0);
+      assert.equal(httpPosts, 0);
+      assert.equal(httpsPosts, flow === 'callback cleanup' ? 1 : 0);
+      assert.equal(reason?.code, flow === 'callback cleanup' ? 'IAM_ID_TOKEN_INVALID' : 'IAM_CONFIG_INVALID');
+      assert.equal(sessionWrites.mock.callCount(), 0);
+      assert.deepEqual(await credentials.readRecord(GRANT_KEY), flow === 'refresh' ? before : undefined);
+      assert.equal(service.getView().signedIn, false);
+    });
+  }
+}
 
 for (const failure of ['missing-source', 'missing-verifier', 'false', 'promise-true', 'promise-reject', 'throw', 'self-report']) {
   test(`actual confidential start with ${failure} has no source read, auth URL or credential POST`, async (t) => {

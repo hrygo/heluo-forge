@@ -418,6 +418,47 @@ test('metadata discovery accepts remote HTTP while rejecting non-HTTP endpoint s
   await assert.rejects(() => loadMetadata({ discoveryUrl: 'ftp://iam.corp.example/discovery' }),
     (error) => error.code === 'IAM_CONFIG_INVALID');
 });
+
+test('confidential metadata gates only HTTP Discovery requests on explicit opt-in', async (t) => {
+  const issuer = 'http://iam.corp.example';
+  const discoveryUrl = issuer + '/.well-known/openid-configuration';
+  const config = { authMode: 'confidential', discoveryUrl };
+  const explicit = {
+    issuer, authorizationEndpoint: issuer + '/authorize', tokenEndpoint: issuer + '/token', jwksUri: issuer + '/jwks',
+  };
+  const document = {
+    issuer, authorization_endpoint: explicit.authorizationEndpoint,
+    token_endpoint: explicit.tokenEndpoint, jwks_uri: explicit.jwksUri,
+    userinfo_endpoint: issuer + '/userinfo',
+  };
+
+  for (const [name, override] of [['omitted', {}], ['disabled', { allowInsecureClientAuthHttp: false }]]) {
+    await t.test(name, async () => {
+      const fetchImpl = t.mock.fn(async () => Response.json(document));
+      const settings = { ...config, ...override };
+      assert.equal((await loadMetadata({ ...settings, ...explicit }, { fetchImpl })).issuer, issuer);
+      await assert.rejects(() => loadMetadata(settings, { fetchImpl }), { code: 'IAM_CONFIG_INVALID' });
+      await assert.rejects(() => loadMetadata({ ...settings, ...explicit }, {
+        fetchImpl, optional: 'userInfoEndpoint',
+      }), { code: 'IAM_CONFIG_INVALID' });
+      assert.equal(fetchImpl.mock.callCount(), 0);
+    });
+  }
+
+  for (const settings of [
+    { ...config, allowInsecureClientAuthHttp: true },
+    { ...config, discoveryUrl: discoveryUrl.replace('http:', 'https:') },
+    { ...config, authMode: 'public' },
+  ]) {
+    const fetchImpl = t.mock.fn(async () => Response.json(document));
+    assert.equal((await loadMetadata(settings, { fetchImpl })).tokenEndpoint, explicit.tokenEndpoint);
+    const metadata = await loadMetadata({ ...settings, ...explicit }, { fetchImpl, optional: 'userInfoEndpoint' });
+    assert.equal(metadata.userInfoEndpoint, document.userinfo_endpoint);
+    assert.equal(fetchImpl.mock.callCount(), 2);
+    for (const call of fetchImpl.mock.calls) assert.equal(call.arguments[0].href, settings.discoveryUrl);
+  }
+});
+
 test('missing optional endpoints are discovered only when requested and bound to the configured issuer', async () => {
   const issuer = 'https://iam.example';
   const config = {
