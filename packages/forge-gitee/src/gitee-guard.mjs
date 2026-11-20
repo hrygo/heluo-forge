@@ -279,7 +279,7 @@ export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
       ...(content === undefined ? {} : { content }),
       ...(source.agent === undefined ? {} : { agent: source.agent }),
       ...(source.signal === undefined ? {} : { signal: source.signal }),
-      callId: nextCallId(action.split('.')[1] || 'action'),
+      callId: text(source.callId) || nextCallId(action.split('.')[1] || 'action'),
     };
     // 宿主 approval 通道：`index.mjs` 的 execute 直通，不额外注入 ctx；调用方要确认通道时
     // 必须显式传 `request.ctx`，否则策略侧的 `kind: 'confirm'` 条目会因"没有审批通道"被拒

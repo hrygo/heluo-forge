@@ -227,6 +227,16 @@ test('写回工具：字段原样交给 service，结果 done 才 ok:true', asyn
   });
 });
 
+test('写回工具：宿主 callId 原样透传，缺省时不凭猜测补一个', async () => {
+  const { service, calls } = fakeService();
+  const tool = byName(buildDevopsTools(service), UPDATE_TOOL);
+  const callArgs = { target: 'ARD123456', summary: '优化启动性能', confirm: { object: 'ARD123456' } };
+  await tool.execute(callArgs, { name: UPDATE_TOOL, callId: 'call-host-1', arguments: callArgs });
+  assert.equal(calls.at(-1).args.callId, 'call-host-1', '同一次调用的重试要靠宿主 callId 命中策略复用');
+  await tool.execute(callArgs, { name: UPDATE_TOOL, arguments: callArgs });
+  assert.equal('callId' in calls.at(-1).args, false, '宿主没给就不编一个假 id');
+});
+
 test('写回工具：策略拒绝/绑定不符时给可见失败与下一步，而静默成功', async () => {
   const cases = [
     ['POLICY_ACTION_UNREGISTERED', 'report-to-admin'],
@@ -808,7 +818,7 @@ test('写回经装配层：变更号与正文进到门禁，身份与取消信�
   const tool = registered.get(UPDATE_TOOL);
   const result = await tool.execute(
     { target: 'ARD123456', summary: '新标题', description: '新描述', confirm: { object: 'ARD123456' } },
-    { agent, signal: controller.signal },
+    { agent, signal: controller.signal, callId: 'call-host-21' },
   );
   const write = seenExec.filter((entry) => entry.action === FLOW_ACTIONS.CHANGE_UPDATE).at(-1);
   assert.ok(write !== undefined, `写回没有进到门禁：${JSON.stringify(result)}`);
@@ -818,4 +828,13 @@ test('写回经装配层：变更号与正文进到门禁，身份与取消信�
   assert.equal(write.exec.content.body, '新描述');
   assert.equal(write.exec.agent, agent);
   assert.equal(write.exec.signal, controller.signal);
+  assert.equal(write.exec.callId, 'call-host-21', '宿主 callId 必须原样到门禁：复用判定用它，合成 id 会让复用永不命中');
+  const synthetic = await (async () => {
+    await tool.execute(
+      { target: 'ARD123456', summary: '再写一次', confirm: { object: 'ARD123456' } },
+      {},
+    );
+    return seenExec.filter((entry) => entry.action === FLOW_ACTIONS.CHANGE_UPDATE).at(-1).exec.callId;
+  })();
+  assert.match(String(synthetic), /^devops-write-\d+$/u, '没有宿主 callId 时回落到合成 id，仍然可审计');
 });

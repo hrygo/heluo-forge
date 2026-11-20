@@ -60,6 +60,73 @@ const SELF = Object.freeze({
   },
 });
 
+/** 确认原因类别：卡片标题行与审计 summary 共用同一份措辞。 */
+export const REASON_LABELS = Object.freeze({
+  action: { en: 'action confirmation', zh: '动作确认' },
+  content: { en: 'content risk', zh: '内容风险' },
+});
+
+/** 卡片上的固定按钮文案：判定常量与展示文案同源，界面不做本地化切换。 */
+export const CONFIRM_ACTION_LABELS = Object.freeze({
+  allow: '允许本次写入',
+  deny: '取消本次写入',
+});
+
+/** 疑似本机路径、盘符、UNC、家目录或 URI 的定位一律不出现在卡片与文案里。 */
+const PATH_LIKE = /^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/])|^[A-Za-z][A-Za-z0-9+.-]*:\/\//u;
+const HIDDEN_LOCATOR = '目标（已隐藏）';
+
+/**
+ * Bound and de-identify a caller-controlled locator before it reaches presentation
+ * copy or an audit summary. Anything that looks like a filesystem path or a URI is
+ * replaced rather than truncated: a half path still leaks a directory name.
+ *
+ * @param {unknown} value
+ * @returns {string | undefined} a short, non-path locator
+ */
+export function sanitizeLocator(value) {
+  const trimmed = text(value, 96);
+  if (trimmed === undefined) return undefined;
+  if (PATH_LIKE.test(trimmed)) return HIDDEN_LOCATOR;
+  return trimmed;
+}
+
+function locatorOf({ target, args = {} } = {}) {
+  const candidates = [target, args?.repository, args?.repo, args?.changeId, args?.owner];
+  for (const candidate of candidates) {
+    const locator = sanitizeLocator(candidate);
+    if (locator !== undefined) return locator;
+  }
+  return undefined;
+}
+
+/** 分支名进入卡片正文前同样脱敏：它可能被写成路径形态。 */
+function branchOf(args) {
+  const branch = sanitizeLocator(args?.branch ?? args?.head);
+  return branch === undefined ? '' : `（分支 ${branch}）`;
+}
+
+/**
+ * Presentation copy for one confirmation card question (one reason per question).
+ *
+ * Returns plain strings rather than locale pairs: the card is rendered by the host
+ * user-questions surface in the interface language, and P1 ships the Chinese copy.
+ *
+ * @param {{action: string, target?: string, args?: object, reason?: string}} request
+ * @returns {{question: string, detail: string}}
+ */
+export function confirmationCardCopy({ action, target, args = {}, reason = 'action' } = {}) {
+  const place = locatorOf({ target, args }) ?? '目标';
+  const what = subject({ action, repository: place, args });
+  const category = Object.hasOwn(REASON_LABELS, reason) ? REASON_LABELS[reason].zh : '需要人工复核';
+  // 每题的文字必须彼此可区分，否则多原因卡片会变成一模一样的两步。
+  const lead = reason === 'content' ? `${category}：` : '';
+  return {
+    question: `${lead}允许${what.zh}${branchOf(args)}？`,
+    detail: `本次调用需要人工确认：${category}。${SELF.call.zh}`,
+  };
+}
+
 /** Bound a caller-controlled string before it reaches presentation copy. */
 function text(value, limit = 80) {
   if (typeof value !== 'string') return undefined;

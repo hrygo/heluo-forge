@@ -1,26 +1,32 @@
 # @heluo/forge-policy
 
-状态：可用（P0 受控写最小门禁——动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面、组织信封验签、路径查询；内容闸、流程规则、路径规则与人工确认卡片待 P1–P3；未接企业环境，未做双端实机）
+状态：可用（P0 受控写最小门禁 + P1 身份永远开、子代理写拒绝、人工确认卡片与决策复用；内容闸、流程规则与路径规则待 P2–P3；未接企业环境，未做双端实机）
 
-一句话：只对目录里登记的写动作负责——登记动作必须解析出 IAM 身份、先落前置执行记录再放行、执行前复验身份与参数、执行后结清；未登记的工具与动作（含全部读动作）不在本门禁作用域，直接放行且不读身份、不记审计；八条规则开关代码默认全关，本阶段置真会在装载期被拒绝。
+一句话：只对目录里登记的写动作负责——登记动作必须解析出 IAM 身份、先落前置执行记录再放行、执行前复验身份与参数、执行后结清；`gitee.git.push` 与 `change.clarification.write` 在开关开启时经宿主 `userQuestions` 卡片逐次确认；未登记的工具与动作（含全部读动作）不在本门禁作用域，直接放行且不读身份、不记审计；八条规则开关代码默认全关，未实现的开关置真会在装载期被拒绝。
 
 | 项 | 内容 |
 |---|---|
 | 形态 | Host 插件（提供 `policy` 服务） |
-| 职责 | 受控写动作的身份校验与前置审计、执行前复验、命令面同源判定、组织信封上限、受保护路径查询 |
+| 职责 | 受控写动作的身份校验与前置审计、执行前复验、人工确认与决策复用、命令面同源判定、组织信封上限、受保护路径查询 |
 | 不负责 | 不替代服务端鉴权；不拦截未登记的工具；不对读动作做统计或审计；不维护独立 hook 引擎 |
-| 衔接点 | `tools/pre-execute`（await 判定、身份与前置审计）、`tools.guard`（同步核验一次性收据）、`tools/result`（兜底结清）、`ctx.commands`（命令面）、`policy` 服务 |
+| 衔接点 | `tools/pre-execute`（await 判定、身份与前置审计）、`tools.guard`（同步核验一次性收据）、`tools/result`（兜底结清）、宿主 `userQuestions`（确认卡片）、`ctx.commands`（命令面）、`policy` 服务 |
 | 详细设计依据 | CORP-DSH-DESIGN-003；分阶段实施见 [实施计划 §5](../../docs/plans/2026-11-19-policy-minimal-gates.md#5-实施计划) |
-| 实现状态 | 目录编译、判定合成、身份校验、恒开审计（memory/file 两种落点）、一次性收据与执行前复验、命令注册、组织信封验签、路径检查、过程观察投影均已实现并有离线用例；内容/流程/路径/确认四类规则尚未接入判定链路，因此没有任何拦截开关可用 |
+| 实现状态 | 目录编译、判定合成、身份校验、恒开审计（memory/file 两种落点）、一次性收据与执行前复验、命令注册、组织信封验签、路径检查、过程观察投影、子代理来源拒绝、确认卡片与决策复用均已实现并有离线用例；内容/流程/路径三类规则尚未接入判定链路，对应开关置真会在装载期拒绝 |
 
 ## 当前实现
 
 | 项 | 状态 |
 |---|---|
 | 目录 | `compileCatalog`：只接受 `action`/`target`/`category`，未知字段（含旧键 `revision`/`enabled`/`kind`/`egress`）与未分类动作一律拒绝装载；类别与默认决策来自内置分类表，运行期不读工具自报属性 |
-| 判定 | `decideAction`：未登记动作在 `denyUnknownAction` 关闭时按 `out-of-scope` 放行；登记动作缺业务目标即拒绝；人工留痕动作在 `denyHumanRecord` 关闭时按 `out-of-scope` 放行；其余登记动作放行并进入身份与审计阶段。规则开关置真一律装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`） |
-| 流水线 | `buildPipeline` 只装配 `resolve → identity → audit → receipt` 四个常开阶段；关闭的规则不出现在阶段表里，因此不会"进入后放行"，也不会因为走过阶段而多写审计 |
+| 判定 | `decideAction`：未登记动作在 `denyUnknownAction` 关闭时按 `out-of-scope` 放行；登记动作缺业务目标即拒绝；人工留痕动作在 `denyHumanRecord` 关闭时按 `out-of-scope` 放行；其余登记动作放行并进入身份与审计阶段。`confirmPush` 开启时只有 `gitee.git.push`、`confirmDopWrite` 开启时只有 `change.clarification.write` 进入确认阶段，其余写动作不弹卡；未实现的开关置真一律装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`） |
+| 流水线 | `buildPipeline` 按已实现的开关装配阶段：`resolve → identity → audit → receipt` 常开，确认阶段在 `confirmPush`/`confirmDopWrite` 开启时插入到审计之前；关闭的规则不出现在阶段表里，因此不会"进入后放行"，也不会因为走过阶段而多写审计 |
 | 身份 | 登记动作必须解析出 IAM actor（宿主 IAM 视图）；解析不出即拒绝，文案指向「设置 → 账号」完成登录后重试；子 Agent 继承父会话身份，不单独查 |
+| 确认卡片 | 一次 `ask`、每题一对固定标签「允许本次写入 / 取消本次写入」，只有每题都恰好选中允许标签才放行；其余应答（缺失、结构非法、未知标签、带自定义文本）一律按未确认拒绝。卡片只含动作可读名、目标定位与原因类别，不含正文、参数原文、令牌或绝对路径 |
+| 确认超时 | 默认 120000 ms（`confirmation.timeoutMs`，装载期校验为正整数）；超时映射为 `POLICY_CONFIRM_TIMEOUT`，文案明确是等待超时而不是用户拒绝。判定由本包自己的计时器执行，宿主侧挂起询问在结论落定后立即 abort |
+| 无 UI 环境 | 没有可用的 `userQuestions` 服务时装载照常完成并给出一次告警，但每次需要卡片的受控写都以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed），不会降级为直接放行 |
+| 错误码 | 六类结论各有唯一码：`POLICY_CONFIRM_DENIED`、`_TIMEOUT`、`_UNAVAILABLE`、`_INVALID_ANSWER`、`_DELEGATED`、`_ERROR`；码同时出现在结构化判定结果与审计里，用户文案不拼码 |
+| 决策复用 | 只缓存"允许"的决定，键为 `工具名 + callId + 动作 + 参数摘要`，同一键的重试不再打扰用户但必须重过身份校验、一次性收据与执行后复验；拒绝、超时、无应答、非法应答与执行失败都不入缓存。缓存最多 32 条、进程内 LRU、不落盘，卸载即清空 |
+| 子代理来源 | 宿主 origin 为 `subagent` 的调用在 `denyDelegatedWrites` 开启时一律拒绝并留一条 `POLICY_CONFIRM_DELEGATED` 审计；开关关闭时，需要卡片的写仍以同一错误码拒绝（子代理不会拿到卡片），不需卡片的写与主会话同路径 |
 | 审计 | `audit.begin` 在放行前落记录（主体取 provider 自证、身份单列 `actor`、摘要覆盖参数与正文），`audit.settle` 执行后补 `durationMs` 与 `decision`；memory 是进程内环形缓冲（默认 1000），file 按天一个 JSONL、保留 `keepDays` 天；写入失败中止本次受控调用给可操作提示，绝不静默回落 memory；上一次未结清时下一次受控写中止，缺口由 `auditGaps()`/`acknowledgeAuditGaps()` 处理 |
 | 记录最小化 | 只写白名单字段；`arguments`/`content`/`stdout`/`stderr` 等禁用字段直接报错；`params` 只存摘要，路径只留尾 4 段 |
 | 收据 | 一次性收据绑定同一执行对象与静态摘要；`tools.guard` 同步核验并消费，执行前 `recheck` 复验卸载、取消、参数与身份变化，任一变化即拒绝执行；结清立即释放准入条目（`pendingAdmissions()` 可查在途数） |
@@ -28,12 +34,12 @@
 | 受保护路径 | 服务暴露 `protectedPaths()` 与 `checkPath(candidate)`：`$DSH_HOME/**` 模板解析（缺席回落 `~/.dsh`）、绝对化 + 词法折叠 + `realpath` + 平台大小写归一后判包含，不可判定即抛错按拒绝；`protectedPaths`/`paths.append` 配置面在装载期拒绝（尚无规则消费它） |
 | 组织信封 | `heluo.policy.org.v1` 的 Ed25519 验签信封：`verified` 进托管模式、`absent` 是个人模式、`invalid` 只降级写动作；`caps` 只能收紧不能放宽 |
 | 过程观察 | 默认关闭导出；有界内存缓冲、按契约字段白名单整条拒绝未知载荷；观察链路故障只降级观察，不改变判定与必要审计 |
-| 生命周期 | 卸载撤销 guard、监听器与服务；等待前置审计或下游 listener 期间卸载/取消，旧调用仍拒绝；已获准但结果未明的调用留 `unknown` 缺口，不伪造完成、不重放；已挂载时拒绝再次挂载 |
+| 生命周期 | 卸载撤销 guard、监听器与服务；等待确认、前置审计或下游 listener 期间卸载/取消，旧调用仍拒绝；已获准但结果未明的调用留 `unknown` 缺口，不伪造完成、不重放；已挂载时拒绝再次挂载 |
 | 安全 | 目录无效、受保护根模板未解析或宿主缺少 `tools.guard` 时拒绝挂载；**不提供 fail-open、通用 `run(command)` 或正则黑名单式保证** |
 
-## 目标能力（P1–P3，尚未实现）
+## 目标能力（P2–P3，尚未实现）
 
-内容规则（HARD 直拒 / SOFT 记录）、流程规则（变更号、保护分支、强制推送、验收小节、审查来源）、受保护路径拦截、`git push` 与 DOP 状态流转的确认卡片、`denyDelegatedWrites` 等八条开关的实际拦截语义，均按 [实施计划 §5](../../docs/plans/2026-11-19-policy-minimal-gates.md#5-实施计划) 分阶段接入。这些能力未实现前，对应配置键在装载期被拒绝，不存在"配了却静默不生效"的中间态。
+内容规则（HARD 直拒 / SOFT 记录）、流程规则（变更号、保护分支、强制推送、验收小节、审查来源）、受保护路径拦截、`denyUnknownAction`/`denyHumanRecord`/`protectPaths`/`enforceProcessRules`/`contentGate` 五条开关的实际拦截语义，均按 [实施计划 §5](../../docs/plans/2026-11-19-policy-minimal-gates.md#5-实施计划) 分阶段接入。这些能力未实现前，对应配置键在装载期被拒绝，不存在"配了却静默不生效"的中间态。
 
 ## IAM隔离许可算法
 

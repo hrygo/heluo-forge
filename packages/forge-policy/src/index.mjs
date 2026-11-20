@@ -15,8 +15,16 @@ export { PolicyCatalogError, catalogIssues, compileCatalog, decideAction } from 
 export {
   BUILTIN_ACTIONS, CATEGORY, actionsIn, classifyAction, defaultDecision, isWriteAction, relaxes, strictestDecision,
 } from './classify.mjs';
-export { DEFAULT_RULES, IMPLEMENTED_RULES, RULE_KEYS, Config, resolveConfig, validateConfig } from './config.mjs';
+export {
+  CONFIRMATION_KEYS, DEFAULT_CONFIRMATION_TIMEOUT_MS, DEFAULT_RULES, IMPLEMENTED_RULES, RULE_KEYS,
+  Config, resolveConfig, validateConfig,
+} from './config.mjs';
 export { MAX_RULES, compileContentRules, digestContent, redactExcerpt, scanPayloads } from './content-rules.mjs';
+export { PERSONA, agentKindOf, personaOf } from './delegation.mjs';
+export {
+  CONFIRM_CODES, CONFIRM_LABELS, CONFIRM_REASONS, buildConfirmationCard, createConfirmationGateway, readConfirmationAnswer,
+} from './confirm.mjs';
+export { DECISION_CACHE_LIMIT, createDecisionCache, reuseKeyOf } from './reuse.mjs';
 export { createGate } from './gate.mjs';
 export { ORG_ENVELOPE_SCHEMA, effectiveDecision, loadOrgPolicy, verifyEnvelope } from './org-policy.mjs';
 export { STAGE, activeRules, buildPipeline, isObserveOnly } from './pipeline.mjs';

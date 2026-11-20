@@ -26,20 +26,42 @@ test('all-off assembles only the four always-on stages', () => {
 test('an unimplemented switch never generates a stage (closed rules stay closed)', () => {
   // 配置层已经拒绝打开这些开关；流水线是纯函数，也必须不因入参为 true 就多出阶段。
   for (const rules of [
-    { denyDelegatedWrites: true },
     { denyUnknownAction: true },
     { denyHumanRecord: true },
     { protectPaths: true },
     { enforceProcessRules: true },
     { contentGate: true },
-    { confirmPush: true },
-    { confirmDopWrite: true },
-    { confirmPush: true, confirmDopWrite: true },
   ]) {
     assert.deepEqual(buildPipeline(rules).map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
     assert.deepEqual(activeRules(rules), []);
     assert.equal(isObserveOnly(rules), true);
   }
+});
+
+test('the three implemented switches assemble their stage in order', () => {
+  assert.deepEqual(buildPipeline({ denyDelegatedWrites: true }).map((stage) => stage.stage), [
+    'resolve', 'delegation', 'identity', 'audit', 'receipt',
+  ]);
+  assert.deepEqual(buildPipeline({ confirmPush: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'confirmation', 'audit', 'receipt',
+  ]);
+  assert.deepEqual(buildPipeline({ confirmDopWrite: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'confirmation', 'audit', 'receipt',
+  ]);
+  const all = buildPipeline({ denyDelegatedWrites: true, confirmPush: true, confirmDopWrite: true });
+  assert.deepEqual(all.map((stage) => stage.stage), ['resolve', 'delegation', 'identity', 'confirmation', 'audit', 'receipt']);
+  assert.deepEqual(activeRules({ denyDelegatedWrites: true, confirmPush: true, confirmDopWrite: true }), [
+    'denyDelegatedWrites', 'confirmPush',
+  ], 'the confirmation stage is assembled once, by the first enabled rule');
+  assert.deepEqual(
+    buildPipeline({ confirmDopWrite: true }).filter((stage) => stage.stage === 'confirmation').map((stage) => stage.rule),
+    ['confirmDopWrite'],
+  );
+  assert.deepEqual(
+    buildPipeline({ confirmDopWrite: true, confirmPush: true }).filter((stage) => stage.stage === 'confirmation').map((stage) => stage.rule),
+    ['confirmPush'],
+  );
+  assert.equal(isObserveOnly({ confirmPush: true }), false);
 });
 
 test('unknown or non-boolean switches are ignored by the pipeline', () => {

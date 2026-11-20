@@ -47,7 +47,14 @@ const ALLOWED_FIELDS = new Set([
   'summary',
   'params',
   'truncated',
+  'code',
 ]);
+
+/**
+ * 记录阶段：`begin`/`settle` 是对一次执行的收据，`asked`/`answered` 是对一次人工
+ * 询问的证据。来源拒绝只写一条不带 phase 的结论，因为它没有对应的执行或询问。
+ */
+export const AUDIT_PHASES = Object.freeze(['begin', 'settle', 'asked', 'answered']);
 
 const FORBIDDEN_FIELDS = new Set(['arguments', 'args', 'stdout', 'stderr', 'content', 'body', 'output', 'token', 'secret', 'credential']);
 
@@ -294,6 +301,32 @@ export function createAuditBarrier(options = {}) {
   }
 
   /**
+   * Single audit line that is neither a begin nor a settle: an `asked`/`answered`
+   * confirmation fact, or a standalone refusal. A write failure throws, but it does
+   * **not** degrade the barrier — a missing confirmation record is not an execution
+   * receipt, so the caller decides (the gate turns it into a refusal).
+   */
+  async function record(fields = {}) {
+    if (degraded) {
+      throw new PolicyAuditError('an earlier audit gap is still outstanding', 'POLICY_AUDIT_GAP_OUTSTANDING');
+    }
+    requireSink();
+    const entry = buildAuditRecord({ ...fields, observedAt: fields?.observedAt ?? clock() });
+    try {
+      await withTimeout(Promise.resolve(sink.append(entry)), timeoutMs, 'POLICY_AUDIT_TIMEOUT');
+    } catch (error) {
+      if (error instanceof PolicyAuditError
+        && (error.code === 'POLICY_AUDIT_TIMEOUT' || error.code === 'POLICY_AUDIT_WRITE_FAILED')) {
+        throw error;
+      }
+      throw new PolicyAuditError(`audit sink rejected the record: ${error?.message ?? error}`, 'POLICY_AUDIT_WRITE_FAILED', {
+        cause: String(error?.message ?? error),
+      });
+    }
+    return entry;
+  }
+
+  /**
    * Post-execution record. A failure here never undoes the executed action; it
    * keeps the outcome plus a gap and degrades the barrier.
    */
@@ -330,6 +363,7 @@ export function createAuditBarrier(options = {}) {
       };
     },
     begin,
+    record,
     settle,
     sinks: () => sink,
     gaps: () => [...gaps],

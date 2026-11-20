@@ -31,15 +31,25 @@ export const RULE_KEYS = Object.freeze([
   'confirmDopWrite',
 ]);
 
-/** P0 无任何已实现规则；P1–P3 只在这里追加键名。 */
-export const IMPLEMENTED_RULES = Object.freeze([]);
+/** P1 实现三键：来源拒绝与两条逐次确认；其余五个开关仍在后续阶段。 */
+export const IMPLEMENTED_RULES = Object.freeze([
+  'denyDelegatedWrites',
+  'confirmPush',
+  'confirmDopWrite',
+]);
+
+/** 逐次确认的默认等待时间：120 秒。超时即拒绝，不再补问。 */
+export const DEFAULT_CONFIRMATION_TIMEOUT_MS = 120_000;
+
+/** `confirmation` 段唯一开放的键：未知键在装载期报错，避免写了却没人读。 */
+export const CONFIRMATION_KEYS = Object.freeze(['timeoutMs']);
 
 export const DEFAULT_RULES = Object.freeze(Object.fromEntries(RULE_KEYS.map((key) => [key, false])));
 
 export const DEFAULTS = Object.freeze({
   catalog: Object.freeze([]),
   rules: DEFAULT_RULES,
-  confirmation: Object.freeze({ timeoutMs: 120_000 }),
+  confirmation: Object.freeze({ timeoutMs: DEFAULT_CONFIRMATION_TIMEOUT_MS }),
   content: Object.freeze({ maxBytes: 262_144 }),
   paths: Object.freeze({ append: Object.freeze([]) }),
   audit: Object.freeze({ sink: 'memory', buffer: 1_000, keepDays: 7, timeoutMs: 2_000 }),
@@ -157,14 +167,6 @@ function checkObservation(issues, observation) {
 }
 
 /**
- * 装载期拒绝"配置了但这一阶段不参与判定"的面（D33/D34 的 fail-closed 延伸）。
- *
- * 这几个键在 P0 只解析、不进判定链路：`categories` 与 `paths.append` 全无消费方，
- * `protectedPaths` 只喂给服务上的 `checkPath`（没有任何规则调用它），`confirmation`
- * 与 `content` 属于 P2/P3。允许写入等于对外宣称"这样配就生效"，而运行期会静默放行，
- * 所以在这一层直接拒绝——要放开某面，先把它接进 `buildPipeline` 与 `createGate`。
- */
-/**
  * 未接入判定链路的配置面在装载期拒绝，避免"配了却静默不生效"。
  *
  * 取默认值等同于没有设置：宿主 loader 会把 `Config` 的规范化结果再交给插件一次，
@@ -179,9 +181,6 @@ function checkUnwiredSurfaces(issues, input) {
   }
   if (Array.isArray(input.paths?.append) && input.paths.append.length > 0) {
     issues.push('paths.append: not implemented in this phase; setting it would be silently ignored');
-  }
-  if (isPlainObject(input.confirmation) && Object.keys(input.confirmation).length > 0 && !sameAsDefault(input.confirmation, DEFAULTS.confirmation)) {
-    issues.push('confirmation: not implemented in this phase; setting it would be silently ignored');
   }
   if (isPlainObject(input.content) && Object.keys(input.content).length > 0 && !sameAsDefault(input.content, DEFAULTS.content)) {
     issues.push('content: not implemented in this phase; setting it would be silently ignored');
@@ -235,7 +234,12 @@ export function validateConfig(input = {}) {
 
   if (input.confirmation !== undefined) {
     if (!isPlainObject(input.confirmation)) issues.push('confirmation: must be an object when provided');
-    else checkPositiveInteger(issues, input.confirmation.timeoutMs, 'confirmation.timeoutMs');
+    else {
+      for (const key of Object.keys(input.confirmation)) {
+        if (!CONFIRMATION_KEYS.includes(key)) issues.push(`confirmation.${key}: unknown config key`);
+      }
+      checkPositiveInteger(issues, input.confirmation.timeoutMs, 'confirmation.timeoutMs');
+    }
   }
   if (input.content !== undefined) {
     if (!isPlainObject(input.content)) issues.push('content: must be an object when provided');
@@ -260,8 +264,9 @@ export function validateConfig(input = {}) {
     value: {
       catalog: input.catalog ?? [],
       rules: Object.freeze({ ...DEFAULT_RULES, ...(input.rules ?? {}) }),
-      // 未接入判定链路的四层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
-      confirmation: DEFAULTS.confirmation,
+      // 已接入判定链路（P1）：`confirmation.timeoutMs` 真的会传给确认通道。
+      confirmation: Object.freeze({ ...DEFAULTS.confirmation, ...(input.confirmation ?? {}) }),
+      // 未接入判定链路的三层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
       content: DEFAULTS.content,
       paths: DEFAULTS.paths,
       audit: Object.freeze({ ...DEFAULTS.audit, ...(input.audit ?? {}) }),

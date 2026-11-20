@@ -17,7 +17,9 @@
     "./catalog": "./src/catalog.mjs",
     "./classify": "./src/classify.mjs",
     "./config": "./src/config.mjs",
+    "./confirm": "./src/confirm.mjs",
     "./content-rules": "./src/content-rules.mjs",
+    "./delegation": "./src/delegation.mjs",
     "./gate": "./src/gate.mjs",
     "./icon": "./icon.svg",
     "./isolated-testing": "./src/isolated-testing.mjs",
@@ -25,7 +27,8 @@
     "./org-policy": "./src/org-policy.mjs",
     "./paths": "./src/paths.mjs",
     "./pipeline": "./src/pipeline.mjs",
-    "./process-rules": "./src/process-rules.mjs"
+    "./process-rules": "./src/process-rules.mjs",
+    "./reuse": "./src/reuse.mjs"
   },
   "files": [
     "src",

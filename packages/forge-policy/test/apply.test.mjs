@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { apply, installPolicy } from '../src/index.mjs';
+import { apply, createDecisionCache, installPolicy } from '../src/index.mjs';
 
 // P0 迁移说明（policy-minimal-gates）：申请通道、范围票据、内容闸、流程规则与路径规则
 // 在 P0 已删除，全关时既不再拦截也不再产生确认；目录行只写 action/target/category。
@@ -22,9 +22,10 @@ const IDENTITY = Object.freeze({
   },
 });
 
-function fakeHost({ iam = IDENTITY, facts, logger } = {}) {
+function fakeHost({ iam = IDENTITY, facts, logger, userQuestions } = {}) {
   const provided = new Map();
   if (facts !== undefined) provided.set('processFacts', facts);
+  if (userQuestions !== undefined) provided.set('userQuestions', userQuestions);
   const guards = [];
   const listeners = new Map();
   const warnings = [];
@@ -240,14 +241,15 @@ test('a push executes without any approval channel', async () => {
   assert.equal(host.policy.auditRecords().filter((item) => item.phase === 'begin').length, 1);
 });
 
-test('the mounted service exposes only the P0 members', () => {
-  // 取代事实：旧服务还暴露 delegation/confirmation/scope/egress/canary 助手；P0 删除这些模块。
+test('the mounted service exposes only the P1 members', () => {
+  // 取代事实：旧服务还暴露 delegation/confirmation/scope/egress/canary 助手；P0 删除这些模块，P1 只补两个只读探针。
   const host = mount();
   const policy = host.policy;
   for (const member of [
     'catalog', 'actions', 'decide', 'authorize', 'protectedPaths', 'checkPath', 'orgPolicy',
     'policyVersion', 'mode', 'contentRuleIds', 'setAuditSink', 'auditRecords', 'auditGaps',
     'acknowledgeAuditGaps', 'auditDegraded', 'executeAction', 'registerCommand', 'observations',
+    'confirmationAvailable', 'decisionCacheSize',
   ]) {
     assert.equal(member in policy, true, `${member} must stay exposed`);
   }
@@ -299,8 +301,8 @@ test('invalid catalogs, legacy keys and unimplemented rules refuse to mount in o
     (error) => error.code === 'POLICY_CONFIG_INVALID' && /catalog\[0\]/u.test(error.message) && /enabled/u.test(error.message),
   );
   assert.throws(
-    () => apply(host.ctx, { ...baseConfig, rules: { confirmPush: true } }),
-    (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.confirmPush/u.test(error.message),
+    () => apply(host.ctx, { ...baseConfig, rules: { contentGate: true } }),
+    (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.contentGate/u.test(error.message),
   );
   assert.throws(
     () => apply(host.ctx, { ...baseConfig, approvals: [] }),
@@ -421,4 +423,56 @@ test('an organization envelope may require a durable sink', () => {
     (error) => error.code === 'POLICY_AUDIT_NOT_DURABLE',
   );
   assert.equal(host.guards.length, 0);
+});
+
+test('an enabled confirmation switch mounts without a channel, warns once and reports it', () => {
+  const host = mount({ ...baseConfig, rules: { confirmPush: true } });
+  assert.equal(host.policy.mode(), 'personal');
+  assert.equal(host.policy.confirmationAvailable(), false);
+  assert.equal(host.policy.decisionCacheSize(), 0, 'a fresh mount starts with an empty cache');
+  assert.equal(host.warnings.length, 1, 'the missing channel is the only warning');
+  assert.match(host.warnings[0], /userQuestions/u);
+  assert.match(host.warnings[0], /POLICY_CONFIRM_UNAVAILABLE/u);
+});
+
+test('a mounted channel is reported as available and silences the warning', () => {
+  const channel = { ask: () => Promise.resolve({ answers: [] }) };
+  const host = mount(
+    { ...baseConfig, rules: { confirmPush: true, confirmDopWrite: true } },
+    { userQuestions: channel },
+  );
+  assert.equal(host.policy.confirmationAvailable(), true);
+  assert.equal(host.warnings.length, 0);
+});
+
+test('an injected gateway and cache are used instead of the built-ins', async () => {
+  const host = fakeHost();
+  const cache = createDecisionCache({ limit: 4 });
+  const calls = [];
+  const confirmations = {
+    ask: (request) => (calls.push(request), Promise.resolve({ decision: 'deny', code: 'POLICY_CONFIRM_DENIED' })),
+    dispose: () => calls.push('dispose'),
+    pending: () => 0,
+  };
+  const dispose = installPolicy(
+    host.ctx,
+    { ...baseConfig, rules: { confirmPush: true } },
+    native(),
+    undefined,
+    { confirmations, decisionCache: cache },
+  );
+  const policy = host.ctx.get('policy');
+  assert.equal(policy.confirmationAvailable(), true, 'an injected gateway is a real channel');
+  assert.equal(host.warnings.length, 0, 'the missing host service is not a problem when a gateway is injected');
+  const result = await policy.executeAction(
+    host.ctx,
+    'gitee.git.push',
+    { name: 'forge_push', arguments: { target: 'acme/demo' }, callId: 'c1', agent: { kind: 'agent' } },
+    async () => ({ ok: true }),
+  );
+  assert.equal(result.code, 'POLICY_CONFIRM_DENIED');
+  assert.equal(calls.length, 1);
+  assert.equal(policy.decisionCacheSize(), 0, 'the injected cache is the one being reported');
+  dispose();
+  assert.deepEqual(calls.at(-1), 'dispose');
 });
