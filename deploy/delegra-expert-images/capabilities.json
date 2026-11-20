@@ -4,7 +4,7 @@
   "python": "3.13.5",
   "uv": "0.13.9",
   "runner": "25c86a283a9c787a01911c714618d78df7552af7",
-  "common": ["paperclip-runnerd", "codex", "node", "python", "python3", "uv", "uvx", "tini", "bash", "sh", "git", "rg"],
+  "common": ["paperclip-runnerd", "codex", "node", "python", "python3", "uv", "uvx", "tini", "bash", "sh", "git", "rg", "curl", "jq"],
   "scenes": {
     "codex-min": [],
     "codex-java-8": ["java", "javac", "mvn"],
@@ -19,7 +19,7 @@
     "codex-test-api": ["newman"],
     "codex-test-web": ["playwright"],
     "codex-test-load": ["k6"],
-    "codex-ops-diag": ["curl", "jq", "openssl", "dig", "ip", "ps"],
+    "codex-ops-diag": ["openssl", "dig", "ip", "ps"],
     "codex-ops-k8s": ["kubectl", "helm"],
     "codex-ops-iac": ["tofu"],
     "codex-office-zh": ["soffice", "pandoc", "pdfinfo", "pdftotext", "fc-match"]

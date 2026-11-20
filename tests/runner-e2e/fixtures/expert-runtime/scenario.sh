@@ -76,8 +76,6 @@ case "$target" in
         openssl req -new -x509 -newkey rsa:2048 -noenc -keyout key.pem \
             -out cert.pem -days 1 -subj /CN=example.test 2>/dev/null
         openssl x509 -in cert.pem -noout -subject | grep -F example.test
-        node /fixtures/loopback.mjs curl -fsS '{url}/api' > response.json
-        jq -e '.ok' response.json
         ;;
     codex-ops-k8s)
         kubectl version --client -o json > kubectl.json

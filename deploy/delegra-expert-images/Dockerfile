@@ -62,7 +62,7 @@ LABEL org.opencontainers.image.title="Heluo Forge Delegra expert runtime" \
 COPY debian.sources /etc/apt/sources.list.d/debian.sources
 RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-        bash ca-certificates coreutils diffutils findutils gawk git grep libstdc++6 \
+        bash ca-certificates coreutils curl diffutils findutils gawk git grep jq libstdc++6 \
         procps python3 python3-venv ripgrep sed tar tini util-linux \
     && rm -rf /var/lib/apt/lists/*
 
@@ -95,6 +95,8 @@ RUN test "$(node --version)" = v24.21.0 \
     && python -c 'import venv' \
     && uv --version >/dev/null \
     && uvx --version >/dev/null \
+    && curl --version >/dev/null \
+    && jq --version >/dev/null \
     && test -r /usr/share/doc/uv/LICENSE-MIT \
     && paperclip-runnerd --build-metadata >/dev/null
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]

@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 const fixtures = fileURLToPath(new URL('./fixtures/expert-runtime', import.meta.url))
+const fixtureMount = ['--mount', 'type=bind,source=' + fixtures + ',target=/fixtures,readonly']
 const common = readFileSync(new URL('./fixtures/expert-runtime/common.sh', import.meta.url), 'utf8')
 const capabilities = JSON.parse(readFileSync(new URL(
   '../../deploy/delegra-expert-images/capabilities.json', import.meta.url,
@@ -116,12 +117,16 @@ async function smoke(image) {
   const target = targetFor(image)
   const config = checkPlatform(image)
   const commands = [...capabilities.common, ...capabilities.scenes[target]]
-  assert.match(succeeded(run(image, [...commonCommand, ...commands], { input: common })), /COMMON_OK/)
+  const commonOutput = succeeded(run(image, [...commonCommand, ...commands], {
+    input: common,
+    extra: fixtureMount,
+  }))
+  assert.match(commonOutput, /COMMON_OK/)
   assert.match(succeeded(run(image, ['codex', 'exec', '--help'])), /Usage:/)
   assert.equal(run(image, ['sh', '-c', 'exit 37']).status, 37, 'tini forwards the exit status')
   await appServer(image)
   if (target !== 'codex-min') {
-    const extra = ['--mount', 'type=bind,source=' + fixtures + ',target=/fixtures,readonly']
+    const extra = [...fixtureMount]
     if (target === 'codex-test-web' && process.env.EXPERT_BROWSER_SECCOMP) {
       extra.push('--security-opt', 'seccomp=' + process.env.EXPERT_BROWSER_SECCOMP)
     }

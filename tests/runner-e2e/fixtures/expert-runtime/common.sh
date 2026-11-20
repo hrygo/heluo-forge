@@ -45,6 +45,8 @@ for (const path of process.argv.slice(1)) {
 workspace=$(mktemp -d /workspace/smoke.XXXXXXXX)
 trap 'rm -rf "$workspace"' EXIT
 cd "$workspace"
+node /fixtures/loopback.mjs curl -fsS --noproxy 127.0.0.1 '{url}/api' > response.json
+jq -e '.ok == true' response.json >/dev/null
 python -m venv .venv
 .venv/bin/python -c 'import csv, sys; assert sys.prefix != sys.base_prefix'
 .venv/bin/python -m pip --version >/dev/null
