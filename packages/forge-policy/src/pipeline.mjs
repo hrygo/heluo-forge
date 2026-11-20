@@ -10,7 +10,6 @@ import { IMPLEMENTED_RULES } from './config.mjs';
 
 export const STAGE = Object.freeze({
   RESOLVE: 'resolve',
-  DELEGATION: 'delegation',
   IDENTITY: 'identity',
   UNKNOWN_ACTION: 'unknown-action',
   HUMAN_RECORD: 'human-record',
@@ -24,7 +23,6 @@ export const STAGE = Object.freeze({
 
 /** 阶段与规则开关的对应关系；未实现的开关永远不会生成阶段。 */
 export const STAGE_RULES = Object.freeze({
-  [STAGE.DELEGATION]: Object.freeze(['denyDelegatedWrites']),
   [STAGE.UNKNOWN_ACTION]: Object.freeze(['denyUnknownAction']),
   [STAGE.HUMAN_RECORD]: Object.freeze(['denyHumanRecord']),
   [STAGE.PROTECTED_PATHS]: Object.freeze(['protectPaths']),
@@ -35,7 +33,6 @@ export const STAGE_RULES = Object.freeze({
 
 const ORDER = Object.freeze([
   STAGE.RESOLVE,
-  STAGE.DELEGATION,
   STAGE.IDENTITY,
   STAGE.UNKNOWN_ACTION,
   STAGE.HUMAN_RECORD,

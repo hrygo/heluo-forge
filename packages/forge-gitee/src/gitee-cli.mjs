@@ -23,7 +23,12 @@
  *                      gitCwd, persistentTokenPolicy})
  *     -> { run({ bin, args, purpose }), runGit({ args, purpose, cwd }), credentialStatus, describe }
  *   run(...) / runGit(...) -> { exitCode, stdout, stderr, durationMs, timedOut, truncated }
+ *   stdout 被脱敏时额外带 `redacted: true` 与封闭词表的 `redactionKinds`（D86）；
+ *   stderr 被脱敏时额外带 `stderrRedacted: true` 与 `stderrRedactionKinds`。
+ *   两路分开上报：`redacted` 只表达"作为内容证据的 stdout 被改写"，读取层据此决定
+ *   提交正文是否还需要按类别入闸；stderr 的回显不参与正文判定，不能被记到正文头上。
  *   scrubSecrets(text, tokens) -> string
+ *   redactionKinds(text, tokens) -> ('token'|'credential-url')[]
  *   detectPersistentToken({ env, readFile }) -> { blocked, reason, files, checked, next_action }
  */
 
@@ -264,6 +269,33 @@ export function scrubSecrets(text, tokens) {
   let scrubbed = source;
   for (const token of list) scrubbed = scrubbed.split(token).join(REDACTED);
   return scrubbed.replace(SECRET_SHAPE, REDACTED).replace(PROXY_CREDENTIALS, '$1***@');
+}
+
+/**
+ * 脱敏分类：只报告"被替换的是哪一类凭据"，不保留原值。
+ *
+ * 策略侧的内容闸需要知道"这段正文里被抹掉的是令牌还是连接串"才能按同一套规则判定；
+ * 类别是封闭词表，不在词表里的情况由调用方按"无法分类"处理（fail closed）。
+ *
+ * @param {string} text 脱敏前的原始输出
+ * @param {string|string[]} tokens 点名的令牌值
+ * @returns {('token'|'credential-url')[]}
+ */
+export function redactionKinds(text, tokens) {
+  const source = typeof text === 'string' ? text : (text === null || text === undefined ? '' : String(text));
+  if (source.length === 0) return [];
+  const kinds = [];
+  const list = normalizeTokens(tokens);
+  let hasToken = list.some((token) => source.includes(token));
+  if (!hasToken) {
+    // `test`/`replace` 共用带 `g` 的表达式：每次都从 0 开始，避免遗留 lastIndex 漏检。
+    SECRET_SHAPE.lastIndex = 0;
+    hasToken = SECRET_SHAPE.test(source);
+  }
+  if (hasToken) kinds.push('token');
+  PROXY_CREDENTIALS.lastIndex = 0;
+  if (PROXY_CREDENTIALS.test(source)) kinds.push('credential-url');
+  return kinds;
 }
 
 /** 默认读文件：任何错误都当"没有这个文件"，检测不该因为权限/缺失而中断。 */
@@ -703,11 +735,20 @@ export function createGiteeRunner({
     const allTokens = extraTokens.length > 0 ? [...tokens, ...extraTokens] : tokens;
     // 出口统一脱敏：适配器与工具面拿到的 stdout/stderr 里不该出现令牌（AC-22）。
     const stdout = scrubSecrets(result.stdout, allTokens);
+    const stderr = scrubSecrets(result.stderr, allTokens);
+    // 内容闸需要"抹掉的是哪一类"才能继续判定（D86）；分类为空说明脱敏来源不明，按无法分类上报。
+    const kinds = stdout !== result.stdout ? redactionKinds(result.stdout, allTokens) : [];
+    // stderr 同样在出口被抹掉，但它不是内容证据：单独上报，避免把 stderr 上的凭据回显
+    // 记成提交正文被脱敏（那会凭空多弹一张内容确认卡）。
+    const stderrKinds = stderr !== result.stderr ? redactionKinds(result.stderr, allTokens) : [];
     return {
       ...result,
       stdout,
-      stderr: scrubSecrets(result.stderr, allTokens),
-      ...(stdout === result.stdout ? {} : { redacted: true }),
+      stderr,
+      ...(stdout !== result.stdout ? { redacted: true, redactionKinds: kinds.length > 0 ? kinds : ['unknown'] } : {}),
+      ...(stderr !== result.stderr
+        ? { stderrRedacted: true, stderrRedactionKinds: stderrKinds.length > 0 ? stderrKinds : ['unknown'] }
+        : {}),
     };
   }
 

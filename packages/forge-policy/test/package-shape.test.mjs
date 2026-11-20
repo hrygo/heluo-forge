@@ -47,7 +47,7 @@ test('the README claims only implemented phases and no removed mechanism', async
   const text = await read('README.md');
   assert.match(text, /状态：可用（P0 受控写最小门禁 \+ P1 身份永远开/);
   assert.match(text, /不提供 fail-open/);
-  assert.match(text, /## 目标能力（P2–P3，尚未实现）/);
+  assert.match(text, /## 目标能力（P3，尚未实现）/);
   assert.doesNotMatch(text, /已联调/);
   assert.doesNotMatch(
     text,

@@ -301,8 +301,8 @@ test('invalid catalogs, legacy keys and unimplemented rules refuse to mount in o
     (error) => error.code === 'POLICY_CONFIG_INVALID' && /catalog\[0\]/u.test(error.message) && /enabled/u.test(error.message),
   );
   assert.throws(
-    () => apply(host.ctx, { ...baseConfig, rules: { contentGate: true } }),
-    (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.contentGate/u.test(error.message),
+    () => apply(host.ctx, { ...baseConfig, rules: { protectPaths: true } }),
+    (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.protectPaths/u.test(error.message),
   );
   assert.throws(
     () => apply(host.ctx, { ...baseConfig, approvals: [] }),

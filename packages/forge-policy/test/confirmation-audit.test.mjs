@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CONFIRM_CODES, CONFIRM_LABELS } from '../src/confirm.mjs';
+import { rootOf } from '../src/delegation.mjs';
 import { apply } from '../src/index.mjs';
 
 const CATALOG = [
@@ -20,12 +21,13 @@ const answering = (selected = CONFIRM_LABELS.allow) => ({
   },
 });
 
-function mount({ rules = {}, confirmation, userQuestions, getView, sink } = {}) {
+function mount({ rules = {}, confirmation, userQuestions, getView, sink, agents } = {}) {
   const services = new Map(), listeners = new Map(), guards = [], warnings = [];
   services.set('iam', {
     getView: getView ?? (() => ({ signedIn: true, principal: { subject: 'svc-policy-test' } })),
   });
   if (userQuestions !== undefined) services.set('userQuestions', userQuestions);
+  if (agents !== undefined) services.set('agents', agents);
   const ctx = {
     get: (key) => services.get(key),
     provide: (key, value) => (services.set(key, value), () => services.delete(key)),
@@ -149,28 +151,7 @@ test('only push and DOP clarification ask, the other writes go straight through'
   h.dispose();
 });
 
-test('a subagent write is refused with one record and no card', async () => {
-  const channel = answering();
-  const h = mount({ rules: { denyDelegatedWrites: true, confirmPush: true }, userQuestions: channel });
-  let ran = 0;
-  const exec = { ...pushExec(), agent: { kind: 'agent', session: { header: { origin: 'subagent' } } } };
-  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', exec, async () => (ran++, { ok: true }));
-  assert.equal(ran, 0);
-  assert.equal(result.code, CONFIRM_CODES.DELEGATED);
-  assert.match(result.text, /主会话/u);
-  assert.doesNotMatch(result.text, /换一个工具|拆成|绕过/u);
-  assert.equal(channel.calls.length, 0, 'a subagent never sees a card');
-  const records = h.policy.auditRecords();
-  assert.equal(records.length, 1);
-  assert.equal(records[0].decision, 'deny');
-  assert.equal(records[0].phase, undefined, 'a delegation refusal is a single decision record');
-  assert.equal(records[0].code, CONFIRM_CODES.DELEGATED);
-  assert.equal(records[0].agent.kind, 'child');
-  assert.match(records[0].summary, /子代理/u);
-  h.dispose();
-});
-
-test('with the delegation rule off, a subagent needing a card is refused by the card path', async () => {
+test('a subagent needing a card without a live root is refused by the card path', async () => {
   const channel = answering();
   const h = mount({ rules: { confirmPush: true }, userQuestions: channel });
   let ran = 0;
@@ -182,6 +163,53 @@ test('with the delegation rule off, a subagent needing a card is refused by the 
   const records = h.policy.auditRecords();
   assert.equal(records.length, 1);
   assert.equal(records[0].rule, 'confirm-delegated-refused');
+  h.dispose();
+});
+
+test('root lookup follows parentSession and refuses to guess between several roots', () => {
+  const root = { id: 'root-1', session: { header: {} } };
+  const mid = { id: 'mid-1', session: { header: { origin: 'subagent', parentSession: 'root-1' } } };
+  const child = { id: 'child-1', session: { header: { origin: 'subagent', parentSession: 'mid-1' } } };
+  const one = { roots: () => [root], get: (id) => ({ 'root-1': root, 'mid-1': mid })[id] };
+  assert.equal(rootOf({ get: () => one }, child), root, 'two hops up still finds the root');
+  const two = { roots: () => [root, { id: 'root-2' }], get: () => undefined };
+  assert.equal(rootOf({ get: () => two }, { session: { header: { parentSession: 'gone' } } }), undefined,
+    'several roots and no known parent: no guess');
+  assert.equal(rootOf({ get: () => undefined }, child), undefined, 'no agents registry: no relay');
+  assert.equal(rootOf({ get: () => ({ roots: () => [root] }) }, { session: { header: { parentSession: 'gone' } } }), root,
+    'a single live root is unambiguous');
+});
+
+test('a subagent card is relayed to its live root session and runs on allow', async () => {
+  const channel = answering();
+  const root = { id: 'root-1', session: { header: {} } };
+  const child = { id: 'child-1', kind: 'agent', session: { header: { origin: 'subagent', parentSession: 'root-1' } } };
+  const agents = { roots: () => [root], get: (id) => (id === 'root-1' ? root : undefined) };
+  const h = mount({ rules: { confirmPush: true }, userQuestions: channel, agents });
+  let ran = 0;
+  const exec = { ...pushExec(), agent: child };
+  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', exec, async () => (ran++, { ok: true }));
+  assert.deepEqual(result, { ok: true });
+  assert.equal(ran, 1, 'an allowed relay runs the child write');
+  assert.equal(channel.calls.length, 1);
+  assert.equal(channel.calls[0].agent, root, 'the card is asked on the live root, not the child');
+  assert.match(channel.calls[0].questions[0].detail, /子代理/u, 'the card says who asked for it');
+  const records = h.policy.auditRecords();
+  assert.equal(records[0].agent.kind, 'child');
+  assert.match(records[0].summary, /转交主会话代问/u);
+  h.dispose();
+});
+
+test('a subagent write with no live root stays refused', async () => {
+  const channel = answering();
+  const agents = { roots: () => [], get: () => undefined };
+  const h = mount({ rules: { confirmPush: true }, userQuestions: channel, agents });
+  let ran = 0;
+  const exec = { ...pushExec(), agent: { kind: 'agent', session: { header: { origin: 'subagent', parentSession: 'gone' } } } };
+  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', exec, async () => (ran++, { ok: true }));
+  assert.equal(ran, 0);
+  assert.equal(result.code, CONFIRM_CODES.DELEGATED);
+  assert.equal(channel.calls.length, 0);
   h.dispose();
 });
 

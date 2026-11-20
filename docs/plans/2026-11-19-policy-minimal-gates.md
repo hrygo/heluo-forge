@@ -33,7 +33,7 @@
 |---|---|---|
 | G1 | 需要确认的动作，确认必定到达用户 | 交互式会话中每次 `gitee.git.push`、`change.clarification.write` 都产生卡片；`danger-full-access` + `never` 会话同样产生。不含非交互场景 |
 | G2 | 沙箱与会话审批交回原生 | 组合包补丁层无 `permission` 条目；`--dump-config` 中该行来自宿主默认 |
-| G3 | 默认不拦截 | 代码默认八个开关全关、企业 bundle 不预置；装载时输出 observe-only 告警 |
+| G3 | 默认不拦截 | 代码默认七个开关全关、企业 bundle 不预置；装载时输出 observe-only 告警 |
 | G4 | 每条规则独立开关、独立测试、独立回退 | 一个开关 = 一条配置 + 至少一条用例 + 可单独回退的提交 |
 | G5 | 审计永远开启、可追溯 | 每次受控判定有审计记录；`sink: file` 重启后可用 `/policy-audit` 查询 |
 
@@ -78,7 +78,7 @@
 
 | 编号 | 决定 |
 |---|---|
-| D33 | 八个开关：`denyDelegatedWrites`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`（全部默认 false） |
+| D33 | 七个开关：`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`（全部默认 false）；子代理发起受控写恒拒（D42），不设开关 |
 | D34 | `protectPaths` 默认 9 类敏感文件，不允许缩减、只能追加 |
 | D35 | 推荐配置模板放包 README，不生效 |
 | D36 | `contentGate` 开、确认开关关时软命中放行 + 审计；有卡片通道才升级为分步确认 |
@@ -102,6 +102,10 @@
 | D49 | v1 不做自定义规则 |
 | D50 | 超 256 KiB 只扫前 256 KiB、标 `truncated`、按结果判定、放行并记"未完整扫描" |
 | D51 | H3/H4 可确认，但无卡片通道时拒绝 |
+| D86 | Gitee 推送正文在公共 CLI 出口按类别脱敏（`token`、`credential-url`）；读取层把类别交给内容闸映射回 `BUILTIN-TOKEN`/`BUILTIN-CREDENTIAL-URL`，可确认命中照常进分步卡；无法分类的脱敏才记 `字段:原因`（如 `commits[0]:redaction-unknown`）后放行。`contentSkipped` 与 `truncated` 在 asked/answered/begin 三处保持一致 |
+| D87 | 正文与最终执行绑定：普通对象正文在 `recheck` 与宿主同步 `guard` 都按同一摘要复验，确认或下游等待期间被改写即拒绝并零执行 |
+| D88 | 正文扫描器自身抛错时按不可确认拒绝（`POLICY_CONTENT_SCAN_FAILED`）：异常不等价于"没有命中"，不得因扫描失败而放行 H1/H2 |
+| D89 | 正文读不到时（`content:unreadable`）不查也不写决策复用缓存：占位摘要无法区分不同正文，复用会让重试绕过重新确认；其余结论复用规则不变 |
 
 ### 3.5 审计与子代理
 
@@ -162,15 +166,14 @@
 10 一次性收据 + 执行后复验
 ```
 
-关闭的规则不经过对应代码路径，只留一条 `allow / rule: disabled` 审计；八个全关时装载输出 observe-only 告警。
+关闭的规则不经过对应代码路径，只留一条 `allow / rule: disabled` 审计；七个全关时装载输出 observe-only 告警。
 
 ### 4.2 配置模型
 
 ```yaml
 catalog:            # 6 条写动作，字段 action/target/category/rules
   - { action: 'gitee.git.push', target: 'repository', category: 'remote-write', rules: [] }
-rules:              # 八个布尔开关，默认全 false
-  denyDelegatedWrites: false
+rules:              # 七个布尔开关，默认全 false
   denyUnknownAction: false
   denyHumanRecord: false
   protectPaths: false
@@ -273,4 +276,11 @@ audit:
 
 ## 10. 实施状态
 
-草案已按裁决台账完成，代码未改。U1、U2 已核对，下一步按第 5 节进入 P0。
+| 阶段 | 状态 | 落地 |
+|---|---|---|
+| P0 骨架 | 已合并 | PR #400（`60e5cf6`） |
+| P1 安全基线 | 已合并 | PR #401（`09e4bdb`） |
+| P2 内容闸 | 已实现，待评审 | 9 条内置规则、按动作字段映射、跨字段 256 KiB 预算、截断与读不到语义、HARD/可确认/SOFT 三档与分步卡片合并 |
+| P3 收尾 | 未开始 | `protectPaths`、`enforceProcessRules`、`denyHumanRecord`、`denyUnknownAction`、`/policy-audit`、文档同步 |
+
+草案已按裁决台账完成。U1（子代理继承父会话身份）已核对；U2（企业侧 `user-questions` API）仍待企业环境核验。

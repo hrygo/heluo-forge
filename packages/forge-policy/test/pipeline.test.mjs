@@ -3,9 +3,9 @@ import test from 'node:test';
 
 import { STAGE, activeRules, buildPipeline, isObserveOnly } from '../src/pipeline.mjs';
 
-test('the stage table keeps the full 0–10 order', () => {
+test('the stage table keeps the full 0–9 order', () => {
   assert.deepEqual(Object.keys(STAGE), [
-    'RESOLVE', 'DELEGATION', 'IDENTITY', 'UNKNOWN_ACTION', 'HUMAN_RECORD',
+    'RESOLVE', 'IDENTITY', 'UNKNOWN_ACTION', 'HUMAN_RECORD',
     'PROTECTED_PATHS', 'PROCESS_RULES', 'CONTENT_GATE', 'CONFIRMATION', 'AUDIT', 'RECEIPT',
   ]);
   assert.equal(Object.isFrozen(STAGE), true);
@@ -30,7 +30,6 @@ test('an unimplemented switch never generates a stage (closed rules stay closed)
     { denyHumanRecord: true },
     { protectPaths: true },
     { enforceProcessRules: true },
-    { contentGate: true },
   ]) {
     assert.deepEqual(buildPipeline(rules).map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
     assert.deepEqual(activeRules(rules), []);
@@ -39,19 +38,19 @@ test('an unimplemented switch never generates a stage (closed rules stay closed)
 });
 
 test('the three implemented switches assemble their stage in order', () => {
-  assert.deepEqual(buildPipeline({ denyDelegatedWrites: true }).map((stage) => stage.stage), [
-    'resolve', 'delegation', 'identity', 'audit', 'receipt',
-  ]);
   assert.deepEqual(buildPipeline({ confirmPush: true }).map((stage) => stage.stage), [
     'resolve', 'identity', 'confirmation', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ confirmDopWrite: true }).map((stage) => stage.stage), [
     'resolve', 'identity', 'confirmation', 'audit', 'receipt',
   ]);
-  const all = buildPipeline({ denyDelegatedWrites: true, confirmPush: true, confirmDopWrite: true });
-  assert.deepEqual(all.map((stage) => stage.stage), ['resolve', 'delegation', 'identity', 'confirmation', 'audit', 'receipt']);
-  assert.deepEqual(activeRules({ denyDelegatedWrites: true, confirmPush: true, confirmDopWrite: true }), [
-    'denyDelegatedWrites', 'confirmPush',
+  assert.deepEqual(buildPipeline({ contentGate: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'content-gate', 'audit', 'receipt',
+  ]);
+  const all = buildPipeline({ contentGate: true, confirmPush: true, confirmDopWrite: true });
+  assert.deepEqual(all.map((stage) => stage.stage), ['resolve', 'identity', 'content-gate', 'confirmation', 'audit', 'receipt']);
+  assert.deepEqual(activeRules({ confirmPush: true, confirmDopWrite: true }), [
+    'confirmPush',
   ], 'the confirmation stage is assembled once, by the first enabled rule');
   assert.deepEqual(
     buildPipeline({ confirmDopWrite: true }).filter((stage) => stage.stage === 'confirmation').map((stage) => stage.rule),

@@ -415,6 +415,10 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
    * - 远端一个可比基线都没有（全新仓库/空远端）时，推送内容就是该分支的全部历史；
    * - 提交列表、任一提交的正文读不到或输出被截断，一律报不可读，由调用方拒绝：
    *   既不用"最近 N 条"代替完整集合，也不把读不全的正文当作完整证据。
+   * - 子进程出口会先脱敏再交给我们（AC-22），脱敏后的正文不能当作完整证据；但"被抹掉的
+   *   是令牌/凭据连接串"这件事本身是可判定的，因此按类别记进 `redactions`，连同脱敏后的
+   *   正文一起交给内容闸（D86），由策略按同一套规则判定。类别不在词表里或无法分类时，
+   *   仍按"正文读不到"拒绝——宁可拦住，也不把来源不明的正文当作无风险。
    */
   async function readRange({ remote = 'origin', branch: branchName, cwd } = {}) {
     const remoteName = assertRemote(remote);
@@ -458,6 +462,7 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     }
     const shas = listed.split('\n').map((line) => line.trim()).filter((line) => line !== '');
     const commits = [];
+    const redactions = [];
     for (const sha of shas) {
       const outcome = await runner.runGit({
         args: ['show', '--no-color', '--unified=0', '--format=%B%x00', sha],
@@ -471,10 +476,16 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
       if (outcome.truncated === true) {
         throw unreadable(`待推送提交 ${sha.slice(0, 12)} 的正文超过读取上限，无法完整扫描`);
       }
-      // 出口脱敏把命中的令牌换成占位符后，扫描到的就不再是真实正文：漏掉的正是最该拦下的
-      // 内容，因此和截断同等处理——拒绝推送，而不是拿脱敏后的半截正文当完整证据。
+      // 出口脱敏把命中的令牌换成占位符后，扫描到的就不再是真实正文。能分类的（令牌、连接串）
+      // 按类别记下来，策略据此走确认/拒绝；分类缺失或不在词表里说明来源不明，仍按读不到拒绝。
+      const field = `commits[${commits.length}]`;
       if (outcome.redacted === true) {
-        throw unreadable(`待推送提交 ${sha.slice(0, 12)} 的正文被脱敏，无法完整扫描`);
+        const kinds = Array.isArray(outcome.redactionKinds) ? outcome.redactionKinds : [];
+        const classified = kinds.length > 0 && kinds.every((kind) => kind === 'token' || kind === 'credential-url');
+        if (!classified) {
+          throw unreadable(`待推送提交 ${sha.slice(0, 12)} 的正文被脱敏，无法完整扫描`);
+        }
+        for (const kind of kinds) redactions.push(Object.freeze({ sha, field, kind }));
       }
       const separator = outcome.stdout.indexOf('\u0000');
       const message = separator === -1 ? outcome.stdout : outcome.stdout.slice(0, separator);
@@ -486,7 +497,7 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
       }));
     }
     // 返回被检查的那个提交：调用方必须把它带到 push 上，检查过的与发出去的才是同一个。
-    return Object.freeze({ sha: resolved.trim(), commits: Object.freeze(commits) });
+    return Object.freeze({ sha: resolved.trim(), commits: Object.freeze(commits), redactions: Object.freeze(redactions) });
   }
 
   return Object.freeze({

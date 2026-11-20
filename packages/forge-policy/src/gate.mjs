@@ -10,7 +10,14 @@
  */
 
 import { decideAction } from './catalog.mjs';
-import { digestContent } from './content-rules.mjs';
+import {
+  compileContentRules,
+  digestContent,
+  observationsFromContent,
+  payloadsForAction,
+  payloadsFromArguments,
+  scanPayloads,
+} from './content-rules.mjs';
 import { DEFAULT_CONFIRMATION_TIMEOUT_MS } from './config.mjs';
 import {
   CONFIRM_CODES,
@@ -21,9 +28,9 @@ import {
   PERSONA,
   agentKindOf,
   confirmDelegatedCopy,
-  delegationCopy,
   delegationSummary,
   personaOf,
+  rootOf,
 } from './delegation.mjs';
 import { reuseKeyOf } from './reuse.mjs';
 
@@ -83,6 +90,37 @@ function contentDigestOf(exec) {
     }
   })();
 }
+
+/**
+ * 正文通道只解析一次：摘要与内容闸必须看同一份文本，否则"扫过的"与"记下的"可能不是同一段。
+ * 读不到就如实标记（内容闸按 D48 放行并告警，不因为读不到正文而阻断业务）。
+ */
+async function resolveContent(exec) {
+  if (typeof exec?.content !== 'function') return { readable: true, value: exec?.content };
+  try {
+    return { readable: true, value: await exec.content() };
+  } catch {
+    return { readable: false, value: undefined };
+  }
+}
+
+/** 待扫字段 = 动作声明字段 ∪ 正文通道里的文本键；正文读不到时只扫参数。 */
+function contentPayloads(action, args, content) {
+  const payloads = payloadsForAction(action, args ?? {});
+  if (content.readable && content.value !== undefined && content.value !== null) {
+    payloads.push(...payloadsFromArguments(content.value));
+  }
+  return payloads;
+}
+
+const CONTENT_SCAN_FAILED_COPY = (action) => `受控写「${action}」已拒绝：正文扫描失败，不能按"没有命中"放行。`
+  + '请重试；持续失败时检查规则配置与正文结构。';
+
+const CONTENT_HARD_COPY = (action, findings) => {
+  const ids = [...new Set(findings.map((finding) => finding.rule))].join('、');
+  return `受控写「${action}」已拒绝：提交内容命中了不允许放行的高风险信息（${ids}）。`
+    + '请从正文中移除后重试；这类内容不能通过人工确认放行。';
+};
 
 /**
  * `subject` 是 provider 自证（Gitee guard 要求 `gitee`），与 IAM `actor` 是两个字段。
@@ -177,8 +215,11 @@ export function createGate({
   confirmations,
   decisionCache,
   timeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS,
+  maxContentBytes,
 } = {}) {
   const stages = Object.freeze([...(pipeline ?? [])]);
+  // 内置规则集随包编译一次；v1 不接受自定义规则（D49），组织规则留到后续阶段。
+  const contentRules = compileContentRules().rules;
   const clock = now ?? (() => Date.now());
   const approved = new WeakMap();
   const admitting = new WeakSet();
@@ -192,6 +233,35 @@ export function createGate({
     const header = exec?.agent?.session?.header;
     const id = header?.id;
     return typeof id === 'string' && id.trim() !== '' ? id.trim() : undefined;
+  }
+
+  /** 内容闸：hard 由调用方拒绝；confirm/soft 只回报，是否弹卡由判定流程决定。 */
+  function scanContent(action, args, content) {
+    try {
+      const scanned = scanPayloads(contentRules, contentPayloads(action, args, content), {
+        ...(maxContentBytes === undefined ? {} : { maxBytes: maxContentBytes }),
+        ...(content.readable ? { observations: observationsFromContent(content.value) } : {}),
+      });
+      // 正文读不到不是扫描器的返回值：在这里补一条同构的"未扫全"记录，交给调用方统一记账。
+      const skipped = [...scanned.skipped];
+      if (content.readable === false) skipped.push({ field: 'content', reason: 'unreadable' });
+      return Object.freeze({
+        ...scanned,
+        skipped: Object.freeze(skipped),
+        truncated: scanned.truncated || skipped.some((item) => item.reason === 'truncated'),
+      });
+    } catch {
+      // 扫描异常不能等价于"没有命中"：内容闸是安全组件，宁可拒绝也不能让 hard 规则失效。
+      return Object.freeze({
+        findings: Object.freeze([]),
+        hard: Object.freeze([]),
+        confirm: Object.freeze([]),
+        soft: Object.freeze([]),
+        skipped: Object.freeze([{ field: 'content', reason: 'scan-failed' }]),
+        truncated: false,
+        failed: true,
+      });
+    }
   }
 
   function callIdOf(exec) {
@@ -296,63 +366,124 @@ export function createGate({
     const persona = personaOf(exec?.agent);
     const kind = agentKindOf(exec);
     const operationId = exec?.callId === undefined ? undefined : String(exec.callId);
-    // 来源闸在身份之前：子代理不该比主会话更容易拿到一次写入。
-    if (persona === PERSONA.CHILD && rules?.denyDelegatedWrites === true) {
-      return denyWithEvidence({
-        action,
-        target,
-        tool: exec?.name,
-        decision: 'deny',
-        rule: 'deny-delegated-writes',
-        code: CONFIRM_CODES.DELEGATED,
-        operationId,
-        agent: { kind },
-        summary: delegationSummary(action),
-      }, delegationCopy(action), CONFIRM_CODES.DELEGATED);
-    }
+    // 来源不拒绝写入：子代理需要人确认时由主会话代问（见确认段），只有找不到可代问的根才拒。
     const actor = normalizeActor(await getActor?.(ctx));
     if (actor === undefined) {
       return deny(IDENTITY_COPY(action));
     }
     const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
-    const contentDigest = typeof exec?.content === 'function'
-      ? await contentDigestOf(exec)
-      : contentDigestOf(exec);
+    // 内容闸开启时正文只解析一次（摘要与扫描看同一份内容）；关闭时走原有摘要路径，
+    // 不额外插一次 await——放行路径上的时序变化会改变宿主看到的执行顺序。
+    const scanning = rules?.contentGate === true;
+    const content = scanning ? await resolveContent(exec) : undefined;
+    const contentDigest = scanning
+      ? digestContent(digestInput(exec, content.readable ? content.value : '[content-unavailable]'))
+      : typeof exec?.content === 'function'
+        ? await contentDigestOf(exec)
+        : contentDigestOf(exec);
     const subject = subjectOf(exec?.name, action);
+    const scanned = scanning ? scanContent(action, exec?.arguments, content) : undefined;
+    // 命中的规则与未扫全的字段：拒绝、确认两段记录与 begin 共用这一份元数据，
+    // 审计才能说明"为什么问"以及"哪里没扫全"（`字段:原因`，如 `body:truncated`）。
+    const ruleIds = scanned === undefined || scanned.findings.length === 0
+      ? undefined
+      : [...new Set(scanned.findings.map((finding) => finding.rule))];
+    const contentSkipped = scanned === undefined || scanned.skipped.length === 0
+      ? undefined
+      : [...new Set(scanned.skipped.map((item) => `${item.field}:${item.reason}`))];
+    const contentTruncated = scanned?.truncated === true ? true : undefined;
+    // 扫描器自身失败时按不可确认拒绝：异常不代表没有命中，放行会让 H1/H2 形同虚设。
+    if (scanned?.failed === true) {
+      return denyWithEvidence({
+        ...(subject === undefined ? {} : { subject }),
+        actor,
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'deny',
+        rule: 'content-scan-failed',
+        operationId,
+        agent: { kind },
+        ...(contentSkipped === undefined ? {} : { contentSkipped }),
+        summary: `受控写 ${action} 的正文扫描失败，按不可确认拒绝`,
+      }, CONTENT_SCAN_FAILED_COPY(action), 'POLICY_CONTENT_SCAN_FAILED');
+    }
+    if (scanned !== undefined && scanned.hard.length > 0) {
+      // H1/H2 不可确认：连卡片都不弹，直接留证据拒绝。
+      return denyWithEvidence({
+        ...(subject === undefined ? {} : { subject }),
+        actor,
+        action,
+        target,
+        tool: exec?.name,
+        decision: 'deny',
+        rule: 'content-hard-block',
+        operationId,
+        agent: { kind },
+        ruleIds,
+        ...(contentSkipped === undefined ? {} : { contentSkipped }),
+        ...(contentTruncated === undefined ? {} : { truncated: true }),
+        summary: `受控写 ${action} 的正文命中不可放行的内容风险`,
+      }, CONTENT_HARD_COPY(action, scanned.hard), 'POLICY_CONTENT_HARD');
+    }
+    // 确认原因按顺序合并：动作确认在前、内容风险在后，客户端据此走分步表单（D25）。
+    const reasons = [];
+    if (decision.action === 'confirm') reasons.push('action');
+    if (scanned !== undefined
+      && (scanned.confirm.length > 0 || (scanned.soft.length > 0 && decision.action === 'confirm'))) {
+      reasons.push('content');
+    }
+    const reasonsKey = reasons.join(',');
     let rule = decision.rule;
     let cacheKey;
-    if (decision.action === 'confirm') {
-      // 来源判定在查缓存之前：子代理没有确认通道，命中缓存也不能替它跳过人工确认。
+    if (reasons.length > 0) {
+      // 来源判定在查缓存之前：命中缓存也不能让子代理替人跳过确认。
+      // 子代理自己收不到卡片（宿主 assertLiveRoot 只认存活根），把卡片转交给它的根会话代问。
+      let cardAgent = exec?.agent;
       if (persona === PERSONA.CHILD) {
-        return denyWithEvidence({
-          action,
-          target,
-          tool: exec?.name,
-          decision: 'deny',
-          rule: 'confirm-delegated-refused',
-          code: CONFIRM_CODES.DELEGATED,
-          operationId,
-          agent: { kind },
-          summary: delegationSummary(action),
-        }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+        cardAgent = rootOf(ctx, exec?.agent);
+        if (cardAgent === undefined) {
+          return denyWithEvidence({
+            action,
+            target,
+            tool: exec?.name,
+            decision: 'deny',
+            rule: 'confirm-delegated-refused',
+            code: CONFIRM_CODES.DELEGATED,
+            operationId,
+            agent: { kind },
+            summary: delegationSummary(action),
+          }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+        }
       }
       const callId = callIdOf(exec);
-      const key = reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest });
+      // 读不到正文时摘要只是占位串：两次"读不到"会算出同一个键，这样的决定不能复用，
+      // 否则确认过的是一次看不见的正文，重试时同样看不见却会被当作同一份内容放行。
+      const cacheable = content === undefined || content.readable !== false;
+      const key = cacheable
+        ? reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest })
+        : undefined;
       const hit = key !== undefined && decisionCache !== undefined ? decisionCache.peek(key) : undefined;
       if (hit !== undefined
         && hit.digest === digest
         && hit.contentDigest === contentDigest
         && hit.action === action
         && hit.actor === actor
-        && hit.session === sessionId) {
+        && hit.session === sessionId
+        && hit.reasons === reasonsKey) {
         // 同一个决定的重试：不再打扰用户，但仍要过身份复验、一次性收据与执行后复验。
         decisionCache.touch(key);
         cacheKey = key;
         rule = 'reused-decision';
       } else {
-        const reasons = ['action'];
-        const card = buildConfirmationCard({ action, target, args: exec?.arguments ?? {}, reasons });
+        const card = buildConfirmationCard({
+          action,
+          target,
+          args: exec?.arguments ?? {},
+          reasons,
+          origin: persona === PERSONA.CHILD ? 'subagent' : 'root',
+        });
         const askedAt = clock();
         const asked = await writeRecord({
           ...(subject === undefined ? {} : { subject }),
@@ -364,7 +495,10 @@ export function createGate({
           rule: 'confirm-required',
           operationId,
           agent: { kind },
-          summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）`,
+          summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）${persona === PERSONA.CHILD ? '，已转交主会话代问' : ''}`,
+          ...(ruleIds === undefined ? {} : { ruleIds }),
+          ...(contentSkipped === undefined ? {} : { contentSkipped }),
+          ...(contentTruncated === undefined ? {} : { truncated: true }),
           phase: 'asked',
         });
         // 先有记录，再问人：asked 写不进去时连卡片都不该弹。
@@ -372,7 +506,7 @@ export function createGate({
         confirmationCount += 1;
         const verdict = (await confirmations?.ask({
           ctx,
-          agent: exec?.agent,
+          agent: cardAgent,
           action,
           questions: card.questions,
           timeoutMs: confirmationTimeoutMs,
@@ -391,6 +525,9 @@ export function createGate({
           agent: { kind },
           durationMs: clock() - askedAt,
           summary: `受控写 ${action} 的确认结论：${answerSummary(verdict.decision, verdict.code)}`,
+          ...(ruleIds === undefined ? {} : { ruleIds }),
+          ...(contentSkipped === undefined ? {} : { contentSkipped }),
+          ...(contentTruncated === undefined ? {} : { truncated: true }),
           phase: 'answered',
         });
         if (!answeredOk) return deny(CONFIRM_RECORD_FAILED_COPY(action), CONFIRM_CODES.ERROR);
@@ -407,6 +544,7 @@ export function createGate({
             contentDigest,
             actor,
             session: sessionId,
+            reasons: reasonsKey,
             decidedAt: clock(),
           });
           cacheKey = key;
@@ -430,6 +568,9 @@ export function createGate({
         summary: `受控写 ${action}（目标 ${target ?? '(未提供)'}）`,
         params: summarizeArguments(exec?.arguments ?? {}),
         contentDigest,
+        ...(ruleIds === undefined ? {} : { ruleIds }),
+        ...(contentSkipped === undefined ? {} : { contentSkipped }),
+        ...(contentTruncated === undefined ? {} : { truncated: true }),
       });
     } catch (error) {
       // 放行结论没能落成记录：本次不算一次成功的"允许"，撤掉复用缓存，重试仍要重新确认。
@@ -501,7 +642,7 @@ export function createGate({
     if (staticDigestOf(exec) !== entry.staticDigest) {
       return { reason: 'the arguments changed before the call started', rule: 'arguments-changed' };
     }
-    if (entry.contentDigest !== undefined && typeof exec?.content === 'function') {
+    if (entry.contentDigest !== undefined) {
       const current = await contentDigestOf(exec);
       if (current !== entry.contentDigest) {
         return { reason: 'the content changed before the call started', rule: 'content-changed' };
@@ -532,6 +673,12 @@ export function createGate({
     if (pendingSettlements.size > 0) return 'a previous settlement is still pending; the call is refused';
     if (exec?.signal?.aborted === true) return 'the call was cancelled after it was admitted';
     if (staticDigestOf(exec) !== entry.staticDigest) return 'the arguments changed after the call was admitted';
+    // 普通对象正文在反序列化后仍可被宿主或下游改写：同步路径也要绑定扫描时的那一份。
+    if (entry.contentDigest !== undefined
+      && typeof exec?.content !== 'function'
+      && contentDigestOf(exec) !== entry.contentDigest) {
+      return 'the content changed after the call was admitted';
+    }
     if (typeof getActor === 'function' && normalizeActor(getActor(undefined)) !== entry.actor) {
       return 'the IAM identity changed after the call was admitted';
     }
@@ -592,6 +739,13 @@ function businessDecisionOf(result) {
     if (changedReason !== undefined) {
       await settle(entry, { decision: 'cancelled', rule: changedReason.rule });
       return { kind: 'error', text: executeDenyCopy(action, changedReason.rule) };
+    }
+    // 复验与执行之间不能再有 await：普通对象正文在执行体拿到之前必须仍是扫描时那一份。
+    if (entry.contentDigest !== undefined
+      && typeof record?.content !== 'function'
+      && contentDigestOf(record) !== entry.contentDigest) {
+      await settle(entry, { decision: 'cancelled', rule: 'content-changed' });
+      return { kind: 'error', text: executeDenyCopy(action, 'content-changed') };
     }
     entry.used = true;
     let result;

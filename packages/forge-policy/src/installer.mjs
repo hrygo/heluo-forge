@@ -207,6 +207,7 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     confirmations,
     decisionCache,
     timeoutMs: config.confirmation.timeoutMs,
+    maxContentBytes: config.content.maxBytes,
   });
 
   // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。

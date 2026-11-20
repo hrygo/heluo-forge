@@ -19,7 +19,7 @@
  *     out-of-scope 透传，期望照常写出标记文件并落一条审计之外的执行记录。
  *   - `target-required`（动作已登记但调用没带 `target` 参数）：期望被拦下，规则
  *     `target-required`。P0 只对六条受控写生效；`probe.canary` 类历史条目已不存在。
- *   - `delegate`（父模型把活交给子 Agent 跑 bash）：P0 未实现 denyDelegatedWrites，
+ *   - `delegate`（父模型把活交给子 Agent 跑 bash）：策略层不按来源拒绝（子代理一律拒绝的开关已删除），
  *     子 Agent 与父模型看到同一份 out-of-scope 语义，期望照常写出标记文件。
  *
  * 用法（凭据只从环境读，不落盘、不打印）：
@@ -48,7 +48,7 @@ const modes = {
     expectRule: 'target-required',
   },
   // 委托路径：父模型自己调用 subagent 工具，让**子 Agent** 去跑 bash。
-  // P0 未实现 denyDelegatedWrites：子 Agent 与父模型看到同一份 out-of-scope 语义。
+  // 策略层不按来源拒绝：子 Agent 与父模型看到同一份 out-of-scope 语义。
   delegate: { catalog: [], expectSideEffect: true, via: 'subagent' },
 };
 const mode = process.argv[2] ?? 'out-of-scope';

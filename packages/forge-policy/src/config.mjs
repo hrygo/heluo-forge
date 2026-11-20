@@ -19,9 +19,8 @@ export class PolicyConfigError extends Error {
   }
 }
 
-/** 八个规则开关：代码内禁止任何 `true` 默认。 */
+/** 七个规则开关：代码内禁止任何 `true` 默认。 */
 export const RULE_KEYS = Object.freeze([
-  'denyDelegatedWrites',
   'denyUnknownAction',
   'denyHumanRecord',
   'protectPaths',
@@ -31,9 +30,18 @@ export const RULE_KEYS = Object.freeze([
   'confirmDopWrite',
 ]);
 
-/** P1 实现三键：来源拒绝与两条逐次确认；其余五个开关仍在后续阶段。 */
+/**
+ * 已删除的开关：装载期点名给出迁移说明，既不静默忽略，也不保留会悄悄失效的别名。
+ * 删除理由见 docs/design/plugins/forge-policy.md §5.1.4——子代理受控写恒拒，
+ * 需要确认的写统一由主会话代问。
+ */
+export const REMOVED_RULE_KEYS = Object.freeze({
+  denyDelegatedWrites: '该开关已删除：子代理发起受控写恒拒，需要确认的写由主会话代问；请从配置中移除',
+});
+
+/** 已实现三键：两条逐次确认与内容闸；其余四个开关仍在后续阶段。 */
 export const IMPLEMENTED_RULES = Object.freeze([
-  'denyDelegatedWrites',
+  'contentGate',
   'confirmPush',
   'confirmDopWrite',
 ]);
@@ -43,6 +51,9 @@ export const DEFAULT_CONFIRMATION_TIMEOUT_MS = 120_000;
 
 /** `confirmation` 段唯一开放的键：未知键在装载期报错，避免写了却没人读。 */
 export const CONFIRMATION_KEYS = Object.freeze(['timeoutMs']);
+
+/** `content` 段唯一开放的键：拼错的预算必须报错，而不是静默退回默认值。 */
+export const CONTENT_KEYS = Object.freeze(['maxBytes']);
 
 export const DEFAULT_RULES = Object.freeze(Object.fromEntries(RULE_KEYS.map((key) => [key, false])));
 
@@ -78,6 +89,22 @@ function checkPositiveInteger(issues, value, path) {
   if (value !== undefined && !isPositiveInteger(value)) issues.push(`${path}: must be a positive integer`);
 }
 
+function checkContent(issues, content) {
+  if (content === undefined) return;
+  if (!isPlainObject(content)) {
+    issues.push('content: must be an object when provided');
+    return;
+  }
+  for (const [key] of Object.entries(content)) {
+    if (!CONTENT_KEYS.includes(key)) issues.push(`content.${key}: unknown config key`);
+  }
+  // 与内容扫描器的预算判定保持一致（`Number.isSafeInteger` 且为正），
+  // 避免装载期接受一个扫描器不会采用的数值、再静默退回 256 KiB 默认值。
+  if (content.maxBytes !== undefined && !(Number.isSafeInteger(content.maxBytes) && content.maxBytes > 0)) {
+    issues.push('content.maxBytes: must be a positive safe integer');
+  }
+}
+
 function checkRules(issues, rules) {
   if (rules === undefined) return;
   if (!isPlainObject(rules)) {
@@ -86,7 +113,8 @@ function checkRules(issues, rules) {
   }
   for (const [key, value] of Object.entries(rules)) {
     if (!RULE_KEYS.includes(key)) {
-      issues.push(`rules.${key}: unknown rule switch`);
+      const guidance = Object.hasOwn(REMOVED_RULE_KEYS, key) ? `（${REMOVED_RULE_KEYS[key]}）` : '';
+      issues.push(`rules.${key}: unknown rule switch${guidance}`);
       continue;
     }
     if (typeof value !== 'boolean') {
@@ -182,9 +210,6 @@ function checkUnwiredSurfaces(issues, input) {
   if (Array.isArray(input.paths?.append) && input.paths.append.length > 0) {
     issues.push('paths.append: not implemented in this phase; setting it would be silently ignored');
   }
-  if (isPlainObject(input.content) && Object.keys(input.content).length > 0 && !sameAsDefault(input.content, DEFAULTS.content)) {
-    issues.push('content: not implemented in this phase; setting it would be silently ignored');
-  }
 }
 
 /** 结构相等的默认值判定；只用于纯 JSON 面（数字/字符串/数组/普通对象）。 */
@@ -241,10 +266,7 @@ export function validateConfig(input = {}) {
       checkPositiveInteger(issues, input.confirmation.timeoutMs, 'confirmation.timeoutMs');
     }
   }
-  if (input.content !== undefined) {
-    if (!isPlainObject(input.content)) issues.push('content: must be an object when provided');
-    else checkPositiveInteger(issues, input.content.maxBytes, 'content.maxBytes');
-  }
+  checkContent(issues, input.content);
   checkPaths(issues, input.paths);
   checkAudit(issues, input.audit);
   checkObservation(issues, input.observation);
@@ -266,8 +288,9 @@ export function validateConfig(input = {}) {
       rules: Object.freeze({ ...DEFAULT_RULES, ...(input.rules ?? {}) }),
       // 已接入判定链路（P1）：`confirmation.timeoutMs` 真的会传给确认通道。
       confirmation: Object.freeze({ ...DEFAULTS.confirmation, ...(input.confirmation ?? {}) }),
-      // 未接入判定链路的三层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
-      content: DEFAULTS.content,
+      // 已接入内容闸（P2）：`content.maxBytes` 会作为单次调用的扫描预算传下去。
+      content: Object.freeze({ ...DEFAULTS.content, ...(input.content ?? {}) }),
+      // 未接入判定链路的两层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
       paths: DEFAULTS.paths,
       audit: Object.freeze({ ...DEFAULTS.audit, ...(input.audit ?? {}) }),
       tools: input.tools ?? {},
