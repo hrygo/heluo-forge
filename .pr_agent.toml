@@ -20,9 +20,10 @@ fallback_models = ["openai/deepseek-v4.1-flash"]
 # size of individual requests. Mirror these settings in the Action environment.
 custom_model_max_tokens = 256000
 max_model_tokens = 64000
-# Move directly to the fallback model on timeout. Surface exhausted model
-# attempts even when some review chunks produced useful results.
+# Allow three minutes per request before moving directly to the fallback model.
+ai_timeout = 180
 retry_same_model_on_timeout = false
+# Surface exhausted model attempts even when some chunks produced useful reviews.
 propagate_tool_errors = true
 # Project documents and PR discussion are written in Chinese.
 response_language = "zh-CN"

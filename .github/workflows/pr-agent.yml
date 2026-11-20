@@ -169,6 +169,7 @@ jobs:
           CONFIG__MODEL: "openai/muse-spark-1.3-contributor"
           CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"
           CONFIG__MAX_MODEL_TOKENS: "64000"
+          CONFIG__AI_TIMEOUT: "180"
           CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"
           CONFIG__PROPAGATE_TOOL_ERRORS: "true"
           # Expose structured review data and mirror the repository policy.

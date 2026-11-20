@@ -314,9 +314,11 @@ test('large reviews use bounded chunking and show coverage gaps', async () => {
 test('model timeouts advance to fallback and exhausted attempts fail the action', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   const action = stepDefinition('Run PR-Agent');
+  assert.match(action, /^ {10}CONFIG__AI_TIMEOUT: "180"$/mu);
   assert.match(action, /^ {10}CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"$/mu);
   assert.match(action, /^ {10}CONFIG__PROPAGATE_TOOL_ERRORS: "true"$/mu);
   assert.match(settings, /^fallback_models = \["openai\/deepseek-v4\.1-flash"\]$/mu);
+  assert.match(settings, /^ai_timeout = 180$/mu);
   assert.match(settings, /^retry_same_model_on_timeout = false$/mu);
   assert.match(settings, /^propagate_tool_errors = true$/mu);
 });
