@@ -738,6 +738,8 @@ export function apply(ctx, rawConfig = {}) {
       if (admitted !== null && typeof admitted === 'object' && admitted.kind === 'error') {
         throw new DevopsReadError(READ_REASONS.POLICY_DENIED, String(admitted.text ?? '策略拒绝了这次写回'), {
           action: FLOW_ACTIONS.CHANGE_UPDATE,
+          // 确认码随拒绝一起交给调用方：人工取消、超时与无应答端必须可区分。
+          ...(typeof admitted.code === 'string' && admitted.code.trim() !== '' ? { policyCode: admitted.code.trim() } : {}),
         });
       }
       return admitted;

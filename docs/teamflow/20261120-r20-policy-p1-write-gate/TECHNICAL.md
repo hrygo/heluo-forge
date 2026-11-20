@@ -406,7 +406,7 @@ createGate({ …P0 依赖, confirmations, decisionCache, timeoutMs: config.confi
 ### 7.1 单次判定状态机
 
 ```
-idle → deciding → (deny | confirm-check) 
+idle → deciding → (deny | confirm-check)
 confirm-check → reuse-hit ──────────────┐
 confirm-check → delegated-refused → deny│
 confirm-check → asked → answered ───────┤→ admitted → executed → settled

@@ -1135,3 +1135,27 @@ test('审计记录的 subject 是 provider 自证，写成功不会被判 mismat
   assert.equal(bad.reason, GUARD_REASONS.AUDIT_PROVIDER_MISMATCH);
   assert.equal(bad.mayHaveSideEffect, true);
 });
+
+test('确认码随策略拒绝一起交给调用方：取消、超时与无通道可区分', async () => {
+  const guard = createGiteeGuard({
+    policy: {
+      decide: () => ({ action: 'allow', rule: 'registered-action' }),
+      executeAction: async () => ({
+        kind: 'error',
+        text: '受控写「gitee.issue.write」未执行：等待人工确认超时（120 秒）。',
+        code: 'POLICY_CONFIRM_TIMEOUT',
+      }),
+    },
+    now: () => CLOCK,
+  });
+  const result = await guard.execute({
+    action: 'gitee.issue.write',
+    target: 'acme/repo',
+    tool: 'forge_gitee_issue_write',
+    confirm: { repo: 'acme/repo', object: 'acme/repo' },
+    payload: { arguments: { repo: 'acme/repo', title: 't', body: 'b' }, run: async () => ({ written: true }) },
+  });
+  assert.equal(result.status, 'denied');
+  assert.equal(result.reason, GUARD_REASONS.POLICY_DENIED);
+  assert.equal(result.policyCode, 'POLICY_CONFIRM_TIMEOUT', '调用方必须能区分人工取消与超时');
+});

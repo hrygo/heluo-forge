@@ -1,8 +1,9 @@
 /**
  * 会话内决策复用：同一次调用被重试时，不再为同一个决定打扰用户。
  *
- * 键由四个分量组成：`tool + callId + action + digest`。任一分量缺失即返回
- * `undefined`——既不能查询也不能写入，避免只凭 callId 或只凭动作就跳过人工确认。
+ * 键由五个分量组成：`tool + callId + action + digest + contentDigest`。任一分量缺失即
+ * 返回 `undefined`——既不能查询也不能写入，避免只凭 callId 或只凭动作就跳过人工确认。
+ * `contentDigest` 覆盖 `exec.content` 的正文快照：只改正文、不改参数的重试必须重新确认。
  *
  * 缓存只在进程内存里：上限 32 条，`Map` 插入序当 LRU（命中即 delete + set 刷新为
  * 最新，不增条目），不落盘、不进日志、不跨会话，插件卸载即清空。
@@ -17,16 +18,17 @@ function nonEmptyString(value) {
 }
 
 /**
- * 四元键：任一分量缺失即 `undefined`（fail-closed，不上探）。
+ * 五元键：任一分量缺失即 `undefined`（fail-closed，不上探）。
  *
- * @param {{tool?: string, callId?: string, action?: string, digest?: string}} parts
+ * @param {{tool?: string, callId?: string, action?: string, digest?: string,
+ *   contentDigest?: string}} parts
  * @returns {string | undefined}
  */
-export function reuseKeyOf({ tool, callId, action, digest } = {}) {
+export function reuseKeyOf({ tool, callId, action, digest, contentDigest } = {}) {
   if (!nonEmptyString(tool) || !nonEmptyString(callId) || !nonEmptyString(action) || !nonEmptyString(digest)) {
     return undefined;
   }
-  return `${tool}${SEPARATOR}${callId}${SEPARATOR}${action}${SEPARATOR}${digest}`;
+  return `${tool}${SEPARATOR}${callId}${SEPARATOR}${action}${SEPARATOR}${digest}${SEPARATOR}${nonEmptyString(contentDigest) ? contentDigest : '-'}`;
 }
 
 /**

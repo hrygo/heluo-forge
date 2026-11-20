@@ -26,7 +26,7 @@ const fullCatalog = () =>
   new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }]));
 
 /** 策略服务替身：目录 + 可脚本化的 executeAction（记录调用，不伪装真实门禁语义）。 */
-function stubPolicy({ catalog = fullCatalog(), admit = true } = {}) {
+function stubPolicy({ catalog = fullCatalog(), admit = true, code, denyWritesOnly = false } = {}) {
   const calls = [];
   return {
     calls,
@@ -35,7 +35,10 @@ function stubPolicy({ catalog = fullCatalog(), admit = true } = {}) {
       executeAction: async (ctx, action, exec, operation) => {
         calls.push({ action, exec });
         if (admit === true) return operation();
-        return { kind: 'error', text: 'denied by policy (test intransigent)' };
+        if (denyWritesOnly === true && action !== 'change.clarification.write') return operation();
+        return code === undefined
+          ? { kind: 'error', text: 'denied by policy (test intransigent)' }
+          : { kind: 'error', text: 'denied by policy (test intransigent)', code };
       },
     },
   };
@@ -164,6 +167,18 @@ test('策略拒绝时适配器零调用，拒绝可见（POLICY_DENIED + 网关�
   });
   assert.equal(calls, 0, '策略拒绝不得触碰适配器');
   assert.equal(denying.calls.length, 1, '拒绝同样经过同一 admission');
+});
+
+test('确认码随策略拒绝一起交给调用方（可区分取消/超时/无通道）', async () => {
+  const reader = { read: async () => ({ status: 'succeeded', source_revision: 'r', changeId: 'CHG-1' }) };
+  const denying = stubPolicy({ admit: false, denyWritesOnly: true, code: 'POLICY_CONFIRM_TIMEOUT' });
+  const { service } = mount({ policy: denying.service, reader });
+  await service.read({ action: 'change.read', target: 'CHG-1' });
+  await assert.rejects(() => service.changeUpdate({ target: 'CHG-1', summary: 's' }), (error) => {
+    assert.equal(error.code, READ_REASONS.POLICY_DENIED);
+    assert.equal(error.detail.policyCode, 'POLICY_CONFIRM_TIMEOUT');
+    return true;
+  });
 });
 
 test('工具面同样经过 admission：拒绝时 ok:false + next_action，不调用适配器', async () => {

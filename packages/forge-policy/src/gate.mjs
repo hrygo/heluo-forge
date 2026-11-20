@@ -119,6 +119,7 @@ const CONFIRM_DENY_COPY = Object.freeze({
   [CONFIRM_CODES.UNAVAILABLE]: (action) => `受控写「${action}」未执行：当前环境没有可用的确认通道（需要桌面端人工确认）。请在桌面端重试。`,
   [CONFIRM_CODES.INVALID_ANSWER]: (action) => `受控写「${action}」未执行：确认应答无法识别，按未确认处理。请重新发起该动作。`,
   [CONFIRM_CODES.DELEGATED]: (action) => confirmDelegatedCopy(action),
+  [CONFIRM_CODES.CANCELLED]: (action) => `受控写「${action}」未执行：本次调用在等待确认时被取消。可重新发起该动作。`,
   [CONFIRM_CODES.ERROR]: (action) => `受控写「${action}」未执行：确认流程出现异常。请重试；若持续失败请联系管理员。`,
 });
 
@@ -129,6 +130,7 @@ const ANSWER_SUMMARY = Object.freeze({
   [CONFIRM_CODES.UNAVAILABLE]: '确认通道不可用，未确认',
   [CONFIRM_CODES.INVALID_ANSWER]: '应答无法识别，未确认',
   [CONFIRM_CODES.DELEGATED]: '子代理来源，未确认',
+  [CONFIRM_CODES.CANCELLED]: '调用被取消，未确认',
   [CONFIRM_CODES.ERROR]: '确认流程异常，未确认',
 });
 
@@ -186,7 +188,13 @@ export function createGate({
   let confirmationCount = 0;
   let disposed = false;
 
-  function callIdOf(exec) {
+  function sessionIdOf(exec) {
+  const header = exec?.agent?.session?.header;
+  const id = header?.id;
+  return typeof id === 'string' && id.trim() !== '' ? id.trim() : undefined;
+}
+
+function callIdOf(exec) {
     const value = exec?.callId;
     return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
   }
@@ -291,6 +299,7 @@ export function createGate({
     if (actor === undefined) {
       return deny(IDENTITY_COPY(action));
     }
+    const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
     const contentDigest = typeof exec?.content === 'function'
       ? await contentDigestOf(exec)
@@ -299,29 +308,35 @@ export function createGate({
     let rule = decision.rule;
     let cacheKey;
     if (decision.action === 'confirm') {
+      // 来源判定在查缓存之前：子代理没有确认通道，命中缓存也不能替它跳过人工确认。
+      if (persona === PERSONA.CHILD) {
+        await writeRecord({
+          action,
+          target,
+          tool: exec?.name,
+          decision: 'deny',
+          rule: 'confirm-delegated-refused',
+          code: CONFIRM_CODES.DELEGATED,
+          operationId,
+          agent: { kind },
+          summary: delegationSummary(action),
+        });
+        return deny(confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+      }
       const callId = callIdOf(exec);
-      const key = reuseKeyOf({ tool: exec?.name, callId, action, digest });
+      const key = reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest });
       const hit = key !== undefined && decisionCache !== undefined ? decisionCache.peek(key) : undefined;
-      if (hit !== undefined && hit.digest === digest && hit.action === action) {
+      if (hit !== undefined
+        && hit.digest === digest
+        && hit.contentDigest === contentDigest
+        && hit.action === action
+        && hit.actor === actor
+        && hit.session === sessionId) {
         // 同一个决定的重试：不再打扰用户，但仍要过身份复验、一次性收据与执行后复验。
         decisionCache.touch(key);
         cacheKey = key;
         rule = 'reused-decision';
       } else {
-        if (persona === PERSONA.CHILD) {
-          await writeRecord({
-            action,
-            target,
-            tool: exec?.name,
-            decision: 'deny',
-            rule: 'confirm-delegated-refused',
-            code: CONFIRM_CODES.DELEGATED,
-            operationId,
-            agent: { kind },
-            summary: delegationSummary(action),
-          });
-          return deny(confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
-        }
         const reasons = ['action'];
         const card = buildConfirmationCard({ action, target, args: exec?.arguments ?? {}, reasons });
         const askedAt = clock();
@@ -347,6 +362,7 @@ export function createGate({
           action,
           questions: card.questions,
           timeoutMs: confirmationTimeoutMs,
+          signal: exec?.signal,
         })) ?? { decision: 'deny', code: CONFIRM_CODES.UNAVAILABLE };
         const answeredOk = await writeRecord({
           ...(subject === undefined ? {} : { subject }),
@@ -368,7 +384,17 @@ export function createGate({
           return deny(denyCopyOf(verdict.code, action, confirmationTimeoutMs), verdict.code ?? CONFIRM_CODES.ERROR);
         }
         if (key !== undefined && decisionCache !== undefined) {
-          decisionCache.set({ key, tool: exec?.name, callId, action, digest, decidedAt: clock() });
+          decisionCache.set({
+            key,
+            tool: exec?.name,
+            callId,
+            action,
+            digest,
+            contentDigest,
+            actor,
+            session: sessionId,
+            decidedAt: clock(),
+          });
           cacheKey = key;
         }
         rule = 'confirm-allowed';
@@ -392,6 +418,8 @@ export function createGate({
         contentDigest,
       });
     } catch (error) {
+      // 放行结论没能落成记录：本次不算一次成功的"允许"，撤掉复用缓存，重试仍要重新确认。
+      if (cacheKey !== undefined) decisionCache?.delete?.(cacheKey);
       if (error?.code === 'POLICY_AUDIT_GAP_OUTSTANDING') return deny(AUDIT_OUTSTANDING_COPY);
       return deny(AUDIT_FAILURE_COPY(action, audit?.sinks?.()?.kind ?? 'memory', target));
     }
@@ -490,11 +518,28 @@ export function createGate({
     return undefined;
   }
 
+
+/** 业务结果里的结论：失败/拒绝/未知都不算一次成功的"允许"，据此撤掉复用缓存。 */
+const BUSINESS_FAILED = new Set(['failed', 'denied', 'error']);
+const BUSINESS_UNKNOWN = new Set(['unknown', 'pending', 'timeout']);
+
+function businessDecisionOf(result) {
+  const candidates = [result, result?.value, result?.result];
+  for (const candidate of candidates) {
+    if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
+    const status = typeof candidate.status === 'string' ? candidate.status.trim().toLowerCase() : '';
+    if (status === '') continue;
+    if (BUSINESS_FAILED.has(status)) return 'error';
+    if (BUSINESS_UNKNOWN.has(status)) return 'unknown';
+  }
+  return 'executed';
+}
+
   async function postExecute(exec, result) {
     const entry = approved.get(exec);
     if (entry === undefined || entry.settled) return;
     const failed = result?.isError === true || result?.kind === 'error';
-    await settle(entry, { decision: failed ? 'error' : 'executed' });
+    await settle(entry, { decision: failed ? 'error' : businessDecisionOf(result) });
   }
 
   /** `recheck` 的拒绝文案：说清"没有执行"，也不把内部规则名抛给用户。 */
@@ -540,7 +585,7 @@ export function createGate({
       return { kind: 'error', text: '执行后复验发现 IAM 身份已变化，本次动作结果按失败处理。' };
     }
     const failed = result?.isError === true || result?.kind === 'error';
-    await settle(entry, { decision: failed ? 'error' : 'executed' });
+    await settle(entry, { decision: failed ? 'error' : businessDecisionOf(result) });
     return result;
   }
 

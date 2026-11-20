@@ -135,3 +135,55 @@ test('unmounting empties the cache: nothing survives the session', async () => {
   h.dispose();
   assert.equal(h.policy.decisionCacheSize(), 0);
 });
+
+test('a changed content snapshot is a different decision', async () => {
+  const channel = answering();
+  const h = mount({ userQuestions: channel });
+  const body = (text) => () => ({ title: 't', body: text });
+  const run = (record) => h.policy.executeAction(h.ctx, 'gitee.git.push', record, async () => ({ ok: true }));
+  await run({ ...exec('call-1'), content: body('正文一') });
+  assert.equal(channel.calls.length, 1);
+  await run({ ...exec('call-1'), content: body('正文二') });
+  assert.equal(channel.calls.length, 2, 'a changed body must be confirmed again even when arguments match');
+  h.dispose();
+});
+
+test('a cached decision belongs to one actor and one session', async () => {
+  const channel = answering();
+  const h = mount({ userQuestions: channel });
+  const session = (id) => ({ kind: 'agent', session: { header: { id } } });
+  await h.policy.executeAction(h.ctx, 'gitee.git.push', { ...exec('call-1'), agent: session('s-1') }, async () => ({ ok: true }));
+  assert.equal(channel.calls.length, 1);
+  await h.policy.executeAction(h.ctx, 'gitee.git.push', { ...exec('call-1'), agent: session('s-2') }, async () => ({ ok: true }));
+  assert.equal(channel.calls.length, 2, 'another session must not inherit the confirmation');
+  h.dispose();
+});
+
+test('a subagent never reuses a decision even when the switch is off', async () => {
+  const channel = answering();
+  const h = mount({ rules: { confirmPush: true, denyDelegatedWrites: false }, userQuestions: channel });
+  const root = { ...exec('call-1'), agent: { session: { header: { id: 's-1' } } } };
+  await h.policy.executeAction(h.ctx, 'gitee.git.push', root, async () => ({ ok: true }));
+  assert.equal(channel.calls.length, 1);
+  // 同会话、同 callId、同参数：若先查缓存就会直接命中；来源判定必须排在缓存之前。
+  const child = { ...exec('call-1'), agent: { session: { header: { origin: 'subagent', id: 's-1' } } } };
+  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', child, async () => ({ ok: true }));
+  assert.equal(result.kind, 'error');
+  assert.equal(result.code, 'POLICY_CONFIRM_DELEGATED');
+  assert.equal(channel.calls.length, 1, 'the child never got a card and never reused the parent decision');
+  h.dispose();
+});
+
+test('a failed or unknown business result is not reusable', async () => {
+  const channel = answering();
+  const h = mount({ userQuestions: channel });
+  const run = (result) => h.policy.executeAction(h.ctx, 'gitee.git.push', exec('call-1'), async () => result);
+  await run({ status: 'failed' });
+  assert.equal(h.policy.decisionCacheSize(), 0, 'a failed write is not a reusable allow');
+  await run({ status: 'unknown' });
+  assert.equal(h.policy.decisionCacheSize(), 0, 'an unknown outcome is not a reusable allow');
+  assert.equal(channel.calls.length, 2, 'both retries asked the human again');
+  await run({ status: 'succeeded' });
+  assert.equal(h.policy.decisionCacheSize(), 1, 'only a completed write becomes reusable');
+  h.dispose();
+});

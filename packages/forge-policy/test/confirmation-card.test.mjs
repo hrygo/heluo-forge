@@ -117,11 +117,12 @@ test('a refusal on one question wins over an allow on another', () => {
   assert.deepEqual(ok, { decision: 'allow' }, 'answer order does not matter');
 });
 
-test('the six confirmation codes are the only outcomes', () => {
+test('the seven confirmation codes are the only outcomes', () => {
   assert.deepEqual(Object.values(CONFIRM_CODES).sort(), [
-    'POLICY_CONFIRM_DELEGATED', 'POLICY_CONFIRM_DENIED', 'POLICY_CONFIRM_ERROR',
-    'POLICY_CONFIRM_INVALID_ANSWER', 'POLICY_CONFIRM_TIMEOUT', 'POLICY_CONFIRM_UNAVAILABLE',
+    'POLICY_CONFIRM_CANCELLED', 'POLICY_CONFIRM_DELEGATED', 'POLICY_CONFIRM_DENIED',
+    'POLICY_CONFIRM_ERROR', 'POLICY_CONFIRM_INVALID_ANSWER', 'POLICY_CONFIRM_TIMEOUT',
+    'POLICY_CONFIRM_UNAVAILABLE',
   ]);
-  assert.equal(new Set(Object.values(CONFIRM_CODES)).size, 6);
+  assert.equal(new Set(Object.values(CONFIRM_CODES)).size, 7);
   assert.deepEqual(CONFIRM_LABELS, { allow: '允许本次写入', deny: '取消本次写入' });
 });

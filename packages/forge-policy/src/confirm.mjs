@@ -17,6 +17,7 @@ export const CONFIRM_CODES = Object.freeze({
   UNAVAILABLE: 'POLICY_CONFIRM_UNAVAILABLE',
   INVALID_ANSWER: 'POLICY_CONFIRM_INVALID_ANSWER',
   DELEGATED: 'POLICY_CONFIRM_DELEGATED',
+  CANCELLED: 'POLICY_CONFIRM_CANCELLED',
   ERROR: 'POLICY_CONFIRM_ERROR',
 });
 
@@ -124,13 +125,15 @@ const UNAVAILABLE = Object.freeze({ decision: 'deny', code: CONFIRM_CODES.UNAVAI
 const DELEGATED = Object.freeze({ decision: 'deny', code: CONFIRM_CODES.DELEGATED });
 const TIMEOUT = Object.freeze({ decision: 'deny', code: CONFIRM_CODES.TIMEOUT });
 const CHANNEL_ERROR = Object.freeze({ decision: 'deny', code: CONFIRM_CODES.ERROR });
+const CANCELLED = Object.freeze({ decision: 'deny', code: CONFIRM_CODES.CANCELLED });
 
 /** 宿主抛出的错误码 → 本仓库的确认码；未知异常一律"流程异常"，不冒充超时或拒绝。 */
 function codeOfHostError(error) {
   const code = typeof error?.code === 'string' ? error.code : '';
   if (code === 'NO_PROVIDER') return CONFIRM_CODES.UNAVAILABLE;
   if (code === 'DELEGATED_CALLER' || code === 'CALLER_NOT_LIVE') return CONFIRM_CODES.DELEGATED;
-  if (code === 'ASK_ABORTED') return CONFIRM_CODES.TIMEOUT;
+  // 宿主 abort 只说明这次询问被结束（调用取消、插件卸载或超时收尾），不是"用户没答"。
+  if (code === 'ASK_ABORTED') return CONFIRM_CODES.CANCELLED;
   return CONFIRM_CODES.ERROR;
 }
 
@@ -158,7 +161,7 @@ export function createConfirmationGateway({
     return 120_000;
   }
 
-  async function ask({ ctx, agent, action, questions, timeoutMs: requested } = {}) {
+  async function ask({ ctx, agent, action, questions, timeoutMs: requested, signal } = {}) {
     if (disposed) return CHANNEL_ERROR;
     let service;
     try {
@@ -171,11 +174,14 @@ export function createConfirmationGateway({
     if (agent === null || agent === undefined) return UNAVAILABLE;
     if (personaOf(agent) === PERSONA.CHILD) return DELEGATED;
 
+    // 调用方已取消：不必再弹卡，也不必等超时。
+    if (signal?.aborted === true) return CANCELLED;
     const label = { questions, allowLabel: CONFIRM_LABELS.allow, denyLabel: CONFIRM_LABELS.deny };
     const controller = new AbortController();
     const token = { controller };
     inflight.add(token);
     let timer;
+    let onAbort;
     try {
       const answered = Promise.resolve()
         .then(() => service.ask({ questions, agent, signal: controller.signal }))
@@ -187,13 +193,27 @@ export function createConfirmationGateway({
         timer = setTimer(() => resolve(TIMEOUT), budgetOf(requested));
         timer?.unref?.();
       });
-      // 两路都已有 settle 处理；这里只等先到的那一路，另一路不会留下未处理拒绝。
-      const verdict = await Promise.race([answered, deadline]);
+      // 工具调用被取消时立即结束等待：卡片仍在客户端，但结论已定。
+      const cancelled = new Promise((resolve) => {
+        if (signal === null || signal === undefined || typeof signal.addEventListener !== 'function') return;
+        onAbort = () => resolve(CANCELLED);
+        if (signal.aborted === true) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      });
+      // 三路都已有 settle 处理；这里只等先到的那一路，其余不会留下未处理拒绝。
+      const verdict = await Promise.race([answered, deadline, cancelled]);
       return verdict;
     } catch {
       return CHANNEL_ERROR;
     } finally {
       if (timer !== undefined) clearTimer(timer);
+      if (onAbort !== undefined && typeof signal?.removeEventListener === 'function') {
+        try {
+          signal.removeEventListener('abort', onAbort);
+        } catch {
+          // 移除失败不影响结论。
+        }
+      }
       inflight.delete(token);
       // 结论已定：释放宿主侧挂起询问（超时路径尤其需要）。
       try {

@@ -95,7 +95,7 @@ test('host error codes map onto exactly one of our codes each', async () => {
     ['NO_PROVIDER', CONFIRM_CODES.UNAVAILABLE],
     ['DELEGATED_CALLER', CONFIRM_CODES.DELEGATED],
     ['CALLER_NOT_LIVE', CONFIRM_CODES.DELEGATED],
-    ['ASK_ABORTED', CONFIRM_CODES.TIMEOUT],
+    ['ASK_ABORTED', CONFIRM_CODES.CANCELLED],
     ['BAD_INTENT', CONFIRM_CODES.ERROR],
     [undefined, CONFIRM_CODES.ERROR],
   ]);
@@ -127,7 +127,7 @@ test('dispose releases in-flight asks and refuses later ones', async () => {
   assert.equal(gateway.pending(), 1);
   gateway.dispose();
   assert.equal(gateway.pending(), 0);
-  assert.deepEqual(await pending, { decision: 'deny', code: CONFIRM_CODES.TIMEOUT });
+  assert.deepEqual(await pending, { decision: 'deny', code: CONFIRM_CODES.CANCELLED });
   assert.deepEqual(await askFor(gateway), { decision: 'deny', code: CONFIRM_CODES.ERROR });
 });
 
@@ -151,4 +151,29 @@ test('concurrent asks each keep their own slot', async () => {
   assert.deepEqual(await first, { decision: 'allow' });
   assert.deepEqual(await second, { decision: 'allow' });
   assert.equal(gateway.pending(), 0);
+});
+
+test('a cancelled tool call ends the wait at once instead of burning the timeout', async () => {
+  const controller = new AbortController();
+  const service = {
+    ask: ({ signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { code: 'ASK_ABORTED' })));
+    }),
+  };
+  const gateway = createConfirmationGateway({ resolveService: () => service, timeoutMs: 120_000 });
+  const pending = askFor(gateway, { signal: controller.signal });
+  await Promise.resolve();
+  assert.equal(gateway.pending(), 1);
+  controller.abort();
+  assert.deepEqual(await pending, { decision: 'deny', code: CONFIRM_CODES.CANCELLED });
+  assert.equal(gateway.pending(), 0, '取消后不留下等待中的槽位');
+});
+
+test('an already cancelled call never opens a card', async () => {
+  const service = { calls: 0, ask() { this.calls += 1; return new Promise(() => {}); } };
+  const gateway = createConfirmationGateway({ resolveService: () => service });
+  const controller = new AbortController();
+  controller.abort();
+  assert.deepEqual(await askFor(gateway, { signal: controller.signal }), { decision: 'deny', code: CONFIRM_CODES.CANCELLED });
+  assert.equal(service.calls, 0);
 });
