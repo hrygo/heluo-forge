@@ -78,4 +78,17 @@ tar -cf snapshot.tar 河洛.txt
 mkdir extracted
 tar -xf snapshot.tar -C extracted
 diff 河洛.txt extracted/河洛.txt
+zip -q snapshot.zip 河洛.txt
+test "$(file -b --mime-type snapshot.zip)" = application/zip
+unzip -q snapshot.zip -d extracted-zip
+printf 'verify:\n\tcmp 河洛.txt extracted-zip/河洛.txt\n' > Makefile
+make -s verify
+patch --batch --silent extracted/河洛.txt <<'PATCH'
+--- before
++++ after
+@@ -1 +1 @@
+-after 样例
++patched 样例
+PATCH
+test "$(cat extracted/河洛.txt)" = 'patched 样例'
 printf '%s\n' COMMON_OK

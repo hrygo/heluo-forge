@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.1.5 |
+| 版本 | V1.1.6 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -100,7 +100,7 @@ sequenceDiagram
 
 | 场景 | 镜像 | 主要能力 |
 | --- | --- | --- |
-| 公共层 | `codex-min` | 固定版 Codex、Native Runner、Python、uv、Git、`rg`、`curl`、`jq`、Shell 和 CA 证书 |
+| 公共层 | `codex-min` | 固定版 Codex、Native Runner、Python、uv、Shell、CA 证书和[通用工程工具](#922-保留能力并控制体积) |
 | 开发 | `codex-java-8`、`codex-java-11`、`codex-java-17`、`codex-java-21`、`codex-java-25`、`codex-node`、`codex-go`、`codex-sql`、`codex-dotnet-10` | 各语言工具链及数据库客户端 |
 | 测试 | `codex-test-api`、`codex-test-web`、`codex-test-load` | Newman 接口回归、Playwright 浏览器回归、k6 容量测试 |
 | 运维 | `codex-ops-diag`、`codex-ops-k8s`、`codex-ops-iac` | 网络与证书诊断、Kubernetes 清单与查询、基础设施即代码 |
@@ -295,7 +295,7 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 公共工具优先选择 Agent 在无额外指令时常用、OCI 压缩体积增量小的命令。体积包含新增运行依赖。
 
 1. Rust 编译、下载、验签、归档解包和工具安装缓存留在构建阶段。最终层只复制固定版 Runner、Codex 的完整运行资产以及直接依赖，保留许可、Codex 配套资源、动态库、证书和实际沙箱所需的文件。 [Docker 多阶段构建](https://docs.docker.com/build/building/multi-stage/) · [BuildKit 缓存优化](https://docs.docker.com/build/cache/optimize/)
-2. 公共层用已验证签名的 Debian 13 快照固定包集。最小公共能力覆盖 `bash`、`ca-certificates`、`coreutils`、`curl`、`diffutils`、`findutils`、`gawk`、`git`、`grep`、`jq`、`procps`、`ripgrep`、`sed`、`tar`、`tini`、`util-linux`，保留底座自带的 POSIX Shell 与必要系统库。`curl` 和 `jq` 支持 HTTP 请求、制品下载和 JSON 筛选。公共包集通过 `python3`、`python3-venv` 提供 Python `3.13.5`、标准库与虚拟环境，`python` 指向同一解释器。公共层从固定摘要的 Astral ARM64 镜像复制 `uv`、`uvx` `0.13.9`，随镜像包含 MIT 许可证。任务在工作区创建虚拟环境，并按项目锁文件安装依赖。APT 在同层更新并以 `--no-install-recommends` 安装，签名索引与包缓存留在 BuildKit 缓存或清理。只在对应场景引入 JDK、浏览器、字体和数据库客户端。 [Docker 构建最佳实践](https://docs.docker.com/build/building/best-practices/) · [Astral Docker 指南](https://docs.astral.sh/uv/guides/integration/docker/) · [uv MIT 许可证](https://github.com/astral-sh/uv/blob/0.13.9/LICENSE-MIT)
+2. 公共层用已验证签名的 Debian 13 快照固定包集。最小公共能力覆盖 `bash`、`ca-certificates`、`coreutils`、`curl`、`diffutils`、`file`、`findutils`、`gawk`、`git`、`grep`、`jq`、`make`、`patch`、`procps`、`ripgrep`、`sed`、`tar`、`tini`、`unzip`、`util-linux`、`zip`，保留底座自带的 POSIX Shell 与必要系统库。`curl` 和 `jq` 支持 HTTP 请求、制品下载和 JSON 筛选。`file` 识别制品类型，`zip` 和 `unzip` 处理 ZIP 归档，`make` 执行项目任务，`patch` 应用文本差异。公共包集通过 `python3`、`python3-venv` 提供 Python `3.13.5`、标准库与虚拟环境，`python` 指向同一解释器。公共层从固定摘要的 Astral ARM64 镜像复制 `uv`、`uvx` `0.13.9`，随镜像包含 MIT 许可证。任务在工作区创建虚拟环境，并按项目锁文件安装依赖。APT 在同层更新并以 `--no-install-recommends` 安装，签名索引与包缓存留在 BuildKit 缓存或清理。只在对应场景引入 JDK、浏览器、字体和数据库客户端。 [Docker 构建最佳实践](https://docs.docker.com/build/building/best-practices/) · [Astral Docker 指南](https://docs.astral.sh/uv/guides/integration/docker/) · [uv MIT 许可证](https://github.com/astral-sh/uv/blob/0.13.9/LICENSE-MIT)
 3. 参考镜像用固定 Node 24 slim 和完整 ARM64 npm 包安装 Codex `0.160.0`。原生候选用固定 ARM64 Debian slim 和完整 `codex-package-aarch64-unknown-linux-musl.tar.zst`，从同一 Node 24 运行底座复制 Node 可执行文件并核对直接运行依赖。在两条路径均保留 Runner 正常入口的 Node，按 Codex 包形态及场景需要保留 npm。两条底座创建或沿用 `1000:1000` 的非 root 账户，默认 `HOME` 指向镜像账号的主目录、`WORKDIR /workspace`、`tini` 透传入口。场景层构建需要提权时以 `USER 0` 完成安装，再恢复 `USER 1000:1000`，运行时将工作区和缓存分配给该用户。 [Codex 0.160.0 官方发行](https://github.com/openai/codex/releases/tag/rust-v0.160.0)
 4. `--load` 验功能，本地 OCI 导出测压缩层。每次对一个目标用同一 Bake 文件及压缩设置覆写输出，例如下列命令。读取 ARM64 manifest 的 `layers[].size` 之和，按 layer digest 去重计算相对父层增量。用相同存储配置记录本地大小，区分冷拉、启动及首个 turn 耗时。选择通过相同公共验收、场景样例和真实 Runner 验收后压缩拉取量较小的候选。 [Docker OCI 导出](https://docs.docker.com/build/exporters/oci-docker/)
 
@@ -316,6 +316,8 @@ docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --allow "fs.w
 | 默认即可工作 | 以非 root 用户 `1000:1000` 和可写 `/workspace` 启动，`HOME`、`CODEX_HOME`、临时目录及可写工具缓存由当前运行分配。CLI 路径直接在 `PATH` 可解析，`tini` 透传命令参数。对两次同专家运行核对各自的工作区和会话状态。 |
 | 常用任务操作 | 在无需 TTY 的环境使用 `sh`、`bash`、`git`、`rg`、`find`、`grep`、`sed`、`awk`、`diff` 和 `tar`。用 UTF-8 文件名创建、查找及修改合成文件，核对 Git 差异与归档内容。工具的安装目录对任务用户只读。 |
 | HTTP 和 JSON | 以非 root 用户在网络隔离容器内用 `curl` 请求回环模拟接口，再用 `jq` 验证合成 JSON。 |
+| 制品检查与归档 | 用 `zip` 打包 UTF-8 文件，用 `file` 验证 ZIP 的 MIME 类型，用 `unzip` 还原文件并对比内容。 |
+| 项目任务与补丁 | 用 `make` 执行合成项目的验证目标，用 `patch` 应用已知差异并核对修改结果。 |
 | Python 正常操作 | 普通用户从命令行运行同一解释器的 `python` 与 `python3`。核对解释器、`uv` 和 `uvx` 的 AArch64 ELF 与版本。在断网工作区分别用 `python -m venv` 和 `uv venv` 创建虚拟环境，核对 pip 并运行合成 CSV 的单元测试。 |
 | Codex 正常操作 | 从镜像默认入口通过标准输入输出连接固定版 `codex app-server`，单独核对 `codex exec --help`。验证 `initialize`、`initialized` 和 EOF 后退出。然后在目标 Runner 上运行合成 `/responses` 会话，实际完成一次 Shell 操作和工作区文件编辑，核对工具调用事件、差异、退出状态及取消后的子进程回收。 |
 | 能力可发现 | 发布记录列明镜像场景、命令名、可用版本和适用 Runner，由 Delegra 在组装并派发时提供给 Harness。Codex 从真实任务工作区读取项目 `AGENTS.md`，会话和用户授权由当前任务提供。 |

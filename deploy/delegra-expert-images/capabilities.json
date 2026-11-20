@@ -4,7 +4,10 @@
   "python": "3.13.5",
   "uv": "0.13.9",
   "runner": "25c86a283a9c787a01911c714618d78df7552af7",
-  "common": ["paperclip-runnerd", "codex", "node", "python", "python3", "uv", "uvx", "tini", "bash", "sh", "git", "rg", "curl", "jq"],
+  "common": [
+    "paperclip-runnerd", "codex", "node", "python", "python3", "uv", "uvx", "tini",
+    "bash", "sh", "git", "rg", "curl", "jq", "file", "make", "patch", "unzip", "zip"
+  ],
   "scenes": {
     "codex-min": [],
     "codex-java-8": ["java", "javac", "mvn"],
