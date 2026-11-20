@@ -1551,3 +1551,239 @@ test('the downgrade follows the target model, so switching models tries images a
   assert.equal(attempts.length, 4);
   assert.equal(attempts[3][0].content[0].offloaded, undefined);
 });
+
+test('declared capabilities win over the 200K/64K baselines and missing ones fall back (issue #202)', async t => {
+  const catalogue = {
+    data: [
+      {
+        id: 'alpha',
+        capabilities: { context_length: 128000, max_output_tokens: 8192, input_modalities: ['text', 'image'], streaming: true },
+        compliance: { level: 'L2', region: 'cn-north-1' },
+      },
+      { id: 'beta' },
+    ],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha, beta] = f.runtime.getView().models;
+  // Declaration first.
+  assert.equal(alpha.contextWindow, 128000);
+  assert.equal(alpha.maxTokens, 8192);
+  assert.deepEqual(alpha.inputModalities, ['text', 'image']);
+  assert.equal(alpha.streaming, true);
+  assert.deepEqual(alpha.compliance, { level: 'L2', region: 'cn-north-1' });
+  // Baseline only where the gateway said nothing.
+  assert.equal(beta.contextWindow, 200000);
+  assert.equal(beta.maxTokens, 64000);
+  assert.deepEqual(beta.inputModalities, ['text']);
+  assert.equal('streaming' in beta, false);
+  assert.equal('compliance' in beta, false);
+});
+
+test('camelCase capability aliases are read the same way (issue #202)', async t => {
+  const catalogue = {
+    data: [{
+      id: 'alpha',
+      capabilities: { contextWindow: 64000, maxOutputTokens: 4096, modalities: ['text'], supportsStreaming: true },
+      compliance: { complianceLevel: 'L1', deploymentRegion: 'cn-east-2' },
+    }],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha] = f.runtime.getView().models;
+  assert.equal(alpha.contextWindow, 64000);
+  assert.equal(alpha.maxTokens, 4096);
+  assert.equal(alpha.streaming, true);
+  assert.deepEqual(alpha.compliance, { level: 'L1', region: 'cn-east-2' });
+});
+
+test('an unusable declaration falls back to the baseline instead of failing the catalogue (issue #202)', async t => {
+  const catalogue = {
+    data: [{
+      id: 'alpha',
+      capabilities: { context_length: -1, max_output_tokens: 1e12, input_modalities: ['audio', 'video'], streaming: 'yes' },
+      compliance: { level: 42, region: 'x'.repeat(200) },
+    }],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().error, null);
+  const [alpha] = f.runtime.getView().models;
+  assert.equal(alpha.contextWindow, 200000);
+  assert.equal(alpha.maxTokens, 64000);
+  assert.deepEqual(alpha.inputModalities, ['text']);
+  assert.equal('streaming' in alpha, false);
+  assert.equal('compliance' in alpha, false);
+});
+
+test('a user override still wins over the declared capacity (issue #202)', async t => {
+  const catalogue = { data: [{ id: 'alpha', capabilities: { context_length: 100000, max_output_tokens: 8000 } }] };
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify(catalogue)),
+    selection: { models: { alpha: { contextWindow: '128k', maxTokens: 4000 } }, defaultModelId: 'alpha' },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha] = f.runtime.getView().models;
+  assert.equal(alpha.contextWindow, 128000);
+  assert.equal(alpha.maxTokens, 4000);
+});
+
+test('compliance metadata is displayed but never changes authorization (issue #202)', async t => {
+  const catalogue = {
+    data: [
+      { id: 'alpha', compliance: { level: 'restricted', region: 'cn-north-1' } },
+      { id: 'beta', compliance: { level: 'open' } },
+    ],
+  };
+  // Deliberately opposite to what a compliance-based rule would do: the
+  // "restricted" model is the enabled one, the "open" model is disabled. A
+  // regression that granted by level or denied restricted models would fail here.
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify(catalogue)),
+    selection: { models: { alpha: {} }, defaultModelId: 'alpha' },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const view = f.runtime.getView();
+  assert.deepEqual(view.models.map(model => [model.id, model.enabled]), [['alpha', true], ['beta', false]]);
+  assert.equal(view.models.find(model => model.id === 'alpha').compliance.level, 'restricted');
+  assert.equal(view.models.find(model => model.id === 'beta').compliance.level, 'open');
+  // A "restricted"-labelled but enabled model still runs; an "open"-labelled but
+  // disabled one is still refused.
+  const ok = await chunks((await f.adapter.prepareCall('enterprise', 'alpha')).stream({ ...options, model: 'alpha' }));
+  assert.equal(ok[0].text, 'ok');
+  await assert.rejects(() => f.adapter.prepareCall('enterprise', 'beta'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+});
+
+test('a mixed modality declaration falls back to text instead of advertising a subset (issue #202 review)', async t => {
+  const catalogue = {
+    data: [
+      { id: 'alpha', capabilities: { input_modalities: ['image', 'audio'] } },
+      { id: 'beta', capabilities: { input_modalities: ['text', 'image'] } },
+    ],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha, beta] = f.runtime.getView().models;
+  // A declaration mixing a known mode with an unknown one says nothing
+  // reliable: claiming "image only" would break plain-text calls.
+  assert.deepEqual(alpha.inputModalities, ['text']);
+  // A fully known declaration is still adopted.
+  assert.deepEqual(beta.inputModalities, ['text', 'image']);
+});
+
+test('a model that declares streaming: false is listed but never selectable or callable (issue #202 review)', async t => {
+  const catalogue = {
+    data: [
+      { id: 'alpha', capabilities: { streaming: true, context_length: 64000 } },
+      { id: 'beta', capabilities: { streaming: false } },
+    ],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const beta = f.runtime.getView().models.find(model => model.id === 'beta');
+  assert.equal(beta.enabled, false);
+  assert.equal(beta.streaming, false, 'the declaration stays visible so the UI can label it');
+
+  // Enabling it is refused by omission: the submitted set cannot hold it.
+  const saved = await f.runtime.updateModelOptions({ alpha: {}, beta: {} });
+  assert.deepEqual(saved.enabled, ['alpha']);
+  assert.deepEqual(Object.keys(f.runtime.getModelOptions()), ['alpha']);
+  // And a direct call is refused with its own sentence, not "not opened".
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'beta'), (error) => {
+    assert.equal(error.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+    assert.equal(error.message, '该模型不支持流式调用，无法在对话中使用。');
+    return true;
+  });
+});
+
+test('the first-run default skips a model that cannot stream (issue #202 review)', async t => {
+  const catalogue = { data: [{ id: 'alpha', capabilities: { streaming: false } }, { id: 'beta' }] };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const view = f.runtime.getView();
+  assert.deepEqual(view.enabled, ['beta']);
+  assert.equal(view.defaultModelId, 'beta');
+});
+test('a model disabled on this machine is not described as an enterprise decision (issue #206)', async t => {
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }, { id: 'beta' }] })),
+    selection: { models: { alpha: {} }, defaultModelId: 'alpha' },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // `beta` is in the enterprise catalogue but this person never enabled it.
+  for (const attempt of [
+    () => f.adapter.prepareCall('enterprise', 'beta'),
+    () => f.adapter.resolveModel('enterprise', 'beta'),
+  ]) {
+    await assert.rejects(attempt, (error) => {
+      assert.equal(error.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+      assert.equal(error.message, '该模型在本机未启用，请在设置中启用。');
+      // The enterprise wording must not appear on a local-preference refusal.
+      assert.doesNotMatch(error.message, /企业开放|企业未开放/u);
+      return true;
+    });
+  }
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'beta', messages: [] }, async function* () { yield { type: 'text', text: 'leak' }; }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(streamed[0].reason.failure.message, '该模型在本机未启用，请在设置中启用。');
+  assert.equal(f.calls, 0);
+});
+
+test('a model the catalogue never offered says so, with the same contract code (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'not-offered'), (error) => {
+    assert.equal(error.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+    assert.equal(error.message, '企业目录未提供该模型。');
+    return true;
+  });
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'not-offered', messages: [] }, async function* () { yield { type: 'text', text: 'leak' }; }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(streamed[0].reason.failure.message, '企业目录未提供该模型。');
+});
+
+test('a route that is not this provider is a caller bug, not a model decision (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await assert.rejects(f.adapter.prepareCall('standalone', 'alpha'), (error) => {
+    assert.equal(error.code, 'IAM_INTERNAL');
+    // Greptile: IAM_INTERNAL has no MESSAGES entry, so this must not be blank.
+    assert.equal(typeof error.message, 'string');
+    assert.ok(error.message.length > 0);
+    return true;
+  });
+});
+
+test('the stream guard names a foreign provider as a policy limit, not a missing model (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const streamed = await chunks(f.guard({ provider: 'standalone', model: 'alpha', messages: [] }, async function* () { yield { type: 'text', text: 'leak' }; }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(streamed[0].reason.failure.message, '企业环境仅允许使用企业模型。');
+  assert.doesNotMatch(streamed[0].reason.failure.message, /企业目录未提供/u);
+});
+
+test('a failed discovery is reported as the gateway failure, not as a missing model (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response('synthetic outage', { status: 503 }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // No catalogue was ever accepted, so "the catalogue does not offer it" is not
+  // a supported conclusion; the refusal must carry the gateway code instead.
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'alpha'), (error) => {
+    assert.equal(error.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+    assert.doesNotMatch(error.message, /企业目录未提供/u);
+    return true;
+  });
+});
