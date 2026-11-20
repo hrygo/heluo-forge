@@ -770,8 +770,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           try {
             checkSession();
             signal.throwIfAborted();
-            const denied = Boolean(refusal(request, this.version));
-            if (denied) { this.denied = denied; throw error(denied); }
+            // Keep the denial object: flattening it loses the message and even
+            // leaks `code: true` into the failure that reaches the person.
+            const denial = refusal(request, this.version);
+            if (denial) { this.denied ??= denial.code; throw error(denial.code); }
           } catch (cause) {
             this.denied ??= streamRefusal() ?? failureCode(cause);
             throw cause;
@@ -1266,6 +1268,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
             ?? { code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: MESSAGES.ENTERPRISE_MODEL_NOT_ALLOWED };
           const cause = new IamError(denial.code, denial.message);
           failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
+        try {
+          const entry = enabledModel(route, model);
+          return entry && installed(entry) ? await backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
+        } catch (cause) {
+          failed({ provider: route, model }, cause, failureCode(cause), 'unknown');
           throw cause;
         }
       };

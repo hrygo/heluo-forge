@@ -1787,3 +1787,13 @@ test('a failed discovery is reported as the gateway failure, not as a missing mo
     return true;
   });
 });
+
+test('resolveModel returns the resolved model for an enabled, installed route (issue #202 review)', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const resolved = await f.adapter.resolveModel('enterprise', options.model);
+  // Returning undefined here silently breaks every prepared call.
+  assert.ok(resolved, 'resolveModel must not resolve to undefined');
+  assert.equal(resolved.id, options.model);
+  assert.equal(resolved.provider, 'enterprise');
+});
