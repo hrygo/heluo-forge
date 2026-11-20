@@ -189,12 +189,12 @@ export function createGate({
   let disposed = false;
 
   function sessionIdOf(exec) {
-  const header = exec?.agent?.session?.header;
-  const id = header?.id;
-  return typeof id === 'string' && id.trim() !== '' ? id.trim() : undefined;
-}
+    const header = exec?.agent?.session?.header;
+    const id = header?.id;
+    return typeof id === 'string' && id.trim() !== '' ? id.trim() : undefined;
+  }
 
-function callIdOf(exec) {
+  function callIdOf(exec) {
     const value = exec?.callId;
     return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
   }
@@ -208,6 +208,22 @@ function callIdOf(exec) {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * 拒绝也要留证据，但证据写不进去不该把拒绝变成放行：判定本身已经是 fail-closed，
+   * 这里只做 best-effort 记录，记录失败时在结果里标 `evidence: 'unrecorded'`，
+   * 让调用链能看到"这次拒绝没有留下审计痕迹"，而不是静默当作已记录。
+   */
+  async function denyWithEvidence(fields, reason, code) {
+    const recorded = await writeRecord(fields);
+    if (recorded) return deny(reason, code);
+    return Object.freeze({
+      kind: 'deny',
+      reason,
+      ...(code === undefined ? {} : { code }),
+      evidence: 'unrecorded',
+    });
   }
 
   function actionFor(toolName) {
@@ -282,7 +298,7 @@ function callIdOf(exec) {
     const operationId = exec?.callId === undefined ? undefined : String(exec.callId);
     // 来源闸在身份之前：子代理不该比主会话更容易拿到一次写入。
     if (persona === PERSONA.CHILD && rules?.denyDelegatedWrites === true) {
-      await writeRecord({
+      return denyWithEvidence({
         action,
         target,
         tool: exec?.name,
@@ -292,8 +308,7 @@ function callIdOf(exec) {
         operationId,
         agent: { kind },
         summary: delegationSummary(action),
-      });
-      return deny(delegationCopy(action), CONFIRM_CODES.DELEGATED);
+      }, delegationCopy(action), CONFIRM_CODES.DELEGATED);
     }
     const actor = normalizeActor(await getActor?.(ctx));
     if (actor === undefined) {
@@ -310,7 +325,7 @@ function callIdOf(exec) {
     if (decision.action === 'confirm') {
       // 来源判定在查缓存之前：子代理没有确认通道，命中缓存也不能替它跳过人工确认。
       if (persona === PERSONA.CHILD) {
-        await writeRecord({
+        return denyWithEvidence({
           action,
           target,
           tool: exec?.name,
@@ -320,8 +335,7 @@ function callIdOf(exec) {
           operationId,
           agent: { kind },
           summary: delegationSummary(action),
-        });
-        return deny(confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
+        }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
       }
       const callId = callIdOf(exec);
       const key = reuseKeyOf({ tool: exec?.name, callId, action, digest, contentDigest });
