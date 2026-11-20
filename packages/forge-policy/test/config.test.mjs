@@ -13,14 +13,14 @@ import {
 
 const WRITE = { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' };
 
-test('the eight rule keys are all off by default; P2 implements four of them', () => {
+test('the seven rule keys are all off by default; P2 implements three of them', () => {
   assert.deepEqual([...RULE_KEYS].sort(), [
-    'confirmDopWrite', 'confirmPush', 'contentGate', 'denyDelegatedWrites',
+    'confirmDopWrite', 'confirmPush', 'contentGate',
     'denyHumanRecord', 'denyUnknownAction', 'enforceProcessRules', 'protectPaths',
   ]);
-  assert.equal(RULE_KEYS.length, 8);
+  assert.equal(RULE_KEYS.length, 7);
   for (const key of RULE_KEYS) assert.equal(DEFAULT_RULES[key], false, `${key} defaults to off`);
-  assert.deepEqual([...IMPLEMENTED_RULES].sort(), ['confirmDopWrite', 'confirmPush', 'contentGate', 'denyDelegatedWrites']);
+  assert.deepEqual([...IMPLEMENTED_RULES].sort(), ['confirmDopWrite', 'confirmPush', 'contentGate']);
   assert.equal(DEFAULT_CONFIRMATION_TIMEOUT_MS, 120_000);
 });
 

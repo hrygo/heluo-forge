@@ -19,9 +19,8 @@ export class PolicyConfigError extends Error {
   }
 }
 
-/** 八个规则开关：代码内禁止任何 `true` 默认。 */
+/** 七个规则开关：代码内禁止任何 `true` 默认。 */
 export const RULE_KEYS = Object.freeze([
-  'denyDelegatedWrites',
   'denyUnknownAction',
   'denyHumanRecord',
   'protectPaths',
@@ -31,9 +30,8 @@ export const RULE_KEYS = Object.freeze([
   'confirmDopWrite',
 ]);
 
-/** 已实现四键：来源拒绝、两条逐次确认与内容闸；其余四个开关仍在后续阶段。 */
+/** 已实现三键：两条逐次确认与内容闸；其余四个开关仍在后续阶段。 */
 export const IMPLEMENTED_RULES = Object.freeze([
-  'denyDelegatedWrites',
   'contentGate',
   'confirmPush',
   'confirmDopWrite',

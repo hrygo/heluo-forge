@@ -159,9 +159,9 @@ test('a cached decision belongs to one actor and one session', async () => {
   h.dispose();
 });
 
-test('a subagent never reuses a decision even when the switch is off', async () => {
+test('a subagent never reuses the root decision it was relayed to', async () => {
   const channel = answering();
-  const h = mount({ rules: { confirmPush: true, denyDelegatedWrites: false }, userQuestions: channel });
+  const h = mount({ rules: { confirmPush: true }, userQuestions: channel });
   const root = { ...exec('call-1'), agent: { session: { header: { id: 's-1' } } } };
   await h.policy.executeAction(h.ctx, 'gitee.git.push', root, async () => ({ ok: true }));
   assert.equal(channel.calls.length, 1);

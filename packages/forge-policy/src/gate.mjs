@@ -27,7 +27,6 @@ import {
   PERSONA,
   agentKindOf,
   confirmDelegatedCopy,
-  delegationCopy,
   delegationSummary,
   personaOf,
   rootOf,
@@ -352,20 +351,7 @@ export function createGate({
     const persona = personaOf(exec?.agent);
     const kind = agentKindOf(exec);
     const operationId = exec?.callId === undefined ? undefined : String(exec.callId);
-    // 来源闸在身份之前：子代理不该比主会话更容易拿到一次写入。
-    if (persona === PERSONA.CHILD && rules?.denyDelegatedWrites === true) {
-      return denyWithEvidence({
-        action,
-        target,
-        tool: exec?.name,
-        decision: 'deny',
-        rule: 'deny-delegated-writes',
-        code: CONFIRM_CODES.DELEGATED,
-        operationId,
-        agent: { kind },
-        summary: delegationSummary(action),
-      }, delegationCopy(action), CONFIRM_CODES.DELEGATED);
-    }
+    // 来源不拒绝写入：子代理需要人确认时由主会话代问（见确认段），只有找不到可代问的根才拒。
     const actor = normalizeActor(await getActor?.(ctx));
     if (actor === undefined) {
       return deny(IDENTITY_COPY(action));

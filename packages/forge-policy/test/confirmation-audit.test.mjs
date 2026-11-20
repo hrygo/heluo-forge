@@ -151,28 +151,7 @@ test('only push and DOP clarification ask, the other writes go straight through'
   h.dispose();
 });
 
-test('a subagent write is refused with one record and no card', async () => {
-  const channel = answering();
-  const h = mount({ rules: { denyDelegatedWrites: true, confirmPush: true }, userQuestions: channel });
-  let ran = 0;
-  const exec = { ...pushExec(), agent: { kind: 'agent', session: { header: { origin: 'subagent' } } } };
-  const result = await h.policy.executeAction(h.ctx, 'gitee.git.push', exec, async () => (ran++, { ok: true }));
-  assert.equal(ran, 0);
-  assert.equal(result.code, CONFIRM_CODES.DELEGATED);
-  assert.match(result.text, /主会话/u);
-  assert.doesNotMatch(result.text, /换一个工具|拆成|绕过/u);
-  assert.equal(channel.calls.length, 0, 'a subagent never sees a card');
-  const records = h.policy.auditRecords();
-  assert.equal(records.length, 1);
-  assert.equal(records[0].decision, 'deny');
-  assert.equal(records[0].phase, undefined, 'a delegation refusal is a single decision record');
-  assert.equal(records[0].code, CONFIRM_CODES.DELEGATED);
-  assert.equal(records[0].agent.kind, 'child');
-  assert.match(records[0].summary, /子代理/u);
-  h.dispose();
-});
-
-test('with the delegation rule off, a subagent needing a card is refused by the card path', async () => {
+test('a subagent needing a card without a live root is refused by the card path', async () => {
   const channel = answering();
   const h = mount({ rules: { confirmPush: true }, userQuestions: channel });
   let ran = 0;

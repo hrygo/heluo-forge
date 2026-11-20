@@ -2,7 +2,7 @@
 
 状态：可用（P0 受控写最小门禁 + P1 身份永远开、子代理写拒绝、人工确认卡片与决策复用 + P2 内容闸；流程规则与受保护路径拦截待 P3；未接企业环境，未做双端实机）
 
-一句话：只对目录里登记的写动作负责——登记动作必须解析出 IAM 身份、先落前置执行记录再放行、执行前复验身份与参数、执行后结清；`gitee.git.push` 与 `change.clarification.write` 在开关开启时经宿主 `userQuestions` 卡片按次确认；未登记的工具与动作（含全部读动作）不在本门禁作用域，直接放行且不读身份、不记审计；八条规则开关代码默认全关，未实现的开关置真会在装载期被拒绝。
+一句话：只对目录里登记的写动作负责——登记动作必须解析出 IAM 身份、先落前置执行记录再放行、执行前复验身份与参数、执行后结清；`gitee.git.push` 与 `change.clarification.write` 在开关开启时经宿主 `userQuestions` 卡片按次确认；未登记的工具与动作（含全部读动作）不在本门禁作用域，直接放行且不读身份、不记审计；七条规则开关代码默认全关，未实现的开关置真会在装载期被拒绝。
 
 | 项 | 内容 |
 |---|---|
@@ -27,7 +27,7 @@
 | 无 UI 环境 | 没有可用的 `userQuestions` 服务时装载照常完成并给出一次告警，但每次需要卡片的受控写都以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed），不会降级为直接放行 |
 | 错误码 | 七类结论各有唯一码：`POLICY_CONTENT_HARD`、`POLICY_CONFIRM_DENIED`、`_TIMEOUT`、`_UNAVAILABLE`、`_INVALID_ANSWER`、`_DELEGATED`、`_ERROR`；码同时出现在结构化判定结果与审计里，用户文案不拼码 |
 | 决策复用 | 只缓存"允许"的决定，键为 `工具名 + callId + 动作 + 参数摘要`，同一键的重试不再打扰用户但必须重过身份校验、一次性收据与执行后复验；拒绝、超时、无应答、非法应答与执行失败都不入缓存。缓存最多 32 条、进程内 LRU、不落盘，卸载即清空 |
-| 子代理来源 | 宿主 origin 为 `subagent` 的调用在 `denyDelegatedWrites` 开启时一律拒绝并留一条 `POLICY_CONFIRM_DELEGATED` 审计；开关关闭时，需要卡片的写仍以同一错误码拒绝（子代理不会拿到卡片），不需卡片的写与主会话同路径 |
+| 子代理来源 | 需要人工确认的写由存活的主会话根代问（卡片弹在主会话，正文写明「本次写入由子代理发起」）；找不到唯一存活的根才以 `POLICY_CONFIRM_DELEGATED` 拒绝。不需确认的写与主会话同路径，不因来源被拒 |
 | 审计 | `audit.begin` 在放行前落记录（主体取 provider 自证、身份单列 `actor`、摘要覆盖参数与正文），`audit.settle` 执行后补 `durationMs` 与 `decision`；memory 是进程内环形缓冲（默认 1000），file 按天一个 JSONL、保留 `keepDays` 天；写入失败中止本次受控调用给可操作提示，绝不静默回落 memory；上一次未结清时下一次受控写中止，缺口由 `auditGaps()`/`acknowledgeAuditGaps()` 处理 |
 | 记录最小化 | 只写白名单字段；`arguments`/`content`/`stdout`/`stderr` 等禁用字段直接报错；`params` 只存摘要，路径只留尾 4 段 |
 | 收据 | 一次性收据绑定同一执行对象与静态摘要；`tools.guard` 同步核验并消费，执行前 `recheck` 复验卸载、取消、参数与身份变化，任一变化即拒绝执行；结清立即释放准入条目（`pendingAdmissions()` 可查在途数） |

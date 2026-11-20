@@ -17,7 +17,7 @@
 | 门禁 | G2 |
 | 模块状态 | 部分实现（P0 受控写骨架已上线：目录、身份、审计、收据；内容/流程/确认按[实施计划](../plans/2026-11-19-policy-minimal-gates.md)分阶段接入） |
 
-> 编制依据：2026-11-16 内网 UAT 观测——活动 profile 的补丁层未覆盖 `heluo-policy`，生效配置由 `forge-enterprise`、`forge-devops`、`forge-gitee` 三个 bundle 层同 id 折叠而成；策略目录只有六条只读动作，六个写动作全部返回 `deny / unregistered-action`，零子进程、零远端调用。同日源码核验：`packages/forge-policy/src/catalog.mjs:66,68`（`egress` 缺省 `confirm`、`enabled` 仅接受布尔 `true`）、`packages/forge-policy/src/installer.mjs:223-226`、`packages/forge-policy/src/approvals.mjs:142`、`packages/forge-policy/src/gate.mjs:65-88`、`packages/forge-gitee/src/gitee-guard.mjs:212,281`、`packages/forge-gitee/src/gitee-actions.mjs:53-58,490`。规则格式复用 `scripts/sensitive-scan/rules.example.json`，推送前扫描的提交集合取法复用 `scripts/sensitive-scan/team-pre-push.mjs` 的 `rev-list base..head`。判定模型的取舍经项目负责人 2026-11-16 逐项确认（确认人：项目负责人；确认事项：默认分层、托管与签名、身份与确认、内容规则边界；适用范围：本文 §4–§9）。**2026-11-19 复决**：确认通道改用宿主问答卡片、范围票据整层取消、八条规则开关代码默认全关由部署者逐条开启（决策与阶段见[实施计划](../plans/2026-11-19-policy-minimal-gates.md)），本文已按此修订。
+> 编制依据：2026-11-16 内网 UAT 观测——活动 profile 的补丁层未覆盖 `heluo-policy`，生效配置由 `forge-enterprise`、`forge-devops`、`forge-gitee` 三个 bundle 层同 id 折叠而成；策略目录只有六条只读动作，六个写动作全部返回 `deny / unregistered-action`，零子进程、零远端调用。同日源码核验：`packages/forge-policy/src/catalog.mjs:66,68`（`egress` 缺省 `confirm`、`enabled` 仅接受布尔 `true`）、`packages/forge-policy/src/installer.mjs:223-226`、`packages/forge-policy/src/approvals.mjs:142`、`packages/forge-policy/src/gate.mjs:65-88`、`packages/forge-gitee/src/gitee-guard.mjs:212,281`、`packages/forge-gitee/src/gitee-actions.mjs:53-58,490`。规则格式复用 `scripts/sensitive-scan/rules.example.json`，推送前扫描的提交集合取法复用 `scripts/sensitive-scan/team-pre-push.mjs` 的 `rev-list base..head`。判定模型的取舍经项目负责人 2026-11-16 逐项确认（确认人：项目负责人；确认事项：默认分层、托管与签名、身份与确认、内容规则边界；适用范围：本文 §4–§9）。**2026-11-19 复决**：确认通道改用宿主问答卡片、范围票据整层取消、规则开关代码默认全关由部署者逐条开启（决策与阶段见[实施计划](../plans/2026-11-19-policy-minimal-gates.md)；2026-11-20 复决删除 `denyDelegatedWrites`，现为七条），本文已按此修订。
 >
 > **已验**：上述观测、源码位置与离线复现结果；**未验**：企业 dop 事实源字段、IAM principal 取值、组织策略签名与验签在真实宿主内的装载、内容规则在真实仓库上的误报率。
 >
@@ -33,7 +33,7 @@
 - **身份（who）**：以哪个 IAM subject 行动；写动作要求可信身份。
 - **证据（evidence）**：谁、依据哪版策略、命中哪些规则。
 
-默认分层：目录只登记六条写动作（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write`、`gitee.git.push`、`gitee.review.record`）；读动作不进目录，未登记动作属于门禁作用域之外，放行且不读身份、不写审计；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。动作分类与内容闸、流程闸由八条独立开关控制，代码默认全关，由部署者逐条开启；`gitee.git.push` 与 DOP 状态流转各有一条确认开关，开启后走宿主问答卡片询问用户。不再有范围票据：普通研发写不逐次确认，也不要求在有效期内复用"任务范围"。组织策略以包内 `policy/` 数据目录的签名信封随包下发（见[策略与审计详细设计 §5.1.4](plugins/forge-policy.md#514-组织策略数据目录2026-11-16)），不设有效期、不单独成包；本地只能收紧，不能放宽。
+默认分层：目录只登记六条写动作（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write`、`gitee.git.push`、`gitee.review.record`）；读动作不进目录，未登记动作属于门禁作用域之外，放行且不读身份、不写审计；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。动作分类与内容闸、流程闸由七条独立开关控制，代码默认全关，由部署者逐条开启；`gitee.git.push` 与 DOP 状态流转各有一条确认开关，开启后走宿主问答卡片询问用户。不再有范围票据：普通研发写不逐次确认，也不要求在有效期内复用"任务范围"。组织策略以包内 `policy/` 数据目录的签名信封随包下发（见[策略与审计详细设计 §5.1.4](plugins/forge-policy.md#514-组织策略数据目录2026-11-16)），不设有效期、不单独成包；本地只能收紧，不能放宽。
 
 尚未闭合：内容规则清单与阈值需在企业真实仓库上评估误报，dop 事实源字段与 IAM principal 取值待核验，确认卡片的超时与并发语义未验，P1–P3 的规则尚未接入判定链路。
 
@@ -118,7 +118,7 @@ flowchart TD
 
 三条设计约束：
 
-1. **默认不拦截**：八条开关代码默认全关，普通研发写在开关关闭时不弹卡、不扫描内容、不检查流程。
+1. **默认不拦截**：七条开关代码默认全关，普通研发写在开关关闭时不弹卡、不扫描内容、不检查流程。
 2. **`review.record` 从 Agent 动作面移除**：它表示"人类做过评审"，由模型发起即伪造来源；宿主在人类确实确认后写入并记录 subject。现行 `confirm{repo,object}` 只能证明参数一致，不能证明人看过。
 3. **`git commit` 继续不进闸**：本地动作必须可完成，否则中断即丢失工作；边界在 push。提交信息前缀校验保留，内容扫描按 SOFT 记录，不阻断。
 
@@ -225,11 +225,11 @@ HARD 级最小集合：私钥块、云厂商长期访问密钥、带凭据的连
 | 阶段 | 内容 | 判据 |
 |---|---|---|
 | P0 骨架（已交付） | 动作目录（六条写动作）、IAM 身份校验、恒开审计（memory/file 落点）、一次性收据与执行前复验、命令面同源判定、组织信封验签、装载期拒绝未接入面 | 登记动作必须解析身份并先落审计；未登记动作零拦截；`pnpm check` 全绿 |
-| P1 安全基线 | 身份域补齐、受保护路径拦截、`denyDelegatedWrites`/`denyUnknownAction`/`denyHumanRecord`/`protectPaths` 四条开关、确认卡片（`confirmPush`、`confirmDopWrite`） | 每条开关打开后零放行伪造路径与委派写；卡片拒绝/超时零执行 |
+| P1 安全基线 | 身份域补齐、确认卡片（`confirmPush`、`confirmDopWrite`）、决策复用 | 卡片拒绝/超时零执行；需要确认的子代理写由主会话代问，找不到根才拒绝 |
 | P2 内容闸 | 内容规则集与 `contentGate`、256 KiB 截断、HARD/SOFT 语义 | HARD 命中零执行且不可被确认提升 |
 | P3 收尾 | 流程规则与 `enforceProcessRules`、`unevaluated` 记账、常态观察、文档与验收收口 | 事实源断开时动作继续且审计可见跳过项 |
 
-配置 schema 按 P0 破坏性简化：`catalog` 只接受 `action` / `target` / `category`；`revision`、`enabled`、`kind`、`egress`、`retry` 等旧键在装载期被拒绝；规则开关为八条布尔，置真但未实现的规则装载期拒绝；`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content` 在对应阶段接入前一律装载期拒绝。旧 schema 不做兼容迁移。
+配置 schema 按 P0 破坏性简化：`catalog` 只接受 `action` / `target` / `category`；`revision`、`enabled`、`kind`、`egress`、`retry` 等旧键在装载期被拒绝；规则开关为七条布尔，置真但未实现的规则装载期拒绝；`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content` 在对应阶段接入前一律装载期拒绝。旧 schema 不做兼容迁移。
 
 ## 13. 与既有决定的关系
 

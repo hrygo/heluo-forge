@@ -90,17 +90,12 @@ export function rootOf(ctx, agent) {
   return roots.length === 1 ? roots[0] : undefined;
 }
 
-/** 子代理来源的拒绝文案：只说明必须在主会话发起，不给任何绕过提示。 */
-export function delegationCopy(action) {
-  return `受控写「${action}」已拒绝：本次调用来自子代理，受控写必须在主会话发起。请在主会话重新发起该动作。`;
-}
-
-/** 需要人工确认的写来自子代理时的拒绝文案（开关关闭时的兜底）。 */
+/** 需要人工确认的写来自子代理、又找不到可代问的根时的拒绝文案。 */
 export function confirmDelegatedCopy(action) {
   return `受控写「${action}」需要人工确认，但本次调用来自子代理、又找不到可代问的主会话，未执行。请在主会话重新发起该动作。`;
 }
 
 /** 一条审计即可解释拒绝理由：来源、动作、结论。 */
 export function delegationSummary(action) {
-  return `受控写 ${action}：本次调用来自子代理，已拒绝（受控写必须在主会话发起）`;
+  return `受控写 ${action}：本次调用来自子代理且找不到可代问的主会话，已拒绝`;
 }
