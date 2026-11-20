@@ -6,6 +6,7 @@ import {
   mkdir,
   writeFile,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -109,7 +110,9 @@ async function makeSkill(root, name, content) {
   return dir;
 }
 
-const tmp = await mkdtemp(join(tmpdir(), "dssm-test-"));
+// 服务端发现与路由按 realpath 归一路径；macOS 的 tmpdir 位于 /var → /private/var
+// 符号链接之后，fixture 根目录创建后先解析到真实位置，登记与断言同口径。
+const tmp = await realpath(await mkdtemp(join(tmpdir(), "dssm-test-")));
 const testUserHome = join(tmp, "home");
 process.env.HOME = testUserHome;
 process.env.USERPROFILE = testUserHome;
