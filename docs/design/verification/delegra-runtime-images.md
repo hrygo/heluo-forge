@@ -103,6 +103,8 @@ Bake `--print` 核对了 13 份 Dockerfile、17 个发布目标以及独立的�
 
 Delegra 的工作流规划和发布逻辑通过 8 个 Node 测试及 `actionlint` 检查。发布规划用 Delegra 的 fork 事件验证了 17 项发布矩阵，并在分支推送和非发布仓库事件下保留 19 项验证矩阵。未进入 `origin/deploy` 的提交被发布规划拒绝。分支策略检查识别了迁移补丁。Heluo Forge `pnpm check` 耗时 52.53 秒，4529 项通过，3 项跳过。
 
+在临时 OCI 仓库用两个合成 ARM64 镜像复验发布路径，耗时 17.86 秒。与发布工作流同一摘要的 `docker-container` BuildKit 只按摘要上传候选。发布脚本校验 ARM64 manifest、SBOM 与来源证明，添加版本标签并重跑后，标签对应的 OCI 索引字节保持一致。预置冲突标签时，发布脚本拒绝该批次，同批其他镜像的版本标签仍不存在。本机 Docker Engine 直连虚拟机回环仓库的尝试返回连接拒绝。通过独立 BuildKit 实例执行 `docker buildx build --pull --platform linux/arm64`，从仓库按索引摘要加载合成镜像，随后在断网容器中执行并核对 `linux/arm64`。
+
 ## 按摘要选用发布镜像
 
 在 Delegra 的镜像工作流中选择成功的专用版本发布运行。用其运行 ID 和 Git 标签中的版本下载回执，核对回执的签名仓库、工作流和源标签。下例使用 `codex-min`，执行前将 `run_id` 和 `version` 替换为选中的运行值。 [Delegra ARM64 镜像发布](https://github.com/hrygo/Delegra/actions/workflows/delegra-expert-images.yml)
