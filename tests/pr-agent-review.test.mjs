@@ -568,11 +568,14 @@ test('an advancing target causes a bounded automatic refresh of the review', asy
   });
 });
 
-test('the workflow retries once with the same pinned PR-Agent and validates the new revision', () => {
-  const retry = workflow.split('      - name: Retry PR-Agent\n')[1]?.split('\n      - name: ')[0] ?? '';
+test('the workflow retries once with the same digest-pinned PR-Agent image and validates the new revision', () => {
+  const uses = /^ {8}uses: (\S+)/mu;
+  const image = uses.exec(stepDefinition('Run PR-Agent'))?.[1] ?? '';
+  assert.match(image, /^docker:\/\/pragent\/pr-agent@sha256:[0-9a-f]{64}$/u);
+  const retry = stepDefinition('Retry PR-Agent');
   assert.match(retry, /if: \$\{\{ steps\.validation\.outputs\.retry == 'true' \}\}/u);
-  assert.match(retry, /uses: the-pr-agent\/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b/u);
-  const recheck = workflow.split('      - name: Validate refreshed PR-Agent review\n')[1]?.split('\n      - name: ')[0] ?? '';
+  assert.equal(uses.exec(retry)?.[1], image);
+  const recheck = stepDefinition('Validate refreshed PR-Agent review');
   assert.match(recheck, /steps\.retry_revision\.outputs\.base/u);
   assert.match(recheck, /steps\.pr_agent_retry\.outputs\.review/u);
 });

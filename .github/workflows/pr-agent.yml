@@ -149,7 +149,7 @@ jobs:
       - name: Run PR-Agent
         id: pr_agent
         if: ${{ steps.revision.outputs.head != '' }}
-        uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
+        uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: &pr_agent_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # OpenCode Go gateway. The endpoint and headers are host-only in
@@ -348,7 +348,7 @@ jobs:
       - name: Retry PR-Agent
         id: pr_agent_retry
         if: ${{ steps.validation.outputs.retry == 'true' }}
-        uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
+        uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: *pr_agent_env
 
       - name: Validate refreshed PR-Agent review

@@ -193,6 +193,30 @@ test('unpinned workflow action is rejected', () => {
   }
 });
 
+test('Docker workflow images are pinned by a full sha256 digest', () => {
+  const root = fixture();
+  const image = 'docker://corp.example/review-tool';
+  const digest = 'a'.repeat(64);
+  const checkout = /actions\/checkout@\w+/u;
+  try {
+    const pinned = `"${image}@sha256:${digest}" # release image`;
+    write(root, '.github/workflows/check.yml', WORKFLOW.replace(checkout, pinned));
+    assert.deepEqual(checkRepo(root).errors, []);
+
+    for (const reference of [
+      `${image}:latest`,
+      `${image}@sha256:${digest.slice(0, 63)}`,
+      `${image}@${digest.slice(0, 40)}`,
+    ]) {
+      write(root, '.github/workflows/check.yml', WORKFLOW.replace(checkout, reference));
+      const { errors } = checkRepo(root);
+      assert.ok(errors.some((error) => error.includes('not pinned to a full sha256 digest')), reference);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const quote of ['', "'", '"']) {
   test(`workflow SHA validation handles comments with ${quote || 'no'} quotes`, () => {
     const root = fixture();
