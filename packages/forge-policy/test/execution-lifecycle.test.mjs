@@ -153,3 +153,75 @@ test('a call that was never admitted cannot be executed by stealing another call
 
 // The source of these lifecycle cases is a read-only independent reproduction
 // against actual supported-floor DSH components, not a claim about target rc.3.
+
+/**
+ * `executeAction` 的独立入口（Gitee/DevOps 工具直接调它）：放行与落地之间还有窗口，
+ * 取消、身份切换、参数改写发生在窗口里都不能让写入落地。评审 P1 的回归位。
+ */
+function windowHost({ onBegin } = {}) {
+  const services = new Map(), listeners = new Map(), guards = [];
+  const view = { signedIn: true, principal: { subject: 'svc-policy-test' } };
+  services.set('iam', { getView: () => view });
+  const ctx = {
+    get: (key) => services.get(key),
+    provide: (key, value) => (services.set(key, value), () => services.delete(key)),
+    effect: (callback) => callback(),
+    on: (event, listener) => (listeners.set(event, listener), () => listeners.delete(event)),
+    tools: { guard: (callback) => (guards.push(callback), () => guards.splice(guards.indexOf(callback), 1)) },
+  };
+  const dispose = apply(ctx, {
+    catalog: [{ action: 'gitee.issue.write', target: 'issue', category: 'dev-write' }],
+    tools: { synthetic: 'gitee.issue.write' },
+  });
+  const policy = services.get('policy');
+  if (typeof onBegin === 'function') {
+    policy.setAuditSink({ durable: true, append(record) {
+      if (record.phase === 'begin') onBegin({ view, record });
+    } });
+  }
+  return { policy, ctx, dispose, view, listeners };
+}
+
+const EXECUTE_COPY = /等待期间|已取消|已卸载/u;
+
+test('executeAction refuses a call whose identity changed between admission and execution', async () => {
+  let seen;
+  const h = windowHost({ onBegin: ({ view }) => { view.signedIn = false; } });
+  const exec = { name: 'synthetic', arguments: { target: 'repo-A' }, callId: 'flip', agent: { kind: 'agent' }, signal: new AbortController().signal };
+  let runs = 0;
+  const result = await h.policy.executeAction(h.ctx, 'gitee.issue.write', exec, async () => { runs += 1; return { kind: 'ok' }; });
+  seen = result;
+  assert.equal(runs, 0, '身份在等待窗口里失效后不得执行');
+  assert.equal(seen.kind, 'error');
+  assert.match(seen.text, /身份发生变化/u);
+  assert.equal(h.policy.auditGaps().length, 0);
+  h.dispose();
+});
+
+test('executeAction refuses a call whose arguments were rewritten during admission', async () => {
+  const h = windowHost();
+  const exec = { name: 'synthetic', arguments: { target: 'repo-A' }, callId: 'rewrite', agent: { kind: 'agent' }, signal: new AbortController().signal };
+  h.policy.setAuditSink({ durable: true, append(record) {
+    if (record.phase === 'begin') exec.arguments.target = 'repo-B';
+  } });
+  let runs = 0;
+  const result = await h.policy.executeAction(h.ctx, 'gitee.issue.write', exec, async () => { runs += 1; return { kind: 'ok' }; });
+  assert.equal(runs, 0, '参数在等待窗口里被改写后不得执行');
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /参数发生变化/u);
+  h.dispose();
+});
+
+test('executeAction refuses a call that was cancelled while it waited', async () => {
+  const h = windowHost();
+  const controller = new AbortController();
+  const exec = { name: 'synthetic', arguments: { target: 'repo-A' }, callId: 'cancel', agent: { kind: 'agent' }, signal: controller.signal };
+  controller.abort();
+  let runs = 0;
+  const result = await h.policy.executeAction(h.ctx, 'gitee.issue.write', exec, async () => { runs += 1; return { kind: 'ok' }; });
+  assert.equal(runs, 0, '取消后不得执行');
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, EXECUTE_COPY);
+  assert.equal(h.policy.auditGaps().length, 0);
+  h.dispose();
+});

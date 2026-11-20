@@ -30,7 +30,7 @@ import {
   publishReview,
   writeToolDefinitions,
 } from '../src/gitee-actions.mjs';
-import { CONFIRM_REQUIRED_ACTIONS, GUARD_REASONS, createGiteeGuard } from '../src/gitee-guard.mjs';
+import { CONFIRM_REQUIRED_ACTIONS, GITEE_AUDIT_SUBJECT, GUARD_REASONS, createGiteeGuard } from '../src/gitee-guard.mjs';
 import { createGiteeSession } from '../src/gitee-session.mjs';
 import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
 import { evaluateProcessRules } from '@heluo/forge-policy/process-rules';
@@ -1095,4 +1095,43 @@ test('审查正文按 review 字段交给内容闸与流程规则', async () => 
   const seen = harness.seen.at(-1);
   assert.equal(typeof seen.exec.content.review, 'string');
   assert.match(seen.exec.content.review, /通过/u);
+});
+
+// 评审 P1 的跨包契约位：策略包的审计记录用 provider 自证当 `subject`（`gitee`），
+// IAM 身份单独放 `actor`。若谁把 `subject` 写回身份，写成功也会被判 provider mismatch。
+// 这里直接打门禁的审计核对那一环：证据是否齐全由 AC-16 的工具层用例覆盖。
+function auditPolicy(records) {
+  return {
+    decide: () => ({ action: 'allow', rule: 'registered-action' }),
+    async executeAction(ctx, action, exec, operation) {
+      return operation();
+    },
+    auditRecords: () => records,
+  };
+}
+
+test('审计记录的 subject 是 provider 自证，写成功不会被判 mismatch', async () => {
+  const request = (records) => ({
+    action: 'gitee.issue.write',
+    target: 'acme/repo',
+    tool: 'forge_gitee_issue_write',
+    confirm: { repo: 'acme/repo', object: 'acme/repo' },
+    payload: { arguments: { repo: 'acme/repo', title: 't', body: 'b' }, run: async () => ({ written: true }) },
+  });
+  const clean = createGiteeGuard({
+    policy: auditPolicy([{ phase: 'begin', action: 'gitee.issue.write', subject: GITEE_AUDIT_SUBJECT, actor: 'svc-policy-test' }]),
+    now: () => CLOCK,
+  });
+  const ok = await clean.execute(request());
+  assert.equal(ok.status, 'done');
+  assert.equal(ok.audit.subject, GITEE_AUDIT_SUBJECT);
+
+  const polluted = createGiteeGuard({
+    policy: auditPolicy([{ phase: 'begin', action: 'gitee.issue.write', subject: 'svc-policy-test' }]),
+    now: () => CLOCK,
+  });
+  const bad = await polluted.execute(request());
+  assert.equal(bad.status, 'failed', '身份混写进 subject 必须被识别为证据链不可信');
+  assert.equal(bad.reason, GUARD_REASONS.AUDIT_PROVIDER_MISMATCH);
+  assert.equal(bad.mayHaveSideEffect, true);
 });

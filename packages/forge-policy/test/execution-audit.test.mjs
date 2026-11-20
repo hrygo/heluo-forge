@@ -153,3 +153,67 @@ test('structured command arguments are normalized once and parser errors are red
   assert.equal(runs, 1);
   h.dispose();
 });
+
+/**
+ * `subject` 是 provider 自证（Gitee guard 要求 `gitee`，见 `gitee-guard.mjs` 的
+ * `GITEE_AUDIT_SUBJECT`），IAM 身份在 `actor`。两者混写会让"写成功"被 Gitee 判成
+ * `GITEE_AUDIT_PROVIDER_MISMATCH`。评审 P1 的回归位。
+ */
+function namedHost(toolName) {
+  const services = new Map(), listeners = new Map(), guards = [];
+  services.set('iam', { getView: () => ({ signedIn: true, principal: { subject: 'svc-policy-test' } }) });
+  const ctx = {
+    get: (key) => services.get(key),
+    provide: (key, value) => (services.set(key, value), () => services.delete(key)),
+    effect: (callback) => callback(),
+    on: (event, listener) => (listeners.set(event, listener), () => listeners.delete(event)),
+    tools: { guard: (callback) => (guards.push(callback), () => guards.splice(guards.indexOf(callback), 1)) },
+  };
+  const dispose = apply(ctx, { catalog: [write], tools: { [toolName]: write.action } });
+  return { policy: services.get('policy'), listeners, dispose };
+}
+
+test('the audit record carries the provider as subject and the IAM identity as actor', async () => {
+  const h = namedHost('forge_gitee_issue_write');
+  const exec = { ...execution({ target: 'repo-A' }), name: 'forge_gitee_issue_write', callId: 'gitee-1' };
+  assert.equal((await h.listeners.get('tools/pre-execute')(exec, allow)).kind, 'allow');
+  const [record] = h.policy.auditRecords();
+  assert.equal(record.subject, 'gitee', 'Gitee guard 只认 gitee 这个自证值');
+  assert.equal(record.actor, 'svc-policy-test', 'IAM 身份单独记录，不被 subject 覆盖');
+  assert.notEqual(record.subject, record.actor);
+  h.dispose();
+});
+
+test('a devops call declares its own provider and never claims gitee', async () => {
+  const h = namedHost('forge_devops_change_update');
+  const exec = { ...execution({ target: 'CHG-1' }), name: 'forge_devops_change_update', callId: 'devops-1' };
+  assert.equal((await h.listeners.get('tools/pre-execute')(exec, allow)).kind, 'allow');
+  const [record] = h.policy.auditRecords();
+  assert.equal(record.subject, 'devops');
+  assert.equal(record.actor, 'svc-policy-test');
+  h.dispose();
+});
+
+test('the audited digest covers the body, not just the arguments', async () => {
+  const h = host();
+  const pre = h.listeners.get('tools/pre-execute');
+  const first = { ...execution({ target: 'repo-A' }), callId: 'body-1', content: { title: 'title', body: 'first body' } };
+  const second = { ...execution({ target: 'repo-A' }), callId: 'body-2', content: { title: 'title', body: 'second body' } };
+  const same = { ...execution({ target: 'repo-A' }), callId: 'body-3', content: { title: 'title', body: 'first body' } };
+  for (const exec of [first, second, same]) assert.equal((await pre(exec, allow)).kind, 'allow');
+  const digests = h.policy.auditRecords().filter((record) => record.phase === 'begin').map((record) => record.contentDigest);
+  assert.equal(digests.length, 3);
+  assert.notEqual(digests[0], digests[1], '同参数不同正文必须得到不同摘要');
+  assert.equal(digests[0], digests[2], '同参数同正文得到同一摘要');
+  assert.match(digests[0], /^[0-9a-f]{64}$/u);
+  h.dispose();
+});
+
+test('a body supplied by a function is resolved before the digest is written', async () => {
+  const h = host();
+  const exec = { ...execution({ target: 'repo-A' }), callId: 'fn-1', content: async () => ({ body: 'lazy body' }) };
+  assert.equal((await h.listeners.get('tools/pre-execute')(exec, allow)).kind, 'allow');
+  const [record] = h.policy.auditRecords();
+  assert.match(record.contentDigest, /^[0-9a-f]{64}$/u);
+  h.dispose();
+});

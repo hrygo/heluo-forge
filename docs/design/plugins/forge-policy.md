@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.17.1 |
+| 版本 | V0.17.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-18 |
+| 最后更新 | 2026-11-20 |
 | 门禁 | G2 |
 | 模块状态 | 可用（门禁骨架；实现与验证见设计索引 §2.2） |
 
@@ -89,15 +89,17 @@
 
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
-| `policy.audit.sink` | `none` \| `memory` | `none` | 是 | 必要审计落点；`memory` 为非持久开发落点，需 `allowNonDurable`；未配置即关闭受门禁动作 |
-| `policy.audit.timeoutMs` | number | 2000 | 是 | 前置/补记写入超时；超时按不可写处理 |
-| `policy.protectedPaths` | string[] | `$DSH_HOME/**`（`$DSH_HOME` 缺席时回落 `~/.dsh`） | 是 | 供显式 `checkPath` 查询；模板未解析即拒绝挂载，当前不自动拦截动作 |
+| `policy.audit.sink` | `memory` \| `file` | `memory` | 是 | 审计落点；`memory` 为环形缓冲（`buffer` 条），`file` 按天轮转写入 `$DSH_HOME/logs/forge-policy-<date>.jsonl` 并按 `keepDays` 清理 |
+| `policy.audit.buffer` | number | 1000 | `sink: memory` 时必填 | 环形缓冲容量 |
+| `policy.audit.keepDays` | number | 7 | `sink: file` 时必填 | 文件审计舱按天保留天数 |
+| `policy.audit.timeoutMs` | number | 2000 | 是 | 前置/补记写入超时；超时按不可写处理并中止本次调用 |
+| `policy.protectedPaths` | string[] | 无（固定 `$DSH_HOME/**`，`$DSH_HOME` 缺席时回落 `~/.dsh`） | 否 | 不再可配置：受保护根固定为默认值，自定义值在装载期拒绝，避免"配了却不生效" |
 | `policy.observation.export.enabled` | boolean | `false` | 否 | 过程观察导出开关；**默认关闭**，启用但缺少宿主发送方（`observationSink`）或未登记枚举时停在 `no-provider` / `unregistered-enums`，一次也不发 |
 | `policy.observation.export.idempotentProvider` | boolean | `false` | 否 | 摄取方是否保证按 `event_id` 幂等；**true 才允许**响应未知时有限重送 |
 | `policy.observation.enums` | object | 空 | 启用导出时必填 | 已登记枚举（`status`/`action` 至少各一项）；本仓库不发明枚举取值 |
 | `policy.audit.requireDurable` | boolean | `false` | 否 | 是否要求持久审计落点；组织策略可强制为 `true`，本机不能改回 `false` |
 
-现行装配不读取 `confirmPaths`、全局 `egress`、`egressAllowlist`、`commandPatterns` 或 `auditSink` 这些旧配置键；配置它们不能建立相应保护。外发规则由动作类别与内容规则判定，不再由目录的 `egress` 字段单独决定。当前 `audit.sink` 仅支持 `none` 和非持久 `memory`，生产持久落点尚待设计与验证。
+未接入判定链路的配置面一律在装载期拒绝，报错带键路径并列出全部问题，不静默忽略：`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content` 当前都属此列（取值等于默认值时视为未设置，宿主 loader 回灌的规范化配置因此可以原样通过）。旧配置键 `confirmPaths`、全局 `egress`、`egressAllowlist`、`commandPatterns`、`auditSink` 既不被读取也报未知键；配置它们不能建立相应保护。判定链路、文件审计舱与规则开关的现行实现见[实施计划 CORP-DSH-PLAN-024](../../plans/2026-11-19-policy-minimal-gates.md)与包内 [README](../../../packages/forge-policy/README.md)。
 
 内容规则、动作上限与流程规则开关不来自本文件配置：内置集随包编译，组织层来自包内 `policy/` 数据目录的签名信封（§5.1.4），本机层只能收紧，不能放宽。
 

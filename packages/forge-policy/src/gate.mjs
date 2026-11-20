@@ -34,8 +34,49 @@ function targetOf(exec) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
 }
 
-function digestOf(exec) {
+/**
+ * 参数摘要只覆盖工具名与 arguments，用于放行后的"参数有没有被改写"复验——
+ * 这一步必须同步，正文通道（`exec.content`）可能是异步函数，不能塞进来。
+ */
+function staticDigestOf(exec) {
   return digestContent({ name: exec?.name ?? null, arguments: exec?.arguments ?? null });
+}
+
+/**
+ * 正文摘要额外覆盖 `exec.content`：Gitee 与 DevOps 把写出去的正文放在这条私有通道上，
+ * 只散列 arguments 会让"同目标、同参数、不同正文"的两次写在审计里长得一模一样。
+ * 函数形式的正文在这里解析一次；解析失败用占位符，避免因为读不到正文就放行无记录。
+ */
+function digestInput(exec, content) {
+  return {
+    name: exec?.name ?? null,
+    arguments: exec?.arguments ?? null,
+    ...(content === undefined ? {} : { content }),
+  };
+}
+
+/** 正文是普通对象时同步算：放行路径上多余的 await 会改变宿主看到的时序。 */
+function contentDigestOf(exec) {
+  if (typeof exec?.content !== 'function') return digestContent(digestInput(exec, exec?.content));
+  return (async () => {
+    try {
+      return digestContent(digestInput(exec, await exec.content()));
+    } catch {
+      return digestContent(digestInput(exec, '[content-unavailable]'));
+    }
+  })();
+}
+
+/**
+ * `subject` 是 provider 自证（Gitee guard 要求 `gitee`），与 IAM `actor` 是两个字段。
+ * 从工具名前缀推断来源，推断不出来就不写，交给消费方按"没自证"处理。
+ */
+function subjectOf(toolName, action) {
+  const name = typeof toolName === 'string' ? toolName : '';
+  if (name.startsWith('forge_gitee_')) return 'gitee';
+  if (name.startsWith('forge_devops_')) return 'devops';
+  if (typeof action === 'string' && action.startsWith('gitee.')) return 'gitee';
+  return undefined;
 }
 
 // `params` 只写调用摘要：正文/评论/补丁等业务内容既不落审计，也不进日志。
@@ -116,6 +157,9 @@ export function createGate({
   async function settle(entry, outcome) {
     if (entry.settled) return;
     entry.settled = true;
+    // 结清即释放：`admitted` 只用来在放行与结清之间挡住同一个 callId 的并发重放，
+    // 留着已结清的条目会把执行对象（含正文）一直强引用到插件卸载。
+    if (entry.exec?.callId !== undefined) admitted.delete(String(entry.exec.callId));
     const promise = audit.settle(entry.receipt, { decision: outcome.decision, rule: outcome.rule ?? entry.decision?.rule, ...outcome.extra });
     pendingSettlements.add(promise);
     try {
@@ -154,11 +198,15 @@ export function createGate({
     if (actor === undefined) {
       return deny(IDENTITY_COPY(action));
     }
-    const digest = digestOf(exec);
+    const digest = staticDigestOf(exec);
+    const contentDigest = typeof exec?.content === 'function'
+      ? await contentDigestOf(exec)
+      : contentDigestOf(exec);
+    const subject = subjectOf(exec?.name, action);
     let receipt;
     try {
       receipt = await audit.begin({
-        subject: actor,
+        ...(subject === undefined ? {} : { subject }),
         actor,
         action,
         target,
@@ -170,7 +218,7 @@ export function createGate({
         agent: { kind: agentKindOf(exec) },
         summary: `受控写 ${action}（目标 ${target ?? '(未提供)'}）`,
         params: summarizeArguments(exec?.arguments ?? {}),
-        contentDigest: digest,
+        contentDigest,
       });
     } catch (error) {
       if (error?.code === 'POLICY_AUDIT_GAP_OUTSTANDING') return deny(AUDIT_OUTSTANDING_COPY);
@@ -181,7 +229,7 @@ export function createGate({
       action,
       target,
       actor,
-      digest,
+      staticDigest: digest,
       decision,
       receipt,
       startedAt: receipt.startedAt,
@@ -222,14 +270,27 @@ export function createGate({
     if (downstream !== undefined && downstream?.kind !== 'allow') {
       return cancel(entry, downstream?.reason ?? 'a downstream stage refused the call', 'downstream-refused');
     }
-    if (disposed) return cancel(entry, 'the policy gate was unloaded before the call started');
-    if (exec?.signal?.aborted === true) return cancel(entry, 'the call was cancelled after it was admitted');
-    if (digestOf(exec) !== entry.digest) return cancel(entry, 'the arguments changed before the call started');
-    const current = normalizeActor(await getActor?.(ctx));
-    if (typeof getActor === 'function' && current !== entry.actor) {
-      return cancel(entry, 'the IAM identity changed after the call was admitted');
-    }
+    const changedReason = await recheck(entry, exec, ctx);
+    if (changedReason !== undefined) return cancel(entry, changedReason.reason);
     return Object.freeze({ kind: 'allow' });
+  }
+
+  /**
+   * 放行之后、执行之前的最终复验：卸载、取消、参数改写、身份切换，任何一项变化都不能
+   * 让这次写入落地。`tools/pre-execute` 与 `executeAction` 共用这一份判定，避免两条入口
+   * 各自维护、慢慢走样。
+   */
+  async function recheck(entry, exec, ctx) {
+    if (disposed) return { reason: 'the policy gate was unloaded before the call started', rule: 'unloaded' };
+    if (exec?.signal?.aborted === true) return { reason: 'the call was cancelled after it was admitted', rule: 'cancelled' };
+    if (staticDigestOf(exec) !== entry.staticDigest) {
+      return { reason: 'the arguments changed before the call started', rule: 'arguments-changed' };
+    }
+    if (typeof getActor === 'function') {
+      const current = normalizeActor(await getActor(ctx));
+      if (current !== entry.actor) return { reason: 'the IAM identity changed after the call was admitted', rule: 'identity-changed' };
+    }
+    return undefined;
   }
 
   function guard(ctxOrExec, maybeExec) {
@@ -249,7 +310,7 @@ export function createGate({
     }
     if (pendingSettlements.size > 0) return 'a previous settlement is still pending; the call is refused';
     if (exec?.signal?.aborted === true) return 'the call was cancelled after it was admitted';
-    if (digestOf(exec) !== entry.digest) return 'the arguments changed after the call was admitted';
+    if (staticDigestOf(exec) !== entry.staticDigest) return 'the arguments changed after the call was admitted';
     if (typeof getActor === 'function' && normalizeActor(getActor(undefined)) !== entry.actor) {
       return 'the IAM identity changed after the call was admitted';
     }
@@ -264,6 +325,15 @@ export function createGate({
     await settle(entry, { decision: failed ? 'error' : 'executed' });
   }
 
+  /** `recheck` 的拒绝文案：说清"没有执行"，也不把内部规则名抛给用户。 */
+  function executeDenyCopy(action, rule) {
+    if (rule === 'cancelled') return `受控写「${action}」已取消：调用在排队等待期间被取消，本次未执行。`;
+    if (rule === 'identity-changed') return `受控写「${action}」未执行：等待期间登录身份发生变化，请重新发起该动作。`;
+    if (rule === 'arguments-changed') return `受控写「${action}」未执行：等待期间参数发生变化，请重新发起该动作。`;
+    if (rule === 'unloaded') return `受控写「${action}」未执行：策略插件已卸载，本次未执行。`;
+    return `受控写「${action}」未执行：放行后状态发生变化。`;
+  }
+
   async function executeAction(ctx, action, exec, operation) {
     if (typeof operation !== 'function') {
       return { kind: 'error', text: '受控写缺少执行体，已拒绝执行。' };
@@ -274,6 +344,11 @@ export function createGate({
     const admission = await admit(ctx, record, action);
     if (admission.kind !== 'allow') return { kind: 'error', text: admission.reason };
     const entry = approved.get(record);
+    const changedReason = await recheck(entry, record, ctx);
+    if (changedReason !== undefined) {
+      await settle(entry, { decision: 'cancelled', rule: changedReason.rule });
+      return { kind: 'error', text: executeDenyCopy(action, changedReason.rule) };
+    }
     entry.used = true;
     let result;
     try {
@@ -314,5 +389,7 @@ export function createGate({
     executeAction,
     dispose,
     now: clock,
+    /** 诊断用：还在"已放行、未结清"之间的执行数（结清后必须归零，否则执行对象被长期持有）。 */
+    pendingAdmissions: () => admitted.size,
   });
 }

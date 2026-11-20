@@ -156,6 +156,53 @@ function checkObservation(issues, observation) {
   }
 }
 
+/**
+ * 装载期拒绝"配置了但这一阶段不参与判定"的面（D33/D34 的 fail-closed 延伸）。
+ *
+ * 这几个键在 P0 只解析、不进判定链路：`categories` 与 `paths.append` 全无消费方，
+ * `protectedPaths` 只喂给服务上的 `checkPath`（没有任何规则调用它），`confirmation`
+ * 与 `content` 属于 P2/P3。允许写入等于对外宣称"这样配就生效"，而运行期会静默放行，
+ * 所以在这一层直接拒绝——要放开某面，先把它接进 `buildPipeline` 与 `createGate`。
+ */
+/**
+ * 未接入判定链路的配置面在装载期拒绝，避免"配了却静默不生效"。
+ *
+ * 取默认值等同于没有设置：宿主 loader 会把 `Config` 的规范化结果再交给插件一次，
+ * 那份结果里带着默认值，必须原样通过，否则正常装载也会被判非法。
+ */
+function checkUnwiredSurfaces(issues, input) {
+  if (isPlainObject(input.categories) && Object.keys(input.categories).length > 0 && !sameAsDefault(input.categories, DEFAULTS.categories)) {
+    issues.push('categories: not implemented in this phase; setting it would be silently ignored');
+  }
+  if (input.protectedPaths !== undefined) {
+    issues.push('protectedPaths: not implemented in this phase; setting it would be silently ignored');
+  }
+  if (Array.isArray(input.paths?.append) && input.paths.append.length > 0) {
+    issues.push('paths.append: not implemented in this phase; setting it would be silently ignored');
+  }
+  if (isPlainObject(input.confirmation) && Object.keys(input.confirmation).length > 0 && !sameAsDefault(input.confirmation, DEFAULTS.confirmation)) {
+    issues.push('confirmation: not implemented in this phase; setting it would be silently ignored');
+  }
+  if (isPlainObject(input.content) && Object.keys(input.content).length > 0 && !sameAsDefault(input.content, DEFAULTS.content)) {
+    issues.push('content: not implemented in this phase; setting it would be silently ignored');
+  }
+}
+
+/** 结构相等的默认值判定；只用于纯 JSON 面（数字/字符串/数组/普通对象）。 */
+function sameAsDefault(value, fallback) {
+  if (value === fallback) return true;
+  if (Array.isArray(value) || Array.isArray(fallback)) {
+    if (!Array.isArray(value) || !Array.isArray(fallback) || value.length !== fallback.length) return false;
+    return value.every((item, index) => sameAsDefault(item, fallback[index]));
+  }
+  if (isPlainObject(value) && isPlainObject(fallback)) {
+    const keys = Object.keys(value);
+    if (keys.length !== Object.keys(fallback).length) return false;
+    return keys.every((key) => Object.hasOwn(fallback, key) && sameAsDefault(value[key], fallback[key]));
+  }
+  return false;
+}
+
 function checkMappings(issues, label, mapping) {
   if (mapping === undefined) return;
   if (!isPlainObject(mapping)) {
@@ -198,18 +245,10 @@ export function validateConfig(input = {}) {
   checkAudit(issues, input.audit);
   checkObservation(issues, input.observation);
   checkMappings(issues, 'tools', input.tools);
-  checkMappings(issues, 'categories', input.categories);
+  checkUnwiredSurfaces(issues, input);
 
   if (input.onDecision !== undefined && typeof input.onDecision !== 'function') {
     issues.push('onDecision: must be a function');
-  }
-  if (input.protectedPaths !== undefined) {
-    if (!Array.isArray(input.protectedPaths)) issues.push('protectedPaths: must be an array of protected roots');
-    else {
-      input.protectedPaths.forEach((value, index) => {
-        if (typeof value !== 'string' || value.trim() === '') issues.push(`protectedPaths[${index}]: must be a non-empty string`);
-      });
-    }
   }
   if (input.env !== undefined && !isPlainObject(input.env)) {
     issues.push('env: must be an object when provided');
@@ -221,16 +260,16 @@ export function validateConfig(input = {}) {
     value: {
       catalog: input.catalog ?? [],
       rules: Object.freeze({ ...DEFAULT_RULES, ...(input.rules ?? {}) }),
-      confirmation: Object.freeze({ ...DEFAULTS.confirmation, ...(input.confirmation ?? {}) }),
-      content: Object.freeze({ ...DEFAULTS.content, ...(input.content ?? {}) }),
-      paths: Object.freeze({ append: Object.freeze([...(input.paths?.append ?? [])]) }),
+      // 未接入判定链路的四层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
+      confirmation: DEFAULTS.confirmation,
+      content: DEFAULTS.content,
+      paths: DEFAULTS.paths,
       audit: Object.freeze({ ...DEFAULTS.audit, ...(input.audit ?? {}) }),
       tools: input.tools ?? {},
-      categories: input.categories ?? {},
+      categories: DEFAULTS.categories,
       observation: input.observation ?? {},
       env: input.env,
       onDecision: input.onDecision,
-      protectedPaths: input.protectedPaths,
     },
   };
 }

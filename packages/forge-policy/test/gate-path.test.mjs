@@ -49,3 +49,16 @@ test('开启路径规则时挂载被拒绝，并指出具体配置键', () => {
     (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.protectPaths/u.test(error.message),
   );
 });
+
+test('结清后不再持有执行对象：pendingAdmissions 回到 0', async () => {
+  // 评审 P2：`admitted` 只该在"已放行、未结清"之间挡住同一个 callId，
+  // 结清后仍留着会把执行对象（含正文）一直强引用到插件卸载。
+  const gate = gateWith();
+  const exec = writeExec();
+  const pre = await gate.preExecute({}, exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(pre.kind, 'allow');
+  assert.equal(gate.pendingAdmissions(), 1, '放行后到结清前必须被追踪');
+
+  await gate.postExecute(exec, { isError: false });
+  assert.equal(gate.pendingAdmissions(), 0, '结清后必须释放');
+});

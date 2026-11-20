@@ -65,27 +65,57 @@ test('validation reports every problem at once with key paths', () => {
   assert.match(joined, /audit\.sink/u);
   assert.match(joined, /audit\.buffer/u);
   assert.match(joined, /tools\.forge\.issue/u);
-  assert.match(joined, /categories\.bash/u);
+  assert.match(joined, /categories: not implemented/u);
   assert.match(joined, /onDecision/u);
-  assert.match(joined, /protectedPaths\[1\]/u);
+  assert.match(joined, /protectedPaths: not implemented/u);
 });
 
-test('unknown top-level keys are rejected; the kept config surfaces are accepted', () => {
+test('unknown top-level keys are rejected', () => {
   const { issues } = validateConfig({ approvals: [], enforce: true, sandbox: 'off' });
   assert.deepEqual(issues, [
     'approvals: unknown config key',
     'enforce: unknown config key',
     'sandbox: unknown config key',
   ]);
+});
+
+test('the wired config surfaces are accepted', () => {
   const kept = validateConfig({
     tools: {},
-    categories: {},
     observation: {},
     env: { DSH_HOME: '/tmp/x' },
     onDecision() {},
-    protectedPaths: ['$DSH_HOME/**'],
+    audit: { sink: 'file', buffer: 10, keepDays: 1, timeoutMs: 100 },
   });
-  assert.equal(kept.issues, undefined, 'the legacy config surfaces stay accepted');
+  assert.equal(kept.issues, undefined);
+});
+
+test('a surface that is not wired into the decision path is refused at load time', () => {
+  const cases = [
+    ['categories', { categories: { bash: 'shell.execute' } }],
+    ['protectedPaths', { protectedPaths: ['$DSH_HOME/**'] }],
+    ['paths.append', { paths: { append: ['$DSH_HOME/secrets/**'] } }],
+    ['confirmation', { confirmation: { timeoutMs: 5_000 } }],
+    ['content', { content: { maxBytes: 1_024 } }],
+  ];
+  for (const [label, input] of cases) {
+    const { issues } = validateConfig(input);
+    assert.equal(issues.length, 1, `${label} is refused on its own`);
+    assert.match(issues[0], /not implemented in this phase/u);
+    assert.match(issues[0], new RegExp(label.replace('.', '\\.'), 'u'), `${label} is named`);
+    assert.throws(
+      () => resolveConfig(input),
+      (error) => error.code === 'POLICY_CONFIG_INVALID',
+      `${label} cannot resolve`,
+    );
+  }
+  // 空值等同于没配：默认层保持原样，插件照常装配。
+  assert.equal(validateConfig({ categories: {}, paths: { append: [] } }).issues, undefined);
+  const defaults = resolveConfig({});
+  assert.deepEqual(defaults.paths, { append: [] });
+  assert.deepEqual(defaults.categories, {});
+  assert.deepEqual(defaults.confirmation, { timeoutMs: 120_000 });
+  assert.deepEqual(defaults.content, { maxBytes: 262_144 });
 });
 
 test('any switch that is not implemented refuses to resolve, naming the key', () => {

@@ -169,9 +169,9 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   }
 
   const env = { ...defaultTemplateValues(), ...process.env, ...(config.env ?? {}) };
-  // 路径设置已暂停用（protectPaths 未实现），但仍作为受控配置面保留并解析：
-  // 默认 9 类受保护根与旧版一致，变更只影响展示，不参与判定。
-  const protectedRoots = resolveProtectedRoots(config.protectedPaths ?? DEFAULT_PROTECTED_PATHS, env);
+  // 受保护路径在 P0 不参与判定（protectPaths 未实现），这里只解出默认根供服务上的
+  // `checkPath` 查询用；配置层的 `protectedPaths` 与 `paths.append` 已在装载期拒绝。
+  const protectedRoots = resolveProtectedRoots(DEFAULT_PROTECTED_PATHS, env);
   const memorySink = config.audit.sink === 'memory' ? createMemorySink({ buffer: config.audit.buffer }) : undefined;
   const fileSink = config.audit.sink === 'file'
     ? createFileSink({ dir: join(env.DSH_HOME, 'logs'), keepDays: config.audit.keepDays })
