@@ -44,6 +44,7 @@ export const IMPLEMENTED_RULES = Object.freeze([
   'contentGate',
   'confirmPush',
   'confirmDopWrite',
+  'enforceProcessRules',
 ]);
 
 /** 逐次确认的默认等待时间：120 秒。超时即拒绝，不再补问。 */

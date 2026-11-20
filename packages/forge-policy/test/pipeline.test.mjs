@@ -29,7 +29,6 @@ test('an unimplemented switch never generates a stage (closed rules stay closed)
     { denyUnknownAction: true },
     { denyHumanRecord: true },
     { protectPaths: true },
-    { enforceProcessRules: true },
   ]) {
     assert.deepEqual(buildPipeline(rules).map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
     assert.deepEqual(activeRules(rules), []);

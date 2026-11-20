@@ -29,11 +29,12 @@ export const CONFIRM_LABELS = Object.freeze({
 /** 原因类别：卡片标题与审计 summary 的唯一真源。 */
 export const CONFIRM_REASONS = Object.freeze({
   action: REASON_LABELS.action.zh,
+  process: REASON_LABELS.process.zh,
   content: REASON_LABELS.content.zh,
 });
 
-/** 原因顺序固定：动作确认在前、内容风险在后（P2 接入内容闸时沿用）。 */
-const REASON_ORDER = Object.freeze(['action', 'content']);
+/** 原因顺序固定：动作确认 → 流程条件 → 内容风险，客户端按这个顺序分步。 */
+const REASON_ORDER = Object.freeze(['action', 'process', 'content']);
 
 const OPTION_DESCRIPTIONS = Object.freeze({
   allow: '只放行这一次调用',

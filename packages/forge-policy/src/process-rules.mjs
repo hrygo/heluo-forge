@@ -4,16 +4,32 @@
  * 事实源（dop 变更状态、计划状态）不可用时跳过相关规则、标记 `unevaluated`
  * 并继续；分支名与调用参数恒可用，不适用该降级。保护分支与强制推送因此始终
  * 可判定。
+ *
+ * 每条规则声明它作用于哪些动作（`actions`）：流程语义只在对应的写动作上成立，
+ * 例如验收小节只对建 PR 有意义，拿去判推送只会产生噪声拒绝。
  */
 
 export const PROCESS_RULES = Object.freeze({
-  'change-in-progress': Object.freeze({ severity: 'hard', needs: 'change' }),
-  'plan-confirmed': Object.freeze({ severity: 'hard', needs: 'plan' }),
-  'push-protected-branch': Object.freeze({ severity: 'hard', needs: 'arguments' }),
-  'push-force': Object.freeze({ severity: 'hard', needs: 'arguments' }),
-  'pr-acceptance-section': Object.freeze({ severity: 'soft', needs: 'arguments' }),
-  'review-ai-source': Object.freeze({ severity: 'hard', needs: 'arguments' }),
+  'change-in-progress': Object.freeze({ severity: 'hard', needs: 'change', actions: Object.freeze(['*']) }),
+  'plan-confirmed': Object.freeze({ severity: 'hard', needs: 'plan', actions: Object.freeze(['*']) }),
+  'push-protected-branch': Object.freeze({ severity: 'hard', needs: 'arguments', actions: Object.freeze(['gitee.git.push']) }),
+  'push-force': Object.freeze({ severity: 'hard', needs: 'arguments', actions: Object.freeze(['gitee.git.push']) }),
+  'pr-acceptance-section': Object.freeze({ severity: 'soft', needs: 'arguments', actions: Object.freeze(['gitee.pr.write']) }),
+  'review-ai-source': Object.freeze({ severity: 'hard', needs: 'arguments', actions: Object.freeze(['gitee.pr.write']) }),
 });
+
+/**
+ * 已接入判定链路的规则：只靠调用参数即可判定，不需要外部事实源。
+ *
+ * 其余两条（`change-in-progress`、`plan-confirmed`）要读 dop 变更状态与计划状态，
+ * 事实源未接入前不参与判定——宁可少判一条，也不让"查不到"变成"一律拒绝"。
+ */
+export const WIRED_PROCESS_RULES = Object.freeze([
+  'push-protected-branch',
+  'push-force',
+  'pr-acceptance-section',
+  'review-ai-source',
+]);
 
 /** 保护分支的内置名单：本地分支名恒可用，因此不因事实源不可用而降级。 */
 export const PROTECTED_BRANCHES = Object.freeze([/^main$/u, /^master$/u, /^release\/.+/u]);
@@ -36,10 +52,10 @@ function reason(rule, text) {
 }
 
 /**
- * @param {{rules: readonly string[], facts?: object, severities?: Record<string, 'hard'|'soft'>}} input
+ * @param {{rules: readonly string[], facts?: object, severities?: Record<string, 'hard'|'soft'>, action?: string}} input
  * @returns {{deny: object[], confirm: object[], unevaluated: object[]}}
  */
-export function evaluateProcessRules({ rules = [], facts = {}, severities = {} } = {}) {
+export function evaluateProcessRules({ rules = [], facts = {}, severities = {}, action } = {}) {
   const deny = [];
   const confirm = [];
   const unevaluated = [];
@@ -52,6 +68,10 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {} }
     const definition = PROCESS_RULES[rule];
     if (definition === undefined) {
       throw new PolicyProcessError(`unknown process rule "${rule}"`, 'POLICY_PROCESS_RULE_UNKNOWN', { rule });
+    }
+    // 规则只在它声明的动作上生效：流程语义不适用于其它写动作，硬套只会误伤。
+    if (action !== undefined && !definition.actions.includes('*') && !definition.actions.includes(action)) {
+      continue;
     }
     const severity = severities[rule] ?? definition.severity;
     switch (rule) {
@@ -117,6 +137,9 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {} }
         break;
       }
       case 'review-ai-source': {
+        // 只看评论式评审：PR 正文不是评审；`forge_gitee_review_publish` 自己追加
+        // `> AI 生成：… PR 版本：…` 页脚，模型不必也不该重复声明。
+        if (state.op !== 'comment') break;
         const body = typeof state.reviewBody === 'string' ? state.reviewBody : '';
         if (!AI_SOURCE.test(body)) {
           deny.push(reason(rule, 'the review does not state that it was produced with AI assistance'));
@@ -155,7 +178,11 @@ export function factsFromArguments(args = {}) {
   if (typeof args.branch === 'string') facts.branch = args.branch;
   else if (typeof args.ref === 'string' && !args.ref.includes(':')) facts.branch = args.ref;
   if (args.force === true) facts.force = true;
-  if (typeof args.body === 'string') facts.prBody = args.body;
+  if (typeof args.body === 'string') {
+    facts.prBody = args.body;
+    // 评论式评审的正文与 PR 正文同走 `body`：是不是评审由 `op` 决定。
+    if (args.op === 'comment') facts.reviewBody = args.body;
+  }
   if (typeof args.review === 'string') facts.reviewBody = args.review;
   else if (typeof args.comment === 'string') facts.reviewBody = args.comment;
   return facts;
