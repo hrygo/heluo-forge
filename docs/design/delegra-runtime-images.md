@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.1.2 |
+| 版本 | V1.1.3 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -16,7 +16,7 @@
 | 最后更新 | 2026-11-20 |
 | 确认人 | 项目负责人（当前用户） |
 | 确认日期 | 2026-11-20 |
-| 确认事项 | Delegra 组装和调度专家。镜像默认包含 Codex，构建、验收与交付统一使用 `linux/arm64`。镜像配方归属 Heluo Forge 仓库。镜像方案覆盖受监管机构开发、测试、运维和办公，按 DRY 与 SOLID 复用公共层，在保全 Agent 与 Codex 必需能力的前提下压缩体积。首版使用发起用户的授权，允许把 DSH IAM 获取的网关连接交给本次任务的 Harness 使用。接入 AIGS 后按用户与 Agent 两种身份的权限交集执行。 |
+| 确认事项 | Delegra 组装和调度专家。所有镜像包含 Codex 和 Python，构建、验收与交付统一使用 `linux/arm64`。镜像配方归属 Heluo Forge 仓库。镜像方案覆盖受监管机构开发、测试、运维和办公，按 DRY 与 SOLID 复用公共层，在保全 Agent 与 Codex 必需能力的前提下压缩体积。首版使用发起用户的授权，允许把 DSH IAM 获取的网关连接交给本次任务的 Harness 使用。接入 AIGS 后按用户与 Agent 两种身份的权限交集执行。 |
 | 适用范围 | 专家组成、`linux/arm64` 镜像、首版 DSH 用户凭据与 AIGS 双主体授权。 |
 | 门禁 | 按 §3、§8 分别验收本地 ARM64 制品与目标 Runner。企业凭据接入须满足 §4、§6.4 的授权、契约与实测判据。 |
 
@@ -108,7 +108,7 @@ sequenceDiagram
 
 首轮由 `codex-min` 和 `codex-java-21` 验证公共层、派生和真实 Runner。标准目录与按需目标依次扩展。镜像优先级、14 份 Dockerfile 的继承、安装内容和 18 个构建目标的验收以[构建规格](#9-镜像与-dockerfile-构建规格)为准。任务可调用的外部动作由专家工具集合、当次授权和实际服务权限决定。
 
-公共层只装配一次 Codex、Runner 和常用工作区工具。场景镜像继承同一运行约定，添加所需工具与直接依赖。下载、编译及缓存留在构建阶段，最终层保留完整运行资产。裁剪后按 §9.2.3 复验文件、Git、Shell、Codex stdio 会话和退出，比较冷拉压缩量、启动及首个 turn 耗时。 [镜像构建原则](#92-镜像构建原则)
+公共层装配 Codex、Runner、Node、Python 和常用工作区工具。所有发布目标和对照目标沿用相同的 Python 运行约定。场景镜像继承同一运行约定，添加所需工具与直接依赖。下载、编译及缓存留在构建阶段，最终层保留完整运行资产。裁剪后按 §9.2.3 复验文件、Git、Shell、Codex stdio 会话和退出，比较冷拉压缩量、启动及首个 turn 耗时。 [镜像构建原则](#92-镜像构建原则)
 
 所有镜像仅构建和交付 `linux/arm64`。构建与启动验收均在原生 ARM64 环境执行。`r2` Native 参考组合使用 Codex `0.160.0` 及 GNU libc 2.39 或更新版本。基础镜像引用摘要，锁定 Codex 与工具链的 ARM64 制品版本和校验值。镜像发布至目标 Runner 获准访问的制品源，发布记录保存摘要、平台、构建输入、工具链、软件物料清单、构建来源证明、适用 Runner 与验收结果。探针配方用于复现共享层和工具链，部署配方还须覆盖目标 Runner 的启动及会话协议。 [本机镜像与模拟网关探针](../engineering/spikes/2026-11-20-delegra-runtime-images/README.md) · [Paperclip Runner 平台要求](https://docs.paperclip.ing/reference/adapters/paperclip-runner/)
 
@@ -293,7 +293,7 @@ AIGS 双标识令牌可承载同一授权语义。采用 OAuth 令牌交换时�
 #### 9.2.2 保留能力并控制体积
 
 1. Rust 编译、下载、验签、归档解包和工具安装缓存留在构建阶段。最终层只复制固定版 Runner、Codex 的完整运行资产以及直接依赖，保留许可、Codex 配套资源、动态库、证书和实际沙箱所需的文件。 [Docker 多阶段构建](https://docs.docker.com/build/building/multi-stage/) · [BuildKit 缓存优化](https://docs.docker.com/build/cache/optimize/)
-2. 公共层用已验证签名的 Debian 13 快照固定包集。最小公共能力覆盖 `bash`、`ca-certificates`、`coreutils`、`diffutils`、`findutils`、`gawk`、`git`、`grep`、`procps`、`ripgrep`、`sed`、`tar`、`tini`、`util-linux`，保留底座自带的 POSIX Shell 与必要系统库。APT 在同层更新并以 `--no-install-recommends` 安装，签名索引与包缓存留在 BuildKit 缓存或清理。只在对应场景引入 JDK、浏览器、字体和数据库客户端。 [Docker 构建最佳实践](https://docs.docker.com/build/building/best-practices/)
+2. 公共层用已验证签名的 Debian 13 快照固定包集。最小公共能力覆盖 `bash`、`ca-certificates`、`coreutils`、`diffutils`、`findutils`、`gawk`、`git`、`grep`、`procps`、`ripgrep`、`sed`、`tar`、`tini`、`util-linux`，保留底座自带的 POSIX Shell 与必要系统库。公共包集通过 `python3`、`python3-venv` 提供 Python `3.13.5`、标准库与虚拟环境，`python` 指向同一解释器。任务可在工作区创建含 pip 的 venv，按项目锁文件安装依赖。APT 在同层更新并以 `--no-install-recommends` 安装，签名索引与包缓存留在 BuildKit 缓存或清理。只在对应场景引入 JDK、浏览器、字体和数据库客户端。 [Docker 构建最佳实践](https://docs.docker.com/build/building/best-practices/)
 3. 参考镜像用固定 Node 24 slim 和完整 ARM64 npm 包安装 Codex `0.160.0`。原生候选用固定 ARM64 Debian slim 和完整 `codex-package-aarch64-unknown-linux-musl.tar.zst`，从同一 Node 24 运行底座复制 Node 可执行文件并核对直接运行依赖。在两条路径均保留 Runner 正常入口的 Node，按 Codex 包形态及场景需要保留 npm。两条底座创建或沿用 `1000:1000` 的非 root 账户，默认 `HOME` 指向镜像账号的主目录、`WORKDIR /workspace`、`tini` 透传入口。场景层构建需要提权时以 `USER 0` 完成安装，再恢复 `USER 1000:1000`，运行时将工作区和缓存分配给该用户。 [Codex 0.160.0 官方发行](https://github.com/openai/codex/releases/tag/rust-v0.160.0)
 4. `--load` 验功能，本地 OCI 导出测压缩层。每次对一个目标用同一 Bake 文件及压缩设置覆写输出，例如下列命令。读取 ARM64 manifest 的 `layers[].size` 之和，按 layer digest 去重计算相对父层增量。用相同存储配置记录本地大小，区分冷拉、启动及首个 turn 耗时。选择通过相同公共验收、场景样例和真实 Runner 验收后压缩拉取量较小的候选。 [Docker OCI 导出](https://docs.docker.com/build/exporters/oci-docker/)
 
@@ -313,6 +313,7 @@ docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --allow "fs.w
 | --- | --- |
 | 默认即可工作 | 以非 root 用户 `1000:1000` 和可写 `/workspace` 启动，`HOME`、`CODEX_HOME`、临时目录及可写工具缓存由当前运行分配。CLI 路径直接在 `PATH` 可解析，`tini` 透传命令参数。对两次同专家运行核对各自的工作区和会话状态。 |
 | 常用任务操作 | 在无需 TTY 的环境使用 `sh`、`bash`、`git`、`rg`、`find`、`grep`、`sed`、`awk`、`diff` 和 `tar`。用 UTF-8 文件名创建、查找及修改合成文件，核对 Git 差异与归档内容。工具的安装目录对任务用户只读。 |
+| Python 正常操作 | 普通用户从命令行运行相同版本的 `python` 与 `python3`。核对 AArch64 ELF，在断网工作区创建 venv 并运行标准库与环境内的 pip。 |
 | Codex 正常操作 | 从镜像默认入口通过标准输入输出连接固定版 `codex app-server`，单独核对 `codex exec --help`。验证 `initialize`、`initialized` 和 EOF 后退出。然后在目标 Runner 上运行合成 `/responses` 会话，实际完成一次 Shell 操作和工作区文件编辑，核对工具调用事件、差异、退出状态及取消后的子进程回收。 |
 | 能力可发现 | 发布记录列明镜像场景、命令名、可用版本和适用 Runner，由 Delegra 在组装并派发时提供给 Harness。Codex 从真实任务工作区读取项目 `AGENTS.md`，会话和用户授权由当前任务提供。 |
 
@@ -345,7 +346,7 @@ docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --allow "fs.w
 
 | Dockerfile → Bake 目标 | 在 `FROM expert_base` 的最终阶段添加 | 完成判据 |
 | --- | --- | --- |
-| `Dockerfile.python` → `codex-python` | `RUN` 从 Debian 13 锁定源安装 `python3.13`、`python3.13-venv`，从固定原生 ARM64 `ghcr.io/astral-sh/uv` 工具阶段 `COPY` `uv` 至 `/usr/local/bin/uv`。项目依赖进任务自己的 `.venv`。 | 创建 venv，核对 `python`、`pip` 和 `uv`，运行处理合成 CSV 的 Python 样例与单元测试。 |
+| `Dockerfile.python` → `codex-python` | 继承公共层的 Python 与 venv，从固定原生 ARM64 `ghcr.io/astral-sh/uv` 工具阶段 `COPY` `uv` 至 `/usr/local/bin/uv`。项目依赖进任务自己的 `.venv`。 | 用固定版 `uv` 断网创建虚拟环境，核对解释器版本并执行合成 CSV 的单元测试。 |
 | `Dockerfile.node` → `codex-node` | 继承公共层的锁定 Node 24；从同一 Node 工具阶段取得 npm，与公共运行时版本一致。`COPY tooling/node/package.json` 与同目录 `package-lock.json`，`RUN npm ci` 安装固定版 `pnpm` 和 `typescript` 至 `/opt/expert-tools/node`，`ENV PATH` 包含对应 `.bin`。 | 验证 Node 和工具版本，`tsc` 编译小型 TypeScript 程序，运行产物并核对输出。 |
 | `Dockerfile.go` → `codex-go` | 工具阶段取官方 `go1.27.4.linux-arm64.tar.gz`，按发布方 SHA-256 `3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92` 校验后解压。最终阶段 `COPY` Go 到 `/usr/local/go`，设置 `PATH` 和 `GOTOOLCHAIN=local`。项目需要 CGo 时按其依赖核验构建工具。 | `go env GOOS GOARCH` 返回 `linux`、`arm64`，断开外网运行无依赖样例的 `go test`。 |
 | `Dockerfile.dotnet` → `codex-dotnet-10` | 工具阶段 `FROM mcr.microsoft.com/dotnet/sdk:10.0-noble` 的 ARM64 摘要 `sha256:299dd5c45103c1fb44ea9d1fd1b149ca056786da47afb84438140411892eec46`。从中 `COPY /usr/share/dotnet`，核对底座并补齐 Debian 13 的 `libc6`、`libgcc-s1`、`libgssapi-krb5-2`、`libicu76`、`libssl3t64`、`libstdc++6`、`ca-certificates`、`tzdata`，设置 `DOTNET_ROOT`、`PATH` 和 `DOTNET_CLI_TELEMETRY_OPTOUT=1`。 | `dotnet --info` 核对 ARM64 和 .NET 10 SDK，清空样例的外部 NuGet 源，构建并运行 `net10.0` 控制台样例。 |
@@ -386,7 +387,7 @@ Java 项目复用相应 JDK 镜像执行项目自带的测试，Python 项目可
 | 构建输入 | 锁定位置与验收 |
 | --- | --- |
 | 公共 Debian 依赖 | `debian.sources` 锁定原生 ARM64 签名快照与信任根。记录快照标识、发布索引摘要和所安装包及版本。所有派生层使用同一快照时只维护一份来源。 |
-| Java、Python、Go、.NET | 在 Bake 为每个目标记录基础或工具链镜像摘要、归档版本、SHA-256 与选择的架构。Python 的 uv 跟随工具镜像摘要，venv 和项目依赖按项目锁文件。 |
+| Java、Python、Go、.NET | 在 Bake 为每个目标记录基础或工具链镜像摘要、归档版本、SHA-256 与选择的架构。Python 解释器与 venv 由公共 Debian 快照固定，uv 由工具镜像摘要固定，项目依赖由任务锁文件固定。 |
 | Node、接口和浏览器 | 各工具目录的 npm 锁文件固定闭包。浏览器额外锁定 Playwright 对应的 Chromium 版本、ARM64 归档、校验值及系统依赖。 |
 | 容量测试与平台工具 | Bake 固定 k6、kubectl、Helm、OpenTofu 的 ARM64 归档及 SHA-256。kubectl 的版本差与 Helm 兼容性按目标集群核定。 |
 | SQL 和办公 | 在允许的 Debian 快照锁定客户端、LibreOffice、CJK 字体和 PDF 工具，按目标系统核验直接依赖、认证方式或样张。 |

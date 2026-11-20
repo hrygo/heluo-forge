@@ -20,11 +20,9 @@ case "$target" in
         mvn --version | grep -F "Java version: $jvm_version."
         ;;
     codex-python)
-        python --version | grep -E '^Python 3\.13\.'
         uv --version | grep -F 'uv 0.11.25'
-        uv venv --offline --no-python-downloads --python /usr/bin/python3.13 .uv-venv
-        python -m venv .venv
-        .venv/bin/python -m pip --version
+        uv venv --offline --no-python-downloads --python "$(command -v python3)" .uv-venv
+        test "$(.uv-venv/bin/python --version)" = "$(python3 --version)"
         printf 'name,amount\n研发,23\n测试,19\n' > input.csv
         .uv-venv/bin/python - <<'PY'
 import csv

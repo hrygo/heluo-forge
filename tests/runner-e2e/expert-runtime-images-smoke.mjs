@@ -11,6 +11,7 @@ const common = readFileSync(new URL('./fixtures/expert-runtime/common.sh', impor
 const capabilities = JSON.parse(readFileSync(new URL(
   '../../deploy/delegra-expert-images/capabilities.json', import.meta.url,
 ), 'utf8'))
+const commonCommand = ['sh', '-eu', '-s', '--', capabilities.python]
 const dockerOptions = ['--pull=never', '--platform=linux/arm64', '--network=none']
 const procTimeout = 120_000
 
@@ -115,7 +116,7 @@ async function smoke(image) {
   const target = targetFor(image)
   const config = checkPlatform(image)
   const commands = [...capabilities.common, ...capabilities.scenes[target]]
-  assert.match(succeeded(run(image, ['sh', '-eu', '-s', '--', ...commands], { input: common })), /COMMON_OK/)
+  assert.match(succeeded(run(image, [...commonCommand, ...commands], { input: common })), /COMMON_OK/)
   assert.match(succeeded(run(image, ['codex', 'exec', '--help'])), /Usage:/)
   assert.equal(run(image, ['sh', '-c', 'exit 37']).status, 37, 'tini forwards the exit status')
   await appServer(image)
@@ -134,7 +135,7 @@ async function smoke(image) {
 
 async function negative(image) {
   const config = checkPlatform(image)
-  const withoutTools = run(image, ['env', 'PATH=/usr/bin:/bin', 'sh', '-eu', '-s', '--', 'node'], { input: common })
+  const withoutTools = run(image, ['env', 'PATH=/usr/bin:/bin', ...commonCommand, 'node'], { input: common })
   assert.notEqual(withoutTools.status, 0, 'missing tool must fail')
   assert.match(withoutTools.stderr, /missing required tool: node/)
   await assert.rejects(

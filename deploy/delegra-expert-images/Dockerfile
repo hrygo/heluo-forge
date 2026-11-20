@@ -63,7 +63,7 @@ COPY debian.sources /etc/apt/sources.list.d/debian.sources
 RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
         bash ca-certificates coreutils diffutils findutils gawk git grep libstdc++6 \
-        procps ripgrep sed tar tini util-linux \
+        procps python3 python3-venv ripgrep sed tar tini util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/home
@@ -81,12 +81,14 @@ RUN --mount=type=bind,from=node_toolchain,source=/usr/local/bin/node,target=/tmp
 COPY --from=runner-build /out/paperclip-runnerd /usr/local/bin/paperclip-runnerd
 COPY --from=runner-source /source/LICENSE /usr/share/doc/paperclip-runnerd/LICENSE
 COPY --from=codex-assets /out/ /opt/expert-codex/
-RUN ln -s /opt/expert-codex/bin/codex /usr/local/bin/codex
+RUN ln -s /opt/expert-codex/bin/codex /usr/local/bin/codex \
+    && ln -s /usr/bin/python3 /usr/local/bin/python
 
 USER 1000:1000
 WORKDIR /workspace
 RUN test "$(node --version)" = v24.21.0 \
     && test "$(codex --version)" = 'codex-cli 0.160.0' \
+    && python -c 'import venv' \
     && paperclip-runnerd --build-metadata >/dev/null
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["codex", "--help"]

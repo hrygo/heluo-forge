@@ -66,6 +66,7 @@ test('release records require the complete matrix and the source commit', () => 
   const complete = receipt();
   const record = collectRelease([complete], release);
   assert.equal(record.platform, 'linux/arm64');
+  assert.equal(record.python, capabilities.python);
   assert.equal(record.images.length, 18);
   assert(record.images.every((image) => image.name === ghcr + '/' + image.target));
   const { images } = complete;

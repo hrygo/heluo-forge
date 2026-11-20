@@ -73,7 +73,8 @@ export function collectRelease(receipts, { version, commit, ghcr }) {
   }
   assert.equal(images.size, scenes.length, 'Incomplete release matrix');
   return {
-    version, commit, platform: capabilities.platform, codex: capabilities.codex, runner: capabilities.runner,
+    version, commit, platform: capabilities.platform,
+    codex: capabilities.codex, python: capabilities.python, runner: capabilities.runner,
     images: scenes.map((target) => images.get(target)),
   };
 }

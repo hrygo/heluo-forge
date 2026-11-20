@@ -1,8 +1,9 @@
 {
   "platform": "linux/arm64",
   "codex": "0.160.0",
+  "python": "3.13.5",
   "runner": "25c86a283a9c787a01911c714618d78df7552af7",
-  "common": ["paperclip-runnerd", "codex", "node", "tini", "bash", "sh", "git", "rg"],
+  "common": ["paperclip-runnerd", "codex", "node", "python", "python3", "tini", "bash", "sh", "git", "rg"],
   "scenes": {
     "codex-min": [],
     "codex-java-8": ["java", "javac", "mvn"],
@@ -10,7 +11,7 @@
     "codex-java-17": ["java", "javac", "mvn"],
     "codex-java-21": ["java", "javac", "mvn"],
     "codex-java-25": ["java", "javac", "mvn"],
-    "codex-python": ["python", "uv"],
+    "codex-python": ["uv"],
     "codex-node": ["npm", "pnpm", "tsc"],
     "codex-go": ["go"],
     "codex-sql": ["psql", "mysql", "sqlite3"],

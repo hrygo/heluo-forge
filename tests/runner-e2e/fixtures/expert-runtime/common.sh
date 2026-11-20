@@ -1,4 +1,6 @@
 set -eu
+python_version=$1
+shift
 test "$(uname -m)" = aarch64
 test "$(id -u):$(id -g)" = 1000:1000
 test "$PWD" = /workspace
@@ -8,6 +10,9 @@ test ! -w /usr/local/bin && test ! -w /opt/expert-codex
 for tool in "$@" find grep sed awk diff tar; do
     command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 1; }
 done
+test "$(python --version)" = "Python $python_version"
+test "$(python3 --version)" = "Python $python_version"
+test "$(readlink -f "$(command -v python)")" = "$(readlink -f "$(command -v python3)")"
 test "$(node --version)" = v24.21.0
 test "$(codex --version)" = 'codex-cli 0.160.0'
 
@@ -30,11 +35,14 @@ for (const path of process.argv.slice(1)) {
   assert.equal(hdr[5], 1, "little-endian ELF " + path)
   assert.equal(hdr.readUInt16LE(18), 183, "AArch64 ELF " + path)
 }
-' "$(command -v node)" "$(command -v paperclip-runnerd)" "$codex_elf"
+' "$(command -v node)" "$(command -v python3)" "$(command -v paperclip-runnerd)" "$codex_elf"
 
 workspace=$(mktemp -d /workspace/smoke.XXXXXXXX)
 trap 'rm -rf "$workspace"' EXIT
 cd "$workspace"
+python -m venv .venv
+.venv/bin/python -c 'import csv, sys; assert sys.prefix != sys.base_prefix'
+.venv/bin/python -m pip --version >/dev/null
 git init -q
 printf '%s\n' 'before 样例' > 河洛.txt
 git add 河洛.txt
