@@ -49,7 +49,7 @@ DSH Host 保存当前实例与组织下的个人偏好。每个会话按当前�
 
 ### 2.2 责任边界
 
-Delegra 持有专家目录、权限、接单状态和任务生命周期。插件负责当前员工的目录体验、个人启停和 DSH 选择交互。个人设置作用于后续选择和新委派。已受理任务继续按 Delegra 的任务规则处理。专家配置、工具权限及 Harness 运行环境由 Delegra 管理。[专家接入方案 §4](../../plans/2026-11-18-forge-experts-integration-proposal.md#4-delegra-权限隔离与数据)
+Delegra 持有专家目录、权限、接单状态和任务生命周期。插件负责当前员工的目录体验、个人启停和 DSH 选择交互。个人设置作用于后续选择和新委派。已受理任务继续按 Delegra 的任务规则处理。专家配置、工具权限及 Harness 运行环境由 Delegra 管理。 [专家接入方案 §4](../../plans/2026-11-18-forge-experts-integration-proposal.md#4-delegra-权限隔离与数据) · [运行时镜像设计](../delegra-runtime-images.md)
 
 专家目录使用已核验的员工授权契约，取证由 [#244](https://github.com/hrygo/heluo-forge/issues/244) 跟踪。范围裁决及接入恢复归 [#243](https://github.com/hrygo/heluo-forge/issues/243)。可信提交与草稿恢复归 [#245](https://github.com/hrygo/heluo-forge/issues/245)。各阶段遵循 §5 的开放条件。 [需求基线 §2](../../requirements/requirements-baseline.md#2-范围边界唯一真源) · [分阶段验收](../../plans/2026-11-18-forge-experts-integration-proposal.md#6-恢复后的阶段与验收)
 
