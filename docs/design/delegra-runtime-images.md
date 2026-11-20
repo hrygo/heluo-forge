@@ -6,7 +6,7 @@
 | --- | --- |
 | 文档编号 | CORP-DSH-DESIGN-022 |
 | 文档名称 | Delegra 专家智能体运行时镜像设计 |
-| 版本 | V1.2.1 |
+| 版本 | V1.2.2 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 作者 | hrygo |
@@ -246,7 +246,7 @@ Delegra 的 `docker/expert-runtime/` 维护参考镜像、Debian 快照及工具
 - [x] 实现 §9.1 的 17 个发布目标及 13 份 Dockerfile。按真实项目所需版本和场景分批启用。每批先固定目标工具版本、ARM64 归档及校验值、包来源和运行依赖，样例有明确入口、固定预期和退出结果。
 - [x] 五个 JDK 复用 `Dockerfile.java`。其他配方、父层、工具链锁及样例由 Delegra 镜像目录维护，各场景按 §9.3 的运行判据验证。 [Delegra 镜像源目录](https://github.com/hrygo/Delegra/tree/deploy/docker/expert-runtime)
 - [x] 在原生 ARM64 节点用 `buildx bake --print` 核对发布目标，以统一冒烟入口运行各场景样例。验证 Chromium 沙箱、办公 CJK 字体及三类格式导出，记录本地镜像摘要、体积增量、冒烟耗时和失败条件。 [本地实测记录](verification/delegra-runtime-images.md)
-- [ ] 在 Delegra 验证原生 ARM64 发布工作流，取得 17 个目标的 GHCR 摘要和可验证的发布回执。浏览器与其他试点场景的真实 Runner 验收在 Heluo Forge 按任务 2 展开。
+- [x] Delegra 的 `expert-images-v1.0.0` 发布通过原生 ARM64 验证，17 个目标的 GHCR 摘要和签名发布回执已核对。 [首版发布验收](verification/delegra-runtime-images.md#首版发布验收)
 - [ ] 通过 §9.4 才登记可用镜像。试点形成冷拉、启动、并发和每任务 Token 用量证据，由负责人据预算与代表性任务决定扩展顺序与规模。公共层更新时重建并复验受影响的发布目标。
 
 计划和契约交付前执行 `pnpm check` 与 `git diff --check`。实测记录保留环境、命令、版本、请求关联、结果与耗时。
