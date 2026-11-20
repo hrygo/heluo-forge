@@ -24,6 +24,7 @@ max_model_tokens = 64000
 ai_timeout = 180
 retry_same_model_on_timeout = false
 # Surface exhausted model attempts even when some chunks produced useful reviews.
+# The workflow runs summary and review separately so one tool cannot block the other.
 propagate_tool_errors = true
 # Project documents and PR discussion are written in Chinese.
 response_language = "zh-CN"
@@ -32,6 +33,7 @@ repo_context_files = ["AGENTS.md"]
 
 [github_action_config]
 # A push refreshes the summary and full review, including merge and bot commits.
+# The workflow selects one of these commands in each action step.
 handle_push_trigger = true
 push_commands = ["/describe", "/review"]
 push_trigger_ignore_bot_commits = false
