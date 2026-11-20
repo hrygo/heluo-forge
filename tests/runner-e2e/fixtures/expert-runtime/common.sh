@@ -45,7 +45,10 @@ for (const path of process.argv.slice(1)) {
 workspace=$(mktemp -d /workspace/smoke.XXXXXXXX)
 trap 'rm -rf "$workspace"' EXIT
 cd "$workspace"
-node /fixtures/loopback.mjs curl -fsS --noproxy 127.0.0.1 '{url}/api' > response.json
+node /fixtures/loopback.mjs sh -eu -c '
+    nc -z -w 2 127.0.0.1 "${1##*:}"
+    exec curl -fsS --noproxy 127.0.0.1 "$1/api"
+' sh '{url}' > response.json
 jq -e '.ok == true' response.json >/dev/null
 python -m venv .venv
 .venv/bin/python -c 'import csv, sys; assert sys.prefix != sys.base_prefix'
@@ -109,4 +112,13 @@ for suffix in bz2 xz zst; do
     tar -xOf "snapshot.tar.$suffix" 河洛.txt > restored.txt
     cmp 河洛.txt restored.txt
 done
+
+test "$(printf 'name\tstatus\napp\tok\n' | column -t)" = "$(printf 'name  status\napp   ok')"
+sqlite3 sample.db 'CREATE TABLE example(n INTEGER); INSERT INTO example VALUES (23), (19);'
+test "$(sqlite3 sample.db 'SELECT SUM(n) FROM example;')" = 42
+
+socket="$workspace/tmux.sock"
+tmux -S "$socket" -f /dev/null new-session -d -s smoke 'exec sleep 30'
+tmux -S "$socket" has-session -t smoke
+tmux -S "$socket" kill-server
 printf '%s\n' COMMON_OK

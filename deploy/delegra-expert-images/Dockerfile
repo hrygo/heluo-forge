@@ -62,9 +62,10 @@ LABEL org.opencontainers.image.title="Heluo Forge Delegra expert runtime" \
 COPY debian.sources /etc/apt/sources.list.d/debian.sources
 RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-        bash bzip2 ca-certificates coreutils curl diffutils file findutils gawk git \
-        grep jq libstdc++6 lsof make patch procps python3 python3-venv ripgrep rsync \
-        sed tar tini tree unzip util-linux xxd xz-utils zip zstd \
+        bash bsdextrautils bzip2 ca-certificates coreutils curl diffutils file findutils \
+        gawk git grep jq libstdc++6 lsof make netcat-openbsd patch procps python3 \
+        python3-venv ripgrep rsync sed sqlite3 tar tini tmux tree unzip util-linux \
+        xxd xz-utils zip zstd \
     && rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/home

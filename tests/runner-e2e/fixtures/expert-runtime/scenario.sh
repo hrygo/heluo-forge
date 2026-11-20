@@ -37,8 +37,6 @@ case "$target" in
         psql --version
         mysql --version
         sqlite3 --version
-        sqlite3 sample.db "CREATE TABLE example(n INTEGER); INSERT INTO example VALUES (23), (19);"
-        test "$(sqlite3 sample.db 'SELECT SUM(n) FROM example;')" = 42
         ;;
     codex-dotnet-10)
         dotnet --info | grep -Ei 'RID:.*linux-arm64'

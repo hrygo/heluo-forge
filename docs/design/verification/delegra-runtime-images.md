@@ -21,12 +21,12 @@
 
 | Bake 目标 | ARM64 manifest digest | 压缩层字节 | 父层增加字节 |
 | --- | --- | ---: | ---: |
-| `codex-min` | `sha256:33b70fdcfe9c97cb2871bc1b4a2cfc78dd507b87f288abb2b94f18ab9c80df7d` | 326625650 | — |
-| `codex-java-21` | `sha256:589c3ebd5b9f9651368bcfa6652740425175821b2be9ae56b332737d538c863b` | 492386274 | 165760624 |
-| `codex-min-native` | `sha256:210696d71b1f6e2b6a2c43c2c920b34d2f0841d39da25bc71b54512e87e7b113` | 319814556 | — |
-| `codex-java-21-native` | `sha256:39892ada95c7c201738a149f11e13c8ee2232262ccd0616b846be2414d8a4889` | 485575201 | 165760645 |
+| `codex-min` | `sha256:dc681084beb456c78c100b591c85fd65e7b09416e1ad14afd736800396e627c4` | 327775796 | — |
+| `codex-java-21` | `sha256:272bd8ade45dc3b9b3e7f7352cf06263f26de401d4e95a2c790e82db9c93a7e5` | 493536392 | 165760596 |
+| `codex-min-native` | `sha256:42c506f136ea15e1b5f68dadc8259ffc074abd46a55d057ff4cf0be059c41742` | 320958999 | — |
+| `codex-java-21-native` | `sha256:245aa0221aabf5afb84dce95be75ef018a94ab5dda36f0a88e1c66e913096bb3` | 486719632 | 165760633 |
 
-公共层通过固定 Debian 快照安装 Python `3.13.5`，`python3.13` 包版本为 `3.13.5-2+deb13u5`，`python3-venv` 包版本为 `3.13.5-1`。公共层装入 `uv` 和 `uvx` 后，npm 版压缩体积在仅含 Python 的同配置基线上增加 17.36 MiB。原生归档版比 npm 版少 6,811,094 字节。JDK 21 为 Temurin `21.0.12.1`。公共层选型按目标 Runner 实际启动验收。 [issue #394](https://github.com/hrygo/heluo-forge/issues/394)
+公共层通过固定 Debian 快照安装 Python `3.13.5`，`python3.13` 包版本为 `3.13.5-2+deb13u5`，`python3-venv` 包版本为 `3.13.5-1`。公共层装入 `uv` 和 `uvx` 后，npm 版压缩体积在仅含 Python 的同配置基线上增加 17.36 MiB。原生归档版比 npm 版少 6,816,797 字节。JDK 21 为 Temurin `21.0.12.1`。公共层选型按目标 Runner 实际启动验收。 [issue #394](https://github.com/hrygo/heluo-forge/issues/394)
 
 公共镜像带 `curl`（Debian `8.14.1-2+deb13u7`）和 `jq`（Debian `1.7.1-6+deb13u4`）。公开轨迹记录两项命令的实际使用。以含 Python 和 uv 的公共镜像为基线，`apt-get -y --no-install-recommends --print-uris --download-only install` 估算含新增依赖的压缩下载量。`curl` 为 623,980 字节，`jq` 为 410,916 字节。两项合装后，npm 版实际 OCI 压缩层净增 1,076,922 字节（1.03 MiB）。 [Agent 调用轨迹表 4](https://junchengyang.com/publication/arxiv/agentWorkload.pdf)
 
@@ -52,37 +52,48 @@
 | `xz-utils` | `5.8.1-1+deb13u2` | 960,936 |
 | `zstd` | `1.5.7+dfsg-1` | 635,036 |
 
-公共冒烟覆盖 OCI 和 ELF 架构、默认 UID/GID、UTF-8 文件、Git、Shell、只读工具目录、`codex exec --help`、`app-server` 初始化、EOF 和 `tini` 退出码。Python 验证覆盖 AArch64 ELF、同一解释器、普通用户断网创建带 pip 的 venv、`uv venv` 和 CSV 单元测试。各镜像以普通用户核对 `uv`、`uvx` 版本及许可证可读性，并用 `curl` 请求回环模拟接口、用 `jq` 断言合成 JSON。通用工程工具的冒烟覆盖 ZIP 和 UTF-8 文件名、MIME 类型、Make 目标及补丁应用后的内容。以同一 UID 验证目录树、ZIP 二进制签名、当前进程打开的文件、本地目录同步及重复同步无变更，并对 `.tar.bz2`、`.tar.xz` 和 `.tar.zst` 作压缩解压往返。在原生归档版公共镜像中，`uv sync --locked --offline` 使用 Python `3.13.5` 创建虚拟环境，锁文件哈希一致。
+公共工具选型以 Pi/P2 公开 macOS 样本的 295,401 条 Shell 调用为频率参考，计数取包含相应命令的调用数。`nc` 的调用证据来自 SWE-chat 表 5 的命令分类。候选体积以 Linux ARM64 npm 版公共镜像为基线，以同一签名快照单独安装各 Debian 包，在 `docker image save` 的 OCI manifest 中核对新增 gzip 层。测量包含新增依赖及安装状态。 [Pi 统计原表](https://raw.githubusercontent.com/earendil-works/psh/main/research/corpus/results.json) · [SWE-chat 表 5](https://openreview.net/pdf/e03684a2d55f5414e50309bd5d4d8826b5be8819.pdf)
 
-缺工具的旧公共镜像分别触发 `missing required tool: uv`、`missing required tool: curl`、`missing required tool: file` 和 `missing required tool: bzip2`。BuildKit 自动创建的许可证目录曾继承文件模式 `0644`，普通用户无法读取其中的文件。构建配方将目录设为 `0755`，普通用户通过构建和冒烟检查。缺工具、stdio 超时及容器清理反例通过，耗时 2.38 秒。Bake 的 AMD64 反例在平台断言处失败，替换 Runner SHA-256 的反例在制品校验处失败。
+| 公共命令 | Debian 快照包和版本 | 样本调用数 | 独装 OCI 增量 KiB |
+| --- | --- | ---: | ---: |
+| `tmux` | `tmux` `3.5a-3` | 1,789 | 932.3 |
+| `sqlite3` | `sqlite3` `3.46.1-7+deb13u2` | 199 | 265.0 |
+| `column` | `bsdextrautils` `2.41.5-0+deb13u1` | 76 | 228.0 |
+| `nc` | `netcat-openbsd` `1.229-1` | SWE-chat 分类记录 | 124.3 |
+
+同一探针测得 `gh` 增量 9.21 MiB，样本调用 8,128 次。`openssh-client` 增量 2.30 MiB。默认 Bash 提供 `time` 关键字，样本的 `time` 计数覆盖 Shell 计时语法。四项入选命令合装后，npm 版实际 OCI 压缩层净增 1,150,146 字节（1.10 MiB），合计 312.59 MiB。
+
+公共冒烟覆盖 OCI 和 ELF 架构、默认 UID/GID、UTF-8 文件、Git、Shell、只读工具目录、`codex exec --help`、`app-server` 初始化、EOF 和 `tini` 退出码。Python 验证覆盖 AArch64 ELF、同一解释器、普通用户断网创建带 pip 的 venv、`uv venv` 和 CSV 单元测试。各镜像以普通用户核对 `uv`、`uvx` 版本及许可证可读性，先用 `nc` 验证回环 TCP 连接，再用 `curl` 请求模拟接口、用 `jq` 断言合成 JSON。通用工程工具的冒烟覆盖 ZIP 和 UTF-8 文件名、MIME 类型、Make 目标及补丁应用后的内容。以同一 UID 验证目录树、ZIP 二进制签名、当前进程打开的文件、本地目录同步及重复同步无变更，并对 `.tar.bz2`、`.tar.xz` 和 `.tar.zst` 作压缩解压往返。无 TTY 时用 `tmux` 建立并清理终端会话，用 `column` 对齐制表符分隔的数据，并用 `sqlite3` 对合成数据库执行查询。在原生归档版公共镜像中，`uv sync --locked --offline` 使用 Python `3.13.5` 创建虚拟环境，锁文件哈希一致。
+
+缺工具的旧公共镜像分别触发 `missing required tool: uv`、`missing required tool: curl`、`missing required tool: file`、`missing required tool: bzip2` 和 `missing required tool: column`。BuildKit 自动创建的许可证目录曾继承文件模式 `0644`，普通用户无法读取其中的文件。构建配方将目录设为 `0755`，普通用户通过构建和冒烟检查。缺工具、stdio 超时及容器清理反例通过，耗时 2.33 秒。Bake 的 AMD64 反例在平台断言处失败，替换 Runner SHA-256 的反例在制品校验处失败。
 
 ## 场景目录
 
 Bake `--print` 核对了 13 份 Dockerfile、17 个发布目标以及独立的两个对照目标的 ARM64 平台和父镜像。各目标使用同一公共冒烟入口，场景使用网络隔离容器内的回环服务和合成输入。
 
-全量构建使用 `docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --load --sbom=true --provenance=mode=min,version=v1 default reference`，耗时 6 分 4.45 秒，加载后逐项核对 Buildx 的 `--metadata-file`。经 `docker image save` 核对 19 个镜像的 SPDX SBOM、SLSA provenance 和父镜像压缩层，耗时 17.76 秒。两类声明均绑定实际 ARM64 manifest。统一冒烟入口分批运行全部 19 个镜像，合计耗时 1 分 10.15 秒。表中体积由各 Linux ARM64 manifest 按层 SHA-256 去重计算，Kubernetes 和 IaC 按运维诊断父层计算增量。
+全量构建使用 `docker buildx bake -f deploy/delegra-expert-images/buildx-bake.hcl --load --sbom=true --provenance=mode=min,version=v1 default reference`，耗时 5 分 28.80 秒，加载后逐项核对 Buildx 的 `--metadata-file`。经 `docker image save` 核对 19 个镜像的 SPDX SBOM、SLSA provenance 和父镜像压缩层，耗时 20.37 秒。两类声明均绑定实际 ARM64 manifest。统一冒烟入口分批运行全部 19 个镜像，合计耗时 1 分 9.31 秒。表中体积由各 Linux ARM64 manifest 按层 SHA-256 去重计算，Kubernetes 和 IaC 按运维诊断父层计算增量。
 
 | 目标 | 场景判据 | image index digest | 压缩 MiB | 父层增量 MiB | 冒烟秒数 |
 | --- | --- | --- | ---: | ---: | ---: |
-| `codex-min` | 公共工具、Python 3.13.5、uv 0.13.9、回环 HTTP 与 JSON、Codex 0.160.0 stdio | `sha256:71749d459f7163279c4aec3db1a57a5a4e84f19ed9bd721db03a7eba62350669` | 311.49 | — | 2.70 |
-| `codex-java-8` | Temurin 1.8.0_504，Java 8 编译与执行 | `sha256:3a2d048b467aa9eaa3a0b0632993357dbc8ebd9ef67c324adadf3991f8353d01` | 372.16 | 60.67 | 2.94 |
-| `codex-java-11` | Temurin 11.0.32.1，指定 release 编译与执行 | `sha256:668f3c5a17e7db96d794e7f717c15792f295079b2cb97b7229ae9c959ad72888` | 456.39 | 144.90 | 2.56 |
-| `codex-java-17` | Temurin 17.0.20.1，指定 release 编译与执行 | `sha256:8b250017489ad9aab4e7d18005345c07658816f87e73e99960f2b3a5d0e2fafd` | 458.37 | 146.87 | 2.76 |
-| `codex-java-21` | Temurin 21.0.12.1，指定 release 编译与执行 | `sha256:a6a2da7f77efb5a5c40a3e285ee7964e7e41cedbfc53ff5373dcc788f28fb782` | 469.58 | 158.08 | 2.95 |
-| `codex-java-25` | Temurin 25.0.4.1，指定 release 编译与执行 | `sha256:0e28b63a1623e4f792dba37ee3172a79a6bb4dbf07a40fab7913b338975513e3` | 407.71 | 96.22 | 2.92 |
-| `codex-node` | Node 24.21.0、pnpm 11.28.5、TypeScript 6.0.3，编译与执行 | `sha256:7dbc69099bb570000d1a83dde97e9879cd1aabd70cdf59336393c9a6da04a0f0` | 321.32 | 9.82 | 3.15 |
-| `codex-go` | Go 1.27.4，断网运行 go test | `sha256:c5230c3e5274e2ef230ed856c64288695d3aba3043a92e1f13a00524ee6e2327` | 376.14 | 64.64 | 12.66 |
-| `codex-sql` | PostgreSQL 客户端 17.12、MariaDB 11.8.6、SQLite 3.46.1，查询结果核对 | `sha256:3bd876b4e026b079d673b0f78cf3ba760f5448018faee38db606c779156a04f0` | 332.01 | 20.51 | 2.30 |
-| `codex-dotnet-10` | .NET SDK 10.0.404，无外部源 restore、编译与执行 | `sha256:f745e12035793b4f3287d013910f281029a010b31fa4791f7ff72bee0890fec9` | 550.69 | 239.19 | 5.83 |
-| `codex-test-api` | Newman 6.2.3，200、404 及 JSON 共 4 项断言和 JUnit 报告 | `sha256:284b6e517332c8811b484ab8ac46a21ca05650569b99b3183f454baed7113297` | 322.88 | 11.38 | 2.95 |
-| `codex-test-web` | Playwright 1.65.1、Chromium 159.0.8154.6，表单、导航和 PNG | `sha256:e3e5d4705624642c1bdc6927b3ec8676bee523eaad6814c3efd4feb54338f552` | 721.70 | 410.20 | 2.74 |
-| `codex-test-load` | k6 2.4.0，单虚拟用户对回环接口测试 | `sha256:142e7d531cd37db211af11266ef20dbccff5f15c0b364ad0d385212622f1bf3f` | 339.43 | 27.94 | 4.45 |
-| `codex-ops-diag` | BIND 9.20.30、回环网卡、证书及进程 | `sha256:878914c5efc6ddd7763b8787fa1eed26fca6e148da1b81fdbf6ad782131ad935` | 316.88 | 5.39 | 2.54 |
-| `codex-ops-k8s` | kubectl 1.37.2、Helm 4.3.2，离线渲染两类清单 | `sha256:9408adcac50b0b67660f34f5240e76e3186302247c52499abc23b034bc7dcb23` | 350.39 | 33.51 | 2.29 |
-| `codex-ops-iac` | OpenTofu 1.13.9，无外部 provider 初始化及校验 | `sha256:b2cf8526e3341cd868a5a63fc968b923885b7ae65fa5cb1c6822a7d555541177` | 346.94 | 30.06 | 2.19 |
-| `codex-office-zh` | LibreOffice 25.2.3.2、Pandoc 3.1.11.1，三种格式导出与中文文本核对 | `sha256:c90a1807d624d8cf64204a2b717435c6292f53da871bfb4acbca7c957c8db8a7` | 600.09 | 288.60 | 3.86 |
+| `codex-min` | 公共工具、Python 3.13.5、uv 0.13.9、回环 HTTP 与 JSON、Codex 0.160.0 stdio | `sha256:a807035c4558eab2559825c57f3d39857d99a92bbd941c70624bddc151b8456c` | 312.59 | — | 1.98 |
+| `codex-java-8` | Temurin 1.8.0_504，Java 8 编译与执行 | `sha256:7677dd1341a12729af1705f64648ff4249d92628352f9c39b4ba289751be22ac` | 373.26 | 60.67 | 2.54 |
+| `codex-java-11` | Temurin 11.0.32.1，指定 release 编译与执行 | `sha256:2b6b4717429695f6a9a1ab57291a88dffde19cd802deb2d02081071b4db31035` | 457.49 | 144.90 | 2.93 |
+| `codex-java-17` | Temurin 17.0.20.1，指定 release 编译与执行 | `sha256:cccab604bf53b9032164ea591cfd0658f93af7a92dc5dd0fc4487eef5e96fa30` | 459.47 | 146.87 | 2.68 |
+| `codex-java-21` | Temurin 21.0.12.1，指定 release 编译与执行 | `sha256:70444dcc8c095509ad9be8215241f9d9a5b7ae442a178f04ef64282c8d5fc2c2` | 470.67 | 158.08 | 2.74 |
+| `codex-java-25` | Temurin 25.0.4.1，指定 release 编译与执行 | `sha256:448ef88779f7be639c02e30120003f1965979370f80a63b9f29cd19d2931dd01` | 408.81 | 96.22 | 2.67 |
+| `codex-node` | Node 24.21.0、pnpm 11.28.5、TypeScript 6.0.3，编译与执行 | `sha256:50adc4c5a5a7d41913ed61190fa60bb296139bfac8a8bd92acabb00f5f01dc31` | 322.42 | 9.82 | 3.19 |
+| `codex-go` | Go 1.27.4，断网运行 go test | `sha256:2fe3705d332ef132bdcc3d59cf23515986ee7e62e0079835dbba9d94a4d1d56a` | 377.24 | 64.64 | 13.00 |
+| `codex-sql` | PostgreSQL 客户端 17.12、MariaDB 客户端 11.8.6 | `sha256:23f515ebc3dbd7e315c52244c6fdc425ecf75f9127dc6b09ab65f8ef611e7b4e` | 332.95 | 20.36 | 2.41 |
+| `codex-dotnet-10` | .NET SDK 10.0.404，无外部源 restore、编译与执行 | `sha256:30de7960eb2b2445f6aace58be15ebb258533885fac15d32432c21899c7dffa7` | 551.79 | 239.20 | 3.68 |
+| `codex-test-api` | Newman 6.2.3，200、404 及 JSON 共 4 项断言和 JUnit 报告 | `sha256:0f57c9413cf4ae98482074614468378ccc948854047d610ba9aa2ce7499f5e7d` | 323.98 | 11.38 | 2.73 |
+| `codex-test-web` | Playwright 1.65.1、Chromium 159.0.8154.6，表单、导航和 PNG | `sha256:c0f0b3e199a1e4855635da8605e1e7cd0379e594583c234a27a7fe6ebecd27a5` | 722.80 | 410.21 | 2.92 |
+| `codex-test-load` | k6 2.4.0，单虚拟用户对回环接口测试 | `sha256:0267c3ebd77a2800ffc866596d605a6c1b7514e4574e0903aad465e09cd2773f` | 340.53 | 27.94 | 4.83 |
+| `codex-ops-diag` | BIND 9.20.30、回环网卡、证书及进程 | `sha256:bd66d18d0bf0a661e52caa66e8496be8d48ea97bdbf4ac058e33074faca84d91` | 317.73 | 5.14 | 3.31 |
+| `codex-ops-k8s` | kubectl 1.37.2、Helm 4.3.2，离线渲染两类清单 | `sha256:85a1e52de228bb7e8d0519f4cc781f4062b7fed4849294eaa4ae79ad106ad41c` | 351.23 | 33.51 | 2.86 |
+| `codex-ops-iac` | OpenTofu 1.13.9，无外部 provider 初始化及校验 | `sha256:d89beda93afebe3c0fa5b1cef2f1211b0bb8da83358905007f92249ba41ea46d` | 347.79 | 30.06 | 2.87 |
+| `codex-office-zh` | LibreOffice 25.2.3.2、Pandoc 3.1.11.1，三种格式导出与中文文本核对 | `sha256:806f9733cec9dc41eb9af3425b82297d8e8f515e1b750d74c6e3e7a9500e72b3` | 601.19 | 288.60 | 6.19 |
 
-`codex-min-native` 的 image index digest 为 `sha256:aa85ecaeb1b6bed770cbe8ede926f2da81dd17243e7c672191d3288af8da2137`，冒烟耗时 2.15 秒。`codex-java-21-native` 的 image index digest 为 `sha256:12ab85caf5be7a54dbb7d462f0231d14b322e10d9c4fc2361d16e6c9e05f7668`，冒烟耗时 5.97 秒。
+`codex-min-native` 的 image index digest 为 `sha256:1bae3c015b36b6ab505dc4b5df8a056065ef31eb3a60e75296b909b05acddcd9`，冒烟耗时 2.09 秒。`codex-java-21-native` 的 image index digest 为 `sha256:413986de13d525bd9b99096af846f12e1468462e87dfa7d30ec818266a7f770b`，冒烟耗时 3.42 秒。
 
 早期参考矩阵的 .NET 构建遇到下载中断，单目标重试使用相同的 MCR ARM64 digest，耗时 12 分 34 秒。中文办公构建耗时 8 分 02 秒。个别下载先使用相同 SHA-256 的暂存制品，最终全量构建使用默认锁定输入。
 
@@ -90,7 +101,7 @@ Bake `--print` 核对了 13 份 Dockerfile、17 个发布目标以及独立的�
 
 办公镜像命中 `Noto Sans CJK SC`。DOCX、XLSX 和 PPTX 各导出一页 PDF，三个输出均可提取 `河洛样例` 与表格数据。
 
-`pnpm check` 耗时 51.86 秒，4538 项通过、3 项跳过、0 失败。版本检查的回归用例同时核对 npm 锁文件误报消除和部署配置里的 DSH 版本硬编码仍被拦截。
+`pnpm check` 耗时 52.11 秒，4538 项通过、3 项跳过、0 失败。版本检查的回归用例同时核对 npm 锁文件误报消除和部署配置里的 DSH 版本硬编码仍被拦截。
 
 ## 待联调
 

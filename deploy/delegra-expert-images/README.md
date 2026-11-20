@@ -1,6 +1,6 @@
 # Delegra 专家运行时镜像
 
-此目录提供 13 份 Dockerfile 和 17 个 Linux ARM64 发布目标。所有镜像共用固定版本的 Codex、`paperclip-runnerd`、Node、Python `3.13.5`、`uv` 与 `uvx` `0.13.9`。通用工具包括 `git`、`rg`、`curl`、`jq`、`file`、`make`、`patch`、`zip`、`unzip`、`tree`、`xxd`、`lsof`、`rsync`、`bzip2`、`xz` 和 `zstd`。Python 任务可直接使用 `codex-min`。`python` 和 `python3` 调用同一解释器，`python -m venv .venv` 创建带 pip 的虚拟环境，`uv sync --locked` 按项目锁文件安装到项目虚拟环境。容器以 `1000:1000` 运行，默认工作区为 `/workspace`。[`capabilities.json`](capabilities.json) 记录各目标提供的命令。
+此目录提供 13 份 Dockerfile 和 17 个 Linux ARM64 发布目标。所有镜像共用固定版本的 Codex、`paperclip-runnerd`、Node、Python `3.13.5`、`uv` 与 `uvx` `0.13.9`。通用工具包括 `git`、`rg`、`curl`、`jq`、`file`、`make`、`patch`、`zip`、`unzip`、`tree`、`xxd`、`lsof`、`rsync`、`bzip2`、`xz`、`zstd`、`tmux`、`sqlite3`、`column` 和 `nc`。Python 任务可直接使用 `codex-min`。`python` 和 `python3` 调用同一解释器，`python -m venv .venv` 创建带 pip 的虚拟环境，`uv sync --locked` 按项目锁文件安装到项目虚拟环境。容器以 `1000:1000` 运行，默认工作区为 `/workspace`。[`capabilities.json`](capabilities.json) 记录各目标提供的命令。
 
 Runner 来源为 Delegra 标签 `deploy/v2026.1106.0-r2` 对应的固定提交。Bake 核对官方源码归档的 SHA-256，Rust 使用该提交的 `Cargo.lock` 构建。Java、uv 和 .NET 工具链使用 ARM64 镜像摘要，npm 工具使用各自的锁文件。Debian 包使用固定日期的快照和 Debian archive keyring 验签。首次取得 CA 证书时，APT 同样按签名索引和包哈希校验下载内容。[运行时镜像设计](../../docs/design/delegra-runtime-images.md) · [本机实测记录](../../docs/design/verification/delegra-runtime-images.md)
 

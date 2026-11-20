@@ -7,7 +7,7 @@
   "common": [
     "paperclip-runnerd", "codex", "node", "python", "python3", "uv", "uvx", "tini",
     "bash", "sh", "git", "rg", "curl", "jq", "file", "make", "patch", "unzip", "zip",
-    "bzip2", "lsof", "rsync", "tree", "xxd", "xz", "zstd"
+    "bzip2", "lsof", "rsync", "tree", "xxd", "xz", "zstd", "column", "nc", "sqlite3", "tmux"
   ],
   "scenes": {
     "codex-min": [],
@@ -18,7 +18,7 @@
     "codex-java-25": ["java", "javac", "mvn"],
     "codex-node": ["npm", "pnpm", "tsc"],
     "codex-go": ["go"],
-    "codex-sql": ["psql", "mysql", "sqlite3"],
+    "codex-sql": ["psql", "mysql"],
     "codex-dotnet-10": ["dotnet"],
     "codex-test-api": ["newman"],
     "codex-test-web": ["playwright"],
