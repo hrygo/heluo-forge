@@ -963,6 +963,8 @@ flowchart TD
 
 目录同步的后台退避只覆盖 `ENTERPRISE_GATEWAY_UNAVAILABLE` 与 `ENTERPRISE_GATEWAY_RATE_LIMIT`；`QUOTA_EXHAUSTED` 与 `CALL_FAILED` 不参与自动重试，避免在额度耗尽或原因未知时反复撞击网关。
 
+目录同步的退避优先采用网关给出的 `Retry-After`（秒数或 HTTP-date，经范围校验），超过 60 秒则不排程、直接把失败留在界面上；未给出或不可解析时按 2 秒、5 秒指数退避。**总计 3 次尝试（首次 + 2 次重试）**。`/models` 请求不产生计费或业务副作用，因此这条重试独立于推理侧：推理在网关已受理后不自动重发，`Retry-After` 仅进入失败诊断。
+
 模型调用的绑定恢复与连接恢复共用一次自动重试预算。绑定变化由 `IAM_GATEWAY_BINDING_CHANGED` 触发，目录重建共享一次进行中的操作，等待上限 5 秒。两类恢复都在重新派发前复核取消状态、授权会话与模型准入。
 
 连接恢复仅接受受控适配器对绑定网关发起的一次原始推理 POST。受控适配器关闭 SDK 自动重试与自动跟随重定向，只有使用 Node 内置 `fetch`、直接提供地址、无逐请求自定义传输且未收到 HTTP 响应的调用可以确认未发送。允许的失败证据包括 `getaddrinfo` 阶段的 `EAI_AGAIN`、`connect` 阶段的 `ECONNREFUSED` 或 `ETIMEDOUT`，以及 Undici 的 `UND_ERR_CONNECT_TIMEOUT`。Node 的多地址连接失败只有在每项均通过上述判据时才可恢复。满足判据时随机等待 200–400 毫秒再尝试，等待期间可取消。[Node 网络连接文档](https://nodejs.org/docs/latest-v24.x/api/net.html)、[Undici 错误说明](https://undici.nodejs.org/api/Errors)、[AWS 退避与抖动实践](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)（核验于 2026-11-18）。

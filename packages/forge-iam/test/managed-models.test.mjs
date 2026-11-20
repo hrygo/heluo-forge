@@ -1551,3 +1551,102 @@ test('the downgrade follows the target model, so switching models tries images a
   assert.equal(attempts.length, 4);
   assert.equal(attempts[3][0].content[0].offloaded, undefined);
 });
+
+test('a catalogue 429 waits as long as Retry-After asks (issue #304)', async t => {
+  const f = fixture({
+    fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': '7' } }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await f.runtime.refresh().catch(() => { });
+  const view = f.runtime.getView();
+  assert.equal(view.state, 'error');
+  // The advertised retry deadline follows the header, not the local backoff.
+  assert.ok(Number.isFinite(view.retryAt));
+  const waitMs = view.retryAt - Date.now();
+  assert.ok(waitMs > 5000 && waitMs <= 7000, `expected ~7s, got ${waitMs}ms`);
+});
+
+test('a Retry-After above the ceiling leaves the failure visible (issue #304)', async t => {
+  const f = fixture({ fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': '120' } }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await f.runtime.refresh().catch(() => { });
+  // Waiting two minutes silently is worse than showing the failure now.
+  assert.equal(f.runtime.getView().retryAt, null);
+});
+
+test('catalogue retries stop after three attempts in total (issue #304)', async t => {
+  let calls = 0;
+  const f = fixture({
+    fetch: async () => {
+      calls += 1;
+      return new Response('down', { status: 503, headers: { 'retry-after': '0' } });
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;   // first attempt already failed
+  await new Promise(resolve => setTimeout(resolve, 150));
+  // initial + at most two retries; a fourth request would mean the ceiling moved.
+  assert.equal(calls, 3, `expected exactly 3 attempts, got ${calls}`);
+});
+
+test('a later Retry-After replaces a pending shorter retry (issue #304)', async t => {
+  let calls = 0;
+  let status = 429;
+  let retryAfter = '2';
+  const f = fixture({
+    fetch: async () => {
+      calls += 1;
+      return new Response('slow down', { status, headers: { 'retry-after': retryAfter } });
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;                       // first failure schedules ~2s
+  const first = f.runtime.getView().retryAt;
+  assert.ok(Number.isFinite(first));
+  retryAfter = '30';
+  await f.runtime.refresh().catch(() => { });  // manual refresh learns 30s
+  const second = f.runtime.getView().retryAt;
+  assert.ok(Number.isFinite(second));
+  // The pending 2s retry must not fire earlier than the latest hint allows.
+  assert.ok(second - Date.now() > 20000, `expected the longer wait, got ${second - Date.now()}ms`);
+  assert.equal(calls, 2);
+});
+
+test('a too-long Retry-After cancels a pending retry instead of firing early (issue #304)', async t => {
+  let retryAfter = '2';
+  const f = fixture({
+    fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': retryAfter } }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;                       // schedules a short retry
+  assert.ok(Number.isFinite(f.runtime.getView().retryAt));
+  retryAfter = '120';
+  await f.runtime.refresh().catch(() => { });  // now the gateway asks for two minutes
+  assert.equal(f.runtime.getView().retryAt, null);
+});
+
+test('a valid but very long Retry-After is not mistaken for "no hint" (issue #304)', async t => {
+  // 86400 seconds parses fine; falling back to the 2s local backoff would hammer
+  // a gateway that explicitly asked for a day.
+  const f = fixture({ fetch: async () => new Response('later', { status: 429, headers: { 'retry-after': '86400' } }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().retryAt, null);
+});
+
+test('the last scheduled retry still honours a newer longer Retry-After (issue #304)', async t => {
+  let retryAfter = '0';
+  const f = fixture({
+    fetch: async () => new Response('slow down', { status: 429, headers: { 'retry-after': retryAfter } }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // Burn the retry budget quickly with zero-second hints.
+  await new Promise(resolve => setTimeout(resolve, 120));
+  retryAfter = '3600';
+  await f.runtime.refresh().catch(() => { });
+  // The pending (last) retry must be cancelled, not fired against the gateway.
+  assert.equal(f.runtime.getView().retryAt, null);
+});

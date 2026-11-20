@@ -33,10 +33,24 @@ function isConnectFailure(error) {
   }
 }
 
-function retryAfterMillis(value) {
+export function retryAfterMillis(value) {
   if (!value) return undefined;
   const millis = /^\d{1,6}$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
   return Number.isInteger(millis) && millis >= 0 && millis <= maxRetryAfterMs ? millis : undefined;
+}
+
+/**
+ * Unbounded form used by callers that decide their own ceiling: a valid but very
+ * long wait must stay distinguishable from "no hint at all", otherwise it would
+ * silently fall back to a short local backoff.
+ */
+export function retryAfterHint(value) {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text) return undefined;
+  const millis = /^\d{1,12}$/u.test(text) ? Number(text) * 1000 : Date.parse(text) - Date.now();
+  if (!Number.isFinite(millis) || millis < 0) return undefined;
+  return Math.round(millis);
 }
 
 export function modelFetchOptions(options, baseURL, resolveIamToken) {
