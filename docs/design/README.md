@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.50.2 |
+| 版本 | V0.50.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 负责 | 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-20 |
+| 最后更新 | 2026-11-21 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -57,6 +57,8 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 专用访问的完整决策比较及验收细化见[评审稿](../architecture/gateway-identity-review.md)，提供方问题见[网关新函](../collaboration/gateway-confirmation-letter.md)与[IAM 原函覆盖评估](../collaboration/iam-confirmation-letter.md#8-本轮需求覆盖评估与补充确认清单平台内部)。
 
 [企业产物发布与分享设计](enterprise-artifact-publishing.md)（CORP-DSH-DESIGN-021）定义通用 HTML 发布、企业 IM 分享、DSH 收件及实施取证。 [金鱼审查证据](../engineering/reviews/enterprise-artifact-publishing-egm.md)
+
+Delegra 侧的专家执行面横跨运行时镜像与 Kubernetes 沙箱，同属跨模块设计：[运行时镜像设计](delegra-runtime-images.md)（CORP-DSH-DESIGN-022）定义 17 个 `linux/arm64` 制品与按摘要选用；[Kubernetes 智能调度设计](delegra-k8s-scheduling.md)（CORP-DSH-DESIGN-024）定义按专家画像路由、干净态单向预热池、受控代理凭据控制点与配额反压，三阶段分别由 `hrygo/Delegra` 的 #72、#73 与 #74、#75 与 #76 承接，本仓库按 [issue #420](https://github.com/hrygo/heluo-forge/issues/420) 跟踪并以 #394、#395、#397 验收。
 
 ### 2.2 实现与验证入口
 
