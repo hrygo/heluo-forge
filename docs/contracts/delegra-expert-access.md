@@ -9,8 +9,8 @@
 | 版本 | V0.1.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
-| 编制 | Agent（代拟） |
-| 负责 | 平台组（代拟） |
+| 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟）；Delegra 维护方会签 |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-22 |
@@ -28,6 +28,8 @@
 - **DSH Host 仅持有个人偏好与短期投影**：Host 通过本契约按需读取目录与范围资格，仅在本机 `storageDomain` 持久保存员工个人启停偏好及 #247 最小请求关联，不得将本地缓存或前端筛选当作授权凭证。
 - **分阶段准入**：第 2–5 节及第 8 节对应目录部分为 `@heluo/forge-experts` 管理包（#246）前置门禁；第 6–7 节及第 8 节对应受理与回查部分为生产 `@` 点选与真实委派（#245、#246、#247）前置门禁。
 
+**路由形态状态**：本文列出的 REST 路径、传输形态与幂等键命名均为**拟议形态**，待 #244 与 Delegra 维护方会签后冻结，不构成当前可实现的既有接口。已被固定版本源码核验的既有表面使用不同的命名与粒度：`GET /api/companies/{companyId}/agents`（目录）、`POST /api/issues/{issueId}/comments` 配合 UUID `clientRequestId`（提交与幂等）、`GET /api/heartbeat-runs/{runId}/events?afterSeq=`（按 run 补读事件）、`POST /api/heartbeat-runs/{runId}/cancel`（取消粒度为 run，而非 task）。实施前必须先冻结版本段与路径族、提交传输形态（REST 直连或经既有 issue 通道）、幂等键命名（`requestId` 或 `clientRequestId`）以及取消与补读的粒度；这些差异已登记在 §9.3 第 1 项。
+
 ## 2. 员工身份与作用域绑定
 
 ### 2.1 专用凭据校验
@@ -37,8 +39,12 @@
 | 校验项 | 服务端强制要求 | 不满足时的行为 |
 | --- | --- | --- |
 | 签发方与受众 | 核验凭据 `issuer`、`audience` 属于已备案的企业身份源与目标 Delegra 实例 | 拒绝并返回 `401 EXPERT_AUTH_INVALID` |
-| 有效期与撤销 | 核验令牌未过期、未被撤销，且员工仍具备目标组织有效成员资格 | 拒绝并返回 `401 EXPERT_AUTH_REVOKED` 或 `403 EXPERT_ORG_FORBIDDEN` |
-| 实例与组织绑定 | 从已核验凭据与可信目录映射解析唯一 `(instanceId, orgId, issuer, subject)`，忽略请求体或请求头中客户端自报的身份字段 | 作用域缺失或不匹配时返回 `403 EXPERT_SCOPE_MISMATCH`，响应体不包含任何受限字段 |
+| 有效期与撤销 | 核验令牌未过期、签名有效且未被撤销 | 拒绝并返回 `401 EXPERT_AUTH_REVOKED` |
+| 组织成员资格 | 核验员工在请求的 `orgId` 下仍具备有效成员资格 | 拒绝并返回 `403 EXPERT_ORG_FORBIDDEN` |
+| 实例与组织绑定 | 从已核验凭据与可信目录映射解析唯一 `(instanceId, orgId, issuer, subject)`，忽略请求体或请求头中客户端自报的身份字段 | 凭据主体与请求 `orgId`/`instanceId` 不等时返回 `403 EXPERT_SCOPE_MISMATCH`，响应体不包含任何受限字段 |
+| 会话委派范围证据 | 对会话级入口（§3.2、§7）核验当前会话的 `delegationScope` 证据 | 证据缺失或不可判定时返回 `409 EXPERT_SCOPE_UNVERIFIED`，不得回落到组织级放行 |
+
+判定顺序固定为：签发方与受众 → 有效期与撤销 → 组织成员资格 → 实例与组织绑定 → 会话委派范围证据。每一层只返回本层失败码，不叠加、不合并返回。
 
 ### 2.2 响应作用域信封
 
@@ -117,9 +123,12 @@
 用于 `@` 候选投影与发送前复验。员工在项目 A 具备调用资格时，在项目 B 可能只有查看权；仅凭组织级目录不得直接生成会话级 `@` 候选。
 
 - **输入**：`orgId`、`delegationScope`（当前 DSH 会话对应的项目或业务委派范围标识）、`expertIds`（当前员工在本机已启用的专家 ID 列表，单次上限 `100`）。
-- **输出**：返回 `scope`、`scopeVerified`（布尔）、`validUntil` 以及逐专家结果数组：
+- **输出**：返回 `scope`（含 §2.2 信封字段，`validUntil` 只在信封内出现，不再于顶层重复）、`scopeVerified`（布尔）以及逐专家结果数组：
   - `{ expertId, callableInScope, callableReason, acceptingTasks, authContinuityDigest }`。
-- **范围证据缺失**：当服务端无法确认 `delegationScope` 或该范围不合法时，返回 `scopeVerified: false` 或 `409 EXPERT_SCOPE_UNVERIFIED`，Host 必须暂停该会话的专家 `@` 候选，不得回落到组织级目录放行。
+- **范围证据判定（二选一，同一响应不会同时出现）**：
+  - 范围本身可判定、但员工在该范围内不具备调用资格 → `200` + `scopeVerified: true` + 逐专家 `callableInScope: false`；
+  - 范围证据缺失、不可判定或不属于当前员工 → `409 EXPERT_SCOPE_UNVERIFIED`，`scopeVerified` 不出现。
+  两种情形下 Host 都必须暂停该会话的专家 `@` 候选，不得回落到组织级目录放行。
 
 ## 4. 分页完整性与游标契约
 
@@ -191,7 +200,24 @@
 
 ### 7.1 原子创建与受理
 
-`POST /api/v1/employee/expert-tasks`
+`POST /api/v1/employee/expert-tasks`（拟议路径，见 §1 路由形态状态与 §9.3 第 1 项）
+
+- **成功响应**（`201` 新建，`200` 幂等重放）：
+
+```json
+{
+  "scope": { "instanceId": "...", "orgId": "...", "issuer": "...", "subject": "...", "verifiedAt": "...", "validUntil": "..." },
+  "taskId": "task_01J9Z...",
+  "requestId": "0f1e2d3c-...",
+  "status": "accepted",
+  "acceptedAt": "2026-11-22T12:00:00Z",
+  "runGeneration": 1,
+  "resultVersion": 0,
+  "idempotentReplay": false
+}
+```
+
+  字段约束：`taskId`、`requestId`、`acceptedAt`、`status` 必填且非空；`status` 取 `accepted | queued`；`runGeneration` 为非负整数，派发意图尚未被领取时为 `0`；`resultVersion` 为非负整数，尚无结果时为 `0`；`idempotentReplay` 为布尔，重放时为 `true` 且 `taskId` 与原回执一致。
 
 - **请求关键字段**：
   - `orgId`、`expertId`、`delegationScope`
@@ -205,9 +231,11 @@
   2. 写入幂等回执记录（键为 `(orgId, issuer, subject, "create_task", requestId)`，绑定 `payloadDigest` 与 `taskId`）；
   3. 写入可恢复的持久派发意图（交由现有持久工作队列按任务与 `runGeneration` 领取）。
 - **幂等重放规则**：
-  - 同幂等键且 `payloadDigest` 相同、当前授权仍有效：返回原已受理回执（`idempotentReplay: true`），不新建任务、不重复入队；
+  - 同幂等键且 `payloadDigest` 相同、且当前授权仍覆盖该专家与任务：返回原已受理回执（`200`、`idempotentReplay: true`），不新建任务、不重复入队；
+  - 同幂等键且 `payloadDigest` 相同、但当前授权已不再覆盖该专家/任务：返回 `404 EXPERT_TASK_NOT_FOUND`，不得在响应中带出 `taskId`、`payloadDigest` 或任务状态；
   - 同幂等键但 `payloadDigest` 不同：拒绝并返回 `409 EXPERT_IDEMPOTENCY_CONFLICT`；
-  - 事务失败或提交前拒绝：零任务、零派发意图，返回明确业务错误码。
+  - 事务回滚或提交前拒绝（可确认未写入）：零任务、零派发意图，返回 `4xx` 明确业务错误码；
+  - 提交结果未知（COMMIT 已发出但回执丢失、连接中断或 Host 重启）：返回 `503 EXPERT_ACCEPTANCE_UNKNOWN`，任务**可能存在**；Host 必须以同一 `requestId` 走 §7.2 的 `by-request/{requestId}` 对账，严禁换新 `requestId` 重发。此分支不得表述为"零任务"。
 
 ### 7.2 权威回查、结果、追问与取消
 
@@ -218,6 +246,10 @@
 | `GET /api/v1/employee/expert-tasks/{taskId}/result` | 返回归属到具体 `taskId`、`runId`、`runGeneration` 与 `resultVersion` 的权威结果、来源标识及当前获准打开的产物引用；区分部分结果与终态，不要求客户端从评论列表猜测最终答复 |
 | `POST /api/v1/employee/expert-tasks/{taskId}/followups` | 绑定原员工、专家与 `taskId`，使用独立 `requestId` 实现幂等与同任务串行受理；重新核验当前员工调用权、任务 ACL 与专家接单状态 |
 | `POST /api/v1/employee/expert-tasks/{taskId}/cancel` | 提交取消请求，立即返回 `cancelRequested: true` 与当前真实状态；仅在运行器确认终止后进入 `cancelled` 终态。若任务在并发窗口内已完成，以服务端终态 `completed` 为准 |
+
+- **结果版本语义**：`resultVersion` 在每次产生新的权威结果投影时单调递增（只读查询不回退）；"部分结果"与"终态结果"由 `status` 是否处于终态区分，不另设布尔字段。`GET .../result` 返回 `{ taskId, runId, runGeneration, resultVersion, status, result, sources, artifacts }`，`result` 可空（运行中尚无结果），`artifacts` 为当前员工仍获准打开的产物引用。
+- **`waiting_user` 交互入口**：本版本不定义提交用户答复的入口，`waiting_user` 状态只用于呈现"等待员工在 Delegra 侧处理"；Host 不得据此发起任何写入。若 #245 要求在同一 DSH 会话内完成交互，须另立契约补充入口、幂等键与授权复验。
+- **实时通道**：本版本不定义订阅路径与事件信封。若后续提供，事件须携带 `{ type, seq, taskId, runGeneration, resultVersion }`，支持 `afterSeq` 补读，并在每次投递与重连时复验当前员工授权。
 
 ## 8. 统一错误码与 HTTP 状态映射
 
@@ -244,6 +276,38 @@
 | `503` | `EXPERT_ACCEPTANCE_UNKNOWN` | 受理结果暂无法确认 | 严禁换新 `requestId` 重发，改走 `by-request/{requestId}` 对账 |
 | `500` | `EXPERT_INTERNAL_ERROR` | 服务端未分类内部异常 | 记录脱敏诊断号；对写操作先走权威回查 |
 
+### 8.1 入口与错误码绑定
+
+错误码只在下列入口出现，未列出的组合视为契约缺陷：
+
+| 入口 | 可返回码 |
+| --- | --- |
+| 目录查询（§3.1） | `401` `AUTH_INVALID`/`AUTH_REVOKED`、`403` `ORG_FORBIDDEN`、`409` `CURSOR_STALE`、`429`、`503` `DIRECTORY_UNAVAILABLE`、`500` |
+| 会话范围核验（§3.2） | `401` `AUTH_INVALID`/`AUTH_REVOKED`、`403` `ORG_FORBIDDEN`/`SCOPE_MISMATCH`、`409` `SCOPE_UNVERIFIED`、`429`、`503` `DIRECTORY_UNAVAILABLE` |
+| 原子创建（§7.1） | `401` `AUTH_INVALID`/`AUTH_REVOKED`、`403` `ORG_FORBIDDEN`/`SCOPE_MISMATCH`/`CALL_FORBIDDEN`、`404` `NOT_FOUND`（专家不可见）与 `TASK_NOT_FOUND`（重放时授权已失效）、`409` `NOT_ACCEPTING`/`IDEMPOTENCY_CONFLICT`/`SCOPE_UNVERIFIED`、`422`、`429`、`503` `ISOLATION_UNVERIFIED`/`ACCEPTANCE_UNKNOWN`、`500` |
+| 任务回查与结果（§7.2） | `401`、`403`、`404` `TASK_NOT_FOUND`、`409` `TASK_STATE_CONFLICT`、`422`、`429`、`503`、`500` |
+| 取消（§7.2） | `401`、`403`、`404` `TASK_NOT_FOUND`、`409` `TASK_STATE_CONFLICT`、`422`、`429`、`503`、`500` |
+
+判定优先级：认证（`401`）→ 组织与范围（`403`）→ 可见性（`404`）→ 状态与并发（`409`）→ 输入格式（`422`）→ 依赖不可用（`503`）→ 内部异常（`500`）。同一请求只返回一个码。
+
+### 8.2 Host 侧映射
+
+设计 §3.5 只规定插件同源路由的状态类别（`401`/`403`/`404`/`409`/`503`/`500`）与内部码，不复制本文整表。Host 按下表把上游结果折叠为同源路由响应，未列出的上游码一律映射为 `500 EXPERT_INTERNAL_ERROR` 并保留脱敏诊断号：
+
+| 上游 | 同源路由状态 | 插件内部码 |
+| --- | --- | --- |
+| `401` `AUTH_INVALID`/`AUTH_REVOKED` | `401` | 同名内部码 |
+| `403` `ORG_FORBIDDEN`/`CALL_FORBIDDEN` | `403` | 同名内部码 |
+| `403` `SCOPE_MISMATCH`、`409` `SCOPE_UNVERIFIED` | `409` | `EXPERT_SCOPE_MISMATCH` |
+| `404` `NOT_FOUND`/`TASK_NOT_FOUND` | `404` | `EXPERT_NOT_FOUND` |
+| `409` 其余冲突类 | `409` | 同名内部码，或 `EXPERT_REVISION_CONFLICT` |
+| `422` | `422` | `EXPERT_REQUEST_INVALID` |
+| `429` | `503` | `EXPERT_DIRECTORY_UNAVAILABLE`（只读，带退避） |
+| `503` | `503` | 同名内部码 |
+| 网络失败、超时、未知异常 | `503` 或 `500` | 仅上游可确认的依赖不可用记 `503`；未知异常保持 `500`，不折叠成 `401`/`503` |
+
+`EXPERT_PREF_SAVE_UNKNOWN` 是设计定义的**插件内部码**（本机偏好写入结果未知），不属于本文的服务端契约词表；它在本机产生、本机消费，不上行至 Delegra。
+
 ## 9. 验收矩阵、回退契约与待冻结项
 
 ### 9.1 角色矩阵与负向用例（#244 准入）
@@ -262,8 +326,19 @@
 
 ### 9.3 待目标环境实测冻结项
 
-以下参数需由 Delegra 维护方与企业环境负责人结合目标版本线在 #244 联调后回填冻结：
+以下参数需由 Delegra 维护方与企业环境负责人结合目标版本线在 #244 联调后回填冻结。冻结结果写入本表并在正文替换"拟议"表述；未冻结项在验收时记 `NOT RUN`，不得以近似值代替。
 
-1. 企业 IAM 到 Delegra 员工/组织映射的真实令牌类型、`issuer`/`audience` 校验方式与撤权收敛最大时限；
-2. 目标部署中 `delegationScope` 的具体业务粒度（项目 ID、工作区或单组织默认范围）；
-3. 幂等回执与私有任务结果的保留期限，以及符合 [需求基线 §4.4](../requirements/requirements-baseline.md#44-数据与合规约束)（C1–C4）的数据路径与日志关闭抽验结果。
+| 事项 | 当前状态 | 责任方 | 截止门禁 |
+| --- | --- | --- | --- |
+| REST 路径族与版本段（现记 `/api/v1/employee/*`，与已取证的 `/api/companies/...`、`/api/issues/...` 不同族） | 拟议 | Delegra 维护方 | 管理包（#246）目录联调前 |
+| 提交传输形态（REST 直连或经既有 issue/comment 通道） | 拟议 | Delegra 维护方 | 真实委派（#245）开始前 |
+| 幂等键命名与语义（`requestId` 或已取证的 `clientRequestId`） | 拟议 | Delegra 维护方 | 原子受理联调前 |
+| 取消与事件补读粒度（按 task 或按已取证的 `heartbeat-runs/{runId}`） | 拟议 | Delegra 维护方 | 取消链路联调前 |
+| 企业 IAM → Delegra 员工/组织映射的令牌类型、`issuer`/`audience` 校验方式 | 待实测 | 企业环境负责人 | 管理包准入 |
+| 撤权收敛最大时限：是否沿用 [需求基线 §4.6](../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求) 的「IAM 停用或网关封禁起最迟五分钟拒绝新请求、不得续期延长」（REQ-01/02/03），以及该判据对目录、范围核验、受理与回查分别是否成立 | 待实测 | 企业环境负责人 | 管理包准入 |
+| `delegationScope` 的业务粒度（项目 ID、工作区或单组织默认范围） | 待冻结 | Delegra 维护方 | 会话范围核验联调前 |
+| 幂等回执与私有任务结果的保留期限 | 待冻结 | Delegra 维护方 | 回查链路联调前 |
+| 符合 [需求基线 §4.4](../requirements/requirements-baseline.md#44-数据与合规约束)（C1–C4）的数据路径与日志关闭抽验结果 | 待实测 | 企业环境负责人 | 真实委派开放前 |
+| `waiting_user` 交互入口与实时事件信封是否纳入本契约 | 待决定 | 平台组 + Delegra 维护方 | 真实委派开放前 |
+
+验收取证统一记录在 `docs/design/verification/forge-experts.md`；本表冻结后须同步该记录与正文，不以本表替代实测。
