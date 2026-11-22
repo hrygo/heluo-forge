@@ -1,0 +1,13 @@
+# @heluo/forge-experts 独立安装单元补丁层（方案 B · Stage 3A-1 管理包）。
+#
+# 1. managementEnabled 与 dispatchEnabled 默认均为 false（fail-closed）；
+#    管理页需按 #244/#246 准入证据显式开启，真实委派须待 #245/#247 验收通过后开放。
+# 2. 不写入 isolate、permission、sandbox 或 rules；可信委派阶段接入 @heluo/forge-policy 时
+#    须沿用共享 id: heluo-policy 与全仓逐字一致的并集目录（D-2 / D-5）。
+
+- insert:
+    - id: forge-experts
+      name: '@heluo/forge-experts'
+      config:
+        managementEnabled: false
+        dispatchEnabled: false

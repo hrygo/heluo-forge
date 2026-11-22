@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" role="img" aria-label="Heluo Forge Experts">
+  <defs>
+    <linearGradient id="forgeExpertsGrad" x1="15%" y1="10%" x2="85%" y2="90%">
+      <stop offset="0%" stop-color="#1D4ED8"/>
+      <stop offset="55%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#00D2FE"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="264" height="264" rx="64" fill="url(#forgeExpertsGrad)"/>
+  <circle cx="160" cy="126" r="38" fill="#FFFFFF"/>
+  <path d="M96 226c0-34 29-58 64-58s64 24 64 58" fill="none" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
+</svg>

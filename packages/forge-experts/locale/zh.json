@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "title": "专家智能体",
+    "description": "浏览获准查看的云端专家智能体，并在设置页手动管理个人在对话中可 @ 的专家候选。"
+  },
+  "ui": {
+    "sectionTitle": "专家智能体",
+    "tabDirectory": "专家目录",
+    "tabCallable": "可调用",
+    "searchPlaceholder": "搜索专家名称或职责…",
+    "enable": "启用",
+    "disable": "停用",
+    "saving": "正在保存…",
+    "pending": "待确认",
+    "disabledNotice": "专家智能体管理入口当前未开放。",
+    "dispatchClosedNotice": "聊天 @ 专家委派尚未开放，当前仅支持在设置页管理个人候选。"
+  }
+}
