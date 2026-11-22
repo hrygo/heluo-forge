@@ -573,8 +573,40 @@ function invokeMockHttp(handler, { method, url, headers = {}, body = null }) {
   });
 }
 
+/**
+ * An npm-installed CLI resolves its SDK from the real package directory: with a
+ * pnpm store the `.bin` entry is a symlink and its dependencies live beside the
+ * real `@deepseek-ai/dsh` package, so requiring from the emplacement itself
+ * yields nothing.
+ */
+function sdkAnchor(location) {
+  if (location.kind !== 'node-cli') return location.anchor;
+  const cliDirectory = dirname(realpathSync(location.anchor));
+  // A package manager shim sits in `.bin`; the SDK's dependencies are siblings of
+  // the real package, so prefer that manifest over the shim path.
+  for (const candidate of [
+    join(cliDirectory, '..', '@deepseek-ai', 'dsh', 'package.json'),
+    join(cliDirectory, '@deepseek-ai', 'dsh', 'package.json'),
+  ]) {
+    if (existsSync(candidate)) return realpathSync(candidate);
+  }
+  let directory = cliDirectory;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const manifest = join(directory, 'package.json');
+    if (existsSync(manifest)) {
+      try {
+        if (JSON.parse(readFileSync(manifest, 'utf8')).name === '@deepseek-ai/dsh') return manifest;
+      } catch { /* keep walking */ }
+    }
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return location.anchor;
+}
+
 async function verifyTargetHostActivation(installedPkgDir, hostLocation) {
-  const hostRequire = createRequire(pathToFileURL(hostLocation.anchor));
+  const hostRequire = createRequire(pathToFileURL(sdkAnchor(hostLocation)));
   const load = (name) => import(pathToFileURL(hostRequire.resolve(name)).href);
 
   // 1. Check SDK package resolution sources (storageDomain / zod / cordis)
