@@ -5,7 +5,9 @@
 
 export const ERROR_STATUS = Object.freeze(Object.assign(Object.create(null), {
   EXPERT_MANAGEMENT_DISABLED: 503,
-  EXPERT_MENTIONS_DISABLED: 503,
+  // A disabled projection is a closed entry, not a transient dependency failure:
+  // 503 is reserved for an unavailable authorization source or storage (§3.5).
+  EXPERT_MENTIONS_DISABLED: 404,
   EXPERT_UNAUTHENTICATED: 401,
   EXPERT_AUTH_INVALID: 401,
   EXPERT_AUTH_REVOKED: 401,

@@ -202,7 +202,7 @@ test('mentions route stays closed by default and enforces three-way intersection
     url: '/api/forge-experts/mentions?sessionId=sess-1',
     headers: { 'x-dsh-auth': 'ok' },
   });
-  assert.equal(closedRes.statusCode, 503);
+  assert.equal(closedRes.statusCode, 404, 'a closed projection is 404, not a retryable 503');
   assert.equal(JSON.parse(closedRes.body).error.code, 'EXPERT_MENTIONS_DISABLED');
   await closedHost.close();
 
