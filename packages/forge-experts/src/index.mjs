@@ -10,9 +10,10 @@ import { API_PREFIX, createExpertsRoutes } from './routes.mjs';
 import { ExpertsError } from './errors.mjs';
 
 export const name = 'forge-experts';
-export const inject = {
-  required: ['webServer', 'connection', 'storageDomain', 'iam'],
-};
+// Cordis accepts only a service-name array or a name -> config map. An object
+// such as { required: [...] } makes Cordis wait for a service literally named
+// "required", so the plugin never activates.
+export const inject = ['webServer', 'connection', 'storageDomain', 'iam'];
 
 function readService(ctx, serviceName) {
   try {
@@ -177,16 +178,25 @@ export async function apply(ctx, config = {}) {
   });
 
   if (managementEnabled) {
-    await host.open();
+    // A storage failure must degrade the panel, not abort plugin activation:
+    // routes answer EXPERT_STORAGE_UNAVAILABLE instead of disappearing.
+    await host.open().catch((error) => {
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] preference storage unavailable', error?.message ?? String(error));
+      }
+    });
   }
 
   const webServer = readService(ctx, 'webServer');
   const unregisterRoute = webServer && typeof webServer.register === 'function'
-    ? webServer.register(API_PREFIX, host.handleRequest)
+    ? webServer.register({ kind: 'prefix', path: API_PREFIX, handler: host.handleRequest })
     : null;
 
   ctx.provide?.('forgeExperts', host);
-  ctx.on?.('dispose', async () => {
+  // Cordis runs a plain function plugin with `new` and never emits a `dispose`
+  // event, so cleanup must be registered as an effect or the route, the SSE
+  // streams and the domain handle leak for the life of the Host.
+  ctx.effect?.(() => async () => {
     if (typeof unregisterRoute === 'function') unregisterRoute();
     await host.close();
   });

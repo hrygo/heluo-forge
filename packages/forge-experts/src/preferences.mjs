@@ -9,6 +9,29 @@ import { ExpertsError } from './errors.mjs';
 export const STORAGE_DOMAIN_NAME = 'forge_experts';
 export const STORAGE_DOMAIN_VERSION = 1;
 export const PREFERENCES_TABLE = 'preferences';
+
+/**
+ * DSH `storageDomain.open` takes a DomainSpec whose `tables` is a record of
+ * table name -> { valueSchema }. The runtime record validator is passed as
+ * `valueSchema.parse`, which the domain facility calls on every read and write.
+ */
+function parseRecord(value) {
+  const parsed = PreferenceRecordSchema.safeParse(value);
+  if (!parsed.success) {
+    const error = new Error(`Invalid preference record: ${parsed.error}`);
+    error.code = 'invalid-record';
+    throw error;
+  }
+  return parsed.data;
+}
+
+export const PREFERENCES_DOMAIN_SPEC = Object.freeze({
+  name: STORAGE_DOMAIN_NAME,
+  version: STORAGE_DOMAIN_VERSION,
+  tables: Object.freeze({
+    [PREFERENCES_TABLE]: Object.freeze({ valueSchema: Object.freeze({ parse: parseRecord }) }),
+  }),
+});
 const DEFAULT_EDIT_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 export function derivePreferenceKey({ instanceId, orgId, issuer, subject, expertId }) {
@@ -75,7 +98,8 @@ export function createPreferencesStore(ports) {
     ? ports.editTokenTtlMs
     : DEFAULT_EDIT_TOKEN_TTL_MS;
 
-  let handle = null;
+  let domainHandle = null;
+  let table = null;
   let degraded = false;
   let degradedReason = null;
   let viewVersion = 1;
@@ -108,16 +132,15 @@ export function createPreferencesStore(ports) {
   }
 
   async function open() {
-    if (handle) return;
+    if (domainHandle) return;
     try {
-      handle = await ports.openStorageDomain({
-        name: STORAGE_DOMAIN_NAME,
-        version: STORAGE_DOMAIN_VERSION,
-        tables: [PREFERENCES_TABLE],
-      });
+      domainHandle = await ports.openStorageDomain(PREFERENCES_DOMAIN_SPEC);
+      table = domainHandle.table(PREFERENCES_TABLE);
       degraded = false;
       degradedReason = null;
     } catch {
+      domainHandle = null;
+      table = null;
       degraded = true;
       degradedReason = 'storage_open_failed';
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage domain is unavailable', { retryable: true });
@@ -125,13 +148,17 @@ export function createPreferencesStore(ports) {
   }
 
   async function close() {
+    // Let queued writes finish before the domain handle goes away, otherwise a
+    // close during a PUT loses the record the caller was told was confirmed.
+    await writeChain.catch(() => {});
     editTokens.clear();
     settlements.clear();
     pendingKeys.clear();
     knownEnabledByScope.clear();
-    if (handle) {
-      const closing = handle;
-      handle = null;
+    if (domainHandle) {
+      const closing = domainHandle;
+      domainHandle = null;
+      table = null;
       await closing.close?.();
     }
   }
@@ -144,12 +171,12 @@ export function createPreferencesStore(ports) {
   }
 
   async function readValidatedRecord(key) {
-    if (!handle || degraded) {
+    if (!table || degraded) {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is unavailable', { retryable: true });
     }
     let raw;
     try {
-      raw = await handle.get(PREFERENCES_TABLE, key);
+      raw = table.get(key);
     } catch {
       degraded = true;
       degradedReason = 'storage_read_failed';
@@ -173,8 +200,16 @@ export function createPreferencesStore(ports) {
     return { enabled: record.enabled, revision: record.revision, continuous: true };
   }
 
+  function pruneEditTokens() {
+    const at = now();
+    for (const [token, meta] of editTokens.entries()) {
+      if (at >= meta.expiresAt && !meta.used) editTokens.delete(token);
+    }
+  }
+
   function issueEditToken({ scope, scopeEpoch, expertId, authContinuityDigest, revision }) {
     if (!authContinuityDigest) return null;
+    pruneEditTokens();
     const token = randomBytes(24).toString('hex');
     const expiresAt = now() + editTokenTtlMs;
     editTokens.set(token, {
@@ -235,7 +270,7 @@ export function createPreferencesStore(ports) {
   }
 
   async function setEnabled({ scope, scopeEpoch, expertId, enabled, editToken }) {
-    if (degraded || !handle) {
+    if (degraded || !table) {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is unavailable', { retryable: true });
     }
     const tokenMeta = editTokens.get(editToken);
@@ -280,11 +315,13 @@ export function createPreferencesStore(ports) {
     settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'pending' });
 
     const key = derivePreferenceKey({ ...scope, expertId });
+    // Mark before enqueueing: a second reader arriving while the write waits in
+    // the queue must see "pending", never the previous confirmed value.
+    pendingKeys.add(key);
     return enqueue(async () => {
-      pendingKeys.add(key);
       try {
         ports.assertScopeCurrent(scopeEpoch, scope);
-        if (degraded || !handle) {
+        if (degraded || !table) {
           throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is unavailable', { retryable: true });
         }
         const auth = await ports.verifyOrgCallable(scope, expertId);
@@ -331,7 +368,7 @@ export function createPreferencesStore(ports) {
         }
 
         try {
-          await handle.set(PREFERENCES_TABLE, key, validated.data);
+          await table.put(key, validated.data);
         } catch (error) {
           if (error?.outcome === 'unknown' || error?.code === 'EXPERT_PREF_SAVE_UNKNOWN') {
             degraded = true;
@@ -381,10 +418,13 @@ export function createPreferencesStore(ports) {
     for (const [token, meta] of editTokens.entries()) {
       if (meta.expertId === expertId && meta.scopeEpoch === scopeEpoch) editTokens.delete(token);
     }
-    if (!handle || degraded) return { invalidated: true };
+    if (!table || degraded) return { invalidated: true };
     const key = derivePreferenceKey({ ...scope, expertId });
     return enqueue(async () => {
-      const existing = await readValidatedRecord(key).catch(() => null);
+      const existing = await readValidatedRecord(key).catch((error) => {
+        if (error?.code === 'EXPERT_STORAGE_UNAVAILABLE') return null;
+        throw error;
+      });
       if (!existing || existing.enabled === false) return { invalidated: false };
       const resetRecord = {
         schemaVersion: 1,
@@ -393,7 +433,7 @@ export function createPreferencesStore(ports) {
         authContinuityDigest: `revoked:${existing.revision + 1}`,
         updatedAt: new Date(now()).toISOString(),
       };
-      await handle.set(PREFERENCES_TABLE, key, resetRecord);
+      await table.put(key, resetRecord);
       trackEnabled(scope, expertId, false);
       viewVersion += 1;
       ports.onPreferenceChanged?.({ scopeEpoch, expertId, viewVersion });
@@ -406,7 +446,7 @@ export function createPreferencesStore(ports) {
   }
 
   async function listConfirmedEnabled({ scope, expertIds = null }) {
-    if (!handle || degraded) return [];
+    if (!table || degraded) return [];
     const ids = Array.isArray(expertIds) ? expertIds : [...(knownEnabledByScope.get(scopeIndexKey(scope)) ?? [])];
     const results = [];
     for (const expertId of ids) {

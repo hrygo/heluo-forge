@@ -46,6 +46,12 @@ importers:
         specifier: workspace:*
         version: link:../forge-policy
 
+  packages/forge-experts:
+    dependencies:
+      react:
+        specifier: '>=18'
+        version: 19.3.1
+
   packages/forge-gitee:
     dependencies:
       '@heluo/forge-policy':

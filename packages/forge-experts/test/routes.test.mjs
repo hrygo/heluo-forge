@@ -60,9 +60,13 @@ function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = f
         return headers?.['x-dsh-auth'] === 'ok' ? undefined : 401;
       },
     }),
+    // Mirrors `storageDomain.open(spec) -> Domain` with `domain.table(name) -> KvTable`
+    // (get/put), i.e. the shape the DSH host actually hands a plugin.
     openStorageDomain: async () => ({
-      async get(_t, k) { return data.get(k) ?? null; },
-      async set(_t, k, v) { data.set(k, v); },
+      table: () => ({
+        get: (k) => data.get(k),
+        put: async (k, v) => { data.set(k, v); },
+      }),
       async close() {},
     }),
     resolveDelegraScope: async () => scope,

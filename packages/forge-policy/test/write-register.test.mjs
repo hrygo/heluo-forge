@@ -109,12 +109,15 @@ test('D1: 设计分类表的每个动作都在策略词表里，且默认决策�
 });
 
 test('D1: 随包补丁层只登记 6 条写动作，四层逐字同序且无 enabled', () => {
+  // 认「登记」而不是认字符串：注释里提到共享策略行不是登记，否则注释措辞会
+  // 把不带策略行的 bundle 拉进本用例，用一条缺行断言误报成配置缺陷。
+  const POLICY_ROW = /^ {4}- id: heluo-policy$/mu;
   const layers = readdirSync(join(root, 'packages'), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(root, 'packages', entry.name, 'cordis.patch.yml'))
     .filter((path) => {
       try {
-        return readFileSync(path, 'utf8').includes('id: heluo-policy');
+        return POLICY_ROW.test(readFileSync(path, 'utf8'));
       } catch {
         return false;
       }
@@ -123,7 +126,7 @@ test('D1: 随包补丁层只登记 6 条写动作，四层逐字同序且无 ena
 
   const catalogs = layers.map((path) => {
     const text = readFileSync(path, 'utf8');
-    const start = text.search(/^ {4}- id: heluo-policy$/mu);
+    const start = text.search(POLICY_ROW);
     assert.ok(start >= 0, `${path} 缺 YAML 策略行（注释里的 \`id: heluo-policy\` 不算登记）`);
     const section = text.slice(start).split('audit:')[0];
     const lines = section

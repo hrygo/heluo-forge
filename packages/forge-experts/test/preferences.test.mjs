@@ -4,14 +4,24 @@ import { createPreferencesStore, derivePreferenceKey } from '../src/preferences.
 
 function createMemoryStorageDomain({ failWrite = null, initial = {} } = {}) {
   const data = new Map(Object.entries(initial));
+  const opened = [];
   return {
     data,
-    async open() {
+    opened,
+    async open(spec) {
+      opened.push(spec);
       return {
-        async get(_table, key) { return data.get(key) ?? null; },
-        async set(_table, key, value) {
-          if (failWrite) throw failWrite;
-          data.set(key, value);
+        // DSH Domain: records live behind `table(name)`; KvTable.get is a
+        // synchronous in-memory read and KvTable.put is the durable write.
+        table(name) {
+          opened.push({ table: name });
+          return {
+            get(key) { return data.get(key); },
+            async put(key, value) {
+              if (failWrite) throw failWrite;
+              data.set(key, value);
+            },
+          };
         },
         async close() {},
       };
@@ -41,6 +51,9 @@ test('preferences default disabled, enforce editToken revision concurrency, and 
     editTokenTtlMs: 60_000,
   });
   await store.open();
+  const spec = storage.opened[0];
+  assert.deepEqual(Object.keys(spec.tables), ['preferences'], 'domain spec must declare the table map, not a name array');
+  assert.equal(typeof spec.tables.preferences.valueSchema?.parse, 'function', 'table spec needs a parse()-able valueSchema');
 
   // Default state is disabled with revision 0.
   const initial = await store.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', authContinuityDigest: digest });

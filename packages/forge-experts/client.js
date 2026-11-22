@@ -161,15 +161,25 @@ window.__ModuleLoader__.load({
         }
       }, [view, query]);
 
+      // Latest view/query for the stream callback: an SSE frame must refresh the
+      // current query without re-subscribing the stream on every keystroke.
+      const viewRef = React.useRef(view);
+      const queryRef = React.useRef(query);
+      viewRef.current = view;
+      queryRef.current = query;
+
       React.useEffect(() => {
-        load(view, query);
+        // Typing filters the loaded snapshot immediately (§3.3); the directory
+        // query is debounced so one keystroke never becomes one remote read.
+        const timer = setTimeout(() => { load(view, query); }, query ? 250 : 0);
+        return () => clearTimeout(timer);
       }, [view, query, load]);
 
       React.useEffect(() => openEventStream((payload) => {
         if (payload.type === 'ready' || payload.type === 'scope-changed' || payload.type === 'catalog-invalidated' || payload.type === 'preference-updated') {
-          load(view, query);
+          load(viewRef.current, queryRef.current);
         }
-      }), [view, query, load]);
+      }), []);
 
       const toggleExpert = async (item) => {
         const pref = item?.preference;
@@ -182,7 +192,14 @@ window.__ModuleLoader__.load({
             const code = resultCode(result);
             setState((prev) => ({ ...prev, notice: resultNotice(result) }));
             if (code === 'EXPERT_PREF_SAVE_UNKNOWN') {
-              await reconcilePreference(item.expertId, pref.editToken);
+              // Same edit token: the Host answers saved / not_executed / pending.
+              const settled = await reconcilePreference(item.expertId, pref.editToken).catch(() => null);
+              const settlement = settled?.body?.settlement;
+              if (settlement === 'saved') {
+                setState((prev) => ({ ...prev, notice: '服务端已确认保存，已回读最新状态。' }));
+              } else if (settlement === 'not_executed') {
+                setState((prev) => ({ ...prev, notice: '该次保存未执行，已保持上次确认的启用状态。' }));
+              }
             }
             await load(view, query);
             return;
@@ -340,7 +357,9 @@ window.__ModuleLoader__.load({
         if (options?.isolatedMentionsPreview === true) {
           disposers.push(mountIsolatedMentionsSource(ctx));
         }
-        ctx.on?.('dispose', () => {
+        // Cordis collects cleanup through `ctx.effect`; it never emits a
+        // `dispose` event, so registering one leaks every slot subscription.
+        ctx.effect?.(() => () => {
           for (const dispose of disposers.splice(0)) {
             try { dispose(); } catch { /* best effort */ }
           }

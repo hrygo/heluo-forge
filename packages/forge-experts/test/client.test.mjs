@@ -70,7 +70,7 @@ test('client single bundle registers settings.section, keeps production @ trigge
     const registeredSections = [];
     let disposedCount = 0;
     let triggerCalled = false;
-    const disposeCallbacks = [];
+    const disposers = [];
     const ctx = {
       slots: {
         inject(_slotName, fn) {
@@ -88,8 +88,9 @@ test('client single bundle registers settings.section, keeps production @ trigge
           return () => {};
         },
       },
-      on(event, fn) {
-        if (event === 'dispose') disposeCallbacks.push(fn);
+      effect(register) {
+        const disposer = register();
+        if (typeof disposer === 'function') disposers.push(disposer);
       },
     };
 
@@ -100,8 +101,8 @@ test('client single bundle registers settings.section, keeps production @ trigge
     assert.equal(registeredSections[0].meta.label(), '专家智能体');
     assert.equal(triggerCalled, false, 'production @ trigger must remain closed by default');
 
-    for (const fn of disposeCallbacks) fn();
-    assert.equal(disposedCount, 1);
+    for (const fn of disposers) fn();
+    assert.equal(disposedCount, 1, 'section registration must be released through the Cordis effect');
   } finally {
     restore();
   }
@@ -164,8 +165,9 @@ test('isolated mentions preview registers @ group, validates onPick version, dro
           };
         },
       },
-      on(event, fn) {
-        if (event === 'dispose') disposeCallbacks.push(fn);
+      effect(register) {
+        const disposer = register();
+        if (typeof disposer === 'function') disposeCallbacks.push(disposer);
       },
     };
 
