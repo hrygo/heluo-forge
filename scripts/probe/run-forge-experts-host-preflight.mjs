@@ -21,7 +21,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -45,7 +45,7 @@ const artifactDir = join(workDir, 'artifacts');
 const installDir = join(workDir, 'installed-profile');
 const dshHome = join(workDir, 'dsh-home');
 const storageRoot = join(workDir, 'storage-root');
-const evidencePath = join(workDir, 'forge-experts-host-preflight.json');
+const evidencePath = join(tmpdir(), `forge-experts-host-preflight-${process.pid}-${Date.now()}.json`);
 
 const isolatedEnv = {
   ...process.env,
@@ -150,9 +150,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path';
 
 export const name = 'forge-experts-preflight';
-export const inject = {
-  optional: ['webServer', 'connection', 'storageDomain', 'iam'],
-};
+export const inject = ['webServer', 'connection'];
 
 const API_PREFIX = '/api/forge-experts-preflight';
 const REQUEST_HEADER = 'x-forge-experts-preflight';
@@ -218,22 +216,27 @@ export async function apply(ctx, config = {}) {
   let storageKind = 'none';
   const hostStorage = typeof ctx.get === 'function' ? ctx.get('storageDomain') : ctx.storageDomain;
   if (hostStorage && typeof hostStorage.open === 'function') {
-    const handle = await hostStorage.open({
+    // Real DSH contract: open(DomainSpec) -> Domain, records via domain.table().
+    const domain = await hostStorage.open({
       name: 'forge_experts',
       version: 1,
-      tables: ['preferences'],
+      tables: { preferences: { valueSchema: { parse: (value) => value } } },
     });
-    storageKind = 'host-storageDomain';
-    store = {
-      source: 'host-storageDomain',
-      async get(key) { return (await handle.get?.('preferences', key)) ?? null; },
-      async set(key, value) {
-        await handle.set?.('preferences', key, value);
-        return value;
-      },
-      async close() { await handle.close?.(); },
-    };
-  } else if (storageDir) {
+    const table = typeof domain?.table === 'function' ? domain.table('preferences') : null;
+    if (table) {
+      storageKind = domain.source === 'fixture-domain-adapter' ? 'fixture-domain-adapter' : 'host-storageDomain';
+      store = {
+        source: storageKind,
+        async get(key) { return table.get(key) ?? null; },
+        async set(key, value) {
+          await table.put(key, value);
+          return value;
+        },
+        async close() { await domain.close?.(); },
+      };
+    }
+  }
+  if (!store && storageDir) {
     store = createFallbackJsonStore(storageDir);
     storageKind = store.source;
   }
@@ -327,7 +330,8 @@ export async function apply(ctx, config = {}) {
   let unregisterRoute = null;
   const webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : ctx.webServer;
   if (webServer && typeof webServer.register === 'function') {
-    unregisterRoute = webServer.register(API_PREFIX, handler);
+    // DSH webServer.register takes one WebRoute ({ kind, path, handler }).
+    unregisterRoute = webServer.register({ kind: 'prefix', path: API_PREFIX, handler });
   }
 
   const service = {
@@ -338,7 +342,8 @@ export async function apply(ctx, config = {}) {
   };
   ctx.provide?.('forgeExpertsPreflight', service);
 
-  ctx.on?.('dispose', async () => {
+  // Cordis collects cleanup through ctx.effect; it does not emit a 'dispose' event.
+  ctx.effect?.(() => async () => {
     if (typeof unregisterRoute === 'function') unregisterRoute();
     for (const res of sseClients) {
       try { res.end(); } catch { /* closing */ }
@@ -388,7 +393,7 @@ export async function apply(ctx, config = {}) {
           });
           if (typeof disposeTrigger === 'function') disposers.push(disposeTrigger);
         }
-        ctx.on?.('dispose', () => {
+        ctx.effect?.(() => () => {
           for (const dispose of disposers.splice(0)) {
             try { dispose(); } catch { /* best effort */ }
           }
@@ -507,8 +512,9 @@ async function verifyClientSingleBundleContract(installedPkgDir) {
           return () => { triggerDisposed = true; };
         },
       },
-      on(event, fn) {
-        if (event === 'dispose') disposeHandlers.push(fn);
+      effect(register) {
+        const disposer = register();
+        if (typeof disposer === 'function') disposeHandlers.push(disposer);
       },
     };
     exported?.apply?.(fakeCtx);
@@ -586,15 +592,32 @@ async function verifyTargetHostActivation(installedPkgDir, hostLocation) {
     resolvedSources,
   });
   if (!hasCoreSdk) {
-    record('host-runtime-routes-sse-and-storage-restart', 'NOT RUN', { reason: 'core DSH SDK exports unavailable' });
+    record('host-runtime-routes-sse-and-unload', 'NOT RUN', { reason: 'core DSH SDK exports unavailable' });
+    record('host-storage-domain-restart-readback', 'NOT RUN', { reason: 'core DSH SDK exports unavailable' });
     return;
   }
 
-  const [{ Context }, { default: Loader }, { PluginPackages, createRuntimeResolution }] = await Promise.all([
+  const [
+    { Context },
+    { default: Loader },
+    { PluginPackages, createRuntimeResolution },
+    storageHubModule,
+    storageJsonModule,
+    storageDomainModule,
+  ] = await Promise.all([
     load('@deepseek-ai/cordis'),
     load('@deepseek-ai/cordis-plugin-loader'),
     load('@deepseek-ai/dsh-app-boot'),
+    load('@deepseek-ai/dsh-storage'),
+    load('@deepseek-ai/dsh-storage-json'),
+    load('@deepseek-ai/dsh-storage-domain'),
   ]);
+  // These packages export `{ Config, apply, inject, name }` without a default
+  // for the backends, and a class as default for the hub; Cordis accepts either
+  // a function or an object carrying `apply`.
+  const asPlugin = (module) => (typeof module.default === 'function' || typeof module.default?.apply === 'function'
+    ? module.default
+    : module);
 
   const installedRealPath = realpathSync(installedPkgDir);
   const patch = parsePatchLayer(readFileSync(join(installedRealPath, 'cordis.patch.yml'), 'utf8'));
@@ -617,18 +640,32 @@ async function verifyTargetHostActivation(installedPkgDir, hostLocation) {
     });
     await ctx.plugin(PluginPackages, { resolution }).await();
     await ctx.plugin(Loader, { baseUrl: pathToFileURL(join(installedRealPath, 'cordis.patch.yml')).href }).await();
+    // The harness serves the same route/storage contracts the real host exposes;
+    // the storage adapter is explicitly labelled so evidence never claims the
+    // host's own storageDomain.
     ctx.provide('webServer', {
-      register(prefix, fn) {
-        registeredRoutes.set(prefix, fn);
-        return () => registeredRoutes.delete(prefix);
+      register(route) {
+        if (!route || typeof route.path !== 'string' || typeof route.handler !== 'function') {
+          throw new TypeError('fixture webServer: register(route) needs { kind, path, handler }');
+        }
+        registeredRoutes.set(route.path, route.handler);
+        return () => registeredRoutes.delete(route.path);
       },
     });
     ctx.provide('connection', {
-      requestRejection({ headers }) {
-        if (rejectAuth || headers?.['x-dsh-test-auth'] !== 'ok') return 401;
+      requestRejection(request) {
+        if (rejectAuth || request?.headers?.['x-dsh-test-auth'] !== 'ok') return 401;
         return undefined;
       },
     });
+    mkdirSync(storageRoot, { recursive: true });
+    // Real storage seam: the shipped hub, JSON backend and domain facility are
+    // mounted as-is, so DomainSpec validation, KvTable semantics and the
+    // single-open rule come from the host implementation rather than a stub.
+    mkdirSync(join(storageRoot, 'json'), { recursive: true });
+    await ctx.plugin(asPlugin(storageHubModule), {}).await();
+    await ctx.plugin(asPlugin(storageJsonModule), { root: join(storageRoot, 'json') }).await();
+    await ctx.plugin(asPlugin(storageDomainModule), { backend: 'json' }).await();
 
     const ids = [];
     for (const row of patch.inserted) {
@@ -682,7 +719,7 @@ async function verifyTargetHostActivation(installedPkgDir, hostLocation) {
     });
     const parsedPut = JSON.parse(putOk.body);
     const parsedReadback = JSON.parse(readback.body);
-    const ok = !escaped
+    const routesOk = !escaped
       && unauth.statusCode === 401
       && health.statusCode === 200
       && sse.statusCode === 200
@@ -691,26 +728,48 @@ async function verifyTargetHostActivation(installedPkgDir, hostLocation) {
       && putOk.statusCode === 200
       && parsedPut.enabled === true
       && parsedPut.revision === 1
-      && unloadedCleanly
-      && readback.statusCode === 200
-      && parsedReadback.enabled === true
-      && parsedReadback.revision === 1;
+      && unloadedCleanly;
 
-    record('host-runtime-routes-sse-and-storage-restart', ok ? 'PASS' : 'FAIL', {
+    record('host-runtime-routes-sse-and-unload', routesOk ? 'PASS' : 'FAIL', {
       unauthStatus: unauth.statusCode,
       healthStatus: health.statusCode,
       sseReadyFrame: sse.body.includes('"type":"ready"'),
       putNoHeaderStatus: putNoHeader.statusCode,
       putRevision: parsedPut.revision,
       unloadedCleanly,
-      restartReadback: { enabled: parsedReadback.enabled, revision: parsedReadback.revision },
+      entryEscaped: escaped,
+      hint: routesOk ? undefined : 'inspect the loader entry state and registeredRoutes keys above; a non-activating fixture shows up as handler is not a function',
     });
+
+    const hostStorageSeam = parsedReadback.storageKind === 'host-storageDomain';
+    const readbackOk = readback.statusCode === 200 && parsedReadback.enabled === true && parsedReadback.revision === 1;
+    if (hostStorageSeam) {
+      record('host-storage-domain-restart-readback', readbackOk ? 'PASS' : 'FAIL', {
+        restartReadback: { enabled: parsedReadback.enabled, revision: parsedReadback.revision },
+      });
+    } else {
+      record('host-storage-domain-restart-readback', 'NOT RUN', {
+        reason: 'the harness supplies a contract-shaped fixture storage adapter, not the host storageDomain; the DomainSpec/KvTable shape is exercised but the host seam is unproven',
+        storageKind: parsedReadback.storageKind,
+        fixtureReadback: { enabled: parsedReadback.enabled, revision: parsedReadback.revision, expected: readbackOk },
+      });
+    }
   } catch (error) {
-    record('host-runtime-routes-sse-and-storage-restart', 'FAIL', { error: error.message });
+    record('host-runtime-routes-sse-and-unload', 'FAIL', { error: error?.stack ?? String(error) });
+    record('host-storage-domain-restart-readback', 'NOT RUN', { reason: 'host activation did not complete' });
   } finally {
     if (host1) await host1.ctx.fiber.dispose().catch(() => {});
     if (host2) await host2.ctx.fiber.dispose().catch(() => {});
   }
+}
+
+function recordWorkingTree(statusAtStart) {
+  if (!statusAtStart?.ok) {
+    record('repository-working-tree-untouched', 'NOT RUN', { reason: 'git status unavailable in current worktree environment' });
+    return;
+  }
+  const statusAtEnd = readGitStatus();
+  record('repository-working-tree-untouched', statusAtEnd.ok && statusAtStart.output === statusAtEnd.output ? 'PASS' : 'FAIL');
 }
 
 function readGitStatus() {
@@ -722,13 +781,32 @@ function readGitStatus() {
 }
 
 async function main() {
-  const statusAtStart = readGitStatus();
+  statusAtStart = { ...readGitStatus(), captured: true };
 
   if (!VALID_TARGETS.has(target)) {
     record('target-selection', 'FAIL', { target, expected: [...VALID_TARGETS] });
     return;
   }
   record('target-selection', 'PASS', { target, profile });
+
+  // An Electron-based DSH keeps its SDK inside an ASAR that only the Electron
+  // runtime can load. Re-enter before running any check so the parent neither
+  // repeats the work nor writes a partial evidence file.
+  try {
+    const probeHost = resolveDshProbeHost({ dsh: dshBin, modules: process.env.DSH_NODE_MODULES });
+    if (probeHost.runtime !== null && realpathSync(process.execPath) !== probeHost.runtime) {
+      const child = spawnSync(
+        probeHost.runtime,
+        ['--expose-internals', fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit' },
+      );
+      reentered = true;
+      process.exitCode = child.status ?? 2;
+      return;
+    }
+  } catch {
+    // Unresolved host SDKs are reported by host-sdk-export-resolution below.
+  }
 
   if (target === 'desktop' && (!dshApp || !existsSync(dshApp))) {
     record('desktop-app-present', 'BLOCKED', {
@@ -737,6 +815,24 @@ async function main() {
     });
   } else if (target === 'desktop') {
     record('desktop-app-present', 'PASS', { dshApp });
+    // `dsh --profile desktop` is rejected by the CLI ("managed exclusively by the
+    // Electron application"), and DSH_APP activation is not implemented here.
+    // Recording FAIL would blame the profile for a harness gap.
+    record('desktop-activation', 'BLOCKED', {
+      reason: 'desktop distribution activation is not implemented by this probe; DSH_APP is only checked for presence',
+      dshApp,
+    });
+    record('target-profile-dump-config', 'NOT RUN', { reason: 'desktop activation not implemented' });
+    record('host-sdk-export-resolution', 'NOT RUN', { reason: 'desktop activation not implemented' });
+    record('host-runtime-routes-sse-and-unload', 'NOT RUN', { reason: 'desktop activation not implemented' });
+    record('host-storage-domain-restart-readback', 'NOT RUN', { reason: 'desktop activation not implemented' });
+    writeFixtureWorkspace();
+    const desktopBuilt = buildPreflightTarball();
+    if (desktopBuilt) {
+      const desktopInstalled = installTarballOffline(desktopBuilt);
+      if (desktopInstalled) await verifyClientSingleBundleContract(desktopInstalled);
+    }
+    return;
   }
 
   // Step 1: Generate isolated fixture workspace & build standalone tarball via real builder (--root)
@@ -757,33 +853,46 @@ async function main() {
     record('dsh-cli-available', 'BLOCKED', {
       dshBin,
       error: versionRun.error?.message ?? (versionRun.stderr ?? '').trim(),
-      hint: 'Supply DSH_BIN=/path/to/dsh (0.2.1-rc.3) to execute target host probes',
+      hint: `Supply DSH_BIN=/path/to/dsh (${targetVersion}) to execute target host probes`,
     });
     record('target-profile-dump-config', 'NOT RUN', { reason: 'DSH CLI unavailable' });
     record('host-sdk-export-resolution', 'NOT RUN', { reason: 'DSH CLI unavailable' });
-    record('host-runtime-routes-sse-and-storage-restart', 'NOT RUN', { reason: 'DSH CLI unavailable' });
+    record('host-runtime-routes-sse-and-unload', 'NOT RUN', { reason: 'DSH CLI unavailable' });
+    record('host-storage-domain-restart-readback', 'NOT RUN', { reason: 'DSH CLI unavailable' });
     return;
   }
 
   const dshVersion = (versionRun.stdout ?? '').trim();
   evidence.env.dshVersion = dshVersion;
+  const versionMatches = dshVersion.includes(targetVersion);
   record('dsh-cli-available', 'PASS', {
     dshVersion,
-    matchesTargetVersion: dshVersion.includes(targetVersion),
+    targetVersion,
+    matchesTargetVersion: versionMatches,
   });
+  // 宿主接缝与独立 profile 的行为不锁定单一宿主版本：版本不符时继续取证，只把
+  // 「目标版本一致性」单列出来，避免用其它版本的 PASS 冒充目标版本证据。
+  record('target-version-pin', versionMatches ? 'PASS' : 'NOT RUN', {
+    dshVersion,
+    targetVersion,
+    matchesTargetVersion: versionMatches,
+    reason: versionMatches
+      ? undefined
+      : `在 ${dshVersion} 上完成了同构接缝取证；目标版本 ${targetVersion} 的实机证据仍缺失`,
+    hint: versionMatches ? undefined : `install ${targetVersion} or point DSH_BIN at it to close the target-version evidence gap`,
+  });
+  evidence.evidenceScope = versionMatches
+    ? { hostVersion: dshVersion, targetVersion, matchesTarget: true }
+    : {
+      hostVersion: dshVersion,
+      targetVersion,
+      matchesTarget: false,
+      note: '宿主运行时接缝与独立 profile 行为在非目标版本上取证；目标版本一致性未证，不据此宣称 §5.2 已满足。',
+    };
 
-  // Check if Electron re-entry is required for macOS desktop ASAR layout
   let hostLocation = null;
   try {
     hostLocation = resolveDshProbeHost({ dsh: dshBin, modules: process.env.DSH_NODE_MODULES });
-    if (hostLocation.runtime !== null && realpathSync(process.execPath) !== hostLocation.runtime) {
-      const child = spawnSync(
-        hostLocation.runtime,
-        ['--expose-internals', fileURLToPath(import.meta.url), ...process.argv.slice(2)],
-        { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'inherit' },
-      );
-      process.exit(child.status ?? 2);
-    }
   } catch (error) {
     record('host-sdk-export-resolution', 'BLOCKED', { error: error.message });
   }
@@ -796,18 +905,30 @@ async function main() {
   });
   const dumpStdout = String(dumpRun.stdout ?? '');
   const hasPreflightRow = dumpStdout.includes('forge-experts-preflight');
+  // The shipped rows use `id: webserver` / `name: '@deepseek-ai/dsh-host-webserver'`,
+  // so a `webServer` camel-case probe never matches.
   const observedHostServices = {
-    storageDomain: /storage-domain|storageDomain/u.test(dumpStdout),
-    storageJson: /storage-json/u.test(dumpStdout),
-    webServer: /web-server|webServer/u.test(dumpStdout),
-    uiSettings: /ui-settings/u.test(dumpStdout),
-    uiInputTrigger: /ui-input-trigger/u.test(dumpStdout),
+    webServer: /dsh-host-webserver|^\s*- id: webserver$/mu.test(dumpStdout),
+    connection: /dsh-client-connection|dsh-host-connection/u.test(dumpStdout),
+    storageDomain: /dsh-storage-domain|dsh-storage-json/u.test(dumpStdout),
+    uiSettings: /dsh-client-ui-settings/u.test(dumpStdout),
+    uiInputTrigger: /dsh-client-ui-input-trigger/u.test(dumpStdout),
   };
-  record('target-profile-dump-config', dumpRun.status === 0 && hasPreflightRow ? 'PASS' : 'FAIL', {
+  // `forge-iam` is a sibling bundle, not part of a standalone experts profile;
+  // record it for context but do not require it here (the design's IAM
+  // dependency is exercised by the IAM package's own gates).
+  const observedSiblingServices = { iam: /forge-iam/u.test(dumpStdout) };
+  const REQUIRED_HOST_SERVICES = ['webServer', 'connection', 'storageDomain', 'uiSettings', 'uiInputTrigger'];
+  const missingServices = REQUIRED_HOST_SERVICES.filter((name) => !observedHostServices[name]);
+  const dumpOk = dumpRun.status === 0 && hasPreflightRow;
+  record('target-profile-dump-config', dumpOk && missingServices.length === 0 ? 'PASS' : (dumpOk ? 'BLOCKED' : 'FAIL'), {
     profile,
     exitCode: dumpRun.status,
     hasPreflightRow,
     observedHostServices,
+    observedSiblingServices,
+    requiredHostServices: REQUIRED_HOST_SERVICES,
+    missingServices,
     stderr: (dumpRun.stderr ?? '').trim().slice(0, 400) || undefined,
   });
 
@@ -815,23 +936,24 @@ async function main() {
   if (hostLocation) {
     await verifyTargetHostActivation(installedPkgDir, hostLocation);
   } else {
-    record('host-runtime-routes-sse-and-storage-restart', 'NOT RUN', { reason: 'host SDK location unresolved' });
+    record('host-runtime-routes-sse-and-unload', 'NOT RUN', { reason: 'host SDK location unresolved' });
+    record('host-storage-domain-restart-readback', 'NOT RUN', { reason: 'host SDK location unresolved' });
   }
 
-  // Step 6: Confirm repository working tree remained untouched
-  if (statusAtStart.ok) {
-    const statusAtEnd = readGitStatus();
-    record('repository-working-tree-untouched', statusAtEnd.ok && statusAtStart.output === statusAtEnd.output ? 'PASS' : 'FAIL');
-  } else {
-    record('repository-working-tree-untouched', 'NOT RUN', { reason: 'git status unavailable in current worktree environment' });
-  }
 }
 
+let reentered = false;
+let statusAtStart = { ok: false, error: 'git status not read' };
 try {
   await main();
 } catch (error) {
   record('preflight-exception', 'FAIL', { error: error?.stack ?? String(error) });
 } finally {
+  if (reentered) {
+    // The child run under the host runtime owns the evidence and the exit code.
+  } else {
+  // Always prove the run left the repository alone, including every early exit.
+  recordWorkingTree(statusAtStart);
   evidence.finishedAt = new Date().toISOString();
   const counts = { PASS: 0, FAIL: 0, BLOCKED: 0, 'NOT RUN': 0 };
   for (const check of evidence.checks) {
@@ -839,6 +961,8 @@ try {
   }
   evidence.summary = counts;
   writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  // The workspace is disposable; the evidence file lives outside it.
+  try { rmSync(workDir, { recursive: true, force: true }); } catch { /* best effort */ }
   console.log(
     `preflight: PASS=${counts.PASS} FAIL=${counts.FAIL} BLOCKED=${counts.BLOCKED} NOT_RUN=${counts['NOT RUN']}`,
   );
@@ -846,4 +970,5 @@ try {
   if (counts.FAIL > 0) process.exitCode = 1;
   else if (counts.BLOCKED > 0 || counts['NOT RUN'] > 0) process.exitCode = 2;
   else process.exitCode = 0;
+  }
 }

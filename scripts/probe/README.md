@@ -184,10 +184,25 @@ DSH_BIN=/path/to/dsh FORGE_EXPERTS_TARGET=web node scripts/probe/run-forge-exper
 产出独立 tarball（含 `bundle-manifest.json` 与 `SHA256SUMS`），再在隔离的 `DSH_HOME` 中完成：
 
 - 离线安装与 `auditReleaseClosure` 包体闭包核验；
-- 浏览器侧单 bundle 契约校验（`window.__ModuleLoader__.load`、`settings.section` 与 `inputTriggers.registerSource` 注册及注销）；
-- 目标 profile（`FORGE_EXPERTS_TARGET=web` 或 `desktop`，桌面另用 `DSH_APP` 指定发行物）的 `--dump-config` 补丁层装配检查；
-- 真实 Cordis / Loader 激活下的同源路由鉴权（`401` / `403`）、SSE 就绪与更新事件流、卸载清理，以及跨 Host 重启的偏好持久回读。
+- 浏览器侧单 bundle 契约校验（`window.__ModuleLoader__.load`、`settings.section` 与 `inputTriggers.registerSource` 注册及注销，注销走 `ctx.effect`）；
+- 目标 profile 的 `--dump-config` 补丁层装配检查：要求 `webServer`、`connection`、`storageDomain`、`ui-settings`、`ui-input-trigger` 五行均可见，缺项记 `BLOCKED`；`forge-iam` 属兄弟包，仅记录不要求；
+- 真实宿主运行时激活（Cordis 4 + Loader + 真实 `storage`／`storage-json`／`storage-domain`）：同源路由鉴权（`401` / `403`）、SSE `ready` 帧、PUT 落盘与 `revision`、卸载后路由注销与服务消失，以及跨 Host 重启的偏好回读。
 
-每项结果按 `PASS`、`FAIL`、`BLOCKED`、`NOT RUN` 逐项记录并写入临时目录的
-`forge-experts-host-preflight.json`（不触碰真实 `DSH_HOME` 与仓库工作区）。退出码：`0` 全部
+环境与版本纪律：
+
+- 宿主接缝与独立 profile 的行为**不锁定宿主版本**：`--version` 与 `.dsh-version` 不一致时仍继续取证，并把「目标版本一致性」单列为 `target-version-pin`（不符记 `NOT RUN`）——其它版本的 `PASS` 只证明同构接缝，不冒充目标版本证据；
+- `FORGE_EXPERTS_TARGET=desktop` 目前只校验 `DSH_APP` 存在性并记 `BLOCKED`（`dsh --profile desktop` 被 CLI 拒绝，桌面激活未实现），不伪装为 `FAIL`；
+- Linux/macOS 桌面发行物的 SDK 位于 ASAR 内时，脚本会在做任何检查之前用对应 Electron 运行时重入一次，父进程只转发子进程结果，不重复取证。
+
+证据边界：`storageDomain` 由宿主自带的 `@deepseek-ai/dsh-storage`、`dsh-storage-json`、`dsh-storage-domain` 原样装配，
+`DomainSpec` 校验、`Domain.table`／`KvTable` 语义与重启回读都走真实实现；`host-storage-domain-restart-readback` 若发现
+宿主未提供 `storageDomain`（或装配失败）仍记 `NOT RUN` 并注明 `storageKind`。夹具只 `provide` `webServer` 与 `connection`
+两项按真实签名实现的替身，因此 `host-runtime-routes-sse-and-unload` 证明的是夹具在真实 Cordis 下的装配、鉴权与卸载，
+不替代目标宿主自带 webserver/connection 的端到端验收。
+
+在非目标宿主版本上取证时，`target-version-pin` 记 `NOT RUN`，退出码因此为 `2`；这是预期结果——宿主项
+`PASS` 仍然有效，只是不能据此宣称 §5.2 的目标版本要求已满足。
+
+每项结果按 `PASS`、`FAIL`、`BLOCKED`、`NOT RUN` 逐项记录并写入 `$TMPDIR/forge-experts-host-preflight-<pid>-<ts>.json`
+（临时工作区在退出时删除；不触碰真实 `DSH_HOME` 与仓库工作区，并在 `finally` 中核对工作区未变）。退出码：`0` 全部
 `PASS`，`1` 存在 `FAIL`，`2` 缺少目标启动器、发行物或前置证据（`BLOCKED` / `NOT RUN`）。
