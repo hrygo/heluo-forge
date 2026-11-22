@@ -47,11 +47,13 @@ function mockHttp(handler, { method, url, headers = {}, body = null }) {
   });
 }
 
-function makeHost({ managementEnabled = true } = {}) {
+function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = false, sessionScopes = null } = {}) {
   const data = new Map();
-  const scope = { instanceId: 'inst-1', orgId: 'org-a', issuer: 'https://iam.example', subject: 'emp-1' };
+  const scope = { instanceId: 'inst-1', orgId: 'org-a', issuer: 'https://iam.example', subject: 'emp-1', validUntil: '2027-01-01T00:00:00Z' };
+  const scopesMap = sessionScopes ?? new Map([['sess-1', 'proj-a']]);
+
   return createExpertsHost({
-    config: { managementEnabled, dispatchEnabled: false },
+    config: { managementEnabled, isolatedMentionsPreviewEnabled, dispatchEnabled: false },
     getIamSession: () => ({ state: 'ready', issuer: scope.issuer, subject: scope.subject }),
     getConnection: () => ({
       requestRejection({ headers }) {
@@ -72,9 +74,18 @@ function makeHost({ managementEnabled = true } = {}) {
         {
           expertId: 'exp-1',
           displayName: '研发助手',
+          disambiguation: '后端架构组',
           summary: { disclosureState: 'available', responsibility: '代码评审' },
           access: { readable: true, callableInOrg: true, callableReason: 'granted', authContinuityDigest: 'dig-1' },
           availability: { acceptingTasks: 'accepting' },
+        },
+        {
+          expertId: 'exp-paused',
+          displayName: '研发助手',
+          disambiguation: '前端测试组',
+          summary: { disclosureState: 'available', responsibility: 'UI 回归' },
+          access: { readable: true, callableInOrg: true, callableReason: 'granted', authContinuityDigest: 'dig-2' },
+          availability: { acceptingTasks: 'paused' },
         },
         {
           expertId: 'exp-view',
@@ -87,8 +98,22 @@ function makeHost({ managementEnabled = true } = {}) {
       page: { nextCursor: null, hasMore: false },
     }),
     verifyOrgCallable: async (_s, id) => ({
-      callableInOrg: id === 'exp-1',
-      authContinuityDigest: id === 'exp-1' ? 'dig-1' : null,
+      callableInOrg: id === 'exp-1' || id === 'exp-paused',
+      authContinuityDigest: id === 'exp-1' ? 'dig-1' : id === 'exp-paused' ? 'dig-2' : null,
+    }),
+    resolveSessionScope: async (sessionId) => {
+      const ds = scopesMap.get(sessionId);
+      return ds ? { delegationScope: ds } : null;
+    },
+    checkDelegraSessionScope: async ({ delegationScope, expertIds }) => ({
+      scopeVerified: true,
+      validUntil: '2027-01-01T00:00:00Z',
+      results: expertIds.map((id) => ({
+        expertId: id,
+        callableInScope: delegationScope === 'proj-a',
+        acceptingTasks: id === 'exp-paused' ? 'paused' : 'accepting',
+        authContinuityDigest: id === 'exp-1' ? 'dig-1' : 'dig-2',
+      })),
     }),
   });
 }
@@ -108,11 +133,9 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   const host = makeHost({ managementEnabled: true });
   await host.open();
 
-  // Unauthenticated connection rejected.
   const unauth = await mockHttp(host.handleRequest, { method: 'GET', url: '/api/forge-experts/catalog?view=directory' });
   assert.equal(unauth.statusCode, 401);
 
-  // SSE stream emits ready frame.
   const sse = await mockHttp(host.handleRequest, {
     method: 'GET',
     url: '/api/forge-experts/events',
@@ -121,7 +144,6 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   assert.equal(sse.statusCode, 200);
   assert.match(sse.body, /"type":"ready"/);
 
-  // Load directory -> exp-1 has editToken, exp-view has null preference.
   const dir = await mockHttp(host.handleRequest, {
     method: 'GET',
     url: '/api/forge-experts/catalog?view=directory',
@@ -133,7 +155,6 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   assert.equal(exp1.preference.enabled, false);
   assert.ok(exp1.preference.editToken);
 
-  // View-only expert cannot be updated.
   const forbidden = await mockHttp(host.handleRequest, {
     method: 'PUT',
     url: '/api/forge-experts/preferences/exp-view',
@@ -143,7 +164,6 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   assert.equal(forbidden.statusCode, 403);
   assert.equal(JSON.parse(forbidden.body).error.code, 'EXPERT_CALL_FORBIDDEN');
 
-  // Missing CSRF header rejected.
   const noHeader = await mockHttp(host.handleRequest, {
     method: 'PUT',
     url: '/api/forge-experts/preferences/exp-1',
@@ -153,7 +173,6 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   assert.equal(noHeader.statusCode, 403);
   assert.equal(JSON.parse(noHeader.body).error.code, 'EXPERT_REQUEST_HEADER_REQUIRED');
 
-  // Valid PUT succeeds and updates revision.
   const put = await mockHttp(host.handleRequest, {
     method: 'PUT',
     url: '/api/forge-experts/preferences/exp-1',
@@ -168,4 +187,107 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   sse.close?.();
   await host.close();
   assert.equal(host.routes.clientCount(), 0);
+});
+
+test('mentions route stays closed by default and enforces three-way intersection plus A -> B -> A version progression when isolated preview is enabled', async () => {
+  // Default config: mentions disabled even when managementEnabled is true.
+  const closedHost = makeHost({ managementEnabled: true, isolatedMentionsPreviewEnabled: false });
+  await closedHost.open();
+  const closedRes = await mockHttp(closedHost.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-1',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(closedRes.statusCode, 503);
+  assert.equal(JSON.parse(closedRes.body).error.code, 'EXPERT_MENTIONS_DISABLED');
+  await closedHost.close();
+
+  // Isolated preview enabled.
+  const sessionScopes = new Map([['sess-1', 'proj-a']]);
+  const host = makeHost({ managementEnabled: true, isolatedMentionsPreviewEnabled: true, sessionScopes });
+  await host.open();
+
+  // Missing sessionId -> 422; unknown session scope -> 409 EXPERT_SCOPE_UNVERIFIED.
+  const noSess = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(noSess.statusCode, 422);
+
+  const unknownSess = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-unknown',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(unknownSess.statusCode, 409);
+  assert.equal(JSON.parse(unknownSess.body).error.code, 'EXPERT_SCOPE_UNVERIFIED');
+
+  // Enable both exp-1 (accepting) and exp-paused (paused).
+  const dir = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/catalog?view=callable',
+    headers: { 'x-dsh-auth': 'ok' },
+  })).body);
+  const exp1 = dir.items.find((i) => i.expertId === 'exp-1');
+  const expPaused = dir.items.find((i) => i.expertId === 'exp-paused');
+
+  const put1 = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'PUT',
+    url: '/api/forge-experts/preferences/exp-1',
+    headers: { 'x-dsh-auth': 'ok', 'x-forge-experts-request': '1', 'content-type': 'application/json' },
+    body: { enabled: true, editToken: exp1.preference.editToken },
+  })).body);
+  await mockHttp(host.handleRequest, {
+    method: 'PUT',
+    url: '/api/forge-experts/preferences/exp-paused',
+    headers: { 'x-dsh-auth': 'ok', 'x-forge-experts-request': '1', 'content-type': 'application/json' },
+    body: { enabled: true, editToken: expPaused.preference.editToken },
+  });
+
+  // Project A: only exp-1 passes (callableInScope && accepting && enabled); exp-paused excluded.
+  const projA1 = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-1',
+    headers: { 'x-dsh-auth': 'ok' },
+  })).body);
+  assert.equal(projA1.candidates.length, 1);
+  assert.equal(projA1.candidates[0].expertId, 'exp-1');
+  assert.equal(projA1.candidates[0].disambiguation, '后端架构组');
+
+  // Switch sess-1 to Project B -> empty candidates, viewVersion increments, personal preference stays enabled.
+  sessionScopes.set('sess-1', 'proj-b');
+  const projB = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-1',
+    headers: { 'x-dsh-auth': 'ok' },
+  })).body);
+  assert.equal(projB.candidates.length, 0);
+  assert.ok(projB.viewVersion > projA1.viewVersion);
+
+  // Switch sess-1 back to Project A (A -> B -> A) -> exp-1 returns with strictly higher viewVersion.
+  sessionScopes.set('sess-1', 'proj-a');
+  const projA2 = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-1',
+    headers: { 'x-dsh-auth': 'ok' },
+  })).body);
+  assert.equal(projA2.candidates.length, 1);
+  assert.ok(projA2.viewVersion > projB.viewVersion);
+
+  // Disable exp-1 -> immediately leaves mentions candidates.
+  await mockHttp(host.handleRequest, {
+    method: 'PUT',
+    url: '/api/forge-experts/preferences/exp-1',
+    headers: { 'x-dsh-auth': 'ok', 'x-forge-experts-request': '1', 'content-type': 'application/json' },
+    body: { enabled: false, editToken: put1.editToken },
+  });
+  const afterDisable = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-1',
+    headers: { 'x-dsh-auth': 'ok' },
+  })).body);
+  assert.equal(afterDisable.candidates.length, 0);
+
+  await host.close();
 });

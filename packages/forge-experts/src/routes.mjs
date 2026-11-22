@@ -171,6 +171,18 @@ export function createExpertsRoutes(ports) {
         return true;
       }
 
+      if (url.pathname === `${API_PREFIX}/mentions`) {
+        if (req.method !== 'GET') {
+          methodNotAllowed(res, 'GET');
+          return true;
+        }
+        const sessionId = url.searchParams.get('sessionId') ?? '';
+        const query = url.searchParams.get('query') ?? '';
+        const projection = await ports.listMentions({ sessionId, query });
+        sendJson(res, 200, projection);
+        return true;
+      }
+
       if (url.pathname.startsWith(`${API_PREFIX}/preferences/`)) {
         const expertId = decodeURIComponent(url.pathname.slice(`${API_PREFIX}/preferences/`.length));
         if (!expertId || expertId.includes('/')) {

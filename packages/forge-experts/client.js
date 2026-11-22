@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
 
     const ERROR_NOTICE = Object.freeze(Object.assign(Object.create(null), {
       EXPERT_MANAGEMENT_DISABLED: '专家智能体管理入口当前未开放。',
+      EXPERT_MENTIONS_DISABLED: '专家 @ 候选投影当前未开放。',
       EXPERT_UNAUTHENTICATED: '请先登录企业账号后再查看专家目录。',
       EXPERT_AUTH_INVALID: '企业登录状态无效，请重新登录。',
       EXPERT_AUTH_REVOKED: '企业授权已撤销，请重新登录。',
@@ -22,6 +23,7 @@ window.__ModuleLoader__.load({
       EXPERT_CALL_FORBIDDEN: '当前账号仅具备查看权限，无法启停该专家。',
       EXPERT_NOT_FOUND: '未找到该专家或当前无权访问。',
       EXPERT_SCOPE_MISMATCH: '账号或组织范围已变化，正在刷新目录。',
+      EXPERT_SCOPE_UNVERIFIED: '当前会话委派范围尚未确认，已暂停专家候选。',
       EXPERT_CURSOR_STALE: '目录版本已更新，请重新加载列表。',
       EXPERT_EDIT_TOKEN_INVALID: '页面状态已过期，请刷新后重试。',
       EXPERT_EDIT_TOKEN_EXPIRED: '操作凭证已过期，请刷新后重试。',
@@ -58,6 +60,13 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
+    async function fetchMentions({ sessionId, query = '' }) {
+      const params = new URLSearchParams({ sessionId });
+      if (query.trim()) params.set('query', query.trim());
+      const response = await fetch(`${API_BASE}/mentions?${params.toString()}`);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
     async function putPreference(expertId, { enabled, editToken }) {
       const response = await fetch(`${API_BASE}/preferences/${encodeURIComponent(expertId)}`, {
         method: 'PUT',
@@ -73,17 +82,18 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
-    function openEventStream(onInvalidate) {
+    function openEventStream(onMessage, onError) {
       if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return () => {};
       const source = new window.EventSource(`${API_BASE}/events`);
       source.onmessage = (event) => {
         let payload;
         try { payload = JSON.parse(event.data); } catch { return; }
         if (!payload || typeof payload !== 'object') return;
-        if (payload.type === 'ready' || payload.type === 'scope-changed' || payload.type === 'catalog-invalidated' || payload.type === 'preference-updated') {
-          onInvalidate(payload);
-        }
+        onMessage(payload);
       };
+      if (typeof onError === 'function') {
+        source.onerror = () => onError();
+      }
       return () => {
         try { source.close(); } catch { /* closing */ }
       };
@@ -155,8 +165,10 @@ window.__ModuleLoader__.load({
         load(view, query);
       }, [view, query, load]);
 
-      React.useEffect(() => openEventStream(() => {
-        load(view, query);
+      React.useEffect(() => openEventStream((payload) => {
+        if (payload.type === 'ready' || payload.type === 'scope-changed' || payload.type === 'catalog-invalidated' || payload.type === 'preference-updated') {
+          load(view, query);
+        }
       }), [view, query, load]);
 
       const toggleExpert = async (item) => {
@@ -236,10 +248,85 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // §6 出口（管理包阶段仅注册设置页；生产 @ 点选默认关闭）
+    // §6 出口（管理包默认只注册设置页；仅在 Stage 3A-2 隔离预览下挂载 @ 候选组与失效注销）
+    function mountIsolatedMentionsSource(ctx) {
+      const triggers = typeof ctx.get === 'function' ? ctx.get('inputTriggers') : ctx.inputTriggers;
+      if (!triggers || typeof triggers.registerSource !== 'function') return () => {};
+
+      let unregister = null;
+      let generation = 0;
+      let activeEpoch = 0;
+      let activeVersion = 0;
+
+      const dropGroup = () => {
+        generation += 1;
+        if (typeof unregister === 'function') {
+          const fn = unregister;
+          unregister = null;
+          try { fn(); } catch { /* best effort */ }
+        }
+      };
+
+      const registerGroup = () => {
+        if (unregister) return;
+        const mountedGen = ++generation;
+        unregister = triggers.registerSource({
+          id: 'forge-experts-mentions',
+          trigger: '@',
+          label: '专家智能体',
+          async query(text, queryCtx) {
+            const sessionId = typeof queryCtx?.sessionId === 'string' ? queryCtx.sessionId : '';
+            if (!sessionId) return [];
+            const result = await fetchMentions({ sessionId, query: typeof text === 'string' ? text : '' });
+            if (mountedGen !== generation || !result.ok) return [];
+            activeEpoch = result.body?.scopeEpoch ?? activeEpoch;
+            activeVersion = result.body?.viewVersion ?? activeVersion;
+            const list = Array.isArray(result.body?.candidates) ? result.body.candidates : [];
+            return list.map((item) => ({
+              id: item.expertId,
+              label: item.disambiguation ? `${item.displayName} · ${item.disambiguation}` : item.displayName,
+              description: item.responsibility ?? '',
+              expertId: item.expertId,
+              scopeEpoch: item.scopeEpoch,
+              viewVersion: item.viewVersion,
+            }));
+          },
+          onPick(picked) {
+            if (!picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion) {
+              return { accepted: false, reason: 'EXPERT_SCOPE_MISMATCH' };
+            }
+            return { accepted: true, expertId: picked.expertId, scopeEpoch: picked.scopeEpoch, viewVersion: picked.viewVersion };
+          },
+        });
+      };
+
+      registerGroup();
+      const closeStream = openEventStream(
+        (payload) => {
+          if (payload.type === 'ready') {
+            registerGroup();
+            return;
+          }
+          if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {
+            dropGroup();
+            registerGroup();
+          }
+        },
+        () => {
+          // SSE 断开时立即撤下旧专家组，待重连 ready 后恢复，防止过期候选留驻已开菜单。
+          dropGroup();
+        },
+      );
+
+      return () => {
+        closeStream();
+        dropGroup();
+      };
+    }
+
     return {
       inject: ['slots'],
-      apply(ctx) {
+      apply(ctx, options = {}) {
         const disposers = [];
         if (ctx.slots && typeof ctx.slots.inject === 'function') {
           const disposeSection = ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -249,6 +336,9 @@ window.__ModuleLoader__.load({
             label: () => '专家智能体',
           }, ExpertsManagementPanel));
           if (typeof disposeSection === 'function') disposers.push(disposeSection);
+        }
+        if (options?.isolatedMentionsPreview === true) {
+          disposers.push(mountIsolatedMentionsSource(ctx));
         }
         ctx.on?.('dispose', () => {
           for (const dispose of disposers.splice(0)) {

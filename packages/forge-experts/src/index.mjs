@@ -1,10 +1,11 @@
 /**
  * Pure Cordis assembly point for @heluo/forge-experts (P2 / P3 / P8).
- * Holds zero mutable business state; connects scope, catalog, preferences, and routes via explicit ports.
+ * Holds zero mutable business state; connects scope, catalog, preferences, mentions, and routes via explicit ports.
  */
 import { createScopeManager } from './scope.mjs';
 import { createCatalogService } from './catalog.mjs';
 import { createPreferencesStore, PreferencePutBodySchema } from './preferences.mjs';
+import { createMentionsService } from './mentions.mjs';
 import { API_PREFIX, createExpertsRoutes } from './routes.mjs';
 import { ExpertsError } from './errors.mjs';
 
@@ -23,11 +24,13 @@ function readService(ctx, serviceName) {
 
 export function createExpertsHost(ports) {
   const managementEnabled = ports?.config?.managementEnabled === true;
+  const isolatedMentionsPreviewEnabled = managementEnabled && ports?.config?.isolatedMentionsPreviewEnabled === true;
   const dispatchEnabled = managementEnabled && ports?.config?.dispatchEnabled === true;
 
   let routesRef = null;
   let catalogRef = null;
   let preferencesRef = null;
+  let mentionsRef = null;
 
   const scope = createScopeManager({
     getIamSession: ports.getIamSession,
@@ -35,6 +38,7 @@ export function createExpertsHost(ports) {
     onScopeChanged({ scopeEpoch }) {
       catalogRef?.invalidate(scopeEpoch);
       preferencesRef?.invalidateScope(scopeEpoch);
+      mentionsRef?.invalidate(scopeEpoch, null);
       routesRef?.broadcast({
         type: 'scope-changed',
         scopeEpoch,
@@ -49,6 +53,7 @@ export function createExpertsHost(ports) {
     assertScopeCurrent: (epoch, expectedScope) => scope.assertCurrent(epoch, expectedScope),
     verifyOrgCallable: ports.verifyOrgCallable,
     onPreferenceChanged({ scopeEpoch, expertId, viewVersion }) {
+      mentionsRef?.invalidate(scopeEpoch, null);
       routesRef?.broadcast({ type: 'preference-updated', scopeEpoch, expertId, viewVersion });
     },
     now: ports.now,
@@ -78,22 +83,40 @@ export function createExpertsHost(ports) {
   });
   catalogRef = catalog;
 
+  const mentions = createMentionsService({
+    isMentionsEnabled: () => isolatedMentionsPreviewEnabled || dispatchEnabled,
+    resolveScope: () => scope.resolveForRequest(),
+    assertScopeCurrent: (epoch, expectedScope) => scope.assertCurrent(epoch, expectedScope),
+    resolveSessionScope: ports.resolveSessionScope,
+    listConfirmedEnabled: (params) => preferences.listConfirmedEnabled(params),
+    isPreferencePending: (params) => preferences.isPending(params),
+    checkDelegraSessionScope: ports.checkDelegraSessionScope,
+    getKnownExpert: (scopeEpoch, expertId) => catalog.getKnownExpert(scopeEpoch, expertId),
+    onMentionsInvalidated({ scopeEpoch, sessionId, viewVersion }) {
+      routesRef?.broadcast({ type: 'mentions-invalidated', scopeEpoch, sessionId, viewVersion });
+    },
+    now: ports.now,
+  });
+  mentionsRef = mentions;
+
   const routes = createExpertsRoutes({
     isManagementEnabled: () => managementEnabled,
     getConnection: ports.getConnection,
     resolveScope: () => scope.resolveForRequest(),
     listCatalog: (params) => catalog.list(params),
+    listMentions: (params) => mentions.list(params),
     getKnownExpert: (scopeEpoch, expertId) => catalog.getKnownExpert(scopeEpoch, expertId),
     getPreference: (params) => preferences.get(params),
     getEditSettlement: (params) => preferences.getEditSettlement(params),
     setPreference: (params) => preferences.setEnabled(params),
     validatePutBody: (body) => PreferencePutBodySchema.safeParse(body),
-    getViewVersion: () => Math.max(catalog.getViewVersion(), preferences.getViewVersion()),
+    getViewVersion: () => Math.max(catalog.getViewVersion(), preferences.getViewVersion(), mentions.getViewVersion()),
   });
   routesRef = routes;
 
   return Object.freeze({
     managementEnabled,
+    isolatedMentionsPreviewEnabled,
     dispatchEnabled,
     open: () => (managementEnabled ? preferences.open() : Promise.resolve()),
     close: async () => {
@@ -104,6 +127,7 @@ export function createExpertsHost(ports) {
     scope,
     catalog,
     preferences,
+    mentions,
     routes,
   });
 }
@@ -141,6 +165,14 @@ export async function apply(ctx, config = {}) {
       ? config.verifyOrgCallable
       : () => {
         throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra authorization verifier is not configured');
+      },
+    resolveSessionScope: typeof config?.resolveSessionScope === 'function'
+      ? config.resolveSessionScope
+      : () => null,
+    checkDelegraSessionScope: typeof config?.checkDelegraSessionScope === 'function'
+      ? config.checkDelegraSessionScope
+      : () => {
+        throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra session scope checker is not configured');
       },
   });
 

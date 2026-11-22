@@ -6,6 +6,7 @@ const indexSrc = readFileSync(new URL('../src/index.mjs', import.meta.url), 'utf
 const scopeSrc = readFileSync(new URL('../src/scope.mjs', import.meta.url), 'utf8');
 const catalogSrc = readFileSync(new URL('../src/catalog.mjs', import.meta.url), 'utf8');
 const preferencesSrc = readFileSync(new URL('../src/preferences.mjs', import.meta.url), 'utf8');
+const mentionsSrc = readFileSync(new URL('../src/mentions.mjs', import.meta.url), 'utf8');
 const routesSrc = readFileSync(new URL('../src/routes.mjs', import.meta.url), 'utf8');
 const clientSrc = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
@@ -32,26 +33,31 @@ function assertSingleErrorReaderInClient(source) {
   assert.equal(errorReads.length, 1, 'client.js must have exactly one error-code unpacker (P5)');
 }
 
+function assertIsolatedMentionsGate(source) {
+  assert.match(source, /if \(options\?\.isolatedMentionsPreview === true\)\s*\{\s*disposers\.push\(mountIsolatedMentionsSource\(ctx\)\);/u);
+}
+
 function assertRoutesSecurityGuards(source) {
   assert.match(source, /connectionRejection\(req, ports\.getConnection\)/u);
   assert.match(source, /if \(!hasMutationHeader\(req\)\)/u);
   assert.doesNotMatch(source, /openStorageDomain\(/u);
 }
 
-test('P2: src/index.mjs holds zero mutable business state and axes have zero cross-imports', () => {
+test('P2: src/index.mjs holds zero mutable business state and all five axes have zero cross-imports', () => {
   assertIndexPureAssembly(indexSrc);
   assertNoCrossAxisImports({
     scope: scopeSrc,
     catalog: catalogSrc,
     preferences: preferencesSrc,
+    mentions: mentionsSrc,
     routes: routesSrc,
   });
 });
 
-test('P1 / P5 / P7: client.js is a single bundle with a single error reader and no direct host writes', () => {
+test('P1 / P3 / P5 / P7: client.js is a single bundle with a single error reader and gated @ trigger registration', () => {
   assertSingleErrorReaderInClient(clientSrc);
+  assertIsolatedMentionsGate(clientSrc);
   assert.doesNotMatch(clientSrc, /localStorage/u);
-  assert.doesNotMatch(clientSrc, /inputTriggers\.registerSource/u);
 });
 
 test('P6 / P8: routes enforce connection auth and CSRF header without touching storage directly', () => {
@@ -64,10 +70,12 @@ test('P9 mutation proofs: every structural guard fails when deliberately violate
   assert.throws(() => assertNoCrossAxisImports({
     scope: scopeSrc,
     catalog: catalogSrc,
-    preferences: `import { createCatalogService } from './catalog.mjs';\n${preferencesSrc}`,
+    preferences: preferencesSrc,
+    mentions: `import { createCatalogService } from './catalog.mjs';\n${mentionsSrc}`,
     routes: routesSrc,
   }));
   assert.throws(() => assertSingleErrorReaderInClient(`${clientSrc}\nconst dup = res.body?.error?.code;\n`));
   assert.throws(() => assertSingleErrorReaderInClient(`import './src/scope.mjs';\n${clientSrc}`));
+  assert.throws(() => assertIsolatedMentionsGate(clientSrc.replace('if (options?.isolatedMentionsPreview === true)', 'if (true)')));
   assert.throws(() => assertRoutesSecurityGuards(routesSrc.replace('if (!hasMutationHeader(req))', 'if (false)')));
 });
