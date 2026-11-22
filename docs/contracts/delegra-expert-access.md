@@ -26,6 +26,7 @@
 
 - **Delegra 持有权威事实**：员工与组织映射、逐专家查看/调用权限、专家接单状态、可披露能力与权限摘要、私有任务可见性、运行上下文隔离及任务生命周期均由 Delegra 服务端独立裁决。
 - **DSH Host 仅持有个人偏好与短期投影**：Host 通过本契约按需读取目录与范围资格，仅在本机 `storageDomain` 持久保存员工个人启停偏好及 #247 最小请求关联，不得将本地缓存或前端筛选当作授权凭证。
+- **凭据换取只在 Host 侧 IAM 内完成**：DSH 进程内的 `@heluo/forge-iam` 是 IAM 访问令牌的唯一持有者，由它向 Delegra 换取员工专用凭据并把结果作为不透明句柄交给业务插件；浏览器、业务插件与本契约的下游都不得接触 IAM 访问令牌（见 §2.3）。
 - **分阶段准入**：第 2–5 节及第 8 节对应目录部分为 `@heluo/forge-experts` 管理包（#246）前置门禁；第 6–7 节及第 8 节对应受理与回查部分为生产 `@` 点选与真实委派（#245、#246、#247）前置门禁。
 
 **路由形态状态**：本文列出的 REST 路径、传输形态与幂等键命名均为**拟议形态**，待 #244 与 Delegra 维护方会签后冻结，不构成当前可实现的既有接口。已被固定版本源码核验的既有表面使用不同的命名与粒度：`GET /api/companies/{companyId}/agents`（目录）、`POST /api/issues/{issueId}/comments` 配合 UUID `clientRequestId`（提交与幂等）、`GET /api/heartbeat-runs/{runId}/events?afterSeq=`（按 run 补读事件）、`POST /api/heartbeat-runs/{runId}/cancel`（取消粒度为 run，而非 task）。实施前必须先冻结版本段与路径族、提交传输形态（REST 直连或经既有 issue 通道）、幂等键命名（`requestId` 或 `clientRequestId`）以及取消与补读的粒度；这些差异已登记在 §9.3 第 1 项。
@@ -65,6 +66,21 @@
 
 - `validUntil` 给出本次授权与目录投影的最大有效截止时间；超过该时间后 Host 必须暂停依赖旧快照的 `@` 候选并重新读取。
 - 若响应中的 `scope` 与 Host 当前活跃会话的 `(instanceId, orgId, issuer, subject)` 任一字段不一致，Host 必须直接丢弃响应并拒绝写入。
+
+### 2.3 专用凭据换取（token exchange）
+
+员工专用凭据不直接使用 IAM 访问令牌，而是由 Host 侧 IAM 以服务端换票取得。换取采用 OAuth 2.0 Token Exchange（RFC 8693）语义：
+
+| 项 | 要求 |
+| --- | --- |
+| 发起方 | `@heluo/forge-iam`（DSH 进程内、IAM 访问令牌的唯一持有者）。浏览器与业务插件不得发起换取，也不得接触 `subject_token` |
+| 请求 | `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`，`subject_token` 为 IAM 访问令牌，`subject_token_type=urn:ietf:params:oauth:token-type:access_token`，`audience` 为目标 Delegra 实例，`resource` 为员工受限 API 根 |
+| 服务端校验 | Delegra 校验 IAM 令牌签名、`issuer`、`audience` 与有效期，并核对员工在请求 `orgId` 的成员资格；任一项不通过即拒绝换取，不签发凭据（映射见 §8） |
+| 响应 | `{ access_token, token_type: "Bearer", expires_in, issued_token_type, scope }`；`expires_in` 必须 ≤ `min(300, IAM 令牌剩余有效期)`，禁止换取服务续期延长（[需求基线 §4.6](../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求) REQ-01/02/03） |
+| 持有与销毁 | 句柄只在 Host 进程内存与单次请求内使用；不得写入 `storageDomain`、日志、错误体、SSE 事件或下发给浏览器；过期即丢弃，不复用 |
+| 失败与撤权 | 换取失败不缓存、不降级为组织级放行；IAM 停用或封禁后新换取必须失败，已签发凭据最迟 5 分钟内失效 |
+
+换票是准入的前提：员工未能换取有效凭据时，目录、候选、偏好写入与真实委派一律按 `503 EXPERT_DIRECTORY_UNAVAILABLE` fail closed，主机不得以本地缓存或既有偏好替代。
 
 ## 3. 专家目录、能力摘要、调用资格与接单状态
 
@@ -334,7 +350,9 @@
 | 提交传输形态（REST 直连或经既有 issue/comment 通道） | 拟议 | Delegra 维护方 | 真实委派（#245）开始前 |
 | 幂等键命名与语义（`requestId` 或已取证的 `clientRequestId`） | 拟议 | Delegra 维护方 | 原子受理联调前 |
 | 取消与事件补读粒度（按 task 或按已取证的 `heartbeat-runs/{runId}`） | 拟议 | Delegra 维护方 | 取消链路联调前 |
-| 企业 IAM → Delegra 员工/组织映射的令牌类型、`issuer`/`audience` 校验方式 | 待实测 | 企业环境负责人 | 管理包准入 |
+| 专用凭据签发方式：IAM 访问令牌经服务端换票取得 Delegra 员工专用凭据（§2.3） | **已定**（2026-11-23 项目负责人确认；实测口径待 #244） | 平台组 | 管理包准入 |
+| 换票端点的路径、`audience`/`resource` 取值与 JWT 内声明集 | 待实测 | Delegra 维护方 | 管理包准入 |
+| `@heluo/forge-iam` 需新增的「按目标受众换取并下发不透明凭据」服务接口（当前 `getSession()` 只返回身份快照，不暴露访问令牌） | 待实现 | DSH 平台组 | 管理包准入 |
 | 撤权收敛最大时限：是否沿用 [需求基线 §4.6](../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求) 的「IAM 停用或网关封禁起最迟五分钟拒绝新请求、不得续期延长」（REQ-01/02/03），以及该判据对目录、范围核验、受理与回查分别是否成立 | 待实测 | 企业环境负责人 | 管理包准入 |
 | `delegationScope` 的业务粒度（项目 ID、工作区或单组织默认范围） | 待冻结 | Delegra 维护方 | 会话范围核验联调前 |
 | 幂等回执与私有任务结果的保留期限 | 待冻结 | Delegra 维护方 | 回查链路联调前 |
