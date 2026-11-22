@@ -172,3 +172,22 @@ ID Token 与 JWKS、刷新轮换、撤销（POST 表单与 D1 的 `GET ?access_t
 用途是在没有企业 IAM 的机器（含 Windows 虚拟机）验证**已按同一 issuer 打包**的交付包：
 浏览器登录、回调、凭据保存、模型列表与对话都能走完。它不产生真实令牌，也不校验真实
 主体与权限；企业联调仍需真实 IAM 与网关。
+
+## 专家智能体插件建包前宿主预检（#246）
+
+```sh
+DSH_BIN=/path/to/dsh FORGE_EXPERTS_TARGET=web node scripts/probe/run-forge-experts-host-preflight.mjs
+```
+
+在独立临时工作区生成仅供取证的 `@heluo/forge-experts` Host + Client 夹具，调用
+`scripts/build-enterprise-bundle.mjs --root <tmp> --entry @heluo/forge-experts` 走真实构建器
+产出独立 tarball（含 `bundle-manifest.json` 与 `SHA256SUMS`），再在隔离的 `DSH_HOME` 中完成：
+
+- 离线安装与 `auditReleaseClosure` 包体闭包核验；
+- 浏览器侧单 bundle 契约校验（`window.__ModuleLoader__.load`、`settings.section` 与 `inputTriggers.registerSource` 注册及注销）；
+- 目标 profile（`FORGE_EXPERTS_TARGET=web` 或 `desktop`，桌面另用 `DSH_APP` 指定发行物）的 `--dump-config` 补丁层装配检查；
+- 真实 Cordis / Loader 激活下的同源路由鉴权（`401` / `403`）、SSE 就绪与更新事件流、卸载清理，以及跨 Host 重启的偏好持久回读。
+
+每项结果按 `PASS`、`FAIL`、`BLOCKED`、`NOT RUN` 逐项记录并写入临时目录的
+`forge-experts-host-preflight.json`（不触碰真实 `DSH_HOME` 与仓库工作区）。退出码：`0` 全部
+`PASS`，`1` 存在 `FAIL`，`2` 缺少目标启动器、发行物或前置证据（`BLOCKED` / `NOT RUN`）。
