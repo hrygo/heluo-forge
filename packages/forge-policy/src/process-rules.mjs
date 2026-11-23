@@ -7,6 +7,11 @@
  *
  * 每条规则声明它作用于哪些动作（`actions`）：流程语义只在对应的写动作上成立，
  * 例如验收小节只对建 PR 有意义，拿去判推送只会产生噪声拒绝。
+ *
+ * 需要正文的规则（`needs: 'content'`）读的是门禁解析出的**同一份正文快照**：
+ * Gitee 工具把建 PR 与评审的正文放在 `exec.content` 里，参数只带定位字段，
+ * 从参数读正文会一律判成"没有正文"。正文读不到时这类规则记 `unevaluated`，
+ * 不把"看不见"当成"不满足"。
  */
 
 export const PROCESS_RULES = Object.freeze({
@@ -14,8 +19,8 @@ export const PROCESS_RULES = Object.freeze({
   'plan-confirmed': Object.freeze({ severity: 'hard', needs: 'plan', actions: Object.freeze(['*']) }),
   'push-protected-branch': Object.freeze({ severity: 'hard', needs: 'arguments', actions: Object.freeze(['gitee.git.push']) }),
   'push-force': Object.freeze({ severity: 'hard', needs: 'arguments', actions: Object.freeze(['gitee.git.push']) }),
-  'pr-acceptance-section': Object.freeze({ severity: 'soft', needs: 'arguments', actions: Object.freeze(['gitee.pr.write']) }),
-  'review-ai-source': Object.freeze({ severity: 'hard', needs: 'arguments', actions: Object.freeze(['gitee.pr.write']) }),
+  'pr-acceptance-section': Object.freeze({ severity: 'soft', needs: 'content', actions: Object.freeze(['gitee.pr.write']) }),
+  'review-ai-source': Object.freeze({ severity: 'hard', needs: 'content', actions: Object.freeze(['gitee.review.publish']) }),
 });
 
 /**
@@ -74,6 +79,11 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {}, 
       continue;
     }
     const severity = severities[rule] ?? definition.severity;
+    // 需要正文的规则在正文读不到时不能判：看不见不等于没有。
+    if (definition.needs === 'content' && state.contentUnreadable === true) {
+      unevaluated.push(reason(rule, 'the content snapshot could not be read'));
+      continue;
+    }
     switch (rule) {
       case 'change-in-progress': {
         if (changeId === undefined) {
@@ -137,10 +147,14 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {}, 
         break;
       }
       case 'review-ai-source': {
-        // 只看评论式评审：PR 正文不是评审；`forge_gitee_review_publish` 自己追加
-        // `> AI 生成：… PR 版本：…` 页脚，模型不必也不该重复声明。
-        if (state.op !== 'comment') break;
+        // 只看评论式评审（`gitee.review.publish`）：普通 PR 评论不施加此门禁，
+        // 否则同步状态、回应讨论都会被当成"评审缺来源"拒掉。评审工具自己追加
+        // `> AI 生成：… PR 版本：…` 页脚，判定看的是解析后的正文快照。
         const body = typeof state.reviewBody === 'string' ? state.reviewBody : '';
+        if (body.length === 0) {
+          deny.push(reason(rule, 'the review body is missing'));
+          break;
+        }
         if (!AI_SOURCE.test(body)) {
           deny.push(reason(rule, 'the review does not state that it was produced with AI assistance'));
           break;
@@ -180,11 +194,25 @@ export function factsFromArguments(args = {}) {
   if (args.force === true) facts.force = true;
   if (typeof args.body === 'string') {
     facts.prBody = args.body;
-    // 评论式评审的正文与 PR 正文同走 `body`：是不是评审由 `op` 决定。
-    if (args.op === 'comment') facts.reviewBody = args.body;
   }
-  if (typeof args.review === 'string') facts.reviewBody = args.review;
-  else if (typeof args.comment === 'string') facts.reviewBody = args.comment;
+  return facts;
+}
+
+/**
+ * 正文快照 → 流程事实。Gitee 工具把正文放在 `exec.content` 里（建 PR 是
+ * `{title, body}`，评论是 `{body}`，评审是 `{review}`），流程判定必须读这一份，
+ * 否则生产形状下永远读到空正文。
+ *
+ * @param {unknown} value `exec.content` 解析后的值
+ * @returns {object}
+ */
+export function factsFromContent(value) {
+  const facts = {};
+  if (value === null || typeof value !== 'object') return facts;
+  if (typeof value.title === 'string') facts.prTitle = value.title;
+  if (typeof value.body === 'string') facts.prBody = value.body;
+  if (typeof value.review === 'string') facts.reviewBody = value.review;
+  if (typeof value.summary === 'string') facts.changeSummary = value.summary;
   return facts;
 }
 

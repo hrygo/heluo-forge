@@ -70,7 +70,7 @@
 | 内容载荷 | 调用参数中的文本字段、文件路径、待推送提交集合 | 内容域 |
 | 流程事实 | dop 变更状态、本地 git 分支与参数、PR 关联 | 流程域 |
 
-判定顺序固定为：能力域（未登记动作出闸；`denyUnknownAction` 开启后硬拒绝）→ 受保护路径（`protectPaths` 开启后不可翻转的硬拒绝）→ 内容域（`contentGate`）→ 流程域（`enforceProcessRules`）→ 决策合成 → 必要的确认卡片（`confirmPush`、`confirmDopWrite`）→ 前置审计。P0 落地能力域、身份与前置审计三段；P1 补确认卡片与决策复用，P2 补内容域，P3 起补流程域（先接四条纯参数规则）。
+判定顺序固定为：能力域（未登记动作出闸；`denyUnknownAction` 开启后硬拒绝）→ 受保护路径（`protectPaths` 开启后不可翻转的硬拒绝）→ 内容域（`contentGate`）→ 流程域（`enforceProcessRules`）→ 决策合成 → 必要的确认卡片（`confirmPush`、`confirmDopWrite`）→ 前置审计。P0 落地能力域、身份与前置审计三段；P1 补确认卡片与决策复用，P2 补内容域，P3 起补流程域（先接四条不需要外部事实源的规则：保护分支、强制推送、验收小节、评审来源）。
 
 ```mermaid
 flowchart TD

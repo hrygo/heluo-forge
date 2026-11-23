@@ -355,7 +355,11 @@ export interface PolicyDecision {
 
 共同约束：开关只能收紧权限；置真但规则未实现时装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`）；事实源不可用时流程规则记 `unevaluated` 并继续，不把"不知道"当成"不满足"；审计恒开，与开关状态无关。
 
-**流程闸的接线范围**：`enforceProcessRules` 当前只接**纯参数即可判定**的四条规则——`push-protected-branch`（`main`/`master`/`release/*` 拒绝）、`push-force`、`pr-acceptance-section`（软命中）、`review-ai-source`（评论式评审必须写明 AI 来源与目标版本）。`change-in-progress` 与 `plan-confirmed` 要读 dop 变更状态与计划状态，事实源未接入前**不参与判定**，避免"查不到状态"被误读成"不满足流程"。规则按 `actions` 限定作用域（推送规则不管建 PR、验收小节规则不管推送），软命中在有确认通道时升级为一张「流程条件」卡片，没有通道时放行并留审计。
+**流程闸的接线范围**：`enforceProcessRules` 当前接**不需要外部事实源**的四条规则——`push-protected-branch`（`main`/`master`/`release/*` 拒绝）、`push-force`、`pr-acceptance-section`（软命中）、`review-ai-source`（评审正文必须写明 AI 来源与目标版本）。`change-in-progress` 与 `plan-confirmed` 要读 dop 变更状态与计划状态，事实源未接入前**不参与判定**，避免"查不到状态"被误读成"不满足流程"。规则按 `actions` 限定作用域（推送规则不管建 PR、验收小节规则不管推送），需要正文的规则读的是门禁解析出的**同一份正文快照**——Gitee 工具把建 PR 正文与评审正文放在 `exec.content`、参数只带定位字段，从参数读正文会永远判成"没有正文"；正文读不到时这类规则记 `unevaluated`，不把"看不见"当成"不满足"。
+
+`review-ai-source` 只作用于 `gitee.review.publish`（评论式评审）。`forge_gitee_pr_write` 的 `op: comment` 是通用追加评论入口，也用于同步状态与回应讨论，不施加评审门禁；评审工具自身追加 `> AI 生成：… PR 版本：…` 页脚，判定看的是解析后的正文。
+
+软命中是否升级为确认，取决于**当下卡片通道是否真的可用**（确认服务存在且有可呈现的会话主体），而不是某个确认开关是否打开：通道可用就弹一张「流程条件」卡，通道不可用就放行并留审计。用开关闭包代替可用性，会在"开了确认但宿主没有应答端"时把软命中错判成确认不可用而拒绝执行。
 
 ### 5.5 必要审计前置与执行后缺口
 

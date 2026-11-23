@@ -23,6 +23,7 @@ import {
   WIRED_PROCESS_RULES,
   evaluateProcessRules,
   factsFromArguments,
+  factsFromContent,
 } from './process-rules.mjs';
 import {
   CONFIRM_CODES,
@@ -138,11 +139,21 @@ const PROCESS_DENIED_COPY = (action, denials) => {
  * 流程闸只接已接线的规则（`WIRED_PROCESS_RULES`）：依赖外部事实源的两条要等
  * 事实源注入后再启用，否则"查不到状态"会被误读成"不满足流程"。
  */
-function evaluateProcess(exec, action) {
+function evaluateProcess(exec, action, content) {
   try {
+    // 参数事实（操作、分支、force）与正文事实（建 PR 正文、评审正文）合并：
+    // Gitee 工具只把正文放在 `exec.content`，参数里没有正文。
+    const facts = { ...factsFromArguments(exec?.arguments ?? {}) };
+    if (content === undefined) {
+      // 没有正文快照（例如未开启内容闸的阶段）不算"读不到"，交给规则按缺字段判定。
+    } else if (content.readable === true) {
+      Object.assign(facts, factsFromContent(content.value));
+    } else {
+      facts.contentUnreadable = true;
+    }
     return evaluateProcessRules({
       rules: WIRED_PROCESS_RULES,
-      facts: factsFromArguments(exec?.arguments ?? {}),
+      facts,
       action,
     });
   } catch {
@@ -410,8 +421,19 @@ export function createGate({
     const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
     const subject = subjectOf(exec?.name, action);
+    // 正文只解析一次：流程闸、内容闸与执行摘要必须看同一份快照。
+    // 流程闸打开时要读正文（建 PR 正文、评审正文都在 `exec.content`），
+    // 因此不能只在内容闸打开时才解析。
+    const scanning = rules?.contentGate === true;
+    const needsContent = scanning || rules?.enforceProcessRules === true;
+    const content = needsContent ? await resolveContent(exec) : undefined;
+    const contentDigest = content !== undefined
+      ? digestContent(digestInput(exec, content.readable ? content.value : '[content-unavailable]'))
+      : typeof exec?.content === 'function'
+        ? await contentDigestOf(exec)
+        : contentDigestOf(exec);
     // 流程闸先于内容闸：先判"这一步该不该发生"，再看"内容能不能发出去"。
-    const process = rules?.enforceProcessRules === true ? evaluateProcess(exec, action) : undefined;
+    const process = rules?.enforceProcessRules === true ? evaluateProcess(exec, action, content) : undefined;
     if (process !== undefined && process.deny.length > 0) {
       const processRuleIds = [...new Set(process.deny.map((item) => item.rule))];
       return denyWithEvidence({
@@ -428,15 +450,6 @@ export function createGate({
         summary: `受控写 ${action} 不满足流程前置条件（${processRuleIds.join('、')}）`,
       }, PROCESS_DENIED_COPY(action, process.deny), 'POLICY_PROCESS_DENIED');
     }
-    // 内容闸开启时正文只解析一次（摘要与扫描看同一份内容）；关闭时走原有摘要路径，
-    // 不额外插一次 await——放行路径上的时序变化会改变宿主看到的执行顺序。
-    const scanning = rules?.contentGate === true;
-    const content = scanning ? await resolveContent(exec) : undefined;
-    const contentDigest = scanning
-      ? digestContent(digestInput(exec, content.readable ? content.value : '[content-unavailable]'))
-      : typeof exec?.content === 'function'
-        ? await contentDigestOf(exec)
-        : contentDigestOf(exec);
     const scanned = scanning ? scanContent(action, exec?.arguments, content) : undefined;
     // 命中的规则与未扫全的字段：拒绝、确认两段记录与 begin 共用这一份元数据，
     // 审计才能说明"为什么问"以及"哪里没扫全"（`字段:原因`，如 `body:truncated`）。
@@ -484,13 +497,20 @@ export function createGate({
         summary: `受控写 ${action} 的正文命中不可放行的内容风险`,
       }, CONTENT_HARD_COPY(action, scanned.hard), 'POLICY_CONTENT_HARD');
     }
+    // 卡片发给谁：子代理自己收不到卡片（宿主 assertLiveRoot 只认存活根），交给它的根会话代问。
+    let cardAgent = exec?.agent;
+    if (persona === PERSONA.CHILD) cardAgent = rootOf(ctx, exec?.agent);
+    // 通道是否**当下真的可用**：开关只决定"该不该问"，能不能问要看服务与应答端。
+    // 用开关闭包代替可用性，会在缺应答端时把软命中错判成"确认不可用"而拒绝执行。
+    const channelAvailable = confirmations !== undefined
+      && typeof confirmations.available === 'function'
+      && confirmations.available({ ctx, agent: cardAgent }) === true;
     // 确认原因按顺序合并：动作确认在前、内容风险在后，客户端据此走分步表单（D25）。
     const reasons = [];
-    const cardChannel = rules?.confirmPush === true || rules?.confirmDopWrite === true;
     if (decision.action === 'confirm') reasons.push('action');
-    // 软流程命中只有在"本来就要弹卡"或"有卡片通道"时才升级为确认；
-    // 否则按放行 + 审计处理（与内容软命中同口径，D36）。
-    if ((process?.confirm.length ?? 0) > 0 && (decision.action === 'confirm' || cardChannel)) {
+    // 软流程命中：本来就要弹卡、或当下通道可用时升级为确认；两者都不成立时
+    // 按放行 + 审计处理（与内容软命中同口径，D36）。
+    if ((process?.confirm.length ?? 0) > 0 && (decision.action === 'confirm' || channelAvailable)) {
       reasons.push('process');
     }
     if (scanned !== undefined
@@ -502,23 +522,19 @@ export function createGate({
     let cacheKey;
     if (reasons.length > 0) {
       // 来源判定在查缓存之前：命中缓存也不能让子代理替人跳过确认。
-      // 子代理自己收不到卡片（宿主 assertLiveRoot 只认存活根），把卡片转交给它的根会话代问。
-      let cardAgent = exec?.agent;
-      if (persona === PERSONA.CHILD) {
-        cardAgent = rootOf(ctx, exec?.agent);
-        if (cardAgent === undefined) {
-          return denyWithEvidence({
-            action,
-            target,
-            tool: exec?.name,
-            decision: 'deny',
-            rule: 'confirm-delegated-refused',
-            code: CONFIRM_CODES.DELEGATED,
-            operationId,
-            agent: { kind },
-            summary: delegationSummary(action),
-          }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
-        }
+      // cardAgent 上面已解析：找不到可代问的根会话时，需要人确认的写入只能拒绝。
+      if (cardAgent === undefined) {
+        return denyWithEvidence({
+          action,
+          target,
+          tool: exec?.name,
+          decision: 'deny',
+          rule: 'confirm-delegated-refused',
+          code: CONFIRM_CODES.DELEGATED,
+          operationId,
+          agent: { kind },
+          summary: delegationSummary(action),
+        }, confirmDelegatedCopy(action), CONFIRM_CODES.DELEGATED);
       }
       const callId = callIdOf(exec);
       // 读不到正文时摘要只是占位串：两次"读不到"会算出同一个键，这样的决定不能复用，

@@ -171,7 +171,7 @@ export function createConfirmationGateway({
       return UNAVAILABLE;
     }
     if (!isPlainObject(service) || typeof service.ask !== 'function') return UNAVAILABLE;
-    // 没有会话主体，卡片无处呈现；子代理不会拿到卡片（gate 已挡，这里二次保险）。
+    // 没有会话主体，卡片无处呈现；子代理应由门禁转交根会话，落到这里属异常路径。
     if (agent === null || agent === undefined) return UNAVAILABLE;
     if (personaOf(agent) === PERSONA.CHILD) return DELEGATED;
 
@@ -225,8 +225,30 @@ export function createConfirmationGateway({
     }
   }
 
+  /**
+   * 当下能否真的问到人：服务存在、有可呈现的会话主体、且不是子代理。
+   * 供门禁判断"软命中该升级为确认，还是按放行 + 审计处理"——开关只说明
+   * 该不该问，能不能问由这里决定。
+   *
+   * @param {{ctx?: object, agent?: object}} [target]
+   * @returns {boolean}
+   */
+  function available({ ctx, agent } = {}) {
+    if (disposed) return false;
+    let service;
+    try {
+      service = resolveService(ctx);
+    } catch {
+      return false;
+    }
+    if (!isPlainObject(service) || typeof service.ask !== 'function') return false;
+    if (agent === null || agent === undefined) return false;
+    return personaOf(agent) !== PERSONA.CHILD;
+  }
+
   return Object.freeze({
     ask,
+    available,
     /** 卸载时收尾：挂起的询问按"流程异常"拒绝，不留悬挂 Promise。 */
     dispose() {
       disposed = true;
