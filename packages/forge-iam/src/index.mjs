@@ -20,8 +20,10 @@ export { Config, IamError, createIamService };
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {unknown} rawConfig
+ * @param {{ env?: Record<string, string | undefined> }} [runtime] test seam; the
+ *   Host passes exactly two arguments, so `env` defaults to `process.env`
  */
-export function apply(ctx, rawConfig = {}) {
+export function apply(ctx, rawConfig = {}, { env = process.env } = {}) {
   const result = validateConfig(rawConfig);
   if ('issues' in result) {
     throw new IamError('IAM_CONFIG_INVALID', 'IAM configuration is invalid', {
@@ -121,12 +123,17 @@ export function apply(ctx, rawConfig = {}) {
   // The disabled rows cover Host services; an environment key is a second
   // bypass that no service lookup can see. Enterprise compositions warn once at
   // load with variable names only, and blocking stays a separate decision.
-  const mounted = officialServicePresent(ctx, result.value);
+  const mounted = officialServicePresent(ctx, result.value, (name) => {
+    // Without the name, the only trace of a throwing lookup is the fail-closed
+    // "unavailable" result, which reads like "no service was mounted".
+    try { ctx.logger?.debug?.(`forge-iam: exclusive lookup failed for ${name}`); } catch { /* optional diagnostic */ }
+  });
+  const exclusive = checkExclusive(ctx, result.value);
   if (mounted !== undefined) {
     try { ctx.logger?.warn?.(`forge-iam: official service still mounted: ${mounted}`); } catch { /* optional diagnostic */ }
   }
 
-  const envBypass = detectEnvBypass(process.env);
+  const envBypass = detectEnvBypass(env);
   if (envBypass.length > 0 && result.value.requireExclusive !== false) {
     try { ctx.logger?.warn?.(formatEnvBypassWarning(envBypass)); } catch { /* optional diagnostic */ }
   }
@@ -136,7 +143,7 @@ export function apply(ctx, rawConfig = {}) {
   let modelServices;
   let managedRuntime;
   const service = createIamService(result.value, {
-    exclusive: checkExclusive(ctx, result.value),
+    exclusive,
     recheckExclusive: () => checkExclusive(ctx, result.value),
     getCredentials: () => readCredentials(),
     ...(confidential && hasDynamicInjection ? {

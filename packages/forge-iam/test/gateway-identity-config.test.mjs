@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateConfig } from '../src/config.mjs';
 import { modelFetchOptions } from '../src/model-transport.mjs';
-import { checkExclusive, officialServicePresent } from '../src/exclusive.mjs';
+import {
+  DEFAULT_EXCLUSIVE_SERVICES,
+  checkExclusive,
+  exclusiveServices,
+  officialServicePresent,
+} from '../src/exclusive.mjs';
 import { PROFILE_FIELD_KEYS as CONFIG_PROFILE_KEYS } from '../src/config.mjs';
 import { PROFILE_FIELD_KEYS as USERINFO_PROFILE_KEYS } from '../src/userinfo.mjs';
 
@@ -84,6 +89,15 @@ test('an extra configured service is part of the exclusivity check', () => {
 test('an empty configured list falls back to the default service', () => {
   const ctx = { get: (name) => (name === 'deepseekAccount' ? {} : undefined) };
   assert.deepEqual(checkExclusive(ctx, { exclusiveServices: [] }), { ok: false, reason: 'exclusive-violation' });
+});
+
+test('the schema default and the assertion fallback name the same services', () => {
+  // config.mjs keeps its own literal because its import closure is fixed (the
+  // maker toolchain ships exactly config/model-options/http-url/errors), and
+  // exclusive.mjs keeps the fallback a bare-config caller such as the Host probe
+  // gets. Drift between them would make the probe and the runtime disagree.
+  assert.deepEqual([...DEFAULT_EXCLUSIVE_SERVICES], [...validateConfig({}).value.exclusiveServices]);
+  assert.deepEqual([...exclusiveServices({})], [...validateConfig({}).value.exclusiveServices]);
 });
 
 test('the config schema and the UserInfo projection agree on the profile keys', () => {

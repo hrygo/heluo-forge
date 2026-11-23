@@ -345,7 +345,9 @@ export function buildConfig(entries) {
     if (envKey === 'HELUO_IAM_PROFILE_FIELDS') {
       // `workNo=work_no,name=pinyin`. Claim names are tokens, and only the two
       // known profile keys are accepted, so a typo fails the build instead of
-      // silently showing nothing on the account panel.
+      // silently showing nothing on the account panel. A repeated key is also a
+      // failure: the last-wins or drop-the-mapping outcomes both ship a config
+      // that shows nothing, so neither is allowed.
       const mapping = {};
       const pairs = raw.split(/[,\s]+/u).filter(Boolean);
       for (const pair of pairs) {
@@ -358,6 +360,10 @@ export function buildConfig(entries) {
         const claim = pair.slice(at + 1);
         if (key !== 'workNo' && key !== 'name') {
           problems.push(`HELUO_IAM_PROFILE_FIELDS key ${key} must be workNo or name`);
+          break;
+        }
+        if (Object.hasOwn(mapping, key)) {
+          problems.push(`HELUO_IAM_PROFILE_FIELDS lists ${key} more than once`);
           break;
         }
         if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(claim)) {

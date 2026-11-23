@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ENV_BYPASS_VARIABLES,
+  checkExclusive,
   detectEnvBypass,
   formatEnvBypassWarning,
 } from '../src/exclusive.mjs';
@@ -43,7 +44,7 @@ const minimalConfig = {
   clientId: 'dsh-desktop',
 };
 
-function applyWith(env, config = minimalConfig) {
+function applyWith(env, config = minimalConfig, { get = () => undefined, debug } = {}) {
   const warnings = [];
   const provided = new Map();
   const ctx = {
@@ -51,25 +52,19 @@ function applyWith(env, config = minimalConfig) {
       provided.set(name, value);
       return () => provided.delete(name);
     },
-    get() {
-      return undefined;
-    },
+    get,
     effect(fn) {
       fn();
       return () => {};
     },
-    logger: { warn: (line) => warnings.push(line) },
+    logger: {
+      warn: (line) => warnings.push(line),
+      debug: (line) => debug?.push(line),
+    },
   };
-  const saved = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, env);
-  try {
-    apply(ctx, config);
-  } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
+  // The environment is injected instead of assigned onto process.env, so a test
+  // run cannot leak a bypass key into sibling tests.
+  apply(ctx, config, { env });
   return { warnings, provided };
 }
 
@@ -83,4 +78,17 @@ test('apply reports a bypass at load with names only', () => {
 test('apply stays quiet without a bypass and under the explicit opt-out', () => {
   assert.deepEqual(applyWith({}).warnings, []);
   assert.deepEqual(applyWith({ DEEPSEEK_API_KEY: 'bypass-value-beta' }, { ...minimalConfig, requireExclusive: false }).warnings, []);
+});
+
+test('a throwing service lookup is attributed next to the fail-closed result', () => {
+  const debug = [];
+  const warnings = [];
+  const get = () => {
+    throw new Error('lookup failed');
+  };
+  assert.deepEqual(checkExclusive({ get }, minimalConfig), { ok: false, reason: 'exclusive-check-unavailable' });
+  const { provided } = applyWith({}, minimalConfig, { get, debug });
+  assert.deepEqual(debug, ['forge-iam: exclusive lookup failed for deepseekAccount']);
+  assert.deepEqual(warnings, []);
+  assert.equal(provided.has('iam'), true, 'an unreadable lookup still mounts the service so it fails closed');
 });
