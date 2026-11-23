@@ -53,7 +53,18 @@ export function retryAfterHint(value) {
   return Math.round(millis);
 }
 
-export function modelFetchOptions(options, baseURL, resolveIamToken) {
+/**
+ * @param {Record<string, unknown>} options
+ * @param {string} baseURL
+ * @param {() => Promise<string>} resolveIamToken
+ * @param {{ tokenHeader?: string, consumerHeader?: string, consumerType?: string }} [identity]
+ *   Header names stay configurable so a gateway change is a config change rather
+ *   than a code change; the defaults are what the deployed gateway accepts.
+ */
+export function modelFetchOptions(options, baseURL, resolveIamToken, identity = {}) {
+  const tokenHeader = identity.tokenHeader ?? 'X-IAM-Token';
+  const consumerHeader = identity.consumerHeader ?? 'X-Consumer-Type';
+  const consumerType = identity.consumerType ?? 'personal';
   const attempt = scope.getStore();
   const directFetch = options?.fetch === undefined;
   const fetcher = options?.fetch ?? globalThis.fetch;
@@ -72,12 +83,12 @@ export function modelFetchOptions(options, baseURL, resolveIamToken) {
         if (typeof token !== 'string' || !token.trim()) {
           throw new IamError('IAM_LOGIN_REQUIRED', 'Model IAM access token is unavailable');
         }
-        const headers = new Headers(init?.headers ?? (requestInput ? input.headers : undefined));
-        headers.set('X-IAM-Token', token);
-        headers.set('X-Consumer-Type', 'personal');
+        const outgoing = new Headers(init?.headers ?? (requestInput ? input.headers : undefined));
+        outgoing.set(tokenHeader, token);
+        outgoing.set(consumerHeader, consumerType);
         // Following a redirect could disclose the credentials or send a second
         // request after the gateway accepted the first one.
-        const request = { ...init, headers, redirect: 'manual' };
+        const request = { ...init, headers: outgoing, redirect: 'manual' };
         if (!attempt) return fetcher(input, request);
         attempt.calls++;
         attempt.failedBeforeSend = false;
