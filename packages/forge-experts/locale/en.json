@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "title": "Expert Agents",
+    "description": "Browse authorized cloud expert agents and manage personal @-mention candidates in DeepSeek Harness."
+  },
+  "ui": {
+    "sectionTitle": "Expert Agents",
+    "tabDirectory": "Directory",
+    "tabCallable": "Callable",
+    "searchPlaceholder": "Search expert name or responsibility...",
+    "enable": "Enable",
+    "disable": "Disable",
+    "saving": "Saving...",
+    "pending": "Pending confirmation",
+    "disabledNotice": "Expert agent management is currently disabled.",
+    "dispatchClosedNotice": "Chat @-mention delegation is not enabled in this release."
+  }
+}
