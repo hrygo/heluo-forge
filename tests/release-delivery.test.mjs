@@ -9,14 +9,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { buildDelivery } from '../scripts/release-delivery.mjs';
+import { buildDelivery, parseArguments } from '../scripts/release-delivery.mjs';
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { buildConfig, parseEnvConfig, PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
@@ -375,17 +375,19 @@ test('builder writes the employee package and a zip', (t) => {
   assert.match(guide, /mounted=unknown/u);
   assert.match(guide, /有旧版本时先执行\s*$/mu, '安装流程必须说明异版本先卸载再安装');
   assert.match(guide, /dsh plugin remove 卸载旧版本/u);
-  assert.match(guide, /客户端认证[\s\S]+管理员已为当前系统账号预置/u);
+  assert.match(guide, /内嵌了企业 IAM 客户端密钥/u);
+  assert.match(guide, /IAM_DISCOVERY_FAILED/u);
+  assert.match(guide, /HELUO_PROFILE/u, '说明要怎么写才能装到 uat 等自定义 profile');
   assert.match(guide, /Linux[^\n]+XDG_DATA_HOME[^\n]+\.local\/share\/HeluoForge/u);
   assert.match(guide, /\.keys\S*keyring\.json/u);
   assert.match(guide, /HTTP[^\n]+明文[^\n]+客户端密钥/u);
   const launcher = readFileSync(join(output, 'installer', 'install-macos.command'), 'utf8');
   assert.match(launcher, /--release "\$ROOT\/enterprise-plugin"/u);
-  assert.match(launcher, /--profile auto --install-host/u);
+  assert.match(launcher, /--profile "\$\{HELUO_PROFILE:-auto\}" --install-host/u);
   const windows = readFileSync(join(output, 'installer', 'install-windows.cmd'), 'utf8');
   assert.match(windows, /\r\n/u, 'Windows launcher must use CRLF line endings');
   assert.match(windows, /where node/u);
-  assert.match(windows, /--profile auto --install-host/u);
+  assert.match(windows, /--profile "%HELUO_PROFILE%" --install-host/u);
   assert.match(windows, /heluo-enterprise-install\.log/u);
   assert.match(windows, /DSH_HOME/u);
   assert.match(guide, /解除锁定/u);
@@ -555,7 +557,8 @@ function packageDelivery({ publicPath, configPath, sha256 }, output, extra = {})
     output,
     toolRoot: TOOL_ROOT,
   };
-  const plan = buildDelivery({ ...base, dryRun: true });
+  // 预览与正式执行必须用同一组开关，否则带密钥/绑定历史时预览会先被拒。
+  const plan = buildDelivery({ ...base, dryRun: true, ...extra });
   return buildDelivery({ ...base, confirm: plan.digest.slice(0, 16), ...extra });
 }
 
@@ -712,8 +715,113 @@ test('employee guide starts dsh web and Desktop is documented separately (issue 
     const body = readFileSync(join(output, 'installer', name), 'utf8');
     assert.match(body, /自算摘要/u, `${name} 必须说明 HASH 是自算值`);
     assert.doesNotMatch(body, /独立口径/u);
+    assert.match(body, /--profile "\$\{HELUO_PROFILE:-auto\}"/u, `${name} 要允许用 HELUO_PROFILE 指定目标 profile（如 uat）`);
   }
+  assert.match(readFileSync(join(output, 'installer', 'install-windows.cmd'), 'utf8'), /HELUO_PROFILE/u);
   const windows = readFileSync(join(output, 'installer', 'install-windows.cmd'), 'utf8');
   assert.match(windows, /dsh web/u);
   assert.match(windows, /separate profile/u, 'Windows 启动器必须说明 Desktop 是另一个 profile');
+});
+
+test('--embed-client-secret 允许把客户端密钥写进交付目录，但不进插件包、不进 plan、不落 zip 之外的明文清单', (t) => {
+  const { root, publicPath, sha256 } = fixture(t);
+  const secret = 'corp-secret-value-abcdef';
+  const configPath = join(root, 'confidential.env');
+  writeFileSync(configPath, [
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+    'HELUO_IAM_SCOPES=openid profile offline_access',
+    '',
+  ].join('\n'));
+  chmodSync(configPath, 0o600);
+  const withSecret = `${configPath}.secret`;
+  writeFileSync(withSecret, `${readFileSync(configPath, 'utf8')}HELUO_IAM_CLIENT_SECRET=${secret}\n`);
+  chmodSync(withSecret, 0o600);
+  const output = join(root, 'delivery');
+  const base = { publicPath, publicSha256: sha256, configPath: withSecret, version: '0.1.0-corp.1', output, toolRoot: TOOL_ROOT };
+
+  // 默认仍然拒绝：内嵌密钥必须由出包人显式授权。
+  expectCode(() => buildDelivery({ ...base, dryRun: true }), 'BUNDLE_SECRET_EMBED_UNSUPPORTED');
+  assert.equal(existsSync(output), false);
+
+  const plan = buildDelivery({ ...base, embedClientSecret: true, dryRun: true });
+  assert.equal(plan.plan.clientSecretEmbedded, true);
+  assert.equal(JSON.stringify(plan.plan).includes(secret), false, 'plan 只报摘要口径，不能带密钥原文');
+
+  const result = buildDelivery({ ...base, embedClientSecret: true, confirm: plan.digest.slice(0, 16) });
+  assert.equal(result.written, true);
+
+  const pluginDir = join(output, 'enterprise-plugin');
+  const secretPath = join(pluginDir, 'iam-client-secret.txt');
+  assert.equal(readFileSync(secretPath, 'utf8'), secret, '密钥按 .env 原值落到交付目录');
+  assert.equal(statSync(secretPath).mode & 0o777, 0o600, '密钥文件必须 0600');
+
+  const binding = JSON.parse(readFileSync(join(pluginDir, 'client-secret.json'), 'utf8'));
+  assert.equal(binding.schema, 'heluo-client-secret/1');
+  assert.equal(binding.file, 'iam-client-secret.txt');
+  assert.equal(binding.sha256, sha256Of(Buffer.from(secret)));
+  assert.equal(binding.clientId, 'DSH');
+  assert.equal(binding.clientAuthMethod, 'client_secret_post');
+  assert.equal(binding.clientSecretRef, 'enterprise-oidc');
+  assert.equal(binding.discoveryUrl, 'https://iam.corp.example/.well-known/openid-configuration');
+
+  const sums = readFileSync(join(output, 'SHA256SUMS'), 'utf8');
+  assert.match(sums, /enterprise-plugin\/iam-client-secret\.txt/u);
+  assert.match(sums, /enterprise-plugin\/client-secret\.json/u);
+
+  // 插件包本身不含密钥：sidecar 只标记「随交付内嵌」，patch/配置里没有值。
+  assert.equal(readFileSync(result.privateTarball).includes(Buffer.from(secret)), false, '插件 tgz 不能夹带密钥');
+  const sidecarEntry = readBundleEntries(result.privateTarball, { withContent: true })
+    .find((entry) => entry.path.endsWith('heluo-private-release.json'));
+  const sidecar = JSON.parse(Buffer.from(sidecarEntry.content).toString('utf8'));
+  assert.equal(sidecar.config.secretEmbedded, true);
+  assert.equal(JSON.stringify(sidecar).includes(secret), false);
+
+  const guide = readFileSync(join(output, 'INSTALL.md'), 'utf8');
+  assert.match(guide, /内嵌的 IAM 客户端密钥/u, '安装说明必须讲清密钥随包下发与自动预置');
+  assert.equal(guide.includes(secret), false, '安装说明不能出现密钥原文');
+});
+
+test('--previous-issuer 把历史绑定写进 client-secret.json，供安装器在换环境后更正绑定', (t) => {
+  // 同一 ref 在旧交付里绑定过别的 issuer 时，目标机的 set 会被凭据库拒绝；制包人知道旧值，
+  // 就写进绑定文件，安装器据此逐个 replace。
+  const options = parseArguments([
+    '--public', '/tmp/public.tgz',
+    '--public-sha256', 'a'.repeat(64),
+    '--config', '/tmp/enterprise.env',
+    '--version', '0.1.0-corp.1',
+    '--output', '/tmp/out',
+    '--embed-client-secret',
+    '--previous-issuer', 'http://old-iam.corp.example/oidc',
+    '--previous-issuer', 'https://old.corp.example/oidc',
+  ]);
+  assert.deepEqual(options.previousIssuers, ['http://old-iam.corp.example/oidc', 'https://old.corp.example/oidc']);
+  expectCode(() => parseArguments(['--public', '/tmp/p.tgz', '--public-sha256', 'a'.repeat(64), '--config', '/tmp/e.env', '--version', 'v', '--output', '/tmp/o', '--previous-issuer', '--embed-client-secret']), 'BAD_ARGUMENT');
+
+  const { root, publicPath, sha256 } = fixture(t);
+  const configPath = join(root, 'confidential.env');
+  writeFileSync(configPath, [
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+    'HELUO_IAM_SCOPES=openid profile offline_access',
+    'HELUO_IAM_CLIENT_SECRET=corp-secret-value-abcdef',
+    '',
+  ].join('\n'));
+  chmodSync(configPath, 0o600);
+  const output = join(root, 'delivery');
+  const result = packageDelivery(
+    { publicPath, configPath, sha256 },
+    output,
+    { embedClientSecret: true, previousIssuers: ['https://old.corp.example/oidc'] },
+  );
+  assert.equal(result.written, true);
+  const binding = JSON.parse(readFileSync(join(output, 'enterprise-plugin', 'client-secret.json'), 'utf8'));
+  assert.deepEqual(binding.previousIssuers, ['https://old.corp.example/oidc']);
+  assert.equal(JSON.stringify(binding).includes('corp-secret-value-abcdef'), false, '绑定文件不含密钥原文');
 });

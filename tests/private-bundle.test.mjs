@@ -761,3 +761,54 @@ test('universal base tarball succeeds with IAM-only config and refuses Gitee con
     baseSha256: createHash('sha256').update(universalBytes).digest('hex'),
   }), 'PUBLIC_TARBALL_INVALID');
 });
+
+test('客户端密钥：默认拒绝，显式允许时只作为交付侧材料，不进 patch 与配置键', (t) => {
+  const root = temp(t);
+  const secretFile = join(root, 'client-secret.txt');
+  writeFileSync(secretFile, 'file-secret-value\n');
+  const base = [
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=test-client',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+    'HELUO_IAM_SCOPES=openid profile',
+  ];
+  const inline = [...base, 'HELUO_IAM_CLIENT_SECRET=corp-secret-value', ''].join('\n');
+  assert.throws(
+    () => parseEnvConfig(inline),
+    (error) => error instanceof PrivateBundleError && error.code === 'BUNDLE_SECRET_EMBED_UNSUPPORTED',
+    '不带显式许可时必须仍然拒绝',
+  );
+
+  const config = buildConfig(parseEnvConfig(inline, { allowSecret: true }));
+  assert.equal(config.secret.clientSecret, 'corp-secret-value');
+  assert.equal(Object.keys(config.iam).includes('clientSecret'), false, '密钥不得进入插件配置');
+  assert.equal(Object.values(config.iam).includes('corp-secret-value'), false);
+  assert.equal(config.keys.some((key) => /clientSecret$/u.test(key)), false, '配置键清单会被打印，不能含密钥');
+  assert.equal(config.keys.includes('iam.clientSecretRef'), true);
+
+  const fromFile = buildConfig(parseEnvConfig([...base, `HELUO_IAM_CLIENT_SECRET_FILE=${secretFile}`, ''].join('\n'), { allowSecret: true }));
+  assert.equal(fromFile.secret.clientSecret, 'file-secret-value', '文件形式读到内容并去掉行尾换行');
+
+  assert.throws(
+    () => buildConfig(parseEnvConfig([...base, 'HELUO_IAM_CLIENT_SECRET=a', `HELUO_IAM_CLIENT_SECRET_FILE=${secretFile}`, ''].join('\n'), { allowSecret: true })),
+    (error) => error instanceof PrivateBundleError && error.code === 'CONFIG_INVALID' && /set only one of/u.test(error.message),
+    '两个密钥键同时出现时整体拒绝',
+  );
+});
+
+test('客户端密钥只允许与 confidential 搭配', () => {
+  const text = [
+    'HELUO_IAM_AUTH_MODE=public',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=test-client',
+    'HELUO_IAM_SCOPES=openid profile',
+    'HELUO_IAM_CLIENT_SECRET=corp-secret-value',
+    '',
+  ].join('\n');
+  assert.throws(
+    () => buildConfig(parseEnvConfig(text, { allowSecret: true })),
+    (error) => error instanceof PrivateBundleError && error.code === 'CONFIG_INVALID' && /only valid with/u.test(error.message),
+  );
+});

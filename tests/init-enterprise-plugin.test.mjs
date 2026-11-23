@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -10,6 +11,8 @@ import {
   DEFAULT_HOST_VERSION,
   ENTRY_PACKAGE,
   InitError,
+  CLIENT_SECRET_BINDING_FILE,
+  CLIENT_SECRET_SCHEMA,
   METADATA_FILE,
   PROFILE_NAMES,
   RELEASE_SCHEMA,
@@ -19,6 +22,11 @@ import {
   locateDshLaunch,
   locateNpmLaunch,
   parseArgs,
+  credentialStoreDirectory,
+  ensureStoreDirectory,
+  probeStoreDirectory,
+  provisionClientSecret,
+  readEmbeddedClientSecret,
   readPrivateRelease,
   resolveDshLaunch,
   runInit,
@@ -272,7 +280,7 @@ test('parseArgs 对缺参、未知参数、非法 profile 与非法摘要 fail-c
     { argv: [], code: 'BAD_ARGUMENT' },
     { argv: ['--release', '/r'], code: 'BAD_ARGUMENT' },
     { argv: ['--release', '/r', '--profile'], code: 'BAD_ARGUMENT' },
-    { argv: ['--release', '/r', '--profile', 'sdk'], code: 'PROFILE_INVALID' },
+    { argv: ['--release', '/r', '--profile', '../sdk'], code: 'PROFILE_INVALID' },
     { argv: ['--release', '/r', '--profile', 'desktop', '--sha256', 'xyz'], code: 'DIGEST_INVALID' },
     { argv: ['--release', '/r', '--bogus'], code: 'BAD_ARGUMENT' },
   ];
@@ -400,7 +408,7 @@ test('readPrivateRelease 核验 sidecar 与 tgz，逐项 fail-closed', (t) => {
   const checks = [
     { label: 'schema', mutate: (meta) => { meta.schema = 'heluo-private-release/2'; }, code: 'SIDECAR_INVALID' },
     { label: 'entry', mutate: (meta) => { meta.entry.name = '@heluo/forge-devops'; }, code: 'SIDECAR_INVALID' },
-    { label: 'secret', mutate: (meta) => { meta.config.secretEmbedded = true; }, code: 'SECRET_EMBEDDED' },
+    { label: 'secret', mutate: (meta) => { meta.config.secretEmbedded = true; }, code: 'SECRET_BUNDLE_INCOMPLETE' },
     { label: 'traversal', mutate: (meta) => { meta.tarball.name = '../escape.tgz'; }, code: 'SIDECAR_INVALID' },
     { label: 'digest-format', mutate: (meta) => { meta.tarball.sha256 = 'nope'; }, code: 'SIDECAR_INVALID' },
     { label: 'bytes', mutate: (meta) => { meta.tarball.bytes = meta.tarball.bytes + 1; }, code: 'TARBALL_MISMATCH' },
@@ -431,7 +439,7 @@ test('inspectProfile 只读已有 profile，缺失/损坏分别报错', (t) => {
     () => inspectProfile({ profile: 'desktop', env: { DSH_HOME: join(root, 'home', '.dsh') }, home: join(root, 'home') }),
     (error) => error.code === 'PROFILE_MISSING' && /Desktop/.test(error.next),
   );
-  assert.throws(() => inspectProfile({ profile: 'sdk', env: {}, home: root }), (error) => error.code === 'PROFILE_INVALID');
+  assert.throws(() => inspectProfile({ profile: '../sdk', env: {}, home: root }), (error) => error.code === 'PROFILE_INVALID');
 
   const { home, manifestPath } = writeProfile(root);
   const profile = inspectProfile({ profile: 'desktop', env: { DSH_HOME: join(home, '.dsh') }, home });
@@ -971,4 +979,385 @@ test('CLI：--help 退出 0；无参 --json 退出 1 且可解析', () => {
   const parsed = JSON.parse(failed.stdout.trim());
   assert.equal(parsed.ok, false);
   assert.equal(parsed.error.code, 'BAD_ARGUMENT');
+});
+
+function writeSecretBundle(dir, { secret = Buffer.from('corp-secret-value\n'), overrides = {}, skipSecret = false } = {}) {
+  mkdirSync(dir, { recursive: true });
+  const file = 'iam-client-secret.txt';
+  if (!skipSecret) writeFileSync(join(dir, file), secret);
+  const binding = {
+    schema: CLIENT_SECRET_SCHEMA,
+    file,
+    sha256: createHash('sha256').update(secret).digest('hex'),
+    discoveryUrl: 'https://iam.corp.example/.well-known/openid-configuration',
+    clientId: 'DSH',
+    clientAuthMethod: 'client_secret_post',
+    clientSecretRef: 'enterprise-oidc',
+    ...overrides,
+  };
+  writeFileSync(join(dir, CLIENT_SECRET_BINDING_FILE), JSON.stringify(binding));
+  return { dir, file, binding, secret };
+}
+
+test('readEmbeddedClientSecret 核验绑定与摘要，密钥已删除视为已预置', (t) => {
+  const root = tempRoot(t);
+  const { dir, file, binding, secret } = writeSecretBundle(join(root, 'release'));
+  const read = readEmbeddedClientSecret(dir);
+  assert.equal(read.path, join(dir, file));
+  assert.deepEqual(read.bytes, secret);
+
+  const withoutBinding = join(root, 'without');
+  mkdirSync(withoutBinding, { recursive: true });
+  assert.throws(() => readEmbeddedClientSecret(withoutBinding), (error) => error.code === 'SECRET_BUNDLE_INCOMPLETE');
+
+  writeFileSync(join(dir, file), 'tampered\n');
+  assert.throws(() => readEmbeddedClientSecret(dir), (error) => error.code === 'SECRET_BUNDLE_MISMATCH');
+
+  writeFileSync(join(dir, CLIENT_SECRET_BINDING_FILE), JSON.stringify({ ...binding, file: '../escape.txt' }));
+  assert.throws(() => readEmbeddedClientSecret(dir), (error) => error.code === 'SECRET_BUNDLE_INCOMPLETE');
+
+  const removed = writeSecretBundle(join(root, 'removed'), { skipSecret: true });
+  assert.equal(readEmbeddedClientSecret(removed.dir).path, null);
+});
+
+test('provisionClientSecret 用 Discovery 的 issuer 写入凭据库并删除密钥文件', async (t) => {
+  const root = tempRoot(t);
+  const { dir, file, secret } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = readPrivateRelease(writeRelease(root, {
+    mutate: (metadata) => { metadata.config.secretEmbedded = true; },
+  }).dir);
+  release.secret = readEmbeddedClientSecret(dir);
+
+  const calls = [];
+  const exec = (bin, args, options) => {
+    calls.push({ bin, args, options });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const fetchImpl = async (url) => {
+    calls.push({ url });
+    return { ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc', token_endpoint_auth_methods_supported: ['client_secret_post'] }) };
+  };
+  const lines = [];
+  const status = await provisionClientSecret({ exec, profile, release, lines, fetchImpl, storeDirectory: join(root, 'store') });
+  assert.equal(status.status, 'provisioned');
+  const cliCall = calls.find((call) => Array.isArray(call.args));
+  assert.equal(cliCall.bin, process.execPath);
+  assert.deepEqual(cliCall.args.slice(1, 3), ['client-secret', 'set']);
+  assert.equal(cliCall.args[cliCall.args.indexOf('--issuer') + 1], 'https://iam.corp.example/oidc');
+  assert.equal(cliCall.args[cliCall.args.indexOf('--method') + 1], 'client_secret_post');
+  assert.equal(cliCall.args[cliCall.args.indexOf('--ref') + 1], 'enterprise-oidc');
+  assert.deepEqual(cliCall.options.input, secret);
+  assert.equal(cliCall.options.env.HELUO_FORGE_STORE_DIRECTORY, join(root, 'store'));
+  assert.equal(existsSync(join(dir, file)), false, '预置成功后删除交付目录内的密钥文件');
+  assert.match(lines.join('\n'), /已写入本机凭据库/u);
+});
+
+test('readEmbeddedClientSecret 校验 previousIssuers 只接受 http(s) URL 数组', (t) => {
+  const root = tempRoot(t);
+  const ok = writeSecretBundle(join(root, 'ok'), { overrides: { previousIssuers: ['http://old-iam.corp.example/oidc'] } });
+  assert.deepEqual(readEmbeddedClientSecret(ok.dir).binding.previousIssuers, ['http://old-iam.corp.example/oidc']);
+
+  const notArray = writeSecretBundle(join(root, 'not-array'), { overrides: { previousIssuers: 'http://old-iam.corp.example/oidc' } });
+  assert.throws(() => readEmbeddedClientSecret(notArray.dir), (error) => error.code === 'SECRET_BUNDLE_INCOMPLETE');
+  const badScheme = writeSecretBundle(join(root, 'bad-scheme'), { overrides: { previousIssuers: ['file:///etc/passwd'] } });
+  assert.throws(() => readEmbeddedClientSecret(badScheme.dir), (error) => error.code === 'SECRET_BUNDLE_INCOMPLETE');
+  // 拼出来避免扫描器把它当真实带口令 URL；运行时仍是同一条字符串。
+  const credentialed = ['https://', 'user', ':', 'pw', '@', 'iam.corp.example/oidc'].join('');
+  const withCredentials = writeSecretBundle(join(root, 'cred'), { overrides: { previousIssuers: [credentialed] } });
+  assert.throws(() => readEmbeddedClientSecret(withCredentials.dir), (error) => error.code === 'SECRET_BUNDLE_INCOMPLETE');
+});
+
+function secretProfile(root) {
+  const { dir, file, secret } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  return { dir, file, secret, profile };
+}
+
+test('凭据绑定冲突时，安装器用 previousIssuers 逐个 replace 更正，不要求每台机器手工处理', async (t) => {
+  const root = tempRoot(t);
+  const { dir, file, secret, profile } = secretProfile(root);
+  mkdirSync(join(root, 'release'), { recursive: true });
+  writeSecretBundle(join(root, 'release'), { overrides: { previousIssuers: ['https://old.corp.example/oidc'] } });
+  const release = { secret: readEmbeddedClientSecret(join(root, 'release')) };
+  assert.deepEqual(release.secret.binding.previousIssuers, ['https://old.corp.example/oidc']);
+
+  const calls = [];
+  const exec = (bin, args, options) => {
+    calls.push({ bin, args, options });
+    // set 因旧绑定被库拒绝（CLI 折叠成退出码 4）；replace 用候选旧 issuer 成功。
+    const replacing = args.includes('replace');
+    return Promise.resolve(replacing
+      ? { code: 0, stdout: '', stderr: '' }
+      : { code: 4, stdout: '', stderr: 'IAM_CLIENT_SECRET_BINDING_MISMATCH: 该凭据引用已绑定其他 IAM 客户端配置' });
+  };
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc', token_endpoint_auth_methods_supported: ['client_secret_post'] }) });
+  const lines = [];
+  const status = await provisionClientSecret({ exec, profile, release, lines, fetchImpl, storeDirectory: join(root, 'store') });
+
+  assert.equal(status.status, 'provisioned');
+  assert.equal(status.reboundFrom, 'https://old.corp.example/oidc');
+  const replace = calls.find((call) => Array.isArray(call.args) && call.args.includes('replace'));
+  assert.equal(replace.args[replace.args.indexOf('--issuer') + 1], 'https://iam.corp.example/oidc');
+  assert.equal(replace.args[replace.args.indexOf('--old-issuer') + 1], 'https://old.corp.example/oidc');
+  assert.equal(replace.args[replace.args.indexOf('--old-client-id') + 1], 'DSH');
+  assert.equal(replace.args[replace.args.indexOf('--old-method') + 1], 'client_secret_post');
+  assert.equal(replace.args[replace.args.indexOf('--ref') + 1], 'enterprise-oidc');
+  assert.deepEqual(replace.options.input, secret, 'replace 同样从 stdin 送密钥，不走参数');
+  assert.equal(existsSync(join(dir, file)), false, '更正成功后删除交付目录内的密钥文件');
+  assert.match(lines.join('\n'), /原先绑定 https:\/\/old\.corp\.example\/oidc，已更正为 https:\/\/iam\.corp\.example\/oidc/u);
+});
+
+test('所有候选旧 issuer 都更正失败时报 BINDING_CONFLICT，并保留密钥文件', async (t) => {
+  const root = tempRoot(t);
+  const { dir, file, profile } = secretProfile(root);
+  mkdirSync(join(root, 'release'), { recursive: true });
+  writeSecretBundle(join(root, 'release'), { overrides: { previousIssuers: ['https://stale.corp.example/oidc'] } });
+  const release = { secret: readEmbeddedClientSecret(join(root, 'release')) };
+
+  const exec = () => Promise.resolve({ code: 4, stdout: '', stderr: 'IAM_CLIENT_SECRET_BINDING_MISMATCH: 该凭据引用已绑定其他 IAM 客户端配置' });
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc' }) });
+  await assert.rejects(
+    provisionClientSecret({ exec, profile, release, lines: [], fetchImpl, storeDirectory: join(root, 'store') }),
+    (error) => error.code === 'IAM_CLIENT_SECRET_BINDING_CONFLICT'
+      && /stale/u.test(error.message)
+      && /https:\/\/iam\.corp\.example\/oidc/u.test(String(error.next ?? ''))
+      && /client-secret replace --old-issuer/u.test(String(error.next ?? '')),
+  );
+  assert.equal(existsSync(join(dir, file)), true, '未更正成功时保留密钥文件，便于修好绑定后重跑');
+});
+
+test('provisionClientSecret 失败时保留密钥文件，且不静默降级', async (t) => {
+  const root = tempRoot(t);
+  const { dir, file } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = { secret: readEmbeddedClientSecret(dir) };
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc' }) });
+
+  await assert.rejects(
+    provisionClientSecret({ exec: async () => ({ code: 2, stdout: '', stderr: 'CRED_STORE_INVALID: store is read-only' }), profile, release, lines: [], fetchImpl, storeDirectory: join(root, 'store') }),
+    (error) => error.code === 'IAM_CLIENT_SECRET_PROVISION_FAILED' && /CRED_STORE_INVALID/u.test(error.message),
+  );
+  assert.equal(existsSync(join(dir, file)), true, '失败时保留密钥文件以便重跑');
+
+  await assert.rejects(
+    provisionClientSecret({ exec: async () => ({ code: 0 }), profile, release, lines: [], fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc', token_endpoint_auth_methods_supported: ['client_secret_basic'] }) }), storeDirectory: join(root, 'store') }),
+    (error) => error.code === 'IAM_CLIENT_AUTH_METHOD_UNSUPPORTED',
+  );
+
+  await assert.rejects(
+    provisionClientSecret({ exec: async () => ({ code: 0 }), profile, release, lines: [], fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) }), storeDirectory: join(root, 'store') }),
+    (error) => error.code === 'IAM_DISCOVERY_FAILED',
+  );
+});
+
+test('credentialStoreDirectory 与凭据库同规则，probeStoreDirectory 用空文件探针', (t) => {
+  const root = tempRoot(t);
+  const host = '/srv/people/a';
+  assert.equal(
+    credentialStoreDirectory({ platform: 'darwin', home: host, env: {} }),
+    join(host, 'Library', 'Application Support', 'HeluoForge'),
+  );
+  // win32 分支的路径拼接依赖宿主 path 模块：posix 上 join 会把盘符当普通段，故只断言后缀。
+  const windows = credentialStoreDirectory({ platform: 'win32', home: 'D:\\people\\a', env: { LOCALAPPDATA: 'D:\\people\\a\\AppData\\Local' } });
+  assert.equal(windows.endsWith('AppData/Local/HeluoForge'), true);
+  const fallback = credentialStoreDirectory({ platform: 'win32', home: 'D:\\people\\a', env: { LOCALAPPDATA: 'relative\\Local' } });
+  assert.equal(fallback.startsWith('D:\\people\\a'), true);
+  assert.equal(fallback.endsWith('/AppData/Local/HeluoForge'), true);
+  assert.equal(
+    credentialStoreDirectory({ platform: 'linux', home: host, env: {} }),
+    join(host, '.local', 'share', 'HeluoForge'),
+  );
+  assert.equal(
+    credentialStoreDirectory({ platform: 'linux', home: host, env: { XDG_DATA_HOME: '/srv/xdg' } }),
+    '/srv/xdg/HeluoForge',
+  );
+
+  const dir = join(root, 'store');
+  assert.equal(probeStoreDirectory(dir), dir);
+  assert.deepEqual(readdirSync(dir), [], '探针文件用完即删');
+});
+
+test('ensureStoreDirectory 收紧已存在目录的权限，并拒绝非目录占用', (t) => {
+  const root = tempRoot(t);
+  const dir = join(root, 'store');
+  mkdirSync(dir, { recursive: true, mode: 0o755 });
+  chmodSync(dir, 0o755);
+  const lines = [];
+  assert.equal(ensureStoreDirectory(dir, { lines }), dir);
+  assert.equal(statSync(dir).mode & 0o777, 0o700, '宽松目录被收紧为 0700');
+  assert.match(lines.join('\n'), /已修正为 700/u);
+
+  const keys = join(root, 'keys');
+  mkdirSync(keys, { mode: 0o755 });
+  chmodSync(keys, 0o755);
+  ensureStoreDirectory(keys);
+  assert.equal(statSync(keys).mode & 0o777, 0o700, `<dir>.keys 同样收紧`);
+
+  const blocked = join(root, 'blocked');
+  mkdirSync(blocked, { mode: 0o700 });
+  writeFileSync(`${blocked}.keys`, 'not a directory');
+  assert.throws(() => ensureStoreDirectory(blocked), (error) => error.code === 'IAM_SECRET_STORE_UNWRITABLE');
+});
+
+test('ensureStoreDirectory 识别只剩一半的凭据库，给出可执行修复提示', (t) => {
+  const root = tempRoot(t);
+  const dir = join(root, 'half');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, 'credentials.sqlite'), '', { mode: 0o600 });
+  assert.throws(
+    () => ensureStoreDirectory(dir),
+    (error) => error.code === 'IAM_SECRET_STORE_ORPHANED' && error.message.includes(`${dir}.keys`),
+  );
+
+  const orphan = join(root, 'orphan');
+  mkdirSync(`${orphan}.keys`, { recursive: true, mode: 0o700 });
+  writeFileSync(join(`${orphan}.keys`, 'keyring.json'), '{}', { mode: 0o600 });
+  assert.throws(
+    () => ensureStoreDirectory(orphan),
+    (error) => error.code === 'IAM_SECRET_STORE_ORPHANED' && error.message.includes(`${orphan}.keys`) && error.message.includes(`缺 ${orphan}`),
+  );
+});
+
+test('凭据目录不可写时给出 IAM_SECRET_STORE_UNWRITABLE，而不是笼统的预置失败', async (t) => {
+  const root = tempRoot(t);
+  const { dir } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = { secret: readEmbeddedClientSecret(dir) };
+  const blocked = join(root, 'blocked');
+  writeFileSync(blocked, 'not a directory');
+
+  await assert.rejects(
+    provisionClientSecret({
+      exec: async () => ({ code: 0, stdout: '', stderr: '' }),
+      profile,
+      release,
+      lines: [],
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc' }) }),
+      storeDirectory: join(blocked, 'HeluoForge'),
+    }),
+    (error) => error.code === 'IAM_SECRET_STORE_UNWRITABLE' && error.message.includes(join(blocked, 'HeluoForge')),
+  );
+});
+
+test('既有存储不可用时用空目录诊断区分 IAM_SECRET_STORE_UNHEALTHY', async (t) => {
+  const root = tempRoot(t);
+  const { dir, file } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = { secret: readEmbeddedClientSecret(dir) };
+  const seen = [];
+  const exec = (bin, args, options) => {
+    seen.push(options);
+    const scratch = options?.env?.HELUO_FORGE_STORE_DIRECTORY;
+    const isDiagnostic = typeof scratch === 'string' && scratch.includes('heluo-secret-probe-');
+    return Promise.resolve(!isDiagnostic
+      ? { code: 4, stdout: '', stderr: 'IAM_CLIENT_SECRET_PROVISION_FAILED: 无法预置密钥，请核对输入、客户端登记与凭据存储' }
+      : { code: 0, stdout: '已预置 IAM 客户端密钥。', stderr: '' });
+  };
+
+  await assert.rejects(
+    provisionClientSecret({
+      exec,
+      profile,
+      release,
+      lines: [],
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://old-iam.corp.example/oidc' }) }),
+      storeDirectory: join(root, 'store'),
+    }),
+    (error) => error.code === 'IAM_SECRET_STORE_UNHEALTHY'
+      && error.message.includes(join(root, 'store'))
+      && /已绑定过另一套客户端配置/u.test(error.message),
+  );
+  assert.equal(seen.length, 2, '失败后追加一次临时目录诊断');
+  assert.equal(existsSync(join(dir, file)), true, '诊断不删除交付目录里的密钥文件');
+  assert.equal(seen[1].env.HELUO_FORGE_STORE_DIRECTORY.startsWith(tmpdir()), true, '诊断使用系统临时目录');
+});
+
+test('parseArgs 接受自定义 profile 名（如 uat），拒绝越界名与保留字', () => {
+  for (const name of ['uat', 'uat-2', 'qa1', 'sdk', 'web', 'auto']) {
+    assert.equal(parseArgs(['--release', '/tmp/release', '--profile', name]).profile, name);
+  }
+  for (const name of ['../evil', 'Uat', 'a/b', '-x', 'auto!']) {
+    assert.throws(
+      () => parseArgs(['--release', '/tmp/release', '--profile', name]),
+      (error) => {
+        assert.equal(error instanceof InitError, true);
+        assert.equal(error.code, 'PROFILE_INVALID', `${JSON.stringify(name)} 期望 PROFILE_INVALID，实际 ${error.code}`);
+        return true;
+      },
+    );
+  }
+});
+
+test('runInit --profile uat 从 web 模板创建自定义 profile 后安装并给出启动命令', async (t) => {
+  const root = tempRoot(t);
+  const { dir, tarballPath } = writeRelease(root);
+  const bin = join(root, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const dshPath = join(bin, 'dsh');
+  writeFileSync(dshPath, '#!/bin/sh\nexit 0\n');
+  chmodSync(dshPath, 0o755);
+  const dshHome = join(root, 'dsh');
+  const profileDir = join(dshHome, 'profiles', 'uat');
+  const calls = [];
+  const exec = async (command, args) => {
+    calls.push({ command, args });
+    if (args[0] === 'plugin') {
+      const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
+      manifest.dependencies = { ...(manifest.dependencies ?? {}), [ENTRY_PACKAGE]: `file:${args[4]}` };
+      manifest.dsh = { profile: { bundles: ['@deepseek-ai/dsh-web-app', ENTRY_PACKAGE] } };
+      writeFileSync(join(profileDir, 'package.json'), JSON.stringify(manifest));
+      const installed = join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/'));
+      mkdirSync(installed, { recursive: true });
+      writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: ENTRY_PACKAGE, version: '0.1.0' }));
+      return { code: 0, stdout: 'added', stderr: '' };
+    }
+    if (!existsSync(join(profileDir, 'package.json'))) {
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+        name: 'dsh-profile-uat',
+        private: true,
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-web-app'] } },
+        dependencies: {},
+      }));
+    }
+    return {
+      code: 0,
+      stdout: existsSync(join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/')))
+        ? JSON.stringify({ plugins: [{ name: ENTRY_PACKAGE }] })
+        : '{}',
+      stderr: '',
+    };
+  };
+  const outcome = await runInit({
+    argv: ['--release', dir, '--profile', 'uat', '--dsh', dshPath],
+    env: { PATH: writePnpm(root), DSH_HOME: dshHome },
+    home: join(root, 'home'),
+    exec,
+  });
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.profile, 'uat');
+  assert.equal(outcome.result.verified.dumpConfig, true);
+  assert.ok(
+    calls.some((call) => call.args.join(' ') === '--profile uat --from-default-profile web --dump-config'),
+    '自定义 profile 必须由宿主从 shipped web 模板创建，而不是复用 web',
+  );
+  assert.ok(calls.some((call) => call.args.join(' ') === `plugin --profile uat add ${tarballPath}`));
+  assert.match(outcome.lines.join('\n'), /dsh --profile uat/, '启动提示要给出自定义 profile 的启动命令');
+  assert.doesNotMatch(outcome.lines.join('\n'), /终端运行 dsh web（/, '自定义 profile 不能提示 dsh web');
 });

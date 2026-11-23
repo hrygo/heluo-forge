@@ -23,11 +23,11 @@
  *   node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web>
  *     [--sha256 <hex>] [--dsh <path>] [--dry-run] [--json]
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** 本插件在 profile 中的包名；与私版清单、补丁层同源。 */
@@ -36,6 +36,17 @@ export const ENTRY_PACKAGE = '@heluo/forge-enterprise';
 /** 受支持的目标 profile；`auto` 表示按已有 profile 选择，缺失时创建 web。 */
 export const PROFILE_NAMES = Object.freeze(['desktop', 'web']);
 export const PROFILE_CHOICES = Object.freeze(['desktop', 'web', 'auto']);
+
+/**
+ * 自定义 profile 名（如 `uat`）。官方宿主按 `$DSH_HOME/profiles/<name>` 装载 profile，
+ * 名字就是目录名，所以只接受与目录安全一致的字符集，且不把保留字 `auto` 当名字。
+ */
+export const CUSTOM_PROFILE_PATTERN = Object.freeze(/^[a-z][a-z0-9-]{0,31}$/u);
+
+/** @param {string} name @returns {boolean} */
+export function isSupportedProfileName(name) {
+  return PROFILE_CHOICES.includes(name) || (name !== 'auto' && CUSTOM_PROFILE_PATTERN.test(name));
+}
 
 /**
  * 官方宿主 npm 包名与默认安装版本；版本可用 `--host-version` 覆盖。
@@ -52,6 +63,15 @@ export const RELEASE_SCHEMA = 'heluo-private-release/1';
 /** 私版交付 sidecar 文件名；制作器写在交付目录顶层，tgz 内另嵌 `heluo-private-release.json`。 */
 export const METADATA_FILE = 'private-release.json';
 
+/** 交付目录内可选的内嵌客户端密钥描述文件（`release-delivery --embed-client-secret` 写入）。 */
+export const CLIENT_SECRET_BINDING_FILE = 'client-secret.json';
+/** 内嵌密钥绑定文件的 schema；与 release-delivery 写出的内容同源。 */
+export const CLIENT_SECRET_SCHEMA = 'heluo-client-secret/1';
+/** Discovery 文档的超时：企业内网 IAM 通常很快，超过 20 秒视为不可达。 */
+export const DISCOVERY_TIMEOUT_MS = 20_000;
+/** 预置客户端密钥的子进程超时；写本机凭据库只是本地操作。 */
+export const PROVISION_TIMEOUT_MS = 60_000;
+
 /** pnpm 安装依赖可能较慢，安装步骤超时给足；核验是只读组合，无需那么久。 */
 export const INSTALL_TIMEOUT_MS = 300_000;
 export const VERIFY_TIMEOUT_MS = 120_000;
@@ -62,13 +82,14 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const HOST_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/u;
 
 export const USAGE = [
-  '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto>',
+  '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto|名称>',
   '        [--sha256 <hex>] [--dsh <path>] [--install-host] [--host-version <ver>]',
   '        [--dry-run] [--json]',
   '',
   '  --release <目录>   私版交付目录（须含 private-release.json 与同名 tgz）',
-  '  --profile <名>     web 或 auto（auto：已有 web 优先，都没有则创建 web）；desktop 由',
-  '                     Desktop 应用独占，脚本会先探测宿主是否支持命令行核验，不支持就拒绝',
+  '  --profile <名>     web、auto（已有 web 优先，都没有则创建 web），或自定义名（如 uat，',
+  '                     缺失时从 shipped web 模板创建）；desktop 由 Desktop 应用独占，',
+  '                     脚本会先探测宿主是否支持命令行核验，不支持就拒绝',
   '  --sha256 <hex>     调用方提供的摘要；脚本无法判断来源是否独立，交付包内启动器传入的',
   '                     是同一 tgz 的自算值（自证，只能发现损坏）',
   '  --dsh <path>       指定 dsh（原生可执行文件或 npm 的 .cmd/.bat shim）；缺省在 PATH 查找',
@@ -221,10 +242,14 @@ export function parseArgs(argv) {
     throw new InitError('BAD_ARGUMENT', 'init: 缺少 --release <交付目录>', '先提供含 private-release.json 与同名 tgz 的交付目录。');
   }
   if (options.profile === undefined) {
-    throw new InitError('BAD_ARGUMENT', 'init: 缺少 --profile <desktop|web|auto>', '用 --profile auto 自动选择/创建 web profile，或显式指定 desktop/web。');
+    throw new InitError('BAD_ARGUMENT', 'init: 缺少 --profile <desktop|web|auto|名称>', '用 --profile auto 自动选择/创建 web profile，或显式指定 desktop、web 或自定义 profile 名（如 uat）。');
   }
-  if (!PROFILE_CHOICES.includes(options.profile)) {
-    throw new InitError('PROFILE_INVALID', `init: 不支持的 profile「${options.profile}」`, '只接受 desktop、web 或 auto。');
+  if (!isSupportedProfileName(options.profile)) {
+    throw new InitError(
+      'PROFILE_INVALID',
+      `init: 不支持的 profile「${options.profile}」`,
+      '只接受 desktop、web、auto，或形如 uat 的自定义 profile 名（小写字母开头，可含数字与连字符）。',
+    );
   }
   if (!HOST_VERSION.test(options.hostVersion)) {
     throw new InitError('HOST_VERSION_INVALID', `init: --host-version 不是合法版本号「${options.hostVersion}」`, '传入纯版本号（形如 x.y.z-rc.1），不要带包名或路径。');
@@ -468,9 +493,10 @@ export function readPrivateRelease(directory) {
   if (typeof version !== 'string' || version.trim() === '') {
     throw new InitError('SIDECAR_INVALID', 'init: sidecar 缺少企业包版本', '重新取得完整私版交付目录。');
   }
-  if (metadata?.config?.secretEmbedded !== false) {
-    throw new InitError('SECRET_EMBEDDED', 'init: sidecar 未声明 config.secretEmbedded=false，拒绝安装', '企业私版不得内嵌 secret；退回制作端修正后重新制作。');
-  }
+  // 内嵌客户端密钥是管理员显式选择的交付形态：sidecar 记录 secretEmbedded，绑定文件
+  // 记录摘要，安装器装完后立即写入本机凭据库并删除该文件。二者缺一即拒绝安装，
+  // 不允许“声明内嵌却没有可用的密钥文件”。
+  const secret = metadata?.config?.secretEmbedded === true ? readEmbeddedClientSecret(dir) : null;
   const tarball = metadata?.tarball;
   if (typeof tarball?.name !== 'string' || tarball.name === '' || tarball.name !== tarball.name.split(/[\\/]/u).pop()) {
     throw new InitError('SIDECAR_INVALID', 'init: sidecar 的 tarball.name 不是简单文件名', '拒绝可能越界的路径；重新取得完整私版交付目录。');
@@ -493,7 +519,7 @@ export function readPrivateRelease(directory) {
   if (digest !== tarball.sha256) {
     throw new InitError('SIDECAR_DIGEST_MISMATCH', `init: ${tarball.name} 摘要与 sidecar 记录不一致`, '重新取得未损坏的制品；sidecar 自证不符时不得继续。');
   }
-  return { dir, metadataPath, metadata, version, tarballName: tarball.name, tarballPath, sha256: digest, bytes };
+  return { dir, metadataPath, metadata, version, tarballName: tarball.name, tarballPath, sha256: digest, bytes, secret };
 }
 
 /**
@@ -501,9 +527,354 @@ export function readPrivateRelease(directory) {
  *
  * @returns {{name: string, dir: string, manifestPath: string, manifest: object, dshHome: string}}
  */
+
+/**
+ * 读取交付目录内嵌的客户端密钥与绑定描述。
+ *
+ * 只返回绑定信息与文件路径，密钥内容留在文件里，由预置步骤直接送进子进程 stdin。
+ * 密钥文件已被删除时返回 `path: null`：那是成功预置后的正常状态，重跑安装脚本不能
+ * 因此拒绝安装（窗口期只有一次）。
+ *
+ * @returns {{binding: object, path: string|null, bytes: Buffer|null}}
+ */
+export function readEmbeddedClientSecret(dir) {
+  const bindingPath = join(dir, CLIENT_SECRET_BINDING_FILE);
+  if (!existsSync(bindingPath)) {
+    throw new InitError(
+      'SECRET_BUNDLE_INCOMPLETE',
+      `init: sidecar 声明内嵌客户端密钥，但交付目录缺少 ${CLIENT_SECRET_BINDING_FILE}`,
+      '重新取得完整私版交付目录；不要只拷 tgz，也不要手工删除绑定文件。',
+    );
+  }
+  let binding;
+  try {
+    binding = JSON.parse(readFileSync(bindingPath, 'utf8'));
+  } catch {
+    throw new InitError('SECRET_BUNDLE_INCOMPLETE', `init: ${CLIENT_SECRET_BINDING_FILE} 不是合法 JSON`, '重新取得完整私版交付目录。');
+  }
+  const invalid = (message) => new InitError('SECRET_BUNDLE_INCOMPLETE', `init: ${CLIENT_SECRET_BINDING_FILE} ${message}`, '重新取得完整私版交付目录；不要手写或修改绑定文件。');
+  if (binding?.schema !== CLIENT_SECRET_SCHEMA) throw invalid(`schema 不是 ${CLIENT_SECRET_SCHEMA}`);
+  const file = binding?.file;
+  if (typeof file !== 'string' || file === '' || basename(file) !== file) throw invalid('的 file 不是简单文件名');
+  if (!SHA256.test(String(binding?.sha256 ?? ''))) throw invalid('的 sha256 不是 64 位十六进制摘要');
+  if (typeof binding?.clientId !== 'string' || binding.clientId === '') throw invalid('缺少 clientId');
+  if (!['client_secret_basic', 'client_secret_post'].includes(binding?.clientAuthMethod)) throw invalid('的 clientAuthMethod 不是 client_secret_basic|client_secret_post');
+  if (typeof binding?.clientSecretRef !== 'string' || binding.clientSecretRef === '') throw invalid('缺少 clientSecretRef');
+  if (typeof binding?.discoveryUrl !== 'string' && typeof binding?.issuer !== 'string') throw invalid('既没有 discoveryUrl 也没有 issuer');
+  // 换 IAM 环境时，同一 ref 在旧交付里可能绑定过别的 issuer；制包人知道旧值，就写进绑定文件，
+  // 安装器在遇到绑定冲突时用它做 client-secret replace。只接受 http(s)、不带用户信息的 URL。
+  const previousIssuers = binding?.previousIssuers;
+  if (previousIssuers !== undefined) {
+    const wellFormed = Array.isArray(previousIssuers) && previousIssuers.every((entry) => {
+      if (typeof entry !== 'string' || !canParseUrl(entry)) return false;
+      const parsed = new URL(entry);
+      return ['https:', 'http:'].includes(parsed.protocol) && parsed.username === '' && parsed.password === '';
+    });
+    if (!wellFormed) throw invalid('的 previousIssuers 不是 http(s) URL 数组');
+  }
+  const path = join(dir, file);
+  if (!existsSync(path)) return { binding, path: null, bytes: null };
+  const bytes = readFileSync(path);
+  if (bytes.length === 0) throw invalid(`指向的 ${file} 是空文件`);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (digest !== binding.sha256) {
+    throw new InitError(
+      'SECRET_BUNDLE_MISMATCH',
+      `init: ${file} 摘要与 ${CLIENT_SECRET_BINDING_FILE} 记录不一致`,
+      '制品在传输中被改动或损坏；重新取得交付目录，不要手工替换密钥文件。',
+    );
+  }
+  return { binding, path, bytes };
+}
+
+/** 从 Discovery 文档取 issuer，并核对 IAM 登记的 token 端点认证方式。 */
+async function resolveSecretIssuer(binding, fetchImpl) {
+  if (typeof binding.discoveryUrl !== 'string' || binding.discoveryUrl === '') {
+    return binding.issuer;
+  }
+  let response;
+  try {
+    response = await fetchImpl(binding.discoveryUrl, { signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS), redirect: 'follow' });
+  } catch (error) {
+    throw new InitError(
+      'IAM_DISCOVERY_FAILED',
+      `init: 读取 IAM Discovery 失败（${error?.message ?? 'UNKNOWN'}）：${binding.discoveryUrl}`,
+      '确认这台机器能访问企业 IAM 后重跑本脚本；密钥文件仍保留在交付目录，重跑会重新预置。',
+    );
+  }
+  if (!response.ok) {
+    throw new InitError(
+      'IAM_DISCOVERY_FAILED',
+      `init: IAM Discovery 返回 HTTP ${response.status}：${binding.discoveryUrl}`,
+      '确认 Discovery 地址与网络策略后重跑本脚本；密钥文件仍保留。',
+    );
+  }
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    throw new InitError('IAM_DISCOVERY_INVALID', 'init: IAM Discovery 不是合法 JSON', '确认 Discovery 地址指向 openid-configuration 文档。');
+  }
+  const issuer = document?.issuer;
+  if (typeof issuer !== 'string' || issuer.trim() === '') {
+    throw new InitError('IAM_DISCOVERY_INVALID', 'init: IAM Discovery 文档缺少 issuer', '确认 IAM 的 Discovery 文档完整后重跑。');
+  }
+  const methods = document?.token_endpoint_auth_methods_supported;
+  if (Array.isArray(methods) && !methods.includes(binding.clientAuthMethod)) {
+    throw new InitError(
+      'IAM_CLIENT_AUTH_METHOD_UNSUPPORTED',
+      `init: IAM 登记的 token 端点认证方式不含 ${binding.clientAuthMethod}（${methods.join(', ')}）`,
+      '与管理员的 IAM 客户端登记对齐（本包 authMethod 与 IAM 登记必须逐字一致），或重新制作交付包。',
+    );
+  }
+  return issuer.trim();
+}
+
+/**
+ * 本机凭据库目录。规则与 `@heluo/forge-credentials-keychain` 的
+ * `selectDefaultStoreDirectory` 一致；安装器单文件自包含、不 import 仓库模块，故在此复刻，
+ * 两处规则必须一起改。
+ */
+export function credentialStoreDirectory({ platform = process.platform, home = homedir(), env = process.env } = {}) {
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'HeluoForge');
+  if (platform === 'win32') {
+    const local = env?.LOCALAPPDATA;
+    const usable = typeof local === 'string' && local !== '' && isAbsolute(local) && parse(local).root.length > 1;
+    return join(usable ? local : join(home, 'AppData', 'Local'), 'HeluoForge');
+  }
+  const previous = join(home, '.local', 'share', 'HeluoForge');
+  const xdg = env?.XDG_DATA_HOME;
+  return platform === 'linux' && typeof xdg === 'string' && isAbsolute(xdg) ? join(xdg, 'HeluoForge') : previous;
+}
+
+/** 预检目录能建、能写、能删；只写空探针文件，不碰密钥内容。 */
+export function probeStoreDirectory(directory) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const probe = join(directory, `.heluo-write-probe-${process.pid}`);
+  writeFileSync(probe, '', { mode: 0o600 });
+  unlinkSync(probe);
+  return directory;
+}
+
+/**
+ * 校验并修正凭据目录权限，再预检可写。
+ *
+ * 凭据库要求数据目录与 `<dir>.keys` 都是 0700 且属主是当前用户；不满足时库抛
+ * `CRED_STORE_PERMISSIONS`，而 CLI 只把它折叠成一句「无法预置密钥」，退出码 4，
+ * 安装器看不到真实原因。目录属主正确、只是模式偏宽时就地收紧到 0700（只收紧，不放松）；
+ * 属主不对（sudo 或别的账号建的）不擅自 chown，直接报可执行的修复路径。
+ */
+export function ensureStoreDirectory(directory, { lines = [], platform = process.platform } = {}) {
+  // 数据目录与 `<dir>.keys` 必须成对：凭据库遇到只有一半的存储会抛
+  // CRED_STORE_UNAVAILABLE（orphaned keyring exists），CLI 再把它折叠成通用失败。
+  const keyDirectory = `${directory}.keys`;
+  const keyring = join(keyDirectory, 'keyring.json');
+  const database = join(directory, 'credentials.sqlite');
+  if ((existsSync(keyring) && !existsSync(directory)) || (existsSync(database) && !existsSync(keyring))) {
+    throw new InitError(
+      'IAM_SECRET_STORE_ORPHANED',
+      `init: 凭据库只剩一半（${existsSync(keyring) ? `有 ${keyDirectory}，缺 ${directory}` : `有 ${database}，缺 ${keyring}`}）`,
+      '多为备份/迁移只拷了其中一个目录，或手工删过。能还原就把缺的一半还原，否则把两个目录一起移走（备份后 mv）再重跑；密钥文件保留在交付目录。',
+    );
+  }
+  for (const target of [directory, keyDirectory]) {
+    if (!existsSync(target)) continue;
+    const info = statSync(target);
+    if (!info.isDirectory()) {
+      throw new InitError(
+        'IAM_SECRET_STORE_UNWRITABLE',
+        `init: 凭据目录位置被非目录占用（${target}）`,
+        '备份并移走该文件后重跑本脚本。密钥文件保留在交付目录。',
+      );
+    }
+    if (platform === 'win32' || typeof process.getuid !== 'function') continue;
+    if (info.uid !== process.getuid()) {
+      throw new InitError(
+        'IAM_SECRET_STORE_FOREIGN_OWNER',
+        `init: 凭据目录不属于当前用户（${target}，owner uid ${info.uid}）`,
+        '该目录多半是 sudo 或别的账号创建的。不要用 sudo 运行本脚本；把目录改回当前用户所有后重跑。密钥文件保留在交付目录。',
+      );
+    }
+    const mode = info.mode & 0o777;
+    if (mode !== 0o700) {
+      chmodSync(target, 0o700);
+      lines.push(`IAM 客户端密钥：凭据目录 ${target} 权限 ${mode.toString(8).padStart(3, '0')} 已修正为 700`);
+    }
+  }
+  return probeStoreDirectory(directory);
+}
+
+/**
+ * 用全新临时目录重跑同一条预置命令，用来区分「本机存储坏了」和「CLI 本身跑不通」。
+ * 只写临时目录、随即删除，不碰既有凭据库。
+ */
+async function diagnoseProvision({ exec, args, bytes }) {
+  const scratch = mkdtempSync(join(tmpdir(), 'heluo-secret-probe-'));
+  try {
+    const result = await exec(process.execPath, args, {
+      timeout: PROVISION_TIMEOUT_MS,
+      shell: false,
+      input: bytes,
+      env: { ...process.env, HELUO_FORGE_STORE_DIRECTORY: scratch },
+    });
+    if (typeof result?.code !== 'number') return { ok: false, reason: '子进程没有返回退出码' };
+    return { ok: result.code === 0, reason: result.code === 0 ? '' : reasonTail(result) };
+  } catch (error) {
+    return { ok: false, reason: typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN') };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** URL.canParse 在旧 Node 上不存在时的等价判断。 */
+function canParseUrl(value) {
+  return typeof URL.canParse === 'function' ? URL.canParse(value) : (() => { try { new URL(value); return true; } catch { return false; } })();
+}
+
+/**
+ * 同一 ref 已绑定别的 issuer 时，用 client-secret replace 更正绑定。
+ *
+ * 凭据库的规则是「同一 ref 的 (issuer, clientId, method) 必须逐字一致」，换环境后 set 必然
+ * 被拒（IAM_CLIENT_SECRET_BINDING_MISMATCH），而 CLI 把它折叠成退出码 4，安装器看不到真因。
+ * 保留的 scope 也读不回来（通用读取被 CRED_STORE_INVALID 拒绝），所以只能由制包人把旧
+ * issuer 写进 client-secret.json，安装器逐个候选值试 replace；错的候选会被库拒绝，不会误改。
+ */
+async function rebindClientSecret({ exec, cli, store, secret, issuer, lines }) {
+  const candidates = Array.isArray(secret.binding.previousIssuers) ? secret.binding.previousIssuers : [];
+  const attempted = [];
+  for (const previous of candidates) {
+    const args = [
+      cli, 'client-secret', 'replace',
+      '--issuer', issuer,
+      '--client-id', secret.binding.clientId,
+      '--method', secret.binding.clientAuthMethod,
+      '--ref', secret.binding.clientSecretRef,
+      '--old-issuer', previous,
+      '--old-client-id', secret.binding.clientId,
+      '--old-method', secret.binding.clientAuthMethod,
+    ];
+    let result;
+    try {
+      result = await exec(process.execPath, args, {
+        timeout: PROVISION_TIMEOUT_MS,
+        shell: false,
+        input: secret.bytes,
+        env: { ...process.env, HELUO_FORGE_STORE_DIRECTORY: store },
+      });
+    } catch (error) {
+      attempted.push(`${previous} → ${error?.code ?? error?.message ?? 'UNKNOWN'}`);
+      continue;
+    }
+    if (result?.code === 0) {
+      lines.push(`IAM 客户端密钥：引用「${secret.binding.clientSecretRef}」原先绑定 ${previous}，已更正为 ${issuer}（旧记录被 replace 覆盖）`);
+      return { ok: true, previous };
+    }
+    attempted.push(`${previous} → ${reasonTail(result)}`);
+  }
+  return { ok: false, attempted };
+}
+
+/**
+ * 把交付目录内嵌的客户端密钥写入本机 Host 凭据库。
+ *
+ * 成功后删除交付目录里的密钥文件；失败保留并抛错——宁可安装报失败，也不要留下
+ * “插件装好了但登录不了”的假成功。
+ *
+ * @returns {Promise<{status: 'provisioned'|'already-removed'|'absent'}>}
+ */
+export async function provisionClientSecret({ exec, profile, release, lines, fetchImpl = fetch, storeDirectory }) {
+  const secret = release.secret;
+  if (secret === null) return { status: 'absent' };
+  if (secret.path === null) {
+    lines.push('IAM 客户端密钥：交付目录内已无密钥文件，跳过预置（视为已预置；若登录报 IAM_CLIENT_AUTH_UNVERIFIED，请管理员重新下发密钥）。');
+    return { status: 'already-removed' };
+  }
+  const issuer = await resolveSecretIssuer(secret.binding, fetchImpl);
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  if (!existsSync(cli)) {
+    throw new InitError(
+      'IAM_CLIENT_SECRET_CLI_MISSING',
+      `init: 已安装的插件里找不到凭据运维入口（${relative(profile.dir, cli)}）`,
+      '确认安装的是完整的企业私版（含 forge-iam）；密钥文件保留在交付目录，修复后重跑。',
+    );
+  }
+  const override = typeof process.env.HELUO_FORGE_STORE_DIRECTORY === 'string' && process.env.HELUO_FORGE_STORE_DIRECTORY !== ''
+    ? process.env.HELUO_FORGE_STORE_DIRECTORY
+    : null;
+  const store = storeDirectory ?? (override === null ? credentialStoreDirectory() : resolve(override));
+  try {
+    ensureStoreDirectory(store, { lines });
+  } catch (error) {
+    if (error instanceof InitError) throw error;
+    throw new InitError(
+      'IAM_SECRET_STORE_UNWRITABLE',
+      `init: 凭据目录不可用（${store}）：${error?.code ?? error?.message ?? 'UNKNOWN'}`,
+      '检查该目录的所有者与权限；不要用 sudo 运行本脚本——sudo 会把记录写进 root 家目录，员工登录时读不到。修复后重跑本脚本。',
+    );
+  }
+  const args = [
+    cli, 'client-secret', 'set',
+    '--issuer', issuer,
+    '--client-id', secret.binding.clientId,
+    '--method', secret.binding.clientAuthMethod,
+    '--ref', secret.binding.clientSecretRef,
+  ];
+  let result;
+  try {
+    result = await exec(process.execPath, args, {
+      timeout: PROVISION_TIMEOUT_MS,
+      shell: false,
+      input: secret.bytes,
+      env: { ...process.env, HELUO_FORGE_STORE_DIRECTORY: store },
+    });
+  } catch (error) {
+    throw new InitError(
+      'IAM_CLIENT_SECRET_PROVISION_FAILED',
+      `init: 写入本机凭据库失败（${error?.code ?? error?.message ?? 'UNKNOWN'}）`,
+      '密钥文件仍保留在交付目录；按提示修复后重跑本脚本即可重新预置。',
+    );
+  }
+  let reboundFrom;
+  if (typeof result?.code === 'number' && result.code !== 0) {
+    const reason = reasonTail(result);
+    const rebound = await rebindClientSecret({ exec, cli, store, secret, issuer, lines });
+    if (rebound.ok) reboundFrom = rebound.previous;
+    if (!rebound.ok) {
+      if (rebound.attempted.length > 0) {
+        throw new InitError(
+          'IAM_CLIENT_SECRET_BINDING_CONFLICT',
+          `init: 引用「${secret.binding.clientSecretRef}」在本机凭据库里已绑定另一套 IAM 客户端配置，且候选旧 issuer 都没能更正（${rebound.attempted.join('；')}）`,
+          `本包声明的 issuer 是 ${issuer}，clientId ${secret.binding.clientId}，method ${secret.binding.clientAuthMethod}。若旧绑定来自历史交付，用 client-secret replace --old-issuer <旧 issuer> --old-client-id ${secret.binding.clientId} --old-method ${secret.binding.clientAuthMethod} 手工更正，或在制包时加 --previous-issuer <旧 issuer> 重出；密钥文件保留在交付目录。`,
+        );
+      }
+      const diagnostic = await diagnoseProvision({ exec, args, bytes: secret.bytes });
+      if (diagnostic.ok) {
+        throw new InitError(
+          'IAM_SECRET_STORE_UNHEALTHY',
+          `init: 本机凭据存储不可用（${store}）：同一命令在全新临时目录下可以写入，说明问题在既有存储——目录所有者/权限、磁盘空间，或「${secret.binding.clientSecretRef}」已绑定过另一套客户端配置${reason === '' ? '' : `（CLI 原始报错：${reason}）`}`,
+          '若确认是历史绑定，制包时加 --previous-issuer <旧 issuer> 重出，或在目标机用 client-secret replace --old-issuer/--old-client-id/--old-method 更正；否则备份并移走该目录（或检查其权限）后重跑。密钥文件保留在交付目录。',
+        );
+      }
+      throw new InitError(
+        'IAM_CLIENT_SECRET_PROVISION_FAILED',
+        `init: 写入本机凭据库失败（退出码 ${result.code}）${reason === '' ? '' : `：${reason}`}${diagnostic.reason === '' ? '' : `；空目录诊断同样失败（${diagnostic.reason}）`}`,
+        '密钥文件仍保留在交付目录；修复凭据存储（磁盘空间、权限、keyring）后重跑本脚本，或用交付目录 INSTALL.md 里的手工命令预置。',
+      );
+    }
+  }
+  rmSync(secret.path, { force: true });
+  lines.push(`IAM 客户端密钥：已写入本机凭据库（issuer ${issuer}，引用 ${secret.binding.clientSecretRef}），交付目录内密钥文件已删除`);
+  return reboundFrom === undefined ? { status: 'provisioned' } : { status: 'provisioned', reboundFrom };
+  return { status: 'provisioned' };
+}
+
 export function inspectProfile({ profile, env = {}, home = homedir() }) {
-  if (!PROFILE_NAMES.includes(profile)) {
-    throw new InitError('PROFILE_INVALID', `init: 不支持的 profile「${profile}」`, '只接受 desktop 或 web；脚本不创建 profile。');
+  if (profile === 'auto' || !isSupportedProfileName(profile)) {
+    throw new InitError(
+      'PROFILE_INVALID',
+      `init: 不支持的 profile「${profile}」`,
+      '只接受 desktop、web 或已创建的自定义 profile 名（如 uat）；desktop 只能由 Desktop 应用创建。',
+    );
   }
   const dshHome = dshHomeOf(env, home);
   const dir = join(dshHome, 'profiles', profile);
@@ -511,7 +882,7 @@ export function inspectProfile({ profile, env = {}, home = homedir() }) {
   if (!existsSync(manifestPath)) {
     const next = profile === 'desktop'
       ? '先启动一次官方 DeepSeek Harness Desktop 完成 profile 初始化并完全退出，再重跑本脚本。'
-      : '先启动一次官方 DSH Web 初始化该 profile，再重跑本脚本。';
+      : `先运行 dsh --profile ${profile} --dump-config 初始化该 profile（自定义名可加 --from-default-profile web），再重跑本脚本。`;
     throw new InitError('PROFILE_MISSING', `init: profile「${profile}」尚未初始化（缺少 profiles/${profile}/package.json）`, next);
   }
   let manifest;
@@ -686,28 +1057,56 @@ function artifactIdentityOf(profile, release) {
 function nextStepLine(profileName) {
   return profileName === 'desktop'
     ? `下一步：在 Desktop 应用的「设置 → 插件」确认 ${ENTRY_PACKAGE} 已加载（desktop profile 由应用独占，命令行不再改动它）。`
-    : `下一步：在终端运行 dsh web，打开它打印的本机地址，在「设置 → 插件」确认 ${ENTRY_PACKAGE} 已加载（Desktop 是另一个 profile，打开它不会看到本次安装）。`;
+    : (() => {
+      const start = profileName === 'web' ? 'dsh web' : `dsh --profile ${profileName}`;
+      return `下一步：在终端运行 ${start}（换端口用 --port <端口>），打开它打印的本机地址，在「设置 → 插件」确认 ${ENTRY_PACKAGE} 已加载（Desktop 是另一个 profile，打开它不会看到本次安装）。`;
+    })();
 }
 
 function defaultExec() {
-  return (bin, args, options) =>
-    new Promise((settle) => {
-      execFile(bin, args, { ...options, shell: false }, (error, stdout, stderr) => {
-        settle({
-          code: error === null ? 0 : typeof error.code === 'number' ? error.code : 1,
-          stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? ''),
+  return (bin, args, options) => {
+    const { input, ...rest } = options ?? {};
+    // 需要往子进程 stdin 送数据（预置客户端密钥时）只能走 spawn：execFile 不提供 stdin。
+    if (input === undefined) {
+      return new Promise((settle) => {
+        execFile(bin, args, { ...rest, shell: false }, (error, stdout, stderr) => {
+          settle({
+            code: error === null ? 0 : typeof error.code === 'number' ? error.code : 1,
+            stdout: String(stdout ?? ''),
+            stderr: String(stderr ?? ''),
+          });
         });
       });
+    }
+    return new Promise((settle) => {
+      const child = spawn(bin, args, { ...rest, shell: false });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('error', (error) => {
+        settle({ code: 1, stdout, stderr: `${stderr}${error?.message ?? ''}` });
+      });
+      child.on('close', (code) => {
+        settle({ code: typeof code === 'number' ? code : 1, stdout, stderr });
+      });
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
     });
+  };
 }
 
 const resolveExec = (exec) => (typeof exec === 'function' ? exec : defaultExec());
 
-async function runStep(exec, launch, args, timeout, failureCode, { env } = {}) {
+async function runStep(exec, launch, args, timeout, failureCode, { env, input } = {}) {
   let result;
   try {
-    result = await exec(launch.bin, [...launch.prefix, ...args], { timeout, shell: false, ...(env === undefined ? {} : { env }) });
+    result = await exec(launch.bin, [...launch.prefix, ...args], {
+      timeout,
+      shell: false,
+      ...(env === undefined ? {} : { env }),
+      ...(input === undefined ? {} : { input }),
+    });
   } catch (error) {
     const reason = typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN');
     throw new InitError(failureCode, `init: 调用 dsh 失败（${reason}）`, '确认 --dsh 指向可用的 dsh（原生可执行文件或 npm 的 dsh.cmd）、宿主未在升级中，再重跑。');
@@ -781,17 +1180,25 @@ async function installHost({ exec, env, platform, version, lines }) {
   );
 }
 
-/** 用官方宿主的 `--dump-config` 创建 shipped web profile 模板；不启动服务。 */
-async function createWebProfile({ exec, launch, lines }) {
-  const result = await runStep(exec, launch, ['--profile', 'web', '--dump-config'], VERIFY_TIMEOUT_MS, 'PROFILE_CREATE_FAILED');
+/**
+ * 用官方宿主的 `--dump-config` 创建 profile 模板；不启动服务。
+ *
+ * `web` 由宿主直接初始化；自定义名（如 `uat`）从 shipped 的 web 模板复制，
+ * 因为宿主只为 shipped 名字准备模板，自定义名必须显式给出 `--from-default-profile`。
+ */
+async function createProfile({ exec, launch, name, lines }) {
+  const args = name === 'web'
+    ? ['--profile', 'web', '--dump-config']
+    : ['--profile', name, '--from-default-profile', 'web', '--dump-config'];
+  const result = await runStep(exec, launch, args, VERIFY_TIMEOUT_MS, 'PROFILE_CREATE_FAILED');
   if (result.code !== 0) {
     throw new InitError(
       'PROFILE_CREATE_FAILED',
-      `init: 创建 web profile 失败（dsh --dump-config 退出码 ${result.code}）`,
+      `init: 创建 profile「${name}」失败（dsh --dump-config 退出码 ${result.code}）`,
       '确认宿主安装完整、DSH_HOME 可写后重跑；脚本不会覆盖已有 profile。',
     );
   }
-  lines.push('profile：已用官方宿主创建 web profile 模板（--dump-config，未启动服务）');
+  lines.push(`profile：已用官方宿主创建 ${name} 模板（--dump-config，未启动服务）`);
 }
 
 /**
@@ -851,7 +1258,7 @@ async function verifyInstall({ exec, launch, profile, lines }) {
  *
  * @param {{argv?: string[], env?: object, home?: string, exec?: Function|null}} [input]
  */
-export async function runInit({ argv = [], env = process.env, home = homedir(), exec = null } = {}) {
+export async function runInit({ argv = [], env = process.env, home = homedir(), exec = null, fetchImpl = fetch } = {}) {
   const lines = [];
   const warnings = [];
   const requestedJson = argv.includes('--json');
@@ -929,7 +1336,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         dshHome,
       };
     } else {
-      await createWebProfile({ exec: resolveExec(exec), launch, lines });
+      await createProfile({ exec: resolveExec(exec), launch, name: profileName, lines });
       profile = inspectProfile({ profile: profileName, env, home });
     }
 
@@ -959,7 +1366,10 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       lines.push(`dry-run：未找到 dsh，将执行 npm install -g ${HOST_PACKAGE}@${options.hostVersion}`);
     }
     if (plannedProfileCreate) {
-      lines.push(`dry-run：profiles/${profile.name} 不存在，将执行 dsh --profile ${profile.name} --dump-config 创建模板`);
+      const createArgv = profile.name === 'web'
+        ? `--profile web --dump-config`
+        : `--profile ${profile.name} --from-default-profile web --dump-config`;
+      lines.push(`dry-run：profiles/${profile.name} 不存在，将执行 dsh ${createArgv} 创建模板`);
     }
     if (declared && installed === null) {
       throw new InitError(
@@ -988,17 +1398,19 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       }
       if (options.dryRun) {
         lines.push('dry-run：未执行安装，未写入 profile');
+        if (release.secret !== null) lines.push('dry-run：安装完成后会把交付目录内的 IAM 客户端密钥写入本机凭据库，并删除该密钥文件');
         lines.push(...verificationPoints(profile));
         return { code: 0, lines, warnings, result: { ...base, status: 'dry-run', command, verified: null } };
       }
       const verification = await verifyInstall({ exec: resolveExec(exec), launch, profile, lines });
+      const secret = await provisionClientSecret({ exec: resolveExec(exec), profile, release, lines, fetchImpl });
       lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
       lines.push(nextStepLine(profile.name));
       return {
         code: 0,
         lines,
         warnings,
-        result: { ...base, status: 'already-installed', command, verified: verification.verified, artifact: { ...artifact, identity: identity.identity } },
+        result: { ...base, status: 'already-installed', command, verified: verification.verified, clientSecret: secret.status, artifact: { ...artifact, identity: identity.identity } },
       };
     }
 
@@ -1012,6 +1424,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     lines.push(`命令：dsh ${command.join(' ')}`);
     if (options.dryRun) {
       lines.push(replacing === null ? 'dry-run：未执行安装，未写入 profile' : 'dry-run：未执行卸载与安装，未写入 profile');
+      if (release.secret !== null) lines.push('dry-run：安装完成后会把交付目录内的 IAM 客户端密钥写入本机凭据库，并删除该密钥文件');
       lines.push(...verificationPoints(profile));
       return {
         code: 0,
@@ -1071,6 +1484,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       lines.push(`制品证据：已记录本次安装的 tgz 摘要与已安装目录摘要（profiles/${profile.name}/${INSTALL_RECORD_FILE}，自证）`);
     }
     const verification = await verifyInstall({ exec: cli, launch, profile, lines });
+    const secret = await provisionClientSecret({ exec: cli, profile, release, lines, fetchImpl });
     lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
     lines.push(nextStepLine(profile.name));
     return {
@@ -1083,6 +1497,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         command,
         ...(replacing === null ? {} : { previousVersion: replacing }),
         verified: verification.verified,
+        clientSecret: secret.status,
         artifact: { ...artifact, identity: identity.identity, detail: identity.detail },
       },
     };
