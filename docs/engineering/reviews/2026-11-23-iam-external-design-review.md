@@ -54,7 +54,7 @@
 | 2.7 | 静态 Key 与 `X-IAM-Token` 头名应配置化，统一走 `resolveGatewayConnection()` | **成立**：头名与 `X-Consumer-Type` 硬编码 | `packages/forge-iam/src/model-transport.mjs:76-77`；`packages/forge-iam/src/service-gateway.mjs` 的连接解析 |
 | 2.8 | 给出 IAM 6.0.3 快速上线推荐配置（不配 `callbackPort`、`gatewayResource` 留空、先去 `offline_access`） | **采纳为模板**：6.0.3 反馈的换票响应直接返回 `refresh_token`，未把 `offline_access` 列为必要条件；`resource` 不支持。注意私版未设置 `HELUO_IAM_SCOPES` 时不写 scopes，插件默认值含 `offline_access`，所以方针是**显式覆盖**而非删除 | `packages/forge-iam/src/config.mjs:80`、`scripts/lib/private-bundle.mjs:70`、`:323-329`；`gatewayResource` 默认空串、不外发 `resource` |
 | 03 | 5 项“可容忍短期风险”（RT 轮换证据不足、RT 不可撤销、跨进程非即时、本地门禁无 PDP、审计未上送） | **采纳**，与本侧既有边界一致，不新增改动 | [IAM 实现与验证记录](../../design/verification/forge-iam.md)；[从 IAM 到 AIGS](../../plans/dsh-plugin-tools/iam-to-aigs-evolution.md) |
-| 05 | 12 项遗漏点（M01—M12：secret 生命周期、`resource`、`offline_access`、旁路清单、多实例、RP 登出、弱网 UX、AIGS 降级、MCP 迁移、补丁覆盖、public 实测、回调前缀负面用例） | **逐项分流**：5 项转 IAM 问题（M01 密钥生命周期、M05 多实例档位、M06 会话失效推送、M11 PKCE 实测、M12 回调测试集），2 项由 6.0.3 反馈结案（M02 `resource`、M03 `offline_access`），3 项属我方（M04 旁路清单、M07 弱网文案、M10 补丁覆盖，其中 M10 已具备），2 项转 AIGS 演进（M08/M09） | [CONF-007 §5](../../collaboration/iam-review-feedback.md#5-最新评审-12-项遗漏点的归属)、PLAN-025 §3 |
+| 05 | 12 项遗漏点（M01—M12：secret 生命周期、`resource`、`offline_access`、旁路清单、多实例、RP 登出、弱网 UX、AIGS 降级、MCP 迁移、补丁覆盖、public 实测、回调前缀负面用例） | **逐项分流**：5 项转 IAM 问题（M01 密钥生命周期、M05 多实例档位、M06 会话失效推送、M11 PKCE 实测、M12 回调测试集），2 项由 6.0.3 反馈结案（M02 `resource`、M03 `offline_access`），3 项属我方（M04 旁路清单、M07 弱网文案、M10 补丁覆盖，其中 M10 已具备），2 项转 AIGS 演进（M08/M09） | [CONF-007 §5](../../collaboration/iam-review-feedback.md#5-最新评审-12-项遗漏点的归属)、PLAN-025 §3（M01/M11/M12 已于 2026-11-23 答复，M05/M06 待答） |
 
 ## 4. 不成立的项与原因
 
@@ -84,7 +84,7 @@
 
 | 编号 | 发现 | 影响 | 处置 |
 |---|---|---|---|
-| N-01 | 授权请求恒定携带 `code_challenge`/`code_challenge_method=S256`，且 `pkce`/`disablePkce` 属禁止配置项，无法关闭（原件只据此论证 public 默认值，未列为阻塞） | 6.0.3 反馈只答“PKCE 能力具备、允许 `plain`、未强制 S256”，S256 是否被接受未知；若不被接受，登录会失败 | 列为 P0 实测项：用一次真实授权请求确认 S256 被接受并留证。不引入 `plain` 分支；若被拒则提交议题由用户裁决，不用弱化 PKCE 换可用性 |
+| N-01 | 授权请求恒定携带 `code_challenge`/`code_challenge_method=S256`，且 `pkce`/`disablePkce` 属禁止配置项，无法关闭（原件只据此论证 public 默认值，未列为阻塞） | 6.0.3 反馈答复“PKCE 能力具备、允许 `plain`、未强制 S256”，S256 是否被接受未知；若不被接受，登录会失败 | 列为 P0 实测项：用一次真实授权请求确认 S256 被接受并留证。不引入 `plain` 分支；若被拒则提交议题由用户裁决，不用弱化 PKCE 换可用性 |
 | N-02 | `userInfo` 字段名映射（`workNo`/`name`）只能由 Host 选项注入，私版 `.env` 无对应键 | 即使配好 `userInfoEndpoint`，账户页仍可能不显示工号 | 列为 P1 必改：私版暴露字段映射键，默认不投影 |
 | N-03 | 独占断言只覆盖 `deepseekAccount` 服务 | 其他官方行残留时本地不告警 | 列为 P1：断言扩展到装配可见的官方行或改用 reflow 结论 |
 | N-04 | 无 `DEEPSEEK_API_KEY` 等环境旁路的运行期检测 | 环境变量配置的官方 Key 仍可能构成旁路 | 列为 P1：启动检测 + 告警/阻断，与 O3 一致性核验 |
@@ -92,24 +92,25 @@
 
 ## 6. 能力基线与口径更正
 
-能力判定按 ADR-32 固定为 IAM 6.0.3 版本反馈。同一版本内答复冲突时，取企业 IAM 团队较新日期的书面答复；仍无先后可取时按不假设能力存在处理。据此对原件涉及的四处口径做更正：
+能力判定按 ADR-32 固定为 IAM 6.0.3 版本反馈。同一版本内答复冲突时，取企业 IAM 团队较新日期的书面答复；仍无先后可取时按不假设能力存在处理。据此对原件涉及的四处口径做更正，并补入 2026-11-23 三项答复带来的两处改判：
 
 | 事项 | 原件口径 | 6.0.3 反馈结论 | 本记录处置 |
 |---|---|---|---|
 | public client / PKCE | 6.0.3 不支持 public client 与 PKCE | 企业答复称授权码 PKCE 能力具备、允许 `plain`、未强制 S256；刷新必须携带 `client_secret` | 登录基线维持机密客户端；PKCE 固定 S256，不启用 `plain`；S256 接受度列一项实测（FB-IAM-01） |
 | 回调登记 | 必须逐字精确匹配，前缀不受理 | 管理台按前缀登记（`http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 可用），端口可随机；另有固定端口预登记与精确匹配的答复 | 前缀登记为基线，固定端口为可选形态；设计 §4.5.1 据此保持前缀口径并注明两种形态 |
-| `offline_access` | 建议先去掉 | 换票响应直接返回 `refresh_token`，未把 `offline_access` 列为必要条件 | 企业模板去掉该项，兼容默认值不变 |
+| `offline_access` | 建议先去掉 | 换票响应直接返回 `refresh_token`，未把 `offline_access` 列为必要条件 | 企业模板显式覆盖为 `openid profile`，兼容默认值不变 |
 | 令牌实时作废 | 厂商把“已发 AT 实时阻断”列为不具备 | 企业答复称停用立即作废、无宽限期（C5），但网关端到端五分钟未给数值 | 能力按企业答复记录，网关判权仍按未证实处理，不据此开放路径 |
+| 2026-11-23 答复（E1—E3） | —（原件未涉及） | S256 可正常发码；`plain`/`S256` 均可用、不强制；省略参数按 `plain`；未登记参数静默忽略；OIDC 授权流程不校验 `redirect_uri`；secret 系统或人工生成、无推送、更新后最迟 2 分钟失效、不支持并存、回滚为重填旧值 | 两处改判：PKCE 由“未答”改为“已确认可用”，回调由“前缀即边界”改为“服务端不校验、边界在客户端”；记入 [ADR-33](../../architecture/platform-architecture.md#14-架构决策记录) 与 [§4.5.9](../../collaboration/iam-confirmation-letter.md#459-2026-11-23-授权码流程三项确认答复登记e1e3) |
 
 ## 7. 未验证项
 
-- PKCE S256 是否被目标部署接受（6.0.3 反馈只确认 PKCE 能力存在，未确认 S256）。
-- 前缀登记的负面边界：主机大写、尾斜杠、非数字端口与 `https` 的登记写法。
+- PKCE S256 与回调边界已由 IAM 2026-11-23 答复（见 §6）：S256 可正常发码，省略参数按 `plain`；OIDC 授权流程不校验 `redirect_uri`。两项仍缺我方一次真实往返留证。
+- OIDC `redirect_uri` 校验缺口的整改计划与补偿控制；缺口属服务端行为，我方只能以 S256 兜底。
 - 令牌有效性回查接口的端点、鉴权、容量与故障语义；网关的在线判权只有这一条依赖。
 - 五分钟撤权的端到端最坏时延与 t0 起点。
 - UserInfo 字段名的二选一口径（`work_no`/`pinyin` 与 `employeeNumber`/`name`）。
 - RT 轮换、重用检测与休眠恢复的真实端点表现（能力已书面确认）。
-- `client_secret` 的生成方、分发方式与泄漏/轮换失败时的回滚能力。
+- `client_secret` 的生成与回滚方式已答复（系统或人工生成、重填旧值），但 2 分钟传播窗内的真实续期表现未实测。
 - 同一账号多设备并发的实际档位（并存、后踢前或先占）。
 - 是否存在向客户端推送会话失效的通道（back-channel logout 或会话管理端点）。
 - 全部结论来自静态比对与书面答复，本记录不包含任何企业环境往返。
@@ -118,9 +119,9 @@
 
 | 类别 | 内容 | 落点 |
 |---|---|---|
-| 必改（我方代码） | S256 接受度实测留证、网关头配置化、独占断言扩展、环境旁路检测、userinfo 字段映射、模板收敛 | [PLAN-025 §3](../../plans/2026-11-23-iam-fast-launch-and-iteration.md#3-必须改动清单) |
+| 必改（我方代码） | S256 真实往返留证、网关头配置化、独占断言扩展、环境旁路检测、userinfo 字段映射、模板收敛 | [PLAN-025 §3](../../plans/2026-11-23-iam-fast-launch-and-iteration.md#3-必须改动清单) |
 | 必改（部署配置） | confidential 认证、显式端点、回环回调与登记、网关 Key 属主绑定 | 同上 §3.2 |
-| 待 IAM 答复 | S256 接受度、前缀登记边界、UserInfo 字段二选一、有效性回查接口、五分钟撤权时延 | [CONF-007 §3](../../collaboration/iam-review-feedback.md#3-需-iam-团队书面确认的事项) |
+| 待 IAM 答复 | UserInfo 字段二选一、有效性回查接口、五分钟撤权时延、多实例档位、会话失效通知、`redirect_uri` 校验缺口（S256 与回调边界已于 2026-11-23 答复） | [CONF-007 §3](../../collaboration/iam-review-feedback.md#3-需-iam-团队书面确认的事项) |
 | 文档修正 | 独占断言覆盖面、PKCE 与 `scopes` 口径、回调两种形态并存、待决事项补充 | [forge-iam.md §4.3](../../design/plugins/forge-iam.md#43-官方账号禁用与独占断言)、[§5.1](../../design/plugins/forge-iam.md#51-配置项规范)、[§4.5.1](../../design/plugins/forge-iam.md#451-回调监听归属)、[§12.1](../../design/plugins/forge-iam.md#121-待决技术事项清单) |
 
 ## 9. 资源判断与处置
