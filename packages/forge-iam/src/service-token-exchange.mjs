@@ -179,14 +179,12 @@ export function createTokenExchangeService(ports) {
       const entry = activeHandles.get(handleId);
       const targetUrl = resolveScopedUrl(resourceRoot, pathOrUrl);
       const token = entry.token;
-      if (entry.singleUse) {
-        // Consume before dispatch so a single-use bearer credential cannot be
-        // replayed concurrently; callers re-exchange on transient transport errors.
-        entry.used = true;
-        entry.disposed = true;
-        entry.token = null;
-        activeHandles.delete(handleId);
-      }
+      // Always consume before dispatch so a single-use bearer credential cannot
+      // be replayed concurrently; callers re-exchange on transient errors.
+      entry.used = true;
+      entry.disposed = true;
+      entry.token = null;
+      activeHandles.delete(handleId);
 
       const headers = new Headers(init?.headers ?? undefined);
       headers.delete('cookie');
@@ -215,7 +213,7 @@ export function createTokenExchangeService(ports) {
     });
   }
 
-  async function exchange({ target, scope = undefined, singleUse = true } = {}) {
+  async function exchange({ target, scope = undefined } = {}) {
     pruneExpired();
     if (activeHandles.size >= MAX_ACTIVE_HANDLES) {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Too many active exchanged credential handles; dispose unused handles first');
@@ -310,6 +308,13 @@ export function createTokenExchangeService(ports) {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response was not valid JSON');
     }
 
+    // Re-verify session identity after reading the asynchronous response body
+    // so a concurrent sign-out or session replacement cannot adopt the token.
+    const afterBodySession = readActiveSession();
+    if (!sameSession(beforeSession, afterBodySession)) {
+      throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed while reading token exchange response');
+    }
+
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response payload is invalid');
     }
@@ -319,21 +324,33 @@ export function createTokenExchangeService(ports) {
     if (typeof payload.token_type !== 'string' || payload.token_type.toLowerCase() !== 'bearer') {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response must return a Bearer token');
     }
+    // RFC 8693 §2.2.1 & contract §2.3: issued_token_type must be an access token.
+    if (payload.issued_token_type !== ACCESS_TOKEN_TYPE) {
+      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response must declare issued_token_type as access_token');
+    }
     const rawExpiresIn = Number(payload.expires_in);
     if (!Number.isFinite(rawExpiresIn) || rawExpiresIn <= 0) {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response omitted a valid expires_in');
     }
 
-    // §2.3 hard bound: expires_in <= min(300, target.maxTtlSeconds, remaining IAM token TTL).
+    // §2.3 hard bound: upstream expires_in itself must satisfy
+    // expires_in <= min(300, target.maxTtlSeconds, remaining IAM token TTL).
+    // Reject non-compliant tokens instead of locally shortening handle lifetime.
     const at = now();
-    const iamRemainingSec = Math.floor((afterFetchSession.accessExpiresAt - at) / 1000);
+    const iamRemainingSec = Math.floor((afterBodySession.accessExpiresAt - at) / 1000);
     if (iamRemainingSec <= 0) {
       throw new IamError('IAM_REAUTH_REQUIRED', 'Active IAM access token expired during token exchange');
     }
     const targetCapSec = Math.min(spec.maxTtlSeconds ?? MAX_EXCHANGED_TTL_SECONDS, MAX_EXCHANGED_TTL_SECONDS);
-    const effectiveTtlSec = Math.min(Math.floor(rawExpiresIn), targetCapSec, iamRemainingSec);
+    if (rawExpiresIn > targetCapSec) {
+      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response expires_in exceeds configured maximum TTL');
+    }
+    if (rawExpiresIn > iamRemainingSec) {
+      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response expires_in exceeds remaining IAM token lifetime');
+    }
+    const effectiveTtlSec = Math.floor(rawExpiresIn);
     if (effectiveTtlSec <= 0) {
-      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Exchanged credential lifetime is zero after TTL clamping');
+      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Token exchange response expires_in must be at least 1 second');
     }
 
     pruneExpired();
@@ -347,7 +364,7 @@ export function createTokenExchangeService(ports) {
       token: payload.access_token.trim(),
       expiresAt,
       resource: spec.resource,
-      singleUse: singleUse !== false,
+      singleUse: true,
       used: false,
       disposed: false,
     });
@@ -357,7 +374,7 @@ export function createTokenExchangeService(ports) {
       handleId,
       target: targetId,
       spec,
-      session: afterFetchSession,
+      session: afterBodySession,
       scope: grantedScope,
       expiresAt,
       resourceRoot,

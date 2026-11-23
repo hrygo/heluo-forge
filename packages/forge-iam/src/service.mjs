@@ -290,16 +290,22 @@ export function createIamService(rawConfig, options = {}) {
 
   const tokenExchange = createTokenExchangeService({
     targets: config.tokenExchangeTargets,
-    getSessionRef: () => (canUseExtensionCredentials() && ctx.lastGrant
-      ? {
+    getSessionRef: () => {
+      if (!canUseExtensionCredentials() || !ctx.lastGrant) return null;
+      const accessExpiresAt = typeof ctx.lastGrant.accessExpiresAt === 'number'
+        ? ctx.lastGrant.accessExpiresAt
+        : Date.parse(ctx.lastGrant.accessExpiresAt);
+      if (!Number.isFinite(accessExpiresAt)) return null;
+      return {
         issuer: ctx.lastGrant.issuer,
         subject: ctx.lastGrant.subject,
-        accessExpiresAt: ctx.lastGrant.accessExpiresAt,
-        // Only session-identity epochs belong here so on-demand token refresh
-        // inside resolveToken() does not falsely look like a sign-out.
-        epoch: `${authEpoch}:${sessionEpoch}`,
-      }
-      : null),
+        accessExpiresAt,
+        // Bind to authEpoch, sessionEpoch, and the persisted grant's
+        // sessionInstanceId so a re-login adopted from another Host invalidates
+        // old handles, while in-session token refresh keeps the same binding.
+        epoch: `${authEpoch}:${sessionEpoch}:${ctx.lastGrant.sessionInstanceId ?? ''}`,
+      };
+    },
     resolveSubjectToken: () => token.resolveToken(),
     fetchImpl,
     now,
@@ -308,7 +314,10 @@ export function createIamService(rawConfig, options = {}) {
 
   const service = {
     extCredentialBroker,
-    exchangeAudienceCredential: (input) => tokenExchange.exchange(input),
+    exchangeAudienceCredential: (input) => tokenExchange.exchange({
+      target: input?.target,
+      scope: input?.scope,
+    }),
     listTokenExchangeTargets: () => tokenExchange.listTargets(),
     listExtCredentials: () => extTokens.listProjectedStatuses(),
     saveExtCredential: (input) => extTokens.saveToken(input),
