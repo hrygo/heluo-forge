@@ -1,6 +1,6 @@
 # AGENTS.md — Heluo Forge agent 工作约定
 
-> 适用范围：仓库根目录及全部子目录。版本：V1.25。最后更新：2026-11-20。
+> 适用范围：仓库根目录及全部子目录。版本：V1.26。最后更新：2026-11-23。
 >
 > 职责：面向智能编程代理（AI Agent）的任务路由、授权边界、技术纪律、修改约束与验收交付规范（职责边界见[文档总览 §2.1](docs/README.md#21-仓库入口职责)）。项目状态、契约字段、文档元数据规范与命令细节留在各自正文，本文件只保留约束 Agent 行为的核心准则与入口。系统、开发者与当前用户指令优先；与公共约定重叠处从其规定，本文件只写差异。
 
@@ -117,6 +117,11 @@
   - 本工程配置了 `sensitive-scan` 钩子，底层会使用 `git stripspace --strip-comments` 规整提交信息；
   - **以 `#` 开头的内容会被整段当成注释静默删除**，导致提交说明正文严重残缺；
   - 引用 Issue 时统一采用内联语法，如 `issue #12` 或 `ref: issue #37`。
+- **分支与 PR 来源**：
+  - PR 一律来自本仓库内分支：在 `origin` 上建立短分支并推送（`git push origin <branch>`），**不使用 fork 分支**；`verify (ubuntu-x64)` 在检出代码前拒绝 head 仓库不是本仓库的 PR；
+  - 原因不是签名缺失，而是审查与修复流程依赖仓库内分支：rebase、`post-rewrite` 重签与 `force-with-lease` 更新都发生在受分支保护与提交钩子约束的分支上；
+  - 迁移既有 fork PR 时把同一分支推到 `origin`，从仓库内分支重开 PR 并保留原关联 Issue（`Closes` / `Part of`），原 PR 关闭并注明替代关系；
+  - 更新 PR 分支只用本地 `git rebase --force-rebase origin/main` 后 `git push --force-with-lease origin <branch>`，不用网页 Update branch（服务端重写提交会让验签失效）。
 - **提交签名与历史改写**：
   - 提交签名（Attestation）强绑定提交信息、树哈希（Tree SHA）与父提交树（Parent-Tree SHA）；
   - 已安装的 `post-rewrite` 钩子在 `git commit --amend`、`git rebase` 后按真实父树自动重扫重签，整条链签名完成后才移动分支；`git reset` 不触发重签，`git cherry-pick` 不触发任何钩子，两者仍需人工确认或补救；
