@@ -53,7 +53,9 @@ export function createIamService(rawConfig, options = {}) {
     try { options.logRenewal(event, fields); } catch { /* diagnostics cannot change the session */ }
   } : undefined;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
-  const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
+  // Host options win; the plugin config carries the same mapping so an enterprise
+  // template can set claims without patching the Host option surface.
+  const profileFields = normalizeProfileFields(options.profileFields ?? config.profileFields ?? Object.freeze({}));
 
   // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
   // a response belonging to a replaced session unable to publish.

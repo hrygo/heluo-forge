@@ -76,6 +76,8 @@
 | MC-05 | P1 | `packages/forge-iam/src/service.mjs`、`scripts/lib/private-bundle.mjs` | 把 `profileFields` 映射开放为私版配置键，默认不投影；默认候选取较新答复的 `work_no`/`pinyin`，待 FB-IAM-06 二选一确认后固化 | 未配置时不请求 UserInfo；配置后可显示工号姓名；映射非法时拒绝启动而非静默不显示 | 平台组 |
 | MC-06 | P1 | `scripts/lib/private-bundle.mjs`、私版模板 | 私版模板**显式给出** `HELUO_IAM_SCOPES=openid profile`：未设置时私版不写 scopes，插件默认值含 `offline_access`，因此不能靠“删除”解决，只能显式覆盖。`gatewayResource` 保持留空（6.0.3 反馈：RT 非要件、`resource` 不支持）。插件兼容默认值不变 | 生成的补丁显式含 `openid profile`；不含 `offline_access` 与 `gatewayResource`；含 `gatewayResource` 时仍通过校验 | 平台组 |
 
+> 落地状态（2026-11-23）：MC-02、MC-03、MC-04（检测与告警）、MC-05（映射入口）、MC-06（模板）已完成代码与用例；MC-01 待 FB-IAM-01 答复与客户端登记，MC-04 阻断口径待裁决，MC-07~MC-12 待 IAM 管理台与网关控制台。
+
 ### 3.2 部署与登记改动（不涉及代码）
 
 | 编号 | 级别 | 对象 | 改动内容 | 验收判据 | 责任 |
@@ -146,10 +148,10 @@
 | A-01 | 机密客户端可完成换票与计划刷新 | 目标环境抓包 + 续期日志 `refresh-committed` | 未联调 |
 | A-02 | 回调地址稳定且被 IAM 接受 | IAM 管理台登记记录 + 登录记录 | 未联调 |
 | A-03 | S256 被接受 | 实测授权请求与授权码发放记录 | 未测 |
-| A-04 | 官方行残留可被运行期断言发现 | 新增用例，注入残留行 | 未实现 |
+| A-04 | 官方行残留可被运行期断言发现 | `gateway-identity-config.test.mjs` 的 `exclusiveServices` 用例 | 已实现：服务名列表化，默认保持单一服务 |
 | A-05 | 环境旁路变量可被检测 | `exclusive-env-bypass.test.mjs` 的检测与告警用例 | 检测与告警已实现；阻断待裁决 |
-| A-06 | 网关身份头可配置且默认不变 | 现有头断言 + 自定义头名用例 | 未实现 |
-| A-07 | 工号姓名按配置投影 | userinfo 用例 | 机制已具备，映射未开放 |
+| A-06 | 网关身份头可配置且默认不变 | 现有头断言 + 自定义头名用例 | 已实现 |
+| A-07 | 工号姓名按配置投影 | `userinfo` 既有用例 + 私版映射用例 | 已实现映射入口；字段名待 FB-IAM-06 |
 | A-08 | 退出失败不报成功 | 既有 signout 用例 | 已具备 |
 | A-09 | 七行官方禁用不被升级覆盖 | `reflow` 用例 | 已具备 |
 | A-10 | 撤销为按访问令牌一条路径 | 目标环境退出记录 | 未联调 |

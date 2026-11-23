@@ -1,5 +1,13 @@
 import { validateManagedModels } from './model-options.mjs';
 import { parseHttpUrl, parseRedirectUri } from './http-url.mjs';
+// RFC 7230 token: the only shape accepted for a header name, a header value and
+// a claim name. Anything else could break or split the request.
+const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+
+// Mirrors userinfo.PROFILE_FIELD_KEYS. config.mjs also ships in the standalone
+// maker toolchain, which deliberately carries only the validator closure, so it
+// must not import the UserInfo client; a unit test keeps the two lists equal.
+export const PROFILE_FIELD_KEYS = Object.freeze(['workNo', 'name']);
 
 // Cordis 用 standard-schema 校验插件配置：Config['~standard'].validate(config)
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
@@ -36,6 +44,11 @@ export const CONFIG_FIELDS = [
   'redirectUri',
   'gatewayResource',
   'gatewayConsoleUrl',
+  'iamTokenHeader',
+  'consumerTypeHeader',
+  'consumerType',
+  'exclusiveServices',
+  'profileFields',
   'defaultProvider',
   'defaultModel',
   'managedModels',
@@ -83,6 +96,15 @@ const DEFAULTS = {
   redirectUri: '',
   gatewayResource: '',
   gatewayConsoleUrl: '',
+  // Gateway identity headers stay configurable so the AIGS switch is a config
+  // change; the defaults are the values the deployed gateway accepts today.
+  iamTokenHeader: 'X-IAM-Token',
+  consumerTypeHeader: 'X-Consumer-Type',
+  consumerType: 'personal',
+  // Host services whose presence proves an official login path is still mounted.
+  exclusiveServices: ['deepseekAccount'],
+  // UserInfo claim mapping. Empty keeps the profile absent instead of guessing.
+  profileFields: null,
   defaultProvider: 'enterprise',
   defaultModel: '',
   managedModels: null,
@@ -119,7 +141,7 @@ export function validateConfig(input) {
   }
 
   const issues = [];
-  const value = { ...DEFAULTS, scopes: [...DEFAULTS.scopes] };
+  const value = { ...DEFAULTS, scopes: [...DEFAULTS.scopes], exclusiveServices: [...DEFAULTS.exclusiveServices] };
 
   for (const key of FORBIDDEN_AUTH_FIELDS) {
     if (Object.hasOwn(source, key)) issues.push(issue(key, 'authentication overrides and PKCE switches are not supported'));
@@ -173,6 +195,45 @@ export function validateConfig(input) {
       issues.push(issue('scopes', 'scopes must include openid'));
     } else {
       value.scopes = [...scopes];
+    }
+  }
+
+  for (const key of ['iamTokenHeader', 'consumerTypeHeader', 'consumerType']) {
+    const raw = source[key];
+    if (raw === undefined || raw === null) continue;
+    if (typeof raw !== 'string' || !HTTP_TOKEN.test(raw)) {
+      // A name or value that is not an RFC 7230 token could smuggle a second
+      // header or a line break into the request.
+      issues.push(issue(key, `${key} must be an HTTP token`));
+      continue;
+    }
+    value[key] = raw;
+  }
+
+  const exclusiveServices = source.exclusiveServices;
+  if (exclusiveServices !== undefined && exclusiveServices !== null) {
+    if (!Array.isArray(exclusiveServices) || exclusiveServices.length === 0
+      || exclusiveServices.some((item) => typeof item !== 'string' || !HTTP_TOKEN.test(item))) {
+      issues.push(issue('exclusiveServices', 'exclusiveServices must be a non-empty array of HTTP tokens'));
+    } else {
+      value.exclusiveServices = [...exclusiveServices];
+    }
+  }
+
+  const profileFields = source.profileFields;
+  if (profileFields !== undefined && profileFields !== null) {
+    if (!isPlainObject(profileFields)) {
+      issues.push(issue('profileFields', 'profileFields must map workNo/name to claim names'));
+    } else {
+      const unknown = Object.keys(profileFields).filter((key) => !PROFILE_FIELD_KEYS.includes(key));
+      const invalid = Object.values(profileFields).some((item) => typeof item !== 'string' || !HTTP_TOKEN.test(item));
+      if (unknown.length > 0) {
+        issues.push(issue('profileFields', `profileFields only accepts ${PROFILE_FIELD_KEYS.join('/')}`));
+      } else if (invalid) {
+        issues.push(issue('profileFields', 'profileFields values must be claim-name tokens'));
+      } else {
+        value.profileFields = Object.freeze({ ...profileFields });
+      }
     }
   }
 

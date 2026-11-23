@@ -68,6 +68,7 @@ export const IAM_ENV_MAP = Object.freeze({
   HELUO_IAM_CLIENT_AUTH_METHOD: 'clientAuthMethod',
   HELUO_IAM_CLIENT_SECRET_REF: 'clientSecretRef',
   HELUO_IAM_SCOPES: 'scopes',
+  HELUO_IAM_PROFILE_FIELDS: 'profileFields',
   HELUO_IAM_REDIRECT_PATH: 'redirectPath',
   HELUO_IAM_CALLBACK_PORT: 'callbackPort',
   HELUO_IAM_CALLBACK_ADDRESS: 'callbackAddress',
@@ -329,6 +330,35 @@ export function buildConfig(entries) {
       else put(iam, field, scopes);
       continue;
     }
+    if (envKey === 'HELUO_IAM_PROFILE_FIELDS') {
+      // `workNo=work_no,name=pinyin`. Claim names are tokens, and only the two
+      // known profile keys are accepted, so a typo fails the build instead of
+      // silently showing nothing on the account panel.
+      const mapping = {};
+      const pairs = raw.split(/[,\s]+/u).filter(Boolean);
+      for (const pair of pairs) {
+        const at = pair.indexOf('=');
+        if (at <= 0 || at === pair.length - 1) {
+          problems.push('HELUO_IAM_PROFILE_FIELDS must use key=claim pairs (workNo=...,name=...)');
+          break;
+        }
+        const key = pair.slice(0, at);
+        const claim = pair.slice(at + 1);
+        if (key !== 'workNo' && key !== 'name') {
+          problems.push(`HELUO_IAM_PROFILE_FIELDS key ${key} must be workNo or name`);
+          break;
+        }
+        if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(claim)) {
+          problems.push(`HELUO_IAM_PROFILE_FIELDS claim ${claim} must be a claim-name token`);
+          break;
+        }
+        mapping[key] = claim;
+      }
+      if (pairs.length === 0) problems.push('HELUO_IAM_PROFILE_FIELDS must map at least one key');
+      else if (Object.keys(mapping).length === pairs.length) put(iam, field, mapping);
+      continue;
+    }
+
     if (envKey === 'HELUO_IAM_MANAGED_MODELS_BASE_URL') {
       if (!isHttpUrl(raw, { allowInsecureHttp })) problems.push(`${envKey} must be an https URL, or http with HELUO_IAM_ALLOW_INSECURE_HTTP=true`);
       else iam.managedModels = { baseURL: raw.replace(/\/+$/u, '') };
