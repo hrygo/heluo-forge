@@ -7,6 +7,7 @@ import { createCatalogService } from './catalog.mjs';
 import { createPreferencesStore, PreferencePutBodySchema } from './preferences.mjs';
 import { createMentionsService } from './mentions.mjs';
 import { API_PREFIX, createExpertsRoutes } from './routes.mjs';
+import { createDelegraClient } from './delegra-client.mjs';
 import { ExpertsError } from './errors.mjs';
 
 export const name = 'forge-experts';
@@ -130,13 +131,43 @@ export function createExpertsHost(ports) {
     preferences,
     mentions,
     routes,
+    delegraClient: ports.delegraClient ?? null,
   });
 }
 
 export async function apply(ctx, config = {}) {
   const managementEnabled = config?.managementEnabled === true;
+  const resolveExchangeCredential = () => {
+    if (typeof config?.exchangeCredential === 'function') return config.exchangeCredential;
+    const iam = readService(ctx, 'iam');
+    if (iam && typeof iam.exchangeAudienceCredential === 'function') {
+      return (params) => iam.exchangeAudienceCredential(params);
+    }
+    return null;
+  };
+  const delegraTarget = typeof config?.delegraTarget === 'string' ? config.delegraTarget.trim() : '';
+  const delegraBaseUrl = typeof config?.delegraBaseUrl === 'string' ? config.delegraBaseUrl.trim() : '';
+  const delegraOrgId = typeof config?.delegraOrgId === 'string' ? config.delegraOrgId.trim() : '';
+  const hasDelegraTarget = Boolean(delegraTarget || delegraBaseUrl || delegraOrgId);
+  const delegraClient = hasDelegraTarget
+    ? createDelegraClient({
+      exchangeCredential: (params) => {
+        const exchange = resolveExchangeCredential();
+        if (!exchange) {
+          throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Forge IAM audience credential exchange is unavailable');
+        }
+        return exchange(params);
+      },
+      target: delegraTarget || undefined,
+      baseUrl: delegraBaseUrl || undefined,
+      orgId: delegraOrgId || undefined,
+      timeoutMs: config?.delegraTimeoutMs,
+    })
+    : null;
+
   const host = createExpertsHost({
     config,
+    delegraClient,
     getIamSession: () => {
       const iam = readService(ctx, 'iam');
       if (!iam || typeof iam.getSession !== 'function') {
@@ -154,27 +185,35 @@ export async function apply(ctx, config = {}) {
     },
     resolveDelegraScope: typeof config?.resolveDelegraScope === 'function'
       ? config.resolveDelegraScope
-      : () => {
-        throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra scope connector is not configured');
-      },
+      : (delegraClient
+        ? delegraClient.resolveDelegraScope
+        : () => {
+          throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra scope connector is not configured');
+        }),
     fetchDelegraCatalog: typeof config?.fetchDelegraCatalog === 'function'
       ? config.fetchDelegraCatalog
-      : () => {
-        throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra catalog connector is not configured');
-      },
+      : (delegraClient
+        ? delegraClient.fetchDelegraCatalog
+        : () => {
+          throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra catalog connector is not configured');
+        }),
     verifyOrgCallable: typeof config?.verifyOrgCallable === 'function'
       ? config.verifyOrgCallable
-      : () => {
-        throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra authorization verifier is not configured');
-      },
+      : (delegraClient
+        ? delegraClient.verifyOrgCallable
+        : () => {
+          throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra authorization verifier is not configured');
+        }),
     resolveSessionScope: typeof config?.resolveSessionScope === 'function'
       ? config.resolveSessionScope
       : () => null,
     checkDelegraSessionScope: typeof config?.checkDelegraSessionScope === 'function'
       ? config.checkDelegraSessionScope
-      : () => {
-        throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra session scope checker is not configured');
-      },
+      : (delegraClient
+        ? delegraClient.checkDelegraSessionScope
+        : () => {
+          throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra session scope checker is not configured');
+        }),
   });
 
   if (managementEnabled) {
