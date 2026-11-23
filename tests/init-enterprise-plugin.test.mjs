@@ -1136,8 +1136,8 @@ test('runInit --profile uat 从 web 模板创建自定义 profile 后安装并�
     };
   };
   const outcome = await runInit({
-    argv: ['--release', dir, '--profile', 'uat'],
-    env: { PATH: `${bin}:${process.env.PATH ?? ''}`, DSH_HOME: dshHome },
+    argv: ['--release', dir, '--profile', 'uat', '--dsh', dshPath],
+    env: { PATH: writePnpm(root), DSH_HOME: dshHome },
     home: join(root, 'home'),
     exec,
   });
