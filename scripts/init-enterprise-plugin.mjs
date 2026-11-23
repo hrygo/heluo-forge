@@ -25,9 +25,9 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, relative, resolve, sep } from 'node:path';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** 本插件在 profile 中的包名；与私版清单、补丁层同源。 */
@@ -561,6 +561,17 @@ export function readEmbeddedClientSecret(dir) {
   if (!['client_secret_basic', 'client_secret_post'].includes(binding?.clientAuthMethod)) throw invalid('的 clientAuthMethod 不是 client_secret_basic|client_secret_post');
   if (typeof binding?.clientSecretRef !== 'string' || binding.clientSecretRef === '') throw invalid('缺少 clientSecretRef');
   if (typeof binding?.discoveryUrl !== 'string' && typeof binding?.issuer !== 'string') throw invalid('既没有 discoveryUrl 也没有 issuer');
+  // 换 IAM 环境时，同一 ref 在旧交付里可能绑定过别的 issuer；制包人知道旧值，就写进绑定文件，
+  // 安装器在遇到绑定冲突时用它做 client-secret replace。只接受 http(s)、不带用户信息的 URL。
+  const previousIssuers = binding?.previousIssuers;
+  if (previousIssuers !== undefined) {
+    const wellFormed = Array.isArray(previousIssuers) && previousIssuers.every((entry) => {
+      if (typeof entry !== 'string' || !canParseUrl(entry)) return false;
+      const parsed = new URL(entry);
+      return ['https:', 'http:'].includes(parsed.protocol) && parsed.username === '' && parsed.password === '';
+    });
+    if (!wellFormed) throw invalid('的 previousIssuers 不是 http(s) URL 数组');
+  }
   const path = join(dir, file);
   if (!existsSync(path)) return { binding, path: null, bytes: null };
   const bytes = readFileSync(path);
@@ -620,6 +631,150 @@ async function resolveSecretIssuer(binding, fetchImpl) {
 }
 
 /**
+ * 本机凭据库目录。规则与 `@heluo/forge-credentials-keychain` 的
+ * `selectDefaultStoreDirectory` 一致；安装器单文件自包含、不 import 仓库模块，故在此复刻，
+ * 两处规则必须一起改。
+ */
+export function credentialStoreDirectory({ platform = process.platform, home = homedir(), env = process.env } = {}) {
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'HeluoForge');
+  if (platform === 'win32') {
+    const local = env?.LOCALAPPDATA;
+    const usable = typeof local === 'string' && local !== '' && isAbsolute(local) && parse(local).root.length > 1;
+    return join(usable ? local : join(home, 'AppData', 'Local'), 'HeluoForge');
+  }
+  const previous = join(home, '.local', 'share', 'HeluoForge');
+  const xdg = env?.XDG_DATA_HOME;
+  return platform === 'linux' && typeof xdg === 'string' && isAbsolute(xdg) ? join(xdg, 'HeluoForge') : previous;
+}
+
+/** 预检目录能建、能写、能删；只写空探针文件，不碰密钥内容。 */
+export function probeStoreDirectory(directory) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const probe = join(directory, `.heluo-write-probe-${process.pid}`);
+  writeFileSync(probe, '', { mode: 0o600 });
+  unlinkSync(probe);
+  return directory;
+}
+
+/**
+ * 校验并修正凭据目录权限，再预检可写。
+ *
+ * 凭据库要求数据目录与 `<dir>.keys` 都是 0700 且属主是当前用户；不满足时库抛
+ * `CRED_STORE_PERMISSIONS`，而 CLI 只把它折叠成一句「无法预置密钥」，退出码 4，
+ * 安装器看不到真实原因。目录属主正确、只是模式偏宽时就地收紧到 0700（只收紧，不放松）；
+ * 属主不对（sudo 或别的账号建的）不擅自 chown，直接报可执行的修复路径。
+ */
+export function ensureStoreDirectory(directory, { lines = [], platform = process.platform } = {}) {
+  // 数据目录与 `<dir>.keys` 必须成对：凭据库遇到只有一半的存储会抛
+  // CRED_STORE_UNAVAILABLE（orphaned keyring exists），CLI 再把它折叠成通用失败。
+  const keyDirectory = `${directory}.keys`;
+  const keyring = join(keyDirectory, 'keyring.json');
+  const database = join(directory, 'credentials.sqlite');
+  if ((existsSync(keyring) && !existsSync(directory)) || (existsSync(database) && !existsSync(keyring))) {
+    throw new InitError(
+      'IAM_SECRET_STORE_ORPHANED',
+      `init: 凭据库只剩一半（${existsSync(keyring) ? `有 ${keyDirectory}，缺 ${directory}` : `有 ${database}，缺 ${keyring}`}）`,
+      '多为备份/迁移只拷了其中一个目录，或手工删过。能还原就把缺的一半还原，否则把两个目录一起移走（备份后 mv）再重跑；密钥文件保留在交付目录。',
+    );
+  }
+  for (const target of [directory, keyDirectory]) {
+    if (!existsSync(target)) continue;
+    const info = statSync(target);
+    if (!info.isDirectory()) {
+      throw new InitError(
+        'IAM_SECRET_STORE_UNWRITABLE',
+        `init: 凭据目录位置被非目录占用（${target}）`,
+        '备份并移走该文件后重跑本脚本。密钥文件保留在交付目录。',
+      );
+    }
+    if (platform === 'win32' || typeof process.getuid !== 'function') continue;
+    if (info.uid !== process.getuid()) {
+      throw new InitError(
+        'IAM_SECRET_STORE_FOREIGN_OWNER',
+        `init: 凭据目录不属于当前用户（${target}，owner uid ${info.uid}）`,
+        '该目录多半是 sudo 或别的账号创建的。不要用 sudo 运行本脚本；把目录改回当前用户所有后重跑。密钥文件保留在交付目录。',
+      );
+    }
+    const mode = info.mode & 0o777;
+    if (mode !== 0o700) {
+      chmodSync(target, 0o700);
+      lines.push(`IAM 客户端密钥：凭据目录 ${target} 权限 ${mode.toString(8).padStart(3, '0')} 已修正为 700`);
+    }
+  }
+  return probeStoreDirectory(directory);
+}
+
+/**
+ * 用全新临时目录重跑同一条预置命令，用来区分「本机存储坏了」和「CLI 本身跑不通」。
+ * 只写临时目录、随即删除，不碰既有凭据库。
+ */
+async function diagnoseProvision({ exec, args, bytes }) {
+  const scratch = mkdtempSync(join(tmpdir(), 'heluo-secret-probe-'));
+  try {
+    const result = await exec(process.execPath, args, {
+      timeout: PROVISION_TIMEOUT_MS,
+      shell: false,
+      input: bytes,
+      env: { ...process.env, HELUO_FORGE_STORE_DIRECTORY: scratch },
+    });
+    if (typeof result?.code !== 'number') return { ok: false, reason: '子进程没有返回退出码' };
+    return { ok: result.code === 0, reason: result.code === 0 ? '' : reasonTail(result) };
+  } catch (error) {
+    return { ok: false, reason: typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN') };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** URL.canParse 在旧 Node 上不存在时的等价判断。 */
+function canParseUrl(value) {
+  return typeof URL.canParse === 'function' ? URL.canParse(value) : (() => { try { new URL(value); return true; } catch { return false; } })();
+}
+
+/**
+ * 同一 ref 已绑定别的 issuer 时，用 client-secret replace 更正绑定。
+ *
+ * 凭据库的规则是「同一 ref 的 (issuer, clientId, method) 必须逐字一致」，换环境后 set 必然
+ * 被拒（IAM_CLIENT_SECRET_BINDING_MISMATCH），而 CLI 把它折叠成退出码 4，安装器看不到真因。
+ * 保留的 scope 也读不回来（通用读取被 CRED_STORE_INVALID 拒绝），所以只能由制包人把旧
+ * issuer 写进 client-secret.json，安装器逐个候选值试 replace；错的候选会被库拒绝，不会误改。
+ */
+async function rebindClientSecret({ exec, cli, store, secret, issuer, lines }) {
+  const candidates = Array.isArray(secret.binding.previousIssuers) ? secret.binding.previousIssuers : [];
+  const attempted = [];
+  for (const previous of candidates) {
+    const args = [
+      cli, 'client-secret', 'replace',
+      '--issuer', issuer,
+      '--client-id', secret.binding.clientId,
+      '--method', secret.binding.clientAuthMethod,
+      '--ref', secret.binding.clientSecretRef,
+      '--old-issuer', previous,
+      '--old-client-id', secret.binding.clientId,
+      '--old-method', secret.binding.clientAuthMethod,
+    ];
+    let result;
+    try {
+      result = await exec(process.execPath, args, {
+        timeout: PROVISION_TIMEOUT_MS,
+        shell: false,
+        input: secret.bytes,
+        env: { ...process.env, HELUO_FORGE_STORE_DIRECTORY: store },
+      });
+    } catch (error) {
+      attempted.push(`${previous} → ${error?.code ?? error?.message ?? 'UNKNOWN'}`);
+      continue;
+    }
+    if (result?.code === 0) {
+      lines.push(`IAM 客户端密钥：引用「${secret.binding.clientSecretRef}」原先绑定 ${previous}，已更正为 ${issuer}（旧记录被 replace 覆盖）`);
+      return { ok: true, previous };
+    }
+    attempted.push(`${previous} → ${reasonTail(result)}`);
+  }
+  return { ok: false, attempted };
+}
+
+/**
  * 把交付目录内嵌的客户端密钥写入本机 Host 凭据库。
  *
  * 成功后删除交付目录里的密钥文件；失败保留并抛错——宁可安装报失败，也不要留下
@@ -627,7 +782,7 @@ async function resolveSecretIssuer(binding, fetchImpl) {
  *
  * @returns {Promise<{status: 'provisioned'|'already-removed'|'absent'}>}
  */
-export async function provisionClientSecret({ exec, profile, release, lines, fetchImpl = fetch }) {
+export async function provisionClientSecret({ exec, profile, release, lines, fetchImpl = fetch, storeDirectory }) {
   const secret = release.secret;
   if (secret === null) return { status: 'absent' };
   if (secret.path === null) {
@@ -643,6 +798,20 @@ export async function provisionClientSecret({ exec, profile, release, lines, fet
       '确认安装的是完整的企业私版（含 forge-iam）；密钥文件保留在交付目录，修复后重跑。',
     );
   }
+  const override = typeof process.env.HELUO_FORGE_STORE_DIRECTORY === 'string' && process.env.HELUO_FORGE_STORE_DIRECTORY !== ''
+    ? process.env.HELUO_FORGE_STORE_DIRECTORY
+    : null;
+  const store = storeDirectory ?? (override === null ? credentialStoreDirectory() : resolve(override));
+  try {
+    ensureStoreDirectory(store, { lines });
+  } catch (error) {
+    if (error instanceof InitError) throw error;
+    throw new InitError(
+      'IAM_SECRET_STORE_UNWRITABLE',
+      `init: 凭据目录不可用（${store}）：${error?.code ?? error?.message ?? 'UNKNOWN'}`,
+      '检查该目录的所有者与权限；不要用 sudo 运行本脚本——sudo 会把记录写进 root 家目录，员工登录时读不到。修复后重跑本脚本。',
+    );
+  }
   const args = [
     cli, 'client-secret', 'set',
     '--issuer', issuer,
@@ -652,7 +821,12 @@ export async function provisionClientSecret({ exec, profile, release, lines, fet
   ];
   let result;
   try {
-    result = await exec(process.execPath, args, { timeout: PROVISION_TIMEOUT_MS, shell: false, input: secret.bytes });
+    result = await exec(process.execPath, args, {
+      timeout: PROVISION_TIMEOUT_MS,
+      shell: false,
+      input: secret.bytes,
+      env: { ...process.env, HELUO_FORGE_STORE_DIRECTORY: store },
+    });
   } catch (error) {
     throw new InitError(
       'IAM_CLIENT_SECRET_PROVISION_FAILED',
@@ -660,16 +834,37 @@ export async function provisionClientSecret({ exec, profile, release, lines, fet
       '密钥文件仍保留在交付目录；按提示修复后重跑本脚本即可重新预置。',
     );
   }
+  let reboundFrom;
   if (typeof result?.code === 'number' && result.code !== 0) {
     const reason = reasonTail(result);
-    throw new InitError(
-      'IAM_CLIENT_SECRET_PROVISION_FAILED',
-      `init: 写入本机凭据库失败（退出码 ${result.code}）${reason === '' ? '' : `：${reason}`}`,
-      '密钥文件仍保留在交付目录；修复凭据存储（磁盘空间、权限、keyring）后重跑本脚本，或用交付目录 INSTALL.md 里的手工命令预置。',
-    );
+    const rebound = await rebindClientSecret({ exec, cli, store, secret, issuer, lines });
+    if (rebound.ok) reboundFrom = rebound.previous;
+    if (!rebound.ok) {
+      if (rebound.attempted.length > 0) {
+        throw new InitError(
+          'IAM_CLIENT_SECRET_BINDING_CONFLICT',
+          `init: 引用「${secret.binding.clientSecretRef}」在本机凭据库里已绑定另一套 IAM 客户端配置，且候选旧 issuer 都没能更正（${rebound.attempted.join('；')}）`,
+          `本包声明的 issuer 是 ${issuer}，clientId ${secret.binding.clientId}，method ${secret.binding.clientAuthMethod}。若旧绑定来自历史交付，用 client-secret replace --old-issuer <旧 issuer> --old-client-id ${secret.binding.clientId} --old-method ${secret.binding.clientAuthMethod} 手工更正，或在制包时加 --previous-issuer <旧 issuer> 重出；密钥文件保留在交付目录。`,
+        );
+      }
+      const diagnostic = await diagnoseProvision({ exec, args, bytes: secret.bytes });
+      if (diagnostic.ok) {
+        throw new InitError(
+          'IAM_SECRET_STORE_UNHEALTHY',
+          `init: 本机凭据存储不可用（${store}）：同一命令在全新临时目录下可以写入，说明问题在既有存储——目录所有者/权限、磁盘空间，或「${secret.binding.clientSecretRef}」已绑定过另一套客户端配置${reason === '' ? '' : `（CLI 原始报错：${reason}）`}`,
+          '若确认是历史绑定，制包时加 --previous-issuer <旧 issuer> 重出，或在目标机用 client-secret replace --old-issuer/--old-client-id/--old-method 更正；否则备份并移走该目录（或检查其权限）后重跑。密钥文件保留在交付目录。',
+        );
+      }
+      throw new InitError(
+        'IAM_CLIENT_SECRET_PROVISION_FAILED',
+        `init: 写入本机凭据库失败（退出码 ${result.code}）${reason === '' ? '' : `：${reason}`}${diagnostic.reason === '' ? '' : `；空目录诊断同样失败（${diagnostic.reason}）`}`,
+        '密钥文件仍保留在交付目录；修复凭据存储（磁盘空间、权限、keyring）后重跑本脚本，或用交付目录 INSTALL.md 里的手工命令预置。',
+      );
+    }
   }
   rmSync(secret.path, { force: true });
   lines.push(`IAM 客户端密钥：已写入本机凭据库（issuer ${issuer}，引用 ${secret.binding.clientSecretRef}），交付目录内密钥文件已删除`);
+  return reboundFrom === undefined ? { status: 'provisioned' } : { status: 'provisioned', reboundFrom };
   return { status: 'provisioned' };
 }
 

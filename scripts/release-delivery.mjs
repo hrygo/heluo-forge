@@ -74,6 +74,7 @@ function parseArguments(argv) {
     dryRun: false,
     skipDiscoveryCheck: false,
     embedClientSecret: false,
+    previousIssuers: [],
     json: false,
   };
   const valued = new Map([
@@ -84,6 +85,9 @@ function parseArguments(argv) {
     ['--output', 'output'],
     ['--confirm', 'confirm'],
     ['--tool-root', 'toolRoot'],
+  ]);
+  const repeatable = new Map([
+    ['--previous-issuer', 'previousIssuers'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -110,6 +114,15 @@ function parseArguments(argv) {
     // 目标机凭据库并删除该文件。默认仍然拒绝 HELUO_IAM_CLIENT_SECRET。
     if (argument === '--embed-client-secret') {
       options.embedClientSecret = true;
+      continue;
+    }
+    // 同一 ref 在旧交付里可能绑定过别的 issuer（换环境时最常见）。列出旧 issuer 后，
+    // 安装器在遇到绑定冲突时会用 client-secret replace 逐个尝试更正，避免每台机器手工处理。
+    if (repeatable.has(argument)) {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith('--')) fail('BAD_ARGUMENT', `${argument} requires a value`);
+      options[repeatable.get(argument)].push(value);
+      index += 1;
       continue;
     }
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
@@ -377,6 +390,15 @@ const EMBEDDED_SECRET_NOTE = `
 
 因此员工不需要执行任何与密钥有关的命令。看到 \`IAM 客户端密钥：已写入本机凭据库\` 即可。
 
+### 换过 IAM 环境时
+
+凭据库要求同一引用（ref）的 issuer / clientId / 认证方式逐字一致。机器上装过旧交付、
+已经预置过旧 issuer 时，set 会被拒绝（退出码 4，底层 IAM_CLIENT_SECRET_BINDING_MISMATCH）。
+本包在 client-secret.json 里带了 previousIssuers（制包时用 --previous-issuer 写入的历史
+issuer），安装脚本会自动逐个尝试 client-secret replace 把绑定更正到本次 issuer，并打印
+\`原先绑定 … 已更正为 …\`；候选都不匹配时才报 IAM_CLIENT_SECRET_BINDING_CONFLICT，
+并给出可手工执行的 replace 命令。
+
 失败时按提示在失败的那台机器上重跑启动器即可（文件仍在，会重新预置）；也可以手工执行：
 
 \`\`\`sh
@@ -418,6 +440,7 @@ export function buildDelivery(input) {
   }
   const toolRoot = resolve(input.toolRoot ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
   const installer = installerSource(toolRoot);
+  const previousIssuers = Array.isArray(input.previousIssuers) ? input.previousIssuers : [];
   const config = resolveBundleConfig({
     config: input.config,
     configPath: input.configPath,
@@ -522,6 +545,7 @@ export function buildDelivery(input) {
         clientId: config.iam.clientId ?? null,
         clientAuthMethod: config.iam.clientAuthMethod ?? null,
         clientSecretRef: config.iam.clientSecretRef ?? null,
+        previousIssuers: previousIssuers.length === 0 ? [] : previousIssuers,
       }, null, 2)}\n`, { mode: 0o600 });
       chmodSync(bindingPath, 0o600);
     }
@@ -624,6 +648,7 @@ async function main() {
     confirm: options.confirm,
     discovery,
     embedClientSecret: options.embedClientSecret,
+    previousIssuers: options.previousIssuers,
   });
   if (options.dryRun) {
     console.error(JSON.stringify(result.plan, null, 2));

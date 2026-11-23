@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { buildDelivery } from '../scripts/release-delivery.mjs';
+import { buildDelivery, parseArguments } from '../scripts/release-delivery.mjs';
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { buildConfig, parseEnvConfig, PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
@@ -557,7 +557,8 @@ function packageDelivery({ publicPath, configPath, sha256 }, output, extra = {})
     output,
     toolRoot: TOOL_ROOT,
   };
-  const plan = buildDelivery({ ...base, dryRun: true });
+  // 预览与正式执行必须用同一组开关，否则带密钥/绑定历史时预览会先被拒。
+  const plan = buildDelivery({ ...base, dryRun: true, ...extra });
   return buildDelivery({ ...base, confirm: plan.digest.slice(0, 16), ...extra });
 }
 
@@ -782,4 +783,45 @@ test('--embed-client-secret 允许把客户端密钥写进交付目录，但不�
   const guide = readFileSync(join(output, 'INSTALL.md'), 'utf8');
   assert.match(guide, /内嵌的 IAM 客户端密钥/u, '安装说明必须讲清密钥随包下发与自动预置');
   assert.equal(guide.includes(secret), false, '安装说明不能出现密钥原文');
+});
+
+test('--previous-issuer 把历史绑定写进 client-secret.json，供安装器在换环境后更正绑定', (t) => {
+  // 同一 ref 在旧交付里绑定过别的 issuer 时，目标机的 set 会被凭据库拒绝；制包人知道旧值，
+  // 就写进绑定文件，安装器据此逐个 replace。
+  const options = parseArguments([
+    '--public', '/tmp/public.tgz',
+    '--public-sha256', 'a'.repeat(64),
+    '--config', '/tmp/enterprise.env',
+    '--version', '0.1.0-corp.1',
+    '--output', '/tmp/out',
+    '--embed-client-secret',
+    '--previous-issuer', 'http://old-iam.corp.example/oidc',
+    '--previous-issuer', 'https://old.corp.example/oidc',
+  ]);
+  assert.deepEqual(options.previousIssuers, ['http://old-iam.corp.example/oidc', 'https://old.corp.example/oidc']);
+  expectCode(() => parseArguments(['--public', '/tmp/p.tgz', '--public-sha256', 'a'.repeat(64), '--config', '/tmp/e.env', '--version', 'v', '--output', '/tmp/o', '--previous-issuer', '--embed-client-secret']), 'BAD_ARGUMENT');
+
+  const { root, publicPath, sha256 } = fixture(t);
+  const configPath = join(root, 'confidential.env');
+  writeFileSync(configPath, [
+    'HELUO_IAM_AUTH_MODE=confidential',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+    'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+    'HELUO_IAM_SCOPES=openid profile offline_access',
+    'HELUO_IAM_CLIENT_SECRET=corp-secret-value-abcdef',
+    '',
+  ].join('\n'));
+  chmodSync(configPath, 0o600);
+  const output = join(root, 'delivery');
+  const result = packageDelivery(
+    { publicPath, configPath, sha256 },
+    output,
+    { embedClientSecret: true, previousIssuers: ['https://old.corp.example/oidc'] },
+  );
+  assert.equal(result.written, true);
+  const binding = JSON.parse(readFileSync(join(output, 'enterprise-plugin', 'client-secret.json'), 'utf8'));
+  assert.deepEqual(binding.previousIssuers, ['https://old.corp.example/oidc']);
+  assert.equal(JSON.stringify(binding).includes('corp-secret-value-abcdef'), false, '绑定文件不含密钥原文');
 });
