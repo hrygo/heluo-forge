@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-024 |
 | 文档名称 | 受控写最小门禁与确认通道重构实施计划 |
-| 版本 | V0.1.2 |
-| 文档状态 | 评审稿 |
+| 版本 | V0.1.3 |
+| 文档状态 | 进行中 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-20 |
+| 最后更新 | 2026-11-23 |
 | 确认人 | 项目负责人 |
 | 确认日期 | 2026-11-19 |
 | 确认事项 | 逐节裁决受控写最小门禁、规则开关和确认通道（D1–D85） |
@@ -191,6 +191,7 @@ content:
   maxBytes: 262144
 paths:
   append: []
+protectedPaths: []    # 追加受保护根模板（$VAR 或绝对路径），与 paths.append 并集去重；工作区九类固定不可缩减
 audit:
   sink: memory        # memory | file
   buffer: 1000
@@ -214,7 +215,7 @@ audit:
 | P0 骨架 | 配置模型、八开关（全关）、observe-only 告警、审计（memory/file/轮转）、流水线骨架、删除四个模块、撤回组合包 `permission` 覆写与 D-6 门禁 | 全关时行为与现状等价；`check:docs`/`check:repo`/包测试通过 | 独立 PR |
 | P1 安全基线 | 身份校验（永远开）、子代理写拒绝、卡片通道（`confirmPush`/`confirmDopWrite`）、决策复用 | 隔离 profile 实测：`never` 会话弹卡、允许后执行、拒绝后零写入 | 独立 PR |
 | P2 内容闸 | 9 条规则、两步卡片、截断语义、`contentFields` 映射 | 每条规则正反例；改写 push 场景 | 独立 PR |
-| P3 收尾 | `protectPaths`、`enforceProcessRules`、`denyHumanRecord`、`denyUnknownAction`、`/policy-audit`、文档同步 | 八开关全开时全量用例；文档与注册表一致 | 独立 PR |
+| P3 收尾（本 PR） | `protectPaths`、`denyHumanRecord`、`denyUnknownAction` 三个语义开关、`/policy-audit` 只读命令与文档同步；`enforceProcessRules` 与流程规则随 #417 | 七开关全开时全量用例；三个开关可独立开启与回退；文档与注册表一致 | 独立 PR |
 
 ## 6. 测试计划
 
@@ -285,6 +286,6 @@ audit:
 | P0 骨架 | 已合并 | PR #400（`60e5cf6`） |
 | P1 安全基线 | 已合并 | PR #401（`09e4bdb`） |
 | P2 内容闸 | 已合并 | PR #411（`7b61a2e0`）。9 条内置规则、按动作字段映射、跨字段 256 KiB 预算、截断与读不到语义、HARD/可确认/SOFT 三档与分步卡片合并 |
-| P3 收尾 | 进行中 | **已接入**：`enforceProcessRules` 的四条规则（保护分支、强制推送、验收小节、评审来源；正文类规则读 `exec.content` 快照）；**待做**：`protectPaths`、`denyHumanRecord`、`denyUnknownAction`、`/policy-audit`、文档同步 |
+| P3 收尾 | 进行中 | **已接入**：`enforceProcessRules` 的四条规则（保护分支、强制推送、验收小节、评审来源；已随 #417 合入）、`denyUnknownAction`/`denyHumanRecord`/`protectPaths` 三个语义开关、`/policy-audit` 只读命令与文档同步；本 PR 合入后 P3 完成 |
 
 方案已按裁决台账完成评审。U1（子代理继承父会话身份）已核对；U2（企业侧 `user-questions` API）仍待企业环境核验。

@@ -9,7 +9,12 @@
  * 直接放行，不读身份、不写审计（D22/D23）。
  */
 
+import { isAbsolute, resolve as resolvePath } from 'node:path';
+
 import { decideAction } from './catalog.mjs';
+import { CATEGORY, classifyAction } from './classify.mjs';
+import { collectPathCandidates } from './path-sources.mjs';
+import { canonicalize, judgeProtectedPath } from './paths.mjs';
 import {
   compileContentRules,
   digestContent,
@@ -49,6 +54,35 @@ const AUDIT_FAILURE_COPY = (action, sinkKind, target) => {
 const AUDIT_OUTSTANDING_COPY = '上一次执行记录尚未回写，为避免漏记，本次受控写已中止；请检查策略存储并确认缺口后重试。';
 
 const IDENTITY_COPY = (action) => `未解析到 IAM 身份，受控写「${action}」已拒绝：请在「设置 → 账号」完成登录后重试。`;
+
+/** 拒绝文案里的"业务目标"：路径形状只留最后一段，绝对路径不进用户面。 */
+function businessTarget(target) {
+  if (typeof target !== 'string') return undefined;
+  const value = target.trim();
+  if (value === '') return undefined;
+  if (!/[\\/]/u.test(value)) return value;
+  const segments = value.split(/[\\/]+/u).filter((segment) => segment !== '');
+  return segments.at(-1);
+}
+
+function goalOf(target) {
+  return businessTarget(target) ?? '未提供';
+}
+
+const UNREGISTERED_COPY = (action) => `未登记动作「${action}」已阻止：该动作没有登记进策略目录，`
+  + '按「默认放行，开启后未登记即拒」的规则拒绝执行。下一步：在策略目录登记该动作（业务目标与读写类别）后重试。';
+
+const HUMAN_RECORD_COPY = (action) => `受控写「${action}」已拒绝：人工评审结论必须由人做出，策略插件不代写评审记录。`
+  + '下一步：请评审人本人在评审界面提交结论。';
+
+const PROTECTED_PATH_COPY = (target, label) => `受保护路径规则拒绝了这次写入：「${goalOf(target)}」`
+  + `命中了受保护文件类别 ${label}。下一步：如确需改动该文件，请由人手动完成，或先确认该路径的归属后再重试。`;
+
+const PATH_SCOPE_COPY = (target) => `受保护路径规则拒绝了这次写入：「${goalOf(target)}」：无法确认这次调用所属的工作区范围。`
+  + '下一步：确认宿主提供了会话工作区目录后重试，或改由人手动完成。';
+
+const PATH_UNRESOLVABLE_COPY = (field, target) => `受保护路径规则拒绝了这次写入：「${goalOf(target)}」：`
+  + `无法确认参数 ${field} 指向的真实路径（可能不存在、不可访问或存在循环链接）。下一步：确认该路径可访问后重试，或改由人手动完成。`;
 
 function normalizeActor(value) {
   if (typeof value === 'string') return value.trim() === '' ? undefined : value;
@@ -270,6 +304,7 @@ export function createGate({
   decisionCache,
   timeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS,
   maxContentBytes,
+  protectedRoots = [],
 } = {}) {
   const stages = Object.freeze([...(pipeline ?? [])]);
   // 内置规则集随包编译一次；v1 不接受自定义规则（D49），组织规则留到后续阶段。
@@ -363,6 +398,101 @@ export function createGate({
     return action !== undefined && isControlled(action);
   }
 
+  function classifyCategory(action) {
+    try {
+      return classifyAction(action)?.category;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 语义开关是否需要门禁介入。未登记读动作与"开关全关的未登记动作"仍然
+   * out-of-scope：不读身份、不写审计、不受审计缺口影响。
+   */
+  function requiresGate(action) {
+    // 目录缺失时不能因为"看起来未登记"就放行：映射到了策略动作就交给门禁，由 admit 报 fail closed。
+    if (!(catalog instanceof Map)) return true;
+    if (isControlled(action)) return true;
+    const category = classifyCategory(action);
+    if (category === CATEGORY.HUMAN_RECORD && rules?.denyHumanRecord === true) return true;
+    return rules?.denyUnknownAction === true && category !== CATEGORY.READ;
+  }
+
+  function allowOutOfScope() {
+    return Object.freeze({ kind: 'allow', rule: 'out-of-scope' });
+  }
+
+  /** 语义阶段拒绝用的审计字段：只写允许字段，不含参数原文与路径值。 */
+  function semanticFields(exec, action, target, meta, extra = {}) {
+    const subject = subjectOf(exec?.name, action);
+    return {
+      ...(subject === undefined ? {} : { subject }),
+      actor: meta.actor,
+      action,
+      target,
+      tool: exec?.name,
+      decision: 'deny',
+      agent: { kind: meta.kind },
+      ...(meta.operationId === undefined ? {} : { operationId: meta.operationId }),
+      ...extra,
+    };
+  }
+
+  /**
+   * 受保护路径阶段（protectPaths）。任何一步无法判定都按拒绝处理，
+   * 但拒绝文案不含路径、errno 或异常文本。
+   */
+  async function protectedPathDenial(exec, action, target, meta) {
+    const workspaceRoot = exec?.agent?.session?.header?.cwd;
+    const scopeFields = semanticFields(exec, action, target, meta, {
+      rule: 'protectPaths',
+      summary: `受控写 ${action} 无法确认受保护路径作用域，已拒绝`,
+    });
+    if (typeof workspaceRoot !== 'string' || workspaceRoot.trim() === '') {
+      return denyWithEvidence(scopeFields, PATH_SCOPE_COPY(target), 'POLICY_PATH_SCOPE_UNAVAILABLE');
+    }
+    try {
+      canonicalize(workspaceRoot);
+    } catch {
+      return denyWithEvidence(scopeFields, PATH_SCOPE_COPY(target), 'POLICY_PATH_SCOPE_UNAVAILABLE');
+    }
+    const collected = collectPathCandidates(exec?.arguments, { workspaceRoot });
+    const unresolvable = (field) => denyWithEvidence(
+      semanticFields(exec, action, target, meta, {
+        rule: 'protectPaths',
+        summary: `受控写 ${action} 的参数 ${field} 无法确认真实路径，已拒绝`,
+      }),
+      PATH_UNRESOLVABLE_COPY(field, target),
+      'POLICY_PATH_UNRESOLVABLE',
+    );
+    if (collected.truncated === true) return unresolvable('path');
+    for (const candidate of collected.candidates) {
+      let judged;
+      try {
+        // 相对参数按会话工作区解释；绝对参数原样归一化。两者都走同一条 canonicalize。
+        const candidatePath = isAbsolute(candidate.value)
+          ? candidate.value
+          : resolvePath(workspaceRoot, candidate.value);
+        judged = judgeProtectedPath(candidatePath, { workspaceRoot, roots: protectedRoots });
+      } catch {
+        return unresolvable(candidate.field);
+      }
+      if (judged.judged !== true || judged.protected !== true) continue;
+      const label = judged.kind === 'name' ? judged.pattern : '配置追加的保护范围';
+      return denyWithEvidence(
+        semanticFields(exec, action, target, meta, {
+          rule: 'protectPaths',
+          ruleIds: judged.ruleIds,
+          summary: `受控写 ${action} 命中受保护路径（${judged.category}），已拒绝`,
+        }),
+        PROTECTED_PATH_COPY(target, label),
+        'POLICY_PROTECTED_PATH',
+      );
+    }
+    return undefined;
+  }
+
   function check(toolName, request = {}) {
     const action = actionFor(toolName) ?? (isControlled(toolName) ? toolName : undefined);
     if (action === undefined) {
@@ -393,7 +523,8 @@ export function createGate({
   }
 
   /**
-   * Resolve → identity → audit, then register the one-shot receipt.
+   * 判定顺序固定为：动作解析 → 身份 → 未登记动作 → 人工留痕 → 受保护路径 →
+   * 内容闸 → 确认 → 审计 → 回执；每个开关命中时只写一条拒记录。
    * Returns `{kind:'allow'}` or `{kind:'deny', reason}`.
    */
   async function admit(ctx, exec, action) {
@@ -412,11 +543,14 @@ export function createGate({
 
   async function admitOnce(ctx, exec, action) {
     const target = targetOf(exec);
-    const decision = decideAction({ catalog, rules, action, target });
-    onDecision?.(decision);
-    if (decision.action === 'deny') {
-      return deny(decision.reason);
+    // 判定顺序（AC-8）：动作解析 → 身份 → 未登记动作 → 人工留痕 → 受保护路径 →
+    // 内容闸 → 确认 → 审计 → 回执。前三个语义阶段命中即拒绝并留证据，卡片无法翻转。
+    if (!(catalog instanceof Map)) {
+      return deny('no compiled policy catalog is available', 'POLICY_CATALOG_UNAVAILABLE');
     }
+    const registered = isControlled(action);
+    const category = classifyCategory(action);
+    if (!registered && !requiresGate(action)) return allowOutOfScope();
     const persona = personaOf(exec?.agent);
     const kind = agentKindOf(exec);
     const operationId = exec?.callId === undefined ? undefined : String(exec.callId);
@@ -424,6 +558,42 @@ export function createGate({
     const actor = normalizeActor(await getActor?.(ctx));
     if (actor === undefined) {
       return deny(IDENTITY_COPY(action));
+    }
+    const meta = { actor, kind, operationId };
+    if (!registered && rules?.denyUnknownAction === true && category !== CATEGORY.READ) {
+      return denyWithEvidence(
+        semanticFields(exec, action, target, meta, {
+          rule: 'denyUnknownAction',
+          ruleIds: ['unregistered-action'],
+          summary: `未登记动作 ${action} 命中 denyUnknownAction，已拒绝`,
+        }),
+        UNREGISTERED_COPY(action),
+        'POLICY_UNREGISTERED_ACTION',
+      );
+    }
+    if (category === CATEGORY.HUMAN_RECORD && rules?.denyHumanRecord === true) {
+      // 人工留痕：不执行、不弹卡、不留正文；证据里只有动作与规则。
+      return denyWithEvidence(
+        semanticFields(exec, action, target, meta, {
+          rule: 'denyHumanRecord',
+          ruleIds: ['human-record'],
+          summary: `人工留痕动作 ${action} 命中 denyHumanRecord，已拒绝`,
+        }),
+        HUMAN_RECORD_COPY(action),
+        'POLICY_HUMAN_RECORD',
+      );
+    }
+    if (!registered) return allowOutOfScope();
+    if (rules?.protectPaths === true) {
+      const denied = await protectedPathDenial(exec, action, target, meta);
+      if (denied !== undefined) return denied;
+    }
+    // #417 的 enforceProcessRules 接入点：流程事实判定必须排在受保护路径之后、
+    // 内容闸之前；该开关当前仍按"未实现"拒绝挂载，不生成这一阶段。
+    const decision = decideAction({ catalog, rules, action, target });
+    onDecision?.(decision);
+    if (decision.action === 'deny') {
+      return deny(decision.reason);
     }
     const sessionId = sessionIdOf(exec);
     const digest = staticDigestOf(exec);
@@ -705,7 +875,7 @@ export function createGate({
 
   async function preExecute(ctx, exec, next) {
     const action = actionFor(exec?.name);
-    if (action === undefined || !isControlled(action)) {
+    if (action === undefined || !requiresGate(action)) {
       return typeof next === 'function' ? next() : Object.freeze({ kind: 'allow' });
     }
     if (disposed) return deny('the policy gate is no longer mounted');
@@ -759,7 +929,7 @@ export function createGate({
   function guard(ctxOrExec, maybeExec) {
     const exec = maybeExec ?? ctxOrExec;
     const action = actionFor(exec?.name);
-    if (action === undefined || !isControlled(action)) return undefined;
+    if (action === undefined || !requiresGate(action)) return undefined;
     if (disposed) return 'the policy gate is no longer mounted';
     const entry = approved.get(exec);
     if (entry === undefined) {
@@ -825,7 +995,7 @@ function businessDecisionOf(result) {
     if (typeof operation !== 'function') {
       return { kind: 'error', text: '受控写缺少执行体，已拒绝执行。' };
     }
-    if (!isControlled(action)) return operation();
+    if (!requiresGate(action)) return operation();
     if (disposed) return { kind: 'error', text: 'the policy gate is no longer mounted' };
     const record = exec ?? {};
     const admission = await admit(ctx, record, action);

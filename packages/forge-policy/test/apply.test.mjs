@@ -260,7 +260,16 @@ test('the mounted service exposes only the P1 members', () => {
   ]) {
     assert.equal(removed in policy, false, `${removed} must be gone`);
   }
-  assert.deepEqual(policy.protectedPaths(), ['$DSH_HOME/**'], 'the path setting is kept as a config surface only');
+  assert.deepEqual(policy.protectedPaths(), [], 'no append root is configured by default');
+  // checkPath 返回对象而不是布尔：工作区内的九类按名称判，工作区外且不在追加根内不判。
+  const workspace = mkdtempSync(join(tmpdir(), 'forge-policy-apply-'));
+  try {
+    assert.deepEqual(policy.checkPath(join(workspace, '.env'), workspace), { judged: true, protected: true, category: 'name:.env' });
+    assert.deepEqual(policy.checkPath(join(workspace, 'notes.txt'), workspace), { judged: true, protected: false });
+    assert.deepEqual(policy.checkPath('/etc/passwd'), { judged: false, protected: false });
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
   assert.equal(policy.orgPolicy().state, 'absent');
   assert.deepEqual(policy.decide({ action: 'gitee.issue.write', target: 'acme/demo!1' }).action, 'allow');
   assert.deepEqual(policy.decide({ action: 'unknown.action', target: 'x' }).rule, 'out-of-scope');
@@ -289,7 +298,7 @@ test('teardown removes the guard, the stages and the service', () => {
   assert.equal(host.guards.length, 0);
 });
 
-test('invalid catalogs, legacy keys and unimplemented rules refuse to mount in one shot', () => {
+test('invalid catalogs and legacy keys refuse to mount in one shot', () => {
   const host = fakeHost();
   // 取代事实：目录行不再接受 enabled/revision；读动作不登记；审批开关已从配置面移除。
   assert.throws(
@@ -299,10 +308,6 @@ test('invalid catalogs, legacy keys and unimplemented rules refuse to mount in o
   assert.throws(
     () => apply(host.ctx, { catalog: [{ ...ISSUE, enabled: true }] }),
     (error) => error.code === 'POLICY_CONFIG_INVALID' && /catalog\[0\]/u.test(error.message) && /enabled/u.test(error.message),
-  );
-  assert.throws(
-    () => apply(host.ctx, { ...baseConfig, rules: { protectPaths: true } }),
-    (error) => error.code === 'POLICY_CONFIG_INVALID' && /rules\.protectPaths/u.test(error.message),
   );
   assert.throws(
     () => apply(host.ctx, { ...baseConfig, approvals: [] }),

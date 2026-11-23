@@ -190,9 +190,10 @@ test('P0: 写动作缺少身份即拒绝，与内容无关', async () => {
   assert.match(String(denied.reason), /设置 → 账号/u);
 });
 
-test('P1: 未实现的开关，挂载时打开仍被拒绝', () => {
-  for (const key of ['denyHumanRecord', 'denyUnknownAction', 'protectPaths']) {
-    assert.throws(() => mount({ rules: { [key]: true } }),
-      (error) => error.code === 'POLICY_CONFIG_INVALID' && error.issues.some((issue) => issue.startsWith(`rules.${key}`)));
+test('P3: 三个语义开关与流程闸都可以单独打开', () => {
+  for (const key of ['denyHumanRecord', 'denyUnknownAction', 'protectPaths', 'enforceProcessRules']) {
+    const host = mount({ rules: { [key]: true } });
+    assert.equal(host.policy.mode(), 'personal', `${key} 打开后插件正常装配`);
+    assert.equal(host.policy.auditDegraded(), false);
   }
 });

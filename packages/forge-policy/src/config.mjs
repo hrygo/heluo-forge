@@ -2,12 +2,16 @@
  * 配置模型与装载期校验（D33/D34/D40/D53/D54）。
  *
  * 校验一次性完成：返回全部问题，每条都带键路径（`catalog[3].category`、
- * `rules.confirmPush`），任一失败拒绝挂载，不静默降级。八开关在 P0 均无实现，
- * 任一置 `true` 即按 fail-closed 拒绝启用并报键名；P1–P3 逐个放开时只需把键名
- * 加入 `IMPLEMENTED_RULES`，默认值与校验保持同源。
+ * `rules.confirmPush`），任一失败拒绝挂载，不静默降级。未实现的开关任一置 `true`
+ * 即按 fail-closed 拒绝启用并报键名；逐阶段放开时只需把键名加入
+ * `IMPLEMENTED_RULES`，默认值与校验保持同源。
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { catalogIssues } from './catalog.mjs';
+import { isPathTemplate, resolveProtectedRoots } from './paths.mjs';
 
 export class PolicyConfigError extends Error {
   constructor(issues) {
@@ -39,12 +43,17 @@ export const REMOVED_RULE_KEYS = Object.freeze({
   denyDelegatedWrites: '该开关已删除：子代理发起受控写恒拒，需要确认的写由主会话代问；请从配置中移除',
 });
 
-/** 已实现三键：两条逐次确认与内容闸；其余四个开关仍在后续阶段。 */
+/**
+ * 已实现七键：内容闸、两条逐次确认、流程闸，以及三个语义开关。
+ */
 export const IMPLEMENTED_RULES = Object.freeze([
   'contentGate',
   'confirmPush',
   'confirmDopWrite',
   'enforceProcessRules',
+  'denyUnknownAction',
+  'denyHumanRecord',
+  'protectPaths',
 ]);
 
 /** 逐次确认的默认等待时间：120 秒。超时即拒绝，不再补问。 */
@@ -145,20 +154,90 @@ function checkAudit(issues, audit) {
   checkPositiveInteger(issues, audit.timeoutMs, 'audit.timeoutMs');
 }
 
+/**
+ * 两层路径模板共用的语法校验：数组、非空字符串、绝对路径或 `$VAR` 模板。
+ * 两处一次报全，不因第一个非法项就停下。
+ */
+function checkTemplateList(issues, value, label) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    issues.push(`${label}: must be an array of path templates`);
+    return;
+  }
+  value.forEach((entry, index) => {
+    if (typeof entry !== 'string' || entry.trim() === '') {
+      issues.push(`${label}[${index}]: must be a non-empty string`);
+      return;
+    }
+    if (!isPathTemplate(entry)) {
+      issues.push(`${label}[${index}]: must be an absolute path or a $VAR template`);
+    }
+  });
+}
+
 function checkPaths(issues, paths) {
   if (paths === undefined) return;
   if (!isPlainObject(paths)) {
     issues.push('paths: must be an object when provided');
     return;
   }
-  if (paths.append !== undefined) {
-    if (!Array.isArray(paths.append)) issues.push('paths.append: must be an array of path templates');
-    else {
-      paths.append.forEach((value, index) => {
-        if (typeof value !== 'string' || value.trim() === '') issues.push(`paths.append[${index}]: must be a non-empty string`);
-      });
-    }
+  checkTemplateList(issues, paths.append, 'paths.append');
+}
+
+function checkProtectedPaths(issues, protectedPaths) {
+  checkTemplateList(issues, protectedPaths, 'protectedPaths');
+}
+
+/**
+ * 与装载期同一套展开基线：`DSH_HOME` 默认 `~/.dsh`，再让进程环境与 `config.env` 覆盖。
+ * 语法合法但无法展开（变量缺席、展开结果非绝对路径）在这里与 L1 问题一起报。
+ */
+function templateEnv(inputEnv) {
+  return {
+    DSH_HOME: join(homedir(), '.dsh'),
+    ...process.env,
+    ...(isPlainObject(inputEnv) ? inputEnv : {}),
+  };
+}
+
+function checkTemplateExpansion(issues, input) {
+  // 逐面逐项报：报错要指出是哪一个配置项，配置多了也分得清来源，
+  // 与 L1（语法）一面的 `label[i]` 口径保持一致。
+  const faces = [
+    ['protectedPaths', Array.isArray(input.protectedPaths) ? input.protectedPaths : []],
+    ['paths.append', Array.isArray(input.paths?.append) ? input.paths.append : []],
+  ];
+  const env = templateEnv(input.env);
+  for (const [label, values] of faces) {
+    values.forEach((template, index) => {
+      if (!isPathTemplate(template)) return;
+      try {
+        resolveProtectedRoots([template], env);
+      } catch (error) {
+        issues.push(`${label}[${index}]: 模板 ${template} 无法展开（${error?.code ?? 'POLICY_CONFIG_INVALID'}）`);
+      }
+    });
   }
+}
+
+/**
+ * 两层配置的稳定并集：`protectedPaths` 在前、`paths.append` 在后，按字符串去重保序。
+ * 门禁的判定顺序与展示都读这一份，避免两个入口各拼一次。
+ *
+ * @param {{protectedPaths?: readonly string[], paths?: {append?: readonly string[]}}} [input]
+ * @returns {readonly string[]}
+ */
+export function collectPathTemplates(input = {}) {
+  const direct = Array.isArray(input?.protectedPaths) ? input.protectedPaths : [];
+  const append = Array.isArray(input?.paths?.append) ? input.paths.append : [];
+  const seen = new Set();
+  const templates = [];
+  for (const value of [...direct, ...append]) {
+    if (typeof value !== 'string' || seen.has(value)) continue;
+    seen.add(value);
+    templates.push(value);
+  }
+  return Object.freeze(templates);
 }
 
 function checkObservation(issues, observation) {
@@ -204,12 +283,6 @@ function checkObservation(issues, observation) {
 function checkUnwiredSurfaces(issues, input) {
   if (isPlainObject(input.categories) && Object.keys(input.categories).length > 0 && !sameAsDefault(input.categories, DEFAULTS.categories)) {
     issues.push('categories: not implemented in this phase; setting it would be silently ignored');
-  }
-  if (input.protectedPaths !== undefined) {
-    issues.push('protectedPaths: not implemented in this phase; setting it would be silently ignored');
-  }
-  if (Array.isArray(input.paths?.append) && input.paths.append.length > 0) {
-    issues.push('paths.append: not implemented in this phase; setting it would be silently ignored');
   }
 }
 
@@ -269,6 +342,7 @@ export function validateConfig(input = {}) {
   }
   checkContent(issues, input.content);
   checkPaths(issues, input.paths);
+  checkProtectedPaths(issues, input.protectedPaths);
   checkAudit(issues, input.audit);
   checkObservation(issues, input.observation);
   checkMappings(issues, 'tools', input.tools);
@@ -280,6 +354,7 @@ export function validateConfig(input = {}) {
   if (input.env !== undefined && !isPlainObject(input.env)) {
     issues.push('env: must be an object when provided');
   }
+  checkTemplateExpansion(issues, input);
 
   if (issues.length > 0) return { issues };
 
@@ -291,8 +366,11 @@ export function validateConfig(input = {}) {
       confirmation: Object.freeze({ ...DEFAULTS.confirmation, ...(input.confirmation ?? {}) }),
       // 已接入内容闸（P2）：`content.maxBytes` 会作为单次调用的扫描预算传下去。
       content: Object.freeze({ ...DEFAULTS.content, ...(input.content ?? {}) }),
-      // 未接入判定链路的两层只保留默认值：上面已拒绝任何非默认设置，这里不再合并用户输入。
-      paths: DEFAULTS.paths,
+      // `paths` 保留宿主写入的原值（含追加根）；`protectedPaths` 是判定用的稳定并集。
+      paths: Object.freeze({
+        append: Object.freeze(Array.isArray(input.paths?.append) ? [...input.paths.append] : []),
+      }),
+      protectedPaths: collectPathTemplates(input),
       audit: Object.freeze({ ...DEFAULTS.audit, ...(input.audit ?? {}) }),
       tools: input.tools ?? {},
       categories: DEFAULTS.categories,

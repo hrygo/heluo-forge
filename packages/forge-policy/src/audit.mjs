@@ -9,7 +9,7 @@
  * `params` 只存摘要，路径只留尾 4 段（D57）。
  */
 
-import { mkdir, appendFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, appendFile, readFile, readdir, unlink } from 'node:fs/promises';
 
 export class PolicyAuditError extends Error {
   constructor(message, code, details = undefined) {
@@ -167,6 +167,18 @@ export function createMemorySink(options = {}) {
       if (entries.length > buffer) entries.splice(0, entries.length - buffer);
     },
     records: () => [...entries],
+    /**
+     * 只读快照：新 → 旧，取前 `limit` 条。不改缓冲、不写审计、不触碰 sink 状态。
+     */
+    read({ limit } = {}) {
+      const max = Number.isInteger(limit) && limit > 0 ? limit : 20;
+      return {
+        records: entries.slice().reverse().slice(0, max),
+        corrupt: 0,
+        missing: false,
+        unreadable: false,
+      };
+    },
     size: () => entries.length,
     lastAt: () => (entries.length === 0 ? undefined : entries.at(-1).observedAt ?? clock()),
   });
@@ -197,6 +209,7 @@ export function createFileSink(options = {}) {
   const fs = {
     mkdir: options.fs?.mkdir ?? mkdir,
     appendFile: options.fs?.appendFile ?? appendFile,
+    readFile: options.fs?.readFile ?? readFile,
     readdir: options.fs?.readdir ?? readdir,
     unlink: options.fs?.unlink ?? unlink,
   };
@@ -245,6 +258,50 @@ export function createFileSink(options = {}) {
           cause: String(error?.message ?? error),
         });
       }
+    },
+    /**
+     * 只读快照：按日期降序读当日与前几日的 JSONL，合并后按 `observedAt` 降序取前
+     * `limit` 条。不 mkdir、不 prune、不写审计、不 spawn 子进程；目录缺席报
+     * `missing`、权限类错误报 `unreadable`，坏行只计入 `corrupt`。
+     */
+    async read({ limit } = {}) {
+      const max = Number.isInteger(limit) && limit > 0 ? limit : 20;
+      let names;
+      try {
+        names = await fs.readdir(dir);
+      } catch (error) {
+        if (error?.code === 'ENOENT') return { records: [], corrupt: 0, missing: true, unreadable: false };
+        return { records: [], corrupt: 0, missing: false, unreadable: true };
+      }
+      const files = names
+        .map((name) => ({ name: String(name), match: pattern.exec(String(name)) }))
+        .filter((entry) => entry.match !== null)
+        .map((entry) => ({ name: entry.name, day: entry.match[1] }))
+        .sort((left, right) => (left.day === right.day ? 0 : left.day < right.day ? 1 : -1));
+      const records = [];
+      let corrupt = 0;
+      for (const entry of files) {
+        let text;
+        try {
+          text = await fs.readFile(`${dir}/${entry.name}`, 'utf8');
+        } catch (error) {
+          if (error?.code === 'ENOENT') continue;
+          return { records: [], corrupt: 0, missing: false, unreadable: true };
+        }
+        for (const line of String(text).split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed === '') continue;
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) corrupt += 1;
+            else records.push(parsed);
+          } catch {
+            corrupt += 1;
+          }
+        }
+      }
+      records.sort((left, right) => (Number(right?.observedAt) || 0) - (Number(left?.observedAt) || 0));
+      return { records: records.slice(0, max), corrupt, missing: false, unreadable: false };
     },
     records: () => [],
     size: () => 0,
@@ -355,6 +412,29 @@ export function createAuditBarrier(options = {}) {
     }
   }
 
+  /**
+   * 只读视图：读当前 sink（`setSink` 之后立刻读新 sink，不做缓存）。任何异常都折算成
+   * "不可读"，命令面据此给可操作提示，绝不把异常文本或路径漏给用户。
+   */
+  async function read({ limit } = {}) {
+    const max = Number.isInteger(limit) && limit > 0 ? limit : 20;
+    const target = sink;
+    try {
+      if (target !== undefined && target !== null && typeof target.read === 'function') {
+        return await target.read({ limit: max });
+      }
+      const records = typeof target?.records === 'function' ? target.records() : [];
+      return {
+        records: records.slice().reverse().slice(0, max),
+        corrupt: 0,
+        missing: records.length === 0,
+        unreadable: false,
+      };
+    } catch {
+      return { records: [], corrupt: 0, missing: false, unreadable: true };
+    }
+  }
+
   return {
     setSink: (next) => {
       sink = next;
@@ -365,6 +445,7 @@ export function createAuditBarrier(options = {}) {
     begin,
     record,
     settle,
+    read,
     sinks: () => sink,
     gaps: () => [...gaps],
     acknowledgeGaps: () => {

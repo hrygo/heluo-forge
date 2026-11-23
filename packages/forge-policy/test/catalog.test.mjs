@@ -77,7 +77,10 @@ test('the default rules let unregistered actions, human records and pushes pass'
 test('an enabled rule tightens exactly its own actions', () => {
   const catalog = compileCatalog([ISSUE, PUSH, HUMAN]);
   const rules = { denyUnknownAction: true, denyHumanRecord: true, confirmPush: true, confirmDopWrite: true };
-  assert.equal(decideAction({ catalog, rules, action: 'change.read', target: 'C-1' }).rule, 'unregistered-action');
+  // 读动作不在开关收紧范围内：未登记的读仍出闸放行，不产生审计。
+  assert.equal(decideAction({ catalog, rules, action: 'change.read', target: 'C-1' }).rule, 'out-of-scope');
+  // 未登记的写动作（词表里是 dev-write，但目录没登记）在开关打开后被拒绝。
+  assert.equal(decideAction({ catalog, rules, action: 'gitee.pr.write', target: 'acme/demo!1' }).rule, 'unregistered-action');
   assert.equal(decideAction({ catalog, rules, action: 'gitee.review.record', target: 'acme/demo!2' }).rule, 'human-record-action');
   const push = decideAction({ catalog, rules, action: 'gitee.git.push', target: 'acme/demo' });
   assert.equal(push.action, 'confirm');

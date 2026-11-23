@@ -23,20 +23,36 @@ test('all-off assembles only the four always-on stages', () => {
   assert.equal(isObserveOnly(), true);
 });
 
-test('an unimplemented switch never generates a stage (closed rules stay closed)', () => {
-  // 配置层已经拒绝打开这些开关；流水线是纯函数，也必须不因入参为 true 就多出阶段。
-  for (const rules of [
-    { denyUnknownAction: true },
-    { denyHumanRecord: true },
-    { protectPaths: true },
-  ]) {
+test('a switch the pipeline does not implement never generates a stage', () => {
+  // 七个开关都已实现；流水线是纯函数，仍不能因为入参里出现陌生键就多出阶段。
+  for (const rules of [{ unknownRule: true }, { denyDelegatedWrites: true }]) {
     assert.deepEqual(buildPipeline(rules).map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
     assert.deepEqual(activeRules(rules), []);
     assert.equal(isObserveOnly(rules), true);
   }
 });
 
-test('the three implemented switches assemble their stage in order', () => {
+test('the seven implemented switches assemble their stage in order', () => {
+  assert.deepEqual(buildPipeline({ denyUnknownAction: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'unknown-action', 'audit', 'receipt',
+  ]);
+  assert.deepEqual(buildPipeline({ denyHumanRecord: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'human-record', 'audit', 'receipt',
+  ]);
+  assert.deepEqual(buildPipeline({ protectPaths: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'protected-paths', 'audit', 'receipt',
+  ]);
+  assert.deepEqual(buildPipeline({ enforceProcessRules: true }).map((stage) => stage.stage), [
+    'resolve', 'identity', 'process-rules', 'audit', 'receipt',
+  ]);
+  const everything = buildPipeline({
+    contentGate: true, confirmPush: true, enforceProcessRules: true,
+    denyUnknownAction: true, denyHumanRecord: true, protectPaths: true,
+  });
+  assert.deepEqual(everything.map((stage) => stage.stage), [
+    'resolve', 'identity', 'unknown-action', 'human-record', 'protected-paths', 'process-rules',
+    'content-gate', 'confirmation', 'audit', 'receipt',
+  ]);
   assert.deepEqual(buildPipeline({ confirmPush: true }).map((stage) => stage.stage), [
     'resolve', 'identity', 'confirmation', 'audit', 'receipt',
   ]);

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { PolicyAuditError, createAuditBarrier, createFileSink } from '../src/audit.mjs';
+import { PolicyAuditError, createAuditBarrier, createFileSink, createMemorySink } from '../src/audit.mjs';
 
 const RECORD = { action: 'gitee.issue.write', actor: 'user-a', phase: 'begin' };
 
@@ -155,4 +155,112 @@ test('the barrier honours its timeout when a sink hangs', async () => {
     timeoutMs: 10,
   });
   await assert.rejects(audit.begin(RECORD), (error) => error.code === 'POLICY_AUDIT_TIMEOUT');
+});
+
+test('the memory sink reads newest first without mutating its ring', () => {
+  const sink = createMemorySink({ buffer: 3 });
+  for (const observedAt of [1, 2, 3, 4]) sink.append({ ...RECORD, observedAt });
+  assert.deepEqual(sink.read({ limit: 2 }), {
+    records: [{ ...RECORD, observedAt: 4 }, { ...RECORD, observedAt: 3 }],
+    corrupt: 0,
+    missing: false,
+    unreadable: false,
+  });
+  assert.equal(sink.read().records.length, 3, 'the ring keeps the newest three');
+  assert.deepEqual(sink.records().map((record) => record.observedAt), [2, 3, 4]);
+  assert.equal(sink.size(), 3);
+});
+
+test('the file sink merges days newest-first, counts corrupt lines and never writes on read', async () => {
+  const { dir, clean } = tempDir();
+  try {
+    const older = join(dir, 'forge-policy-2026-11-22.jsonl');
+    const newer = join(dir, 'forge-policy-2026-11-23.jsonl');
+    writeFileSync(older, `${JSON.stringify({ ...RECORD, observedAt: 1000 })}\n\n`);
+    writeFileSync(newer, `${JSON.stringify({ ...RECORD, observedAt: 3000 })}\nnot-json\n${JSON.stringify({ ...RECORD, observedAt: 2000 })}\n`);
+    const before = [readFileSync(older, 'utf8'), readFileSync(newer, 'utf8')];
+
+    const sink = createFileSink({ dir });
+    const snapshot = await sink.read({ limit: 10 });
+    assert.equal(snapshot.corrupt, 1);
+    assert.equal(snapshot.missing, false);
+    assert.equal(snapshot.unreadable, false);
+    assert.deepEqual(snapshot.records.map((record) => record.observedAt), [3000, 2000, 1000]);
+    assert.deepEqual((await sink.read({ limit: 2 })).records.map((record) => record.observedAt), [3000, 2000]);
+    assert.deepEqual([readFileSync(older, 'utf8'), readFileSync(newer, 'utf8')], before, 'reading does not rewrite');
+    assert.deepEqual(readdirSync(dir).sort(), ['forge-policy-2026-11-22.jsonl', 'forge-policy-2026-11-23.jsonl']);
+  } finally {
+    clean();
+  }
+});
+
+test('reading a missing audit directory reports missing and creates nothing', async () => {
+  const { dir, clean } = tempDir();
+  try {
+    const missing = join(dir, 'does-not-exist');
+    const sink = createFileSink({ dir: missing });
+    assert.deepEqual(await sink.read({ limit: 5 }), { records: [], corrupt: 0, missing: true, unreadable: false });
+    assert.equal(existsSync(missing), false, 'read must not create the audit directory');
+  } finally {
+    clean();
+  }
+});
+
+test('permission failures read as unreadable, never as an empty history', async () => {
+  const unreadableDir = createFileSink({
+    dir: '/forbidden',
+    fs: {
+      readdir: async () => {
+        const error = new Error('permission denied');
+        error.code = 'EACCES';
+        throw error;
+      },
+    },
+  });
+  assert.deepEqual(await unreadableDir.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: true });
+
+  const unreadableFile = createFileSink({
+    dir: '/forbidden',
+    fs: {
+      readdir: async () => ['forge-policy-2026-11-23.jsonl'],
+      readFile: async () => {
+        const error = new Error('is a directory');
+        error.code = 'EISDIR';
+        throw error;
+      },
+    },
+  });
+  assert.deepEqual(await unreadableFile.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: true });
+});
+
+test('the barrier reads through the current sink and falls back to its ring', async () => {
+  const legacy = createMemorySink({ buffer: 10 });
+  for (const observedAt of [1, 2]) legacy.append({ ...RECORD, observedAt });
+  const noRead = {
+    kind: 'memory',
+    durable: false,
+    append: () => {},
+    records: () => [{ ...RECORD, observedAt: 8 }, { ...RECORD, observedAt: 9 }],
+  };
+  const audit = createAuditBarrier({ sink: noRead });
+  assert.deepEqual((await audit.read({ limit: 1 })).records.map((record) => record.observedAt), [9]);
+
+  const fallback = createAuditBarrier({
+    sink: {
+      kind: 'memory',
+      durable: false,
+      append: () => {},
+      records: () => [{ ...RECORD, observedAt: 5 }, { ...RECORD, observedAt: 6 }],
+    },
+  });
+  assert.deepEqual((await fallback.read({ limit: 2 })).records.map((record) => record.observedAt), [6, 5]);
+
+  const throwing = createAuditBarrier({
+    sink: { kind: 'file', durable: true, append: () => {}, read: async () => { throw new Error('boom'); } },
+  });
+  assert.deepEqual(await throwing.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: true });
+
+  const combined = createAuditBarrier({ sink: { kind: 'memory', durable: false, append: () => {}, read: () => ({ records: [], corrupt: 0, missing: false, unreadable: false }) } });
+  combined.setSink(legacy);
+  assert.deepEqual((await combined.read({ limit: 1 })).records.map((record) => record.observedAt), [2], 'setAuditSink affects later reads');
 });

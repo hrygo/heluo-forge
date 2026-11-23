@@ -215,5 +215,9 @@ test('ordinary apply and isolated module import do not discover sources or regis
   const config = { audit: { sink: 'memory' }, catalog: [] };
   Object.defineProperty(config, 'getSources', { get() { assert.fail('ordinary config probed a private source'); } });
   const dispose = apply(host.ctx, config);
-  assert.equal(host.definitions.size, 0); assert.equal(host.commands.size, 0); dispose();
+  // 只读命令 /policy-audit 是普通装配的一部分；这里仍要证明没有登记任何合成能力。
+  assert.equal(host.definitions.size, 0);
+  assert.deepEqual([...host.commands.keys()], ['policy-audit']);
+  dispose();
+  assert.equal(host.commands.size, 0);
 });

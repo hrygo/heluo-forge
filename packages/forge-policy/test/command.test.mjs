@@ -74,7 +74,8 @@ test('a command naming an unknown or reserved action is refused at registration'
     () => policy.registerCommand(host.ctx, { name: 'nope', description: 'x', action: 'gitee.issue.write' }),
     (error) => error.code === 'POLICY_COMMAND_INVALID',
   );
-  assert.equal(host.registered.size, 0);
+  // 只读的 /policy-audit 由装配注册；这里确认没有因本次调用留下任何命令面。
+  assert.deepEqual([...host.registered.keys()], ['policy-audit']);
 });
 
 test('the command face runs the same decision as the tool face', async () => {

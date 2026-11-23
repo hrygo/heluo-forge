@@ -10,9 +10,10 @@ import { createGate } from './gate.mjs';
 import { createDecisionCache } from './reuse.mjs';
 import { createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
 import { loadOrgPolicy } from './org-policy.mjs';
-import { matchProtected, resolveProtectedRoots } from './paths.mjs';
+import { judgeProtectedPath, matchProtected, resolveProtectedRoots } from './paths.mjs';
 import { buildPipeline, isObserveOnly } from './pipeline.mjs';
-import { Config, resolveConfig, validateConfig } from './config.mjs';
+import { Config, PolicyConfigError, collectPathTemplates, resolveConfig, validateConfig } from './config.mjs';
+import { registerAuditCommand } from './audit-command.mjs';
 
 export { Config, validateConfig };
 
@@ -22,7 +23,7 @@ const OBSERVATION_SINK_KEY = 'observationSink';
 // 流程事实（变更状态、计划确认）由宿主既有服务提供；缺席时判为"未判定"。
 const PROCESS_FACTS_KEY = 'processFacts';
 
-const OBSERVE_ONLY_NOTICE = '[forge-policy] 8 项策略开关均为关闭，当前为 observe-only：只记录受控执行的凭据，不拦截内容、路径、流程或确认。';
+const OBSERVE_ONLY_NOTICE = '[forge-policy] 7 项策略开关均为关闭，当前为 observe-only：只记录受控执行的凭据，不拦截内容、路径、流程或确认。';
 
 // 逐次确认需要宿主的 userQuestions 服务；缺席时装载照常成功，每次需要卡片的写都会拒绝。
 const CONFIRMATION_UNAVAILABLE_NOTICE = '[forge-policy] 已启用 confirmPush/confirmDopWrite，但宿主没有可用的 userQuestions 服务：需要人工确认的受控写会一律以 POLICY_CONFIRM_UNAVAILABLE 拒绝（不降级为直接放行）。';
@@ -33,8 +34,9 @@ function hasConfirmationChannel(ctx) {
   return isPlainObject(service) && typeof service.ask === 'function';
 }
 
-// 路径规则的默认受保护根（9 类，按宿主占位符展开）。P0 只保留配置面与展示。
-const DEFAULT_PROTECTED_PATHS = Object.freeze(['$DSH_HOME/**']);
+// 受保护路径的默认配置为空：九类名称在会话工作区内恒生效，配置只能追加范围，
+// 不能再靠一个默认 `$DSH_HOME/**` 把"工作区内九类"覆盖掉或静默缩小。
+const DEFAULT_PROTECTED_PATHS = Object.freeze([]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -180,9 +182,17 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   }
 
   const env = { ...defaultTemplateValues(), ...process.env, ...(config.env ?? {}) };
-  // 受保护路径在 P0 不参与判定（protectPaths 未实现），这里只解出默认根供服务上的
-  // `checkPath` 查询用；配置层的 `protectedPaths` 与 `paths.append` 已在装载期拒绝。
-  const protectedRoots = resolveProtectedRoots(DEFAULT_PROTECTED_PATHS, env);
+  // 两层模板合并后按同一基线展开：九类名称固定生效，配置只能追加受保护范围。
+  // 展开失败已在 `validateConfig` 与 L1 问题一起报过；这里保留防御性汇总，避免装配到一半。
+  const configuredTemplates = collectPathTemplates(config);
+  let protectedRoots;
+  try {
+    protectedRoots = resolveProtectedRoots([...DEFAULT_PROTECTED_PATHS, ...configuredTemplates], env);
+  } catch (error) {
+    throw new PolicyConfigError([
+      `protectedPaths/paths.append: 模板 ${error?.details?.template ?? 'protectedPaths/paths.append'} 无法展开（${error?.code ?? 'POLICY_CONFIG_INVALID'}）`,
+    ]);
+  }
   const memorySink = config.audit.sink === 'memory' ? createMemorySink({ buffer: config.audit.buffer }) : undefined;
   const fileSink = config.audit.sink === 'file'
     ? createFileSink({ dir: join(env.DSH_HOME, 'logs'), keepDays: config.audit.keepDays })
@@ -211,6 +221,7 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     decisionCache,
     timeoutMs: config.confirmation.timeoutMs,
     maxContentBytes: config.content.maxBytes,
+    protectedRoots,
   });
 
   // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。
@@ -232,7 +243,10 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     for (const dispose of disposers.splice(0).reverse()) dispose?.();
     disposeProvide?.();
   };
+  // 只读命令：没有 commands 服务时是空操作，不阻断挂载；disposer 跟随卸载顺序回收。
+  const disposeAuditCommand = registerAuditCommand(ctx, { audit });
   const disposers = [];
+  if (typeof disposeAuditCommand === 'function') disposers.push(disposeAuditCommand);
   disposers.push(native.guard((exec) => (owned ? owned.guard(gate, exec) : gate.guard(exec))));
   if (typeof ctx.on === 'function') {
     disposers.push(native.pre((exec, next) => (owned ? owned.preExecute(gate, ctx, exec, next) : gate.preExecute(ctx, exec, next))));
@@ -262,8 +276,26 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     actions: () => [...catalog.keys()],
     decide: (request) => decideAction({ catalog, rules: config.rules, ...request }),
     authorize: (toolName, request) => gate.check(toolName, request),
-    protectedPaths: () => protectedRoots.map((entry) => entry.raw),
-    checkPath: (candidate) => matchProtected(candidate, protectedRoots),
+    /** 配置追加的模板（展开前原文）；九类名称在代码里恒开，不出现在这里。 */
+    protectedPaths: () => configuredTemplates,
+    /**
+     * 路径判定查询：给工作区根时按"工作区内九类 + 配置追加根"判定；不给时只判追加根，
+     * 因为九类名称只在会话工作区内生效。返回对象而非布尔，调用方不必猜缺省含义。
+     */
+    checkPath: (candidate, workspaceRoot) => {
+      if (workspaceRoot === undefined) {
+        const result = matchProtected(candidate, protectedRoots);
+        if (!result.protected) return Object.freeze({ judged: false, protected: false });
+        return Object.freeze({ judged: true, protected: true, category: `root:${result.root}` });
+      }
+      const result = judgeProtectedPath(candidate, { workspaceRoot, roots: protectedRoots });
+      if (!result.judged) return Object.freeze({ judged: false, protected: false });
+      return Object.freeze({
+        judged: true,
+        protected: result.protected === true,
+        ...(result.category === undefined ? {} : { category: result.category }),
+      });
+    },
     orgPolicy: () => (org.state === 'verified'
       ? { state: org.state, policyVersion: org.policyVersion, issuedBy: org.issuedBy, issuedAt: org.issuedAt, digest: org.digest, keyId: org.keyId }
       : { state: org.state, reason: org.reason }),

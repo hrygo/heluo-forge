@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-020 |
 | 文档名称 | 策略判定模型设计 |
-| 版本 | V0.2.1 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-20 |
+| 最后更新 | 2026-11-23 |
 | 门禁 | G2 |
 | 确认人 | 项目负责人 |
 | 确认日期 | 2026-11-20 |
@@ -38,7 +38,7 @@
 
 默认分层：目录只登记六条写动作（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write`、`gitee.git.push`、`gitee.review.record`）；读动作不进目录，未登记动作属于门禁作用域之外，放行且不读身份、不写审计；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。动作分类与内容闸、流程闸由七条独立开关控制，代码默认全关，由部署者逐条开启；`gitee.git.push` 与 DOP 状态流转各有一条确认开关，开启后走宿主问答卡片询问用户。不再有范围票据：普通研发写不逐次确认，也不要求在有效期内复用"任务范围"。组织策略以包内 `policy/` 数据目录的签名信封随包下发（见[策略与审计详细设计 §5.1.4](plugins/forge-policy.md#514-组织策略数据目录2026-11-16)），不设有效期、不单独成包；本地只能收紧，不能放宽。
 
-尚未闭合：内容规则清单与阈值需在企业真实仓库上评估误报，dop 事实源字段与 IAM principal 取值待核验，确认卡片的超时与并发语义未验，P1–P3 的规则尚未接入判定链路。
+尚未闭合：内容规则清单与阈值需在企业真实仓库上评估误报，dop 事实源字段与 IAM principal 取值待核验，确认卡片的超时与并发语义未验；流程规则（`enforceProcessRules`）随 #417 接入，其余规则已在 P0–P3 接入判定链路。
 
 ## 2. 目标与非目标
 
@@ -70,7 +70,9 @@
 | 内容载荷 | 调用参数中的文本字段、文件路径、待推送提交集合 | 内容域 |
 | 流程事实 | dop 变更状态、本地 git 分支与参数、PR 关联 | 流程域 |
 
-判定顺序固定为：能力域（未登记动作出闸；`denyUnknownAction` 开启后硬拒绝）→ 受保护路径（`protectPaths` 开启后不可翻转的硬拒绝）→ 内容域（`contentGate`）→ 流程域（`enforceProcessRules`）→ 决策合成 → 必要的确认卡片（`confirmPush`、`confirmDopWrite`）→ 前置审计。P0 落地能力域、身份与前置审计三段；P1 补确认卡片与决策复用，P2 补内容域，P3 起补流程域（先接四条不需要外部事实源的规则：保护分支、强制推送、验收小节、评审来源）。
+判定顺序固定为：能力域（解析动作，未登记动作出闸）→ 身份域（写动作要求 IAM actor）→ 未登记动作（`denyUnknownAction`）→ 人工记录（`denyHumanRecord`）→ 受保护路径（`protectPaths`，不可翻转的硬拒绝）→ 流程域（`enforceProcessRules`）→ 内容域（`contentGate`）→ 决策合成 → 必要的确认卡片（`confirmPush`、`confirmDopWrite`）→ 前置审计与执行前复验。未开启的开关不生成阶段；同一动作同时命中多条规则时按上述顺序归因，只留一条拒绝证据。
+
+三个语义开关只允许收紧权限：默认关闭时对被判定动作没有额外影响，开启后分别拒绝未登记写、Agent 发起的人工记录与受保护文件名命中，都无法把其他轴的拒绝翻成允许；三者都在装载期校验取值，配置非法时插件不启用。七个开关均已接入判定链路，P0 的 schema 约束见 §12：当前仍属"未接入即装载期拒绝"的配置面只剩 `categories`；`protectedPaths`、`paths.append`、`confirmation`、`content` 与流程闸均已接入。字段定义与错误语义以[策略与审计详细设计 §5](plugins/forge-policy.md#5-接口与配置)为唯一真源，本文不复制字段表。
 
 ```mermaid
 flowchart TD
@@ -227,12 +229,12 @@ HARD 级最小集合：私钥块、云厂商长期访问密钥、带凭据的连
 
 | 阶段 | 内容 | 判据 |
 |---|---|---|
-| P0 骨架（已交付） | 动作目录（六条写动作）、IAM 身份校验、恒开审计（memory/file 落点）、一次性收据与执行前复验、命令面同源判定、组织信封验签、装载期拒绝未接入面 | 登记动作必须解析身份并先落审计；未登记动作零拦截；`pnpm check` 全绿 |
+| P0 骨架（已交付） | 动作目录（六条写动作）、IAM 身份校验、恒开审计（memory/file 落点）、一次性收据与执行前复验、命令面同源判定、组织信封验签、装载期拒绝未接入面（现仅剩 `categories`） | 登记动作必须解析身份并先落审计；未登记动作零拦截；`pnpm check` 全绿 |
 | P1 安全基线 | 身份域补齐、确认卡片（`confirmPush`、`confirmDopWrite`）、决策复用 | 卡片拒绝/超时零执行；需要确认的子代理写由主会话代问，找不到根才拒绝 |
 | P2 内容闸 | 内容规则集与 `contentGate`、256 KiB 截断、HARD/SOFT 语义 | HARD 命中零执行且不可被确认提升 |
-| P3 收尾 | 流程规则与 `enforceProcessRules`、`unevaluated` 记账、常态观察、文档与验收收口 | 事实源断开时动作继续且审计可见跳过项 |
+| P3 收尾（本 PR） | 未登记动作、人工留痕、受保护路径三个语义开关与只读命令 `/policy-audit`；文档与验收收口 | 三个开关可独立开启且装载成功；`enforceProcessRules` 仍装载期拒绝；审计查询默认 20、上限 200 |
 
-配置 schema 按 P0 破坏性简化：`catalog` 只接受 `action` / `target` / `category`；`revision`、`enabled`、`kind`、`egress`、`retry` 等旧键在装载期被拒绝；规则开关为七条布尔，置真但未实现的规则装载期拒绝；`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content` 在对应阶段接入前一律装载期拒绝。旧 schema 不做兼容迁移。
+配置 schema 按 P0 破坏性简化：`catalog` 只接受 `action` / `target` / `category`；`revision`、`enabled`、`kind`、`egress`、`retry` 等旧键在装载期被拒绝；规则开关为七条布尔，置真但未实现的规则装载期拒绝（当前七条均已实现，不再有属于此列的开关）。`protectedPaths` 与 `paths.append` 已在 P3 接入，`confirmation` 与 `content` 已在 P1/P2 接入；当前仍属"未接入即装载期拒绝"的配置面只剩 `categories`。旧 schema 不做兼容迁移。
 
 ## 13. 与既有决定的关系
 

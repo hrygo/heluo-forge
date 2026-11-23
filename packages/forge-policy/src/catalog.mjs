@@ -154,7 +154,13 @@ export function decideAction({ catalog, rules = {}, action, target } = {}) {
   }
   const entry = catalog.get(action);
   if (entry === undefined) {
-    if (rules.denyUnknownAction === true) {
+    // 未登记动作：读放行（不读身份、不写审计），写与无法归类按写处理。
+    // 与门禁的 unknown-action/human-record 阶段同口径，避免服务面 `decide` 与门禁两套结论。
+    const unregistered = classifyAction(action);
+    if (unregistered?.category === CATEGORY.HUMAN_RECORD && rules.denyHumanRecord === true) {
+      return deny('human-record-action', 'a human record can only be written by a human, never by an agent');
+    }
+    if (rules.denyUnknownAction === true && unregistered?.category !== CATEGORY.READ) {
       return deny('unregistered-action', `action "${action}" is not registered in the policy catalog`);
     }
     return allow('out-of-scope', `action "${action}" is not a controlled write action`);
@@ -164,7 +170,10 @@ export function decideAction({ catalog, rules = {}, action, target } = {}) {
   }
   const classified = classifyAction(action);
   if (classified === undefined) {
-    return deny('unregistered-action', `action "${action}" has no builtin classification`);
+    if (rules.denyUnknownAction === true) {
+      return deny('unregistered-action', `action "${action}" has no builtin classification`);
+    }
+    return allow('out-of-scope', `action "${action}" has no builtin classification`);
   }
   if (classified.category === CATEGORY.HUMAN_RECORD) {
     if (rules.denyHumanRecord === true) {
