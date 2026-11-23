@@ -23,6 +23,9 @@ test('one card carries the action, the target and a fixed pair of labels', () =>
   assert.match(question.question, /feat\/x/u, 'the branch is shown so the human can tell calls apart');
   assert.match(question.detail, /不选择视为取消/u);
   assert.doesNotMatch(question.detail, /动作确认/u, '标题已经说了这是什么确认，正文不重复');
+  // 正文与标题的左边距由宿主样式保证，这里不允许再出现不可见字符补偿。
+  assert.doesNotMatch(JSON.stringify({ questions }), /[\u2000-\u200f\u2028-\u202f\u2060\ufeff\u00a0]/u, 'no invisible padding characters');
+  assert.match(question.detail, /侧栏会话/u, 'the card says where the result can be found afterwards');
   assert.deepEqual(question.options.map((option) => option.label), [allowLabel, denyLabel]);
   assert.deepEqual(question.options.map((option) => option.description), ['只放行这一次调用', '拒绝本次调用，不执行']);
   assert.equal(Object.isFrozen(questions), true);
@@ -39,6 +42,11 @@ test('merged reasons become one question each, action before content', () => {
   assert.deepEqual(merged.questions.map((question) => question.id), ['forge-policy-action', 'forge-policy-content']);
   assert.deepEqual(merged.questions.map((question) => question.header), [CONFIRM_REASONS.action, CONFIRM_REASONS.content]);
   assert.equal(new Set(merged.questions.map((question) => question.question)).size, merged.questions.length);
+  // 多原因走宿主的分步表单：题面各自说明原因，进度由宿主显示，插件不自造序号。
+  assert.deepEqual(merged.questions.map((question) => question.header), ['动作确认', '内容风险']);
+  for (const question of merged.questions) {
+    assert.doesNotMatch(question.question, /第\s*\d+\s*步|\d+\s*\/\s*\d+/u, 'progress is the host\'s job, not the copy\'s');
+  }
   assert.equal(buildConfirmationCard({ action: 'gitee.git.push' }).questions.length, 1, 'no reasons still asks the action itself');
   assert.equal(buildConfirmationCard({ action: 'gitee.git.push', reasons: [] }).questions[0].id, 'forge-policy-action');
   assert.equal(buildConfirmationCard({ action: 'gitee.git.push', reasons: ['unknown'] }).questions[0].id, 'forge-policy-action');
