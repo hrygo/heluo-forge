@@ -7,6 +7,43 @@
  * @param {Record<string, unknown>} config
  * @returns {{ ok: true } | { ok: false, reason: 'exclusive-violation' | 'exclusive-check-unavailable' }}
  */
+/** Host services that prove an official login path is still mounted. */
+export const DEFAULT_EXCLUSIVE_SERVICES = Object.freeze(['deepseekAccount']);
+
+/**
+ * @param {Record<string, unknown>} [config]
+ * @returns {string[]} the services this composition must keep absent
+ */
+export function exclusiveServices(config) {
+  const configured = config?.exclusiveServices;
+  if (!Array.isArray(configured) || configured.length === 0) return [...DEFAULT_EXCLUSIVE_SERVICES];
+  return configured;
+}
+
+/**
+ * Names the first official service still mounted, so the caller can report it
+ * without widening the check result.
+ *
+ * @param {{ get?: (name: string) => unknown } | undefined} ctx
+ * @param {Record<string, unknown>} [config]
+ * @returns {string | undefined}
+ */
+export function officialServicePresent(ctx, config) {
+  if (!ctx || typeof ctx.get !== 'function') return undefined;
+  for (const name of exclusiveServices(config)) {
+    let service;
+    try {
+      service = ctx.get(name);
+    } catch {
+      // An unreadable lookup proves nothing; the caller's fail-closed path
+      // reports the unavailable check separately.
+      continue;
+    }
+    if (service !== undefined && service !== null) return name;
+  }
+  return undefined;
+}
+
 export function checkExclusive(ctx, config) {
   if (config?.requireExclusive === false) return { ok: true };
 
@@ -15,9 +52,11 @@ export function checkExclusive(ctx, config) {
   }
 
   try {
-    const account = ctx.get('deepseekAccount');
-    if (account !== undefined && account !== null) {
-      return { ok: false, reason: 'exclusive-violation' };
+    for (const name of exclusiveServices(config)) {
+      const service = ctx.get(name);
+      if (service !== undefined && service !== null) {
+        return { ok: false, reason: 'exclusive-violation' };
+      }
     }
     return { ok: true };
   } catch {

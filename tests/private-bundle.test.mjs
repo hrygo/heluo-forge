@@ -812,3 +812,23 @@ test('客户端密钥只允许与 confidential 搭配', () => {
     (error) => error instanceof PrivateBundleError && error.code === 'CONFIG_INVALID' && /only valid with/u.test(error.message),
   );
 });
+
+test('profile fields map claim names into the iam config', () => {
+  const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=workNo=work_no,name=pinyin'].join('\n'));
+  assert.deepEqual(buildConfig(entries).iam.profileFields, { workNo: 'work_no', name: 'pinyin' });
+});
+
+test('profile fields refuse unknown keys, missing pairs and non-token claims', () => {
+  for (const value of ['dept=department', 'workNo', 'workNo=work no', 'name=pinyin=extra', '=work_no']) {
+    const entries = parseEnvConfig([...ENV, `HELUO_IAM_PROFILE_FIELDS=${value}`].join('\n'));
+    expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
+  }
+});
+
+test('the shipped profile mapping passes the plugin schema', () => {
+  const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=name=pinyin,workNo=work_no'].join('\n'));
+  const { iam } = buildConfig(entries);
+  const result = validateConfig({ ...iam });
+  assert.equal('issues' in result, false, JSON.stringify(result.issues ?? []));
+  assert.deepEqual(result.value.profileFields, { name: 'pinyin', workNo: 'work_no' });
+});

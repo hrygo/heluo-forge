@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.8.0 |
+| 版本 | V3.9.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -234,7 +234,7 @@ flowchart TB
 
 补丁层在目标 Profile 下共停用七行：上表四项之外，还有 `llm-pi-ai`（自由添加网关）、`ui-settings-models`（自由配置模型入口）与 `credentials`（官方明文凭据提供方）。后三行同样构成旁路，不因本表只列账号相关四行而省略。
 
-装配期的官方行核验由 `@heluo/forge-enterprise` 的补丁与 `OFFICIAL_ROWS` 断言承担：缺席的行记为 `absent`，Loader 警告跳过不等于已禁用。插件自身的运行期独占断言位于 `src/exclusive.mjs`，只检查 `ctx.get('deepseekAccount')` 服务是否残留，发现残留即拒绝受保护操作；该断言不覆盖其余官方行，其余行的残留只能由装配期断言发现，运行期不产生告警。环境变量旁路（如 `DEEPSEEK_API_KEY`）在组合装配时检测：`exclusive.mjs` 的 `detectEnvBypass` 只读取变量名，`apply` 在 `requireExclusive` 未关闭时以固定文案告警一次，文案不含变量值。检测默认只告警，是否拒绝启动尚未实现，须由用户裁决后另行变更。`exclusive-violation` 审计事件及持久落点仍是待验证目标，不能由本地诊断或拒绝行为推断已交付。
+装配期的官方行核验由 `@heluo/forge-enterprise` 的补丁与 `OFFICIAL_ROWS` 断言承担：缺席的行记为 `absent`，Loader 警告跳过不等于已禁用。插件自身的运行期独占断言位于 `src/exclusive.mjs`，按 `exclusiveServices`（默认 `['deepseekAccount']`）逐个检查宿主服务；任一残留即拒绝受保护操作，并在装配日志给出具体服务名。企业补丁把其余官方行登记进该列表后，运行期也能覆盖到那些行；未登记的行仍只能由装配期断言发现。环境变量旁路（如 `DEEPSEEK_API_KEY`）在组合装配时检测：`exclusive.mjs` 的 `detectEnvBypass` 只读取变量名，`apply` 在 `requireExclusive` 未关闭时以固定文案告警一次，文案不含变量值。检测默认只告警，是否拒绝启动尚未实现，须由用户裁决后另行变更。`exclusive-violation` 审计事件及持久落点仍是待验证目标，不能由本地诊断或拒绝行为推断已交付。
 
 ### 4.4 客户端 UI 交互设计
 
@@ -333,6 +333,11 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `httpTimeoutMs` | number | 10000 | 否 | HTTP 请求默认超时上限（毫秒）；刷新与撤销请求设 5000ms 硬上限 |
 | `logoutMode` | string | `local` | 否 | `local` 完成本地退出与已配置的撤销。`rp` 还可生成全局登出地址 |
 | `requireExclusive` | boolean | `true` | 否 | 排他性强断言开关；检测到官方服务残留时阻断就绪 |
+| `iamTokenHeader` | string | `X-IAM-Token` | 否 | 网关身份头名，须为 RFC 7230 token；改名前确认网关接受新头 |
+| `consumerTypeHeader` | string | `X-Consumer-Type` | 否 | 消费方类型头名，同样须为 token |
+| `consumerType` | string | `personal` | 否 | 消费方类型值；个人版固定 `personal`，AIGS 迁移时整体改为目标值 |
+| `exclusiveServices` | string[] | `['deepseekAccount']` | 否 | 必须保持缺席的宿主服务名列表；命中即判 `exclusive-violation` 并告警具体服务名 |
+| `profileFields` | object | 空 | 否 | UserInfo 字段映射，仅接受 `workNo`/`name` 键，值为 claim 名 token；空表示不取画像 |
 
 授权请求恒定携带 `code_challenge` 与 `code_challenge_method=S256`；`pkce`、`pkceMethod`、`codeChallengeMethod`、`disablePkce` 一律按禁止配置项处理，不能通过配置关闭或降级。IAM 6.0.3 反馈称授权码 PKCE 能力具备、允许 `plain`、未强制 S256；S256 是否被接受既无书面结论也无实测证据。本实现固定使用 S256，不提供 `plain` 降级，接受度待实测，见 §12.1 第 16 项。
 
@@ -1113,10 +1118,10 @@ flowchart TD
 | 14 | UserInfo 工号与姓名字段的最终口径：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法 | IAM 团队 | 取较新日期的 `work_no`/`pinyin` 为默认候选映射，联调确认前不把任一字段名写入契约；统一账户页展示名与审计主体显示名 |
 | 15 | 回调前缀匹配的边界：合法前缀限定为 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均被拒。大小写、尾斜杠与非数字端口未验 | IAM 团队 | 用真实 IAM 补负面用例，确认非法写法的拒绝形态 |
 | 16 | PKCE S256 的接受度：6.0.3 反馈只答“PKCE 能力具备、允许 `plain`、未强制 S256”，未答 S256 是否被接受；厂商回函另称不支持 PKCE | IAM 团队 + 平台组 | 以一次授权请求实测收口。仅当 S256 被拒时才讨论降级，且降级属安全取舍，由用户裁决，不默认开启 |
-| 17 | 网关身份头名与 consumer 类型的配置化，以及切换为 `Authorization: Bearer` 的适配边界 | 平台组 | V1 只做配置化、默认值保持现值；实际切换随 AIGS 立项，不阻塞 V1 |
-| 18 | 官方旁路环境变量（如 `DEEPSEEK_API_KEY`）的运行期检测与处置口径 | 平台组 | 检测默认告警；是否阻断须用户裁决，不能以关闭检测换取可用性 |
-| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 与第 14 项的 IAM 答复配套实现；未配置时不读取 UserInfo，不显示未知字段 |
-| 20 | 运行期独占断言的覆盖面扩展：从单一 `deepseekAccount` 服务到装配可见的官方行结论 | 平台组 | 与装配期 `OFFICIAL_ROWS` 断言口径一致，避免两处判定标准分裂 |
+| 17 | 网关身份头名与 consumer 类型的配置化，以及切换为 `Authorization: Bearer` 的适配边界 | 平台组 | 已实现：`iamTokenHeader`/`consumerTypeHeader`/`consumerType` 三键配置化，默认值保持现值；改为 `Authorization: Bearer` 的适配随 AIGS 立项 |
+| 18 | 官方旁路环境变量（如 `DEEPSEEK_API_KEY`）的运行期检测与处置口径 | 平台组 | 已实现检测与告警（`detectEnvBypass`、`formatEnvBypassWarning`）；阻断未实现，须用户裁决，不能以关闭检测换取可用性 |
+| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 已实现：插件配置 `profileFields` 与私版 `HELUO_IAM_PROFILE_FIELDS` 均落为同一映射，仅接受 `workNo`/`name`；未配置时不读取 UserInfo。字段名仍等第 14 项答复 |
+| 20 | 运行期独占断言的覆盖面扩展：从单一 `deepseekAccount` 服务到装配可见的官方行结论 | 平台组 | 已实现：`exclusiveServices` 列表化（默认 `['deepseekAccount']`），企业可把官方行对应服务登记进去；未登记的行仍由装配期断言覆盖 |
 
 ### 12.2 已审定不采用的设计选项
 

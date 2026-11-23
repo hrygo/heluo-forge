@@ -1701,7 +1701,12 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
   }
   // Both provider methods return the SDK's event stream synchronously. Bind
   // the IAM resolver to their fetch options and authorize only at dispatch.
-  const fetchOptions = options => modelFetchOptions(options, baseURL, resolveIamToken);
+  const identityHeaders = {
+    tokenHeader: config.iamTokenHeader,
+    consumerHeader: config.consumerTypeHeader,
+    consumerType: config.consumerType,
+  };
+  const fetchOptions = options => modelFetchOptions(options, baseURL, resolveIamToken, identityHeaders);
   const piProvider = {
     id: provider, name: '企业模型', baseUrl: baseURL,
     auth: { apiKey: { name: '企业个人访问凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
