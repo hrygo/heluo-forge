@@ -234,7 +234,7 @@ flowchart TB
 
 补丁层在目标 Profile 下共停用七行：上表四项之外，还有 `llm-pi-ai`（自由添加网关）、`ui-settings-models`（自由配置模型入口）与 `credentials`（官方明文凭据提供方）。后三行同样构成旁路，不因本表只列账号相关四行而省略。
 
-装配期的官方行核验由 `@heluo/forge-enterprise` 的补丁与 `OFFICIAL_ROWS` 断言承担：缺席的行记为 `absent`，Loader 警告跳过不等于已禁用。插件自身的运行期独占断言位于 `src/exclusive.mjs`，只检查 `ctx.get('deepseekAccount')` 服务是否残留，发现残留即拒绝受保护操作；该断言不覆盖其余官方行，其余行的残留只能由装配期断言发现，运行期不产生告警。环境变量旁路（如 `DEEPSEEK_API_KEY`）当前无运行期检测，检测与处置列为目标项。`exclusive-violation` 审计事件及持久落点仍是待验证目标，不能由本地诊断或拒绝行为推断已交付。
+装配期的官方行核验由 `@heluo/forge-enterprise` 的补丁与 `OFFICIAL_ROWS` 断言承担：缺席的行记为 `absent`，Loader 警告跳过不等于已禁用。插件自身的运行期独占断言位于 `src/exclusive.mjs`，只检查 `ctx.get('deepseekAccount')` 服务是否残留，发现残留即拒绝受保护操作；该断言不覆盖其余官方行，其余行的残留只能由装配期断言发现，运行期不产生告警。环境变量旁路（如 `DEEPSEEK_API_KEY`）在组合装配时检测：`exclusive.mjs` 的 `detectEnvBypass` 只读取变量名，`apply` 在 `requireExclusive` 未关闭时以固定文案告警一次，文案不含变量值。检测默认只告警，是否拒绝启动尚未实现，须由用户裁决后另行变更。`exclusive-violation` 审计事件及持久落点仍是待验证目标，不能由本地诊断或拒绝行为推断已交付。
 
 ### 4.4 客户端 UI 交互设计
 

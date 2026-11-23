@@ -26,3 +26,29 @@ export function checkExclusive(ctx, config) {
     return { ok: false, reason: 'exclusive-check-unavailable' };
   }
 }
+// Official bypasses that live in the environment rather than in a Host service:
+// a real key here still lets a caller reach a model without the enterprise IAM
+// path, so the composition reports it instead of assuming the disabled rows are
+// the only bypass. Only names cross this boundary, never values.
+export const ENV_BYPASS_VARIABLES = Object.freeze(['DEEPSEEK_API_KEY']);
+
+/**
+ * @param {Record<string, unknown>} [env]
+ * @returns {string[]} names of bypass variables that hold a non-empty value
+ */
+export function detectEnvBypass(env = {}) {
+  return ENV_BYPASS_VARIABLES.filter((name) => {
+    const value = env[name];
+    return typeof value === 'string' && value.trim() !== '';
+  });
+}
+
+/**
+ * @param {string[]} names
+ * @returns {string} a fixed diagnostic line, or an empty string when nothing is
+ * detected; variable names only so no secret can reach a log
+ */
+export function formatEnvBypassWarning(names) {
+  if (names.length === 0) return '';
+  return `forge-iam: official bypass variables present: ${names.join(', ')}`;
+}
