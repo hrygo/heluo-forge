@@ -9,7 +9,7 @@
  * 直接放行，不读身份、不写审计（D22/D23）。
  */
 
-import { isAbsolute, resolve as resolvePath } from 'node:path';
+import { isAbsolute, sep } from 'node:path';
 
 import { decideAction } from './catalog.mjs';
 import { CATEGORY, classifyAction } from './classify.mjs';
@@ -448,6 +448,19 @@ export function createGate({
    */
   async function protectedPathDenial(exec, action, target, meta) {
     const workspaceRoot = exec?.agent?.session?.header?.cwd;
+    const collected = collectPathCandidates(exec?.arguments, { workspaceRoot });
+    const unresolvable = (field) => denyWithEvidence(
+      semanticFields(exec, action, target, meta, {
+        rule: 'protectPaths',
+        summary: `受控写 ${action} 的参数 ${field} 无法确认真实路径，已拒绝`,
+      }),
+      PATH_UNRESOLVABLE_COPY(field, target),
+      'POLICY_PATH_UNRESOLVABLE',
+    );
+    if (collected.truncated === true) return unresolvable('path');
+    // 没有任何需要判定的路径字段（命令式写、纯业务目标）：这一阶段无事可做，
+    // 不能因为会话没带工作区就把所有受控写一并拒掉。
+    if (collected.candidates.length === 0) return undefined;
     const scopeFields = semanticFields(exec, action, target, meta, {
       rule: 'protectPaths',
       summary: `受控写 ${action} 无法确认受保护路径作用域，已拒绝`,
@@ -461,25 +474,17 @@ export function createGate({
     } catch {
       return denyWithEvidence(scopeFields, PATH_SCOPE_COPY(target), 'POLICY_PATH_SCOPE_UNAVAILABLE');
     }
-    const collected = collectPathCandidates(exec?.arguments, { workspaceRoot });
-    const unresolvable = (field) => denyWithEvidence(
-      semanticFields(exec, action, target, meta, {
-        rule: 'protectPaths',
-        summary: `受控写 ${action} 的参数 ${field} 无法确认真实路径，已拒绝`,
-      }),
-      PATH_UNRESOLVABLE_COPY(field, target),
-      'POLICY_PATH_UNRESOLVABLE',
-    );
-    if (collected.truncated === true) return unresolvable('path');
     for (const candidate of collected.candidates) {
       // 超长路径被截断后就不再是原值：按"无法确认真实路径"拒绝，而不是拿截断值去判。
       if (candidate.truncated === true) return unresolvable(candidate.field);
       let judged;
       try {
-        // 相对参数按会话工作区解释；绝对参数原样归一化。两者都走同一条 canonicalize。
+        // 相对参数只拼上工作区，不做词法归一：`link/../x` 的 `..` 必须在符号链接
+        // 展开之后再取父目录（canonicalize 逐段解析），先 resolve 会折叠掉 `..`
+        // 而把目标算到另一个目录，与直接传绝对路径得到不同结论。
         const candidatePath = isAbsolute(candidate.value)
           ? candidate.value
-          : resolvePath(workspaceRoot, candidate.value);
+          : `${workspaceRoot}${workspaceRoot.endsWith(sep) ? '' : sep}${candidate.value}`;
         judged = judgeProtectedPath(candidatePath, { workspaceRoot, roots: protectedRoots });
       } catch {
         return unresolvable(candidate.field);

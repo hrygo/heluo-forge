@@ -8,6 +8,26 @@ import { PolicyAuditError, createAuditBarrier, createFileSink, createMemorySink 
 
 const RECORD = { action: 'gitee.issue.write', actor: 'user-a', phase: 'begin' };
 
+/**
+ * 假 `fs.open`：把整段文本当成文件内容，供 `readTail` 使用（它只读尾部）。
+ * 尾部读取被截断时按字节纠正边界。
+ */
+function openOf(text, { fail } = {}) {
+  const bytes = Buffer.from(String(text), 'utf8');
+  return async () => ({
+    async stat() {
+      if (fail !== undefined) throw Object.assign(new Error('read failed'), { code: fail });
+      return { size: bytes.length };
+    },
+    async read(buffer, offset, length, position) {
+      const start = Math.max(0, position ?? 0);
+      bytes.copy(buffer, offset, start, Math.min(bytes.length, start + length));
+      return { bytesRead: Math.min(length, Math.max(0, bytes.length - start)) };
+    },
+    async close() {},
+  });
+}
+
 function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), 'forge-policy-audit-'));
   return { dir, clean: () => rmSync(dir, { recursive: true, force: true }) };
@@ -194,12 +214,13 @@ test('the file sink merges days newest-first, counts corrupt lines and never wri
   }
 });
 
-test('reading a missing audit directory reports missing and creates nothing', async () => {
+test('an audit directory that has no records yet is empty, not missing', async () => {
   const { dir, clean } = tempDir();
   try {
     const missing = join(dir, 'does-not-exist');
     const sink = createFileSink({ dir: missing });
-    assert.deepEqual(await sink.read({ limit: 5 }), { records: [], corrupt: 0, missing: true, unreadable: false });
+    // 目录在首次写入时才会创建：这是"已装配、还没有记录"，不是"未装配审计"。
+    assert.deepEqual(await sink.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: false });
     assert.equal(existsSync(missing), false, 'read must not create the audit directory');
   } finally {
     clean();
@@ -223,14 +244,29 @@ test('permission failures read as unreadable, never as an empty history', async 
     dir: '/forbidden',
     fs: {
       readdir: async () => ['forge-policy-2026-11-23.jsonl'],
-      readFile: async () => {
-        const error = new Error('is a directory');
-        error.code = 'EISDIR';
-        throw error;
-      },
+      open: openOf('', { fail: 'EISDIR' }),
     },
   });
   assert.deepEqual(await unreadableFile.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: true });
+});
+
+test('a session with no sink at all is the only "missing audit" case', async () => {
+  const barrier = createAuditBarrier();
+  assert.deepEqual(await barrier.read({ limit: 5 }), { records: [], corrupt: 0, missing: true, unreadable: false });
+
+  // 有 sink 但还没有记录：空快照，不是"未装配"。
+  const sink = createMemorySink({ buffer: 5 });
+  const withSink = createAuditBarrier({ sink });
+  assert.deepEqual(await withSink.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: false });
+});
+
+test('the memory sink selects the newest records by observedAt, not append order', () => {
+  const sink = createMemorySink({ buffer: 10 });
+  // 并发写入下事件时间可以与追加顺序相反。
+  sink.append({ ...RECORD, observedAt: 9 });
+  sink.append({ ...RECORD, observedAt: 3 });
+  sink.append({ ...RECORD, observedAt: 5 });
+  assert.deepEqual(sink.read({ limit: 2 }).records.map((record) => record.observedAt), [9, 5]);
 });
 
 test('the barrier reads through the current sink and falls back to its ring', async () => {
@@ -265,15 +301,30 @@ test('the barrier reads through the current sink and falls back to its ring', as
   assert.deepEqual((await combined.read({ limit: 1 })).records.map((record) => record.observedAt), [2], 'setAuditSink affects later reads');
 });
 
-test('a read stops once it has enough records instead of parsing the whole history', async () => {
+test('a read selects the newest records by observedAt, not by append order', async () => {
   const { dir, clean } = tempDir();
   try {
     const file = join(dir, 'forge-policy-2026-11-23.jsonl');
-    writeFileSync(file, `not-json\n${JSON.stringify({ ...RECORD, observedAt: 5 })}\n${JSON.stringify({ ...RECORD, observedAt: 6 })}\n`);
+    // 追加顺序与事件时间相反：先追加的反而更新（并发写入下常见）。
+    writeFileSync(file, `${JSON.stringify({ ...RECORD, observedAt: 9 })}\n${JSON.stringify({ ...RECORD, observedAt: 3 })}\n`);
     const sink = createFileSink({ dir });
     const snapshot = await sink.read({ limit: 1 });
-    assert.deepEqual(snapshot.records.map((record) => record.observedAt), [6]);
-    assert.equal(snapshot.corrupt, 0, 'lines older than the requested window are never parsed');
+    assert.deepEqual(snapshot.records.map((record) => record.observedAt), [9]);
+    assert.equal(snapshot.corrupt, 0);
+  } finally {
+    clean();
+  }
+});
+
+test('a malformed line inside the scanned window is counted, never dropped silently', async () => {
+  const { dir, clean } = tempDir();
+  try {
+    const file = join(dir, 'forge-policy-2026-11-23.jsonl');
+    writeFileSync(file, `not-json\n${JSON.stringify({ ...RECORD, observedAt: 5 })}\n`);
+    const sink = createFileSink({ dir });
+    const snapshot = await sink.read({ limit: 5 });
+    assert.deepEqual(snapshot.records.map((record) => record.observedAt), [5]);
+    assert.equal(snapshot.corrupt, 1);
   } finally {
     clean();
   }
@@ -284,13 +335,13 @@ test('one unreadable day is skipped instead of losing the readable history', asy
     dir: '/mixed',
     fs: {
       readdir: async () => ['forge-policy-2026-11-23.jsonl', 'forge-policy-2026-11-22.jsonl'],
-      readFile: async (file) => {
+      open: async (file) => {
         if (String(file).includes('2026-11-23')) {
           const error = new Error('permission denied');
           error.code = 'EACCES';
           throw error;
         }
-        return `${JSON.stringify({ ...RECORD, observedAt: 1000 })}\n`;
+        return openOf(`${JSON.stringify({ ...RECORD, observedAt: 1000 })}\n`)();
       },
     },
   });
@@ -305,7 +356,7 @@ test('an audit directory with no matching files is empty history, not unreadable
     dir: '/empty',
     fs: {
       readdir: async () => ['other.log'],
-      readFile: async () => '',
+      open: openOf(''),
     },
   });
   assert.deepEqual(await sink.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: false });

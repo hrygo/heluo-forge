@@ -218,7 +218,7 @@ function withinRoot(canonical, root) {
  * @param {string} candidate
  * @param {{workspaceRoot?: string, roots?: {raw: string, root: string}[], platform?: string, resolve?: Function}} [options]
  * @returns {{judged: boolean, protected: boolean, canonical: string, kind?: 'name' | 'root', pattern?: string,
- *   template?: string, category?: string, ruleIds?: readonly string[]}}
+ *   template?: string, rootId?: string, category?: string, ruleIds?: readonly string[]}}
  */
 export function judgeProtectedPath(candidate, options = {}) {
   const roots = options.roots ?? [];
@@ -230,9 +230,11 @@ export function judgeProtectedPath(candidate, options = {}) {
   const canonical = canonicalize(candidate, options);
   const inWorkspace = withinRoot(canonical, workspace);
   let configured;
-  for (const entry of roots) {
+  let configuredIndex = -1;
+  for (const [index, entry] of roots.entries()) {
     if (withinRoot(canonical, canonicalize(entry.root, options))) {
       configured = entry;
+      configuredIndex = index;
       break;
     }
   }
@@ -252,13 +254,17 @@ export function judgeProtectedPath(candidate, options = {}) {
     });
   }
   if (configured !== undefined) {
+    // 追加项用配置里的序号标识，不用路径原文：配置可能写的是绝对路径，
+    // 而 category/ruleIds 会进审计。原文只放在 template 里供人看，禁止写入审计。
+    const rootId = `root:${configuredIndex + 1}`;
     return Object.freeze({
       judged: true,
       protected: true,
       kind: 'root',
       template: configured.raw,
-      category: `root:${configured.raw}`,
-      ruleIds: Object.freeze([`root:${configured.raw}`]),
+      rootId,
+      category: rootId,
+      ruleIds: Object.freeze([rootId]),
       canonical,
     });
   }

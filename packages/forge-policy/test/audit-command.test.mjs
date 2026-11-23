@@ -8,6 +8,10 @@ import {
   registerAuditCommand,
 } from '../src/audit-command.mjs';
 import { AUDIT_EMPTY_COPY, AUDIT_MISSING_COPY, AUDIT_UNREADABLE_COPY } from '../src/audit-query.mjs';
+import { createAuditBarrier, createFileSink } from '../src/audit.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // P3 · `/policy-audit [N]` 注册与只读行为：命令只读审计源，不写审计、不改策略状态。
 function harness({ audit, commands = true } = {}) {
@@ -125,6 +129,20 @@ test('an unreadable sink becomes a readable error without a path or errno', asyn
   assert.deepEqual(failed, { kind: 'error', text: AUDIT_UNREADABLE_COPY });
   assert.equal(failed.text.includes('EACCES'), false);
   assert.equal(failed.text.includes('/private'), false);
+});
+
+test('a freshly configured file sink reads as empty history, not as audit being off', async () => {
+  // 审计目录在首次写入时才创建：全新会话查审计应当说"还没有记录"，
+  // 而不是"本会话没有启用审计"。
+  const dir = mkdtempSync(join(tmpdir(), 'forge-policy-audit-command-'));
+  try {
+    const audit = createAuditBarrier({ sink: createFileSink({ dir: join(dir, 'logs') }) });
+    const { registered } = harness({ audit });
+    const result = await registered.get(AUDIT_COMMAND_NAME).handler({ arguments: {} });
+    assert.deepEqual(result, { kind: 'error', text: AUDIT_EMPTY_COPY });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a missing audit source reports the empty-state hint, not a zero-row success', async () => {

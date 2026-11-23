@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { createAuditBarrier, createMemorySink } from '../src/audit.mjs';
@@ -146,7 +146,9 @@ test('配置追加的根用模板标记命中，类别不是绝对路径', async
   const decision = await pre(gate, execFor({ target: 'acme/demo!1', path: join(vault, 'notes.txt') }, { cwd: workspace }));
   assert.equal(decision.kind, 'deny');
   assert.match(String(decision.reason), /配置追加的保护范围/u);
-  assert.deepEqual(denyRecords(sink)[0].ruleIds, [`root:${template}`]);
+  // 审计只留追加项序号；配置原文（可能是绝对路径）不进审计。
+  assert.deepEqual(denyRecords(sink)[0].ruleIds, ['root:1']);
+  assert.equal(JSON.stringify(denyRecords(sink)[0]).includes(vault), false);
 });
 
 test('缺少会话工作区、循环链接或候选超限都按无法判定拒绝', async (t) => {
@@ -173,6 +175,35 @@ test('缺少会话工作区、循环链接或候选超限都按无法判定拒�
   assert.equal(tooMany.kind, 'deny');
   assert.equal(tooMany.code, 'POLICY_PATH_UNRESOLVABLE');
   assert.ok(denyRecords(sink).length >= 2);
+});
+
+test('无路径字段的受控写不因缺工作区被拦', async (t) => {
+  fixture(t);
+  const { gate, sink } = gateFor({ rules: { protectPaths: true } });
+  // 仓库名与分支名都不是路径来源；调用方也没带 agent。没有候选就没有可判定的路径，
+  // 不能因为"不知道工作区"把一次纯业务写一并拒掉。
+  const decision = await pre(gate, { name: 'demo_write', arguments: { target: 'acme/demo', branch: 'feat/x' }, callId: 'c2' });
+  assert.equal(decision.kind, 'allow');
+  assert.equal(denyRecords(sink).length, 0);
+});
+
+test('相对路径的父目录语义在符号链接展开之后才折叠', async (t) => {
+  if (!POSIX) return;
+  const workspace = fixture(t);
+  const outside = mkdtempSync(join(tmpdir(), 'forge-policy-gate-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  symlinkSync(outside, join(workspace, 'link'));
+  const { gate } = gateFor({ rules: { protectPaths: true } });
+
+  // `link/../.env` 的物理目标是 outside 的父目录；词法归一（先 resolve）会算成
+  // workspace/.env。同一目标的相对写与绝对写必须得到同一个判定。
+  const relative = await pre(gate, execFor({ target: 'acme/demo!1', path: 'link/../.env' }, { cwd: workspace }));
+  const absolute = await pre(gate, execFor({ target: 'acme/demo!1', path: join(dirname(outside), '.env') }, { cwd: workspace }));
+  assert.deepEqual(
+    [relative.kind, relative.code],
+    [absolute.kind, absolute.code],
+    'the relative and absolute forms of one target must agree',
+  );
 });
 
 test('截断或过深的路径候选按"无法确认"拒绝，不拿半截值去判', async (t) => {

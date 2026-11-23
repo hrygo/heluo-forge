@@ -97,7 +97,7 @@ test('a sibling directory sharing the workspace prefix is not in scope', (t) => 
   assert.equal(judgeProtectedPath(join(sibling, '.env'), { workspaceRoot: workspace }).judged, false);
 });
 
-test('configured roots extend the scope and report their raw template', (t) => {
+test('configured roots extend the scope and are identified by ordinal, not by path', (t) => {
   const workspace = fixture(t);
   const vault = mkdtempSync(join(tmpdir(), 'forge-policy-vault-'));
   t.after(() => rmSync(vault, { recursive: true, force: true }));
@@ -109,8 +109,10 @@ test('configured roots extend the scope and report their raw template', (t) => {
   assert.equal(inRoot.judged, true);
   assert.equal(inRoot.protected, true);
   assert.equal(inRoot.kind, 'root');
-  assert.equal(inRoot.category, `root:${template}`);
-  assert.deepEqual(inRoot.ruleIds, [`root:${template}`]);
+  // 审计里只记序号：配置可能写绝对路径，原文不该落进审计。
+  assert.equal(inRoot.category, 'root:1');
+  assert.deepEqual(inRoot.ruleIds, ['root:1']);
+  assert.equal(inRoot.template, template, 'the raw template stays available for display only');
 
   // 工作区外的普通路径仍不判：追加根只扩大范围，不代表"工作区外一律受保护"。
   assert.equal(judgeProtectedPath(join(tmpdir(), 'no-such-file.txt'), { workspaceRoot: workspace, roots }).judged, false);
