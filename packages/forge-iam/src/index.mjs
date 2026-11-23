@@ -4,7 +4,7 @@ import { createSessionRenewalLogger, renewalErrorFields } from './session-renewa
 import { createCallbackManager } from './callback-listener.mjs';
 import { Config, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { checkExclusive } from './exclusive.mjs';
+import { checkExclusive, detectEnvBypass, formatEnvBypassWarning } from './exclusive.mjs';
 import { createIamRoutes } from './routes.mjs';
 import { createIamService } from './service.mjs';
 
@@ -117,6 +117,14 @@ export function apply(ctx, rawConfig = {}) {
     if (trusted && typeof trusted.then === 'function') Promise.resolve(trusted).catch(() => {});
     return trusted === true && clientSecretBinding === binding && current.credentials === instance;
   };
+
+  // The disabled rows cover Host services; an environment key is a second
+  // bypass that no service lookup can see. Enterprise compositions warn once at
+  // load with variable names only, and blocking stays a separate decision.
+  const envBypass = detectEnvBypass(process.env);
+  if (envBypass.length > 0 && result.value.requireExclusive !== false) {
+    try { ctx.logger?.warn?.(formatEnvBypassWarning(envBypass)); } catch { /* optional diagnostic */ }
+  }
 
   let currentWebServer;
   let currentConnection;
