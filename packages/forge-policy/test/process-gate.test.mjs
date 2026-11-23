@@ -176,6 +176,14 @@ test('评审正文自带工具页脚时放行（生产形状）', async () => {
   h.dispose();
 });
 
+test('评审正文缺失（正文形状变化）时不判，按放行处理', async () => {
+  const h = mount({ rules: { enforceProcessRules: true } });
+  const { result, ran } = await denial(h.policy, h.ctx, 'gitee.review.publish', reviewExec(''));
+  assert.deepEqual(result, { ok: true }, '正文快照里没有评审正文时不能硬拒');
+  assert.equal(ran, 1);
+  h.dispose();
+});
+
 test('普通 PR 评论不受评审门禁约束', async () => {
   const h = mount({ rules: { enforceProcessRules: true } });
   const comment = prExec({ args: { op: 'comment' }, content: { body: '这段实现有问题' } }, 'call-comment');

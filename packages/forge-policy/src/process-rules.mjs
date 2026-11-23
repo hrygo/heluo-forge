@@ -152,7 +152,9 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {}, 
         // `> AI 生成：… PR 版本：…` 页脚，判定看的是解析后的正文快照。
         const body = typeof state.reviewBody === 'string' ? state.reviewBody : '';
         if (body.length === 0) {
-          deny.push(reason(rule, 'the review body is missing'));
+          // 正文快照里没有评审正文（形状变化或空对象）：不判。
+          // 与其它 needs:'content' 规则同口径——看不见不等于不满足。
+          unevaluated.push(reason(rule, 'the review body is missing'));
           break;
         }
         if (!AI_SOURCE.test(body)) {
@@ -180,6 +182,9 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {}, 
  * fields. Missing facts stay missing: the rule decides whether that is
  * `unevaluated` or a refusal.
  *
+ * `op` 来自调用参数，正文来自 `exec.content` 快照（`factsFromContent`）；
+ * 两者由门禁合并，判定只看合并后的结果。
+ *
  * @param {Record<string, unknown>} args
  * @returns {object}
  */
@@ -192,9 +197,8 @@ export function factsFromArguments(args = {}) {
   if (typeof args.branch === 'string') facts.branch = args.branch;
   else if (typeof args.ref === 'string' && !args.ref.includes(':')) facts.branch = args.ref;
   if (args.force === true) facts.force = true;
-  if (typeof args.body === 'string') {
-    facts.prBody = args.body;
-  }
+  // 正文不从这里取：Gitee 工具把建 PR / 评审正文放在 `exec.content`，
+  // 参数里的 `body` 只是历史形状，保留会造成"两条来源抢同一个字段"。
   return facts;
 }
 

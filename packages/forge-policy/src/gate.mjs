@@ -139,7 +139,7 @@ const PROCESS_DENIED_COPY = (action, denials) => {
  * 流程闸只接已接线的规则（`WIRED_PROCESS_RULES`）：依赖外部事实源的两条要等
  * 事实源注入后再启用，否则"查不到状态"会被误读成"不满足流程"。
  */
-function evaluateProcess(exec, action, content) {
+function evaluateProcess(exec, action, content, report) {
   try {
     // 参数事实（操作、分支、force）与正文事实（建 PR 正文、评审正文）合并：
     // Gitee 工具只把正文放在 `exec.content`，参数里没有正文。
@@ -156,8 +156,14 @@ function evaluateProcess(exec, action, content) {
       facts,
       action,
     });
-  } catch {
+  } catch (error) {
     // 求值抛错不等于没有违反：按不可确认拒绝，与内容扫描失败同口径。
+    // 但拒绝要能排障：把错误摘要交给日志与观察回调，审计只记规则名不记堆栈。
+    try {
+      report?.(error);
+    } catch {
+      // 报告通道自身失败不影响拒绝结论。
+    }
     return Object.freeze({
       deny: Object.freeze([Object.freeze({
         rule: 'process-rule-error',
@@ -258,6 +264,7 @@ export function createGate({
   tools = {},
   getActor,
   onDecision,
+  warn,
   now,
   confirmations,
   decisionCache,
@@ -433,7 +440,25 @@ export function createGate({
         ? await contentDigestOf(exec)
         : contentDigestOf(exec);
     // 流程闸先于内容闸：先判"这一步该不该发生"，再看"内容能不能发出去"。
-    const process = rules?.enforceProcessRules === true ? evaluateProcess(exec, action, content) : undefined;
+    const process = rules?.enforceProcessRules === true
+      ? evaluateProcess(exec, action, content, (error) => {
+        // 只在求值抛错时触发：消息可能包含规则名，不含业务正文。
+        const detail = typeof error?.message === 'string' ? error.message : String(error);
+        warn?.(`[forge-policy] 流程规则求值失败，本次按不可确认拒绝：${detail}`);
+        try {
+          onDecision?.({ kind: 'process-error', action, message: detail });
+        } catch {
+          // 观察回调失败不影响判定。
+        }
+      })
+      : undefined;
+    // 卡片发给谁、通道当下是否可用：命中规则分类与确认原因都要用这一份判定。
+    // 子代理自己收不到卡片（宿主 assertLiveRoot 只认存活根），交给它的根会话代问。
+    let cardAgent = exec?.agent;
+    if (persona === PERSONA.CHILD) cardAgent = rootOf(ctx, exec?.agent);
+    const channelAvailable = confirmations !== undefined
+      && typeof confirmations.available === 'function'
+      && confirmations.available({ ctx, agent: cardAgent }) === true;
     if (process !== undefined && process.deny.length > 0) {
       const processRuleIds = [...new Set(process.deny.map((item) => item.rule))];
       return denyWithEvidence({
@@ -453,12 +478,19 @@ export function createGate({
     const scanned = scanning ? scanContent(action, exec?.arguments, content) : undefined;
     // 命中的规则与未扫全的字段：拒绝、确认两段记录与 begin 共用这一份元数据，
     // 审计才能说明"为什么问"以及"哪里没扫全"（`字段:原因`，如 `body:truncated`）。
-    // 流程（软命中）与内容的命中规则合成一份：审计据此说明"为什么问"。
-    const hitRules = [
-      ...(process === undefined ? [] : process.confirm.map((item) => item.rule)),
-      ...(scanned === undefined ? [] : scanned.findings.map((finding) => finding.rule)),
-    ];
+    // 命中规则分两份：`ruleIds` 是这次调用命中的全部规则（begin 记录用），
+    // `askedRuleIds` 只含真正进了确认卡的原因——没有升级为确认的软命中如果写进
+    // asked/answered，审计就会声称"因为某条流程规则才问"，而卡片里并没有它。
+    const processRuleIds = process === undefined ? [] : process.confirm.map((item) => item.rule);
+    const contentRuleIds = scanned === undefined ? [] : scanned.findings.map((finding) => finding.rule);
+    const processAsked = processRuleIds.length > 0
+      && (decision.action === 'confirm' || channelAvailable);
+    const hitRules = [...processRuleIds, ...contentRuleIds];
     const ruleIds = hitRules.length === 0 ? undefined : [...new Set(hitRules)];
+    const askedRuleIds = (() => {
+      const asked = [...(processAsked ? processRuleIds : []), ...contentRuleIds];
+      return asked.length === 0 ? undefined : [...new Set(asked)];
+    })();
     const contentSkipped = scanned === undefined || scanned.skipped.length === 0
       ? undefined
       : [...new Set(scanned.skipped.map((item) => `${item.field}:${item.reason}`))];
@@ -497,22 +529,12 @@ export function createGate({
         summary: `受控写 ${action} 的正文命中不可放行的内容风险`,
       }, CONTENT_HARD_COPY(action, scanned.hard), 'POLICY_CONTENT_HARD');
     }
-    // 卡片发给谁：子代理自己收不到卡片（宿主 assertLiveRoot 只认存活根），交给它的根会话代问。
-    let cardAgent = exec?.agent;
-    if (persona === PERSONA.CHILD) cardAgent = rootOf(ctx, exec?.agent);
-    // 通道是否**当下真的可用**：开关只决定"该不该问"，能不能问要看服务与应答端。
-    // 用开关闭包代替可用性，会在缺应答端时把软命中错判成"确认不可用"而拒绝执行。
-    const channelAvailable = confirmations !== undefined
-      && typeof confirmations.available === 'function'
-      && confirmations.available({ ctx, agent: cardAgent }) === true;
     // 确认原因按顺序合并：动作确认在前、内容风险在后，客户端据此走分步表单（D25）。
     const reasons = [];
     if (decision.action === 'confirm') reasons.push('action');
     // 软流程命中：本来就要弹卡、或当下通道可用时升级为确认；两者都不成立时
     // 按放行 + 审计处理（与内容软命中同口径，D36）。
-    if ((process?.confirm.length ?? 0) > 0 && (decision.action === 'confirm' || channelAvailable)) {
-      reasons.push('process');
-    }
+    if (processAsked) reasons.push('process');
     if (scanned !== undefined
       && (scanned.confirm.length > 0 || (scanned.soft.length > 0 && decision.action === 'confirm'))) {
       reasons.push('content');
@@ -575,7 +597,7 @@ export function createGate({
           operationId,
           agent: { kind },
           summary: `受控写 ${action} 需要人工确认（${reasons.map((reason) => CONFIRM_REASONS[reason]).join('；')}）${persona === PERSONA.CHILD ? '，已转交主会话代问' : ''}`,
-          ...(ruleIds === undefined ? {} : { ruleIds }),
+          ...(askedRuleIds === undefined ? {} : { ruleIds: askedRuleIds }),
           ...(contentSkipped === undefined ? {} : { contentSkipped }),
           ...(contentTruncated === undefined ? {} : { truncated: true }),
           phase: 'asked',
@@ -604,7 +626,7 @@ export function createGate({
           agent: { kind },
           durationMs: clock() - askedAt,
           summary: `受控写 ${action} 的确认结论：${answerSummary(verdict.decision, verdict.code)}`,
-          ...(ruleIds === undefined ? {} : { ruleIds }),
+          ...(askedRuleIds === undefined ? {} : { ruleIds: askedRuleIds }),
           ...(contentSkipped === undefined ? {} : { contentSkipped }),
           ...(contentTruncated === undefined ? {} : { truncated: true }),
           phase: 'answered',

@@ -162,18 +162,37 @@ export function createConfirmationGateway({
     return 120_000;
   }
 
-  async function ask({ ctx, agent, action, questions, timeoutMs: requested, signal } = {}) {
-    if (disposed) return CHANNEL_ERROR;
+  /**
+   * `ask` 与 `available` 共用的前置校验：服务存在、有可呈现的会话主体、不是子代理。
+   * 两处走同一段代码，判定口径就不会各自漂移。
+   *
+   * @param {{ctx?: object, agent?: object}} [target]
+   * @returns {{ok: true, service: object} | {ok: false, code: string}}
+   */
+  function resolveTarget({ ctx, agent } = {}) {
     let service;
     try {
       service = resolveService(ctx);
     } catch {
-      return UNAVAILABLE;
+      return { ok: false, code: CONFIRM_CODES.UNAVAILABLE };
     }
-    if (!isPlainObject(service) || typeof service.ask !== 'function') return UNAVAILABLE;
+    if (!isPlainObject(service) || typeof service.ask !== 'function') {
+      return { ok: false, code: CONFIRM_CODES.UNAVAILABLE };
+    }
     // 没有会话主体，卡片无处呈现；子代理应由门禁转交根会话，落到这里属异常路径。
-    if (agent === null || agent === undefined) return UNAVAILABLE;
-    if (personaOf(agent) === PERSONA.CHILD) return DELEGATED;
+    if (agent === null || agent === undefined) return { ok: false, code: CONFIRM_CODES.UNAVAILABLE };
+    if (personaOf(agent) === PERSONA.CHILD) return { ok: false, code: CONFIRM_CODES.DELEGATED };
+    return { ok: true, service };
+  }
+
+  async function ask({ ctx, agent, action, questions, timeoutMs: requested, signal } = {}) {
+    if (disposed) return CHANNEL_ERROR;
+    const target = resolveTarget({ ctx, agent });
+    if (!target.ok) {
+      // 只有"确认服务不可用/无主体/是子代理"会走到这里，其余错误由 ask 内部兜底。
+      return Object.freeze({ decision: 'deny', code: target.code });
+    }
+    const service = target.service;
 
     // 调用方已取消：不必再弹卡，也不必等超时。
     if (signal?.aborted === true) return CANCELLED;
@@ -230,20 +249,16 @@ export function createConfirmationGateway({
    * 供门禁判断"软命中该升级为确认，还是按放行 + 审计处理"——开关只说明
    * 该不该问，能不能问由这里决定。
    *
+   * **结果有时效性**：它只是调用前的快照。检查通过之后插件仍可能被卸载，
+   * 宿主应答端也可能消失，`ask` 仍会按 UNAVAILABLE/CANCELLED 等结论失败；
+   * 调用方不得把 `true` 当作"一定会问到人"的保证。
+   *
    * @param {{ctx?: object, agent?: object}} [target]
    * @returns {boolean}
    */
   function available({ ctx, agent } = {}) {
     if (disposed) return false;
-    let service;
-    try {
-      service = resolveService(ctx);
-    } catch {
-      return false;
-    }
-    if (!isPlainObject(service) || typeof service.ask !== 'function') return false;
-    if (agent === null || agent === undefined) return false;
-    return personaOf(agent) !== PERSONA.CHILD;
+    return resolveTarget({ ctx, agent }).ok;
   }
 
   return Object.freeze({

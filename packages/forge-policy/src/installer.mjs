@@ -196,6 +196,8 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   const getActor = overrides.getActor ?? (() => readActor(ctx));
   const confirmations = overrides.confirmations ?? createConfirmationGateway({ timeoutMs: config.confirmation.timeoutMs });
   const decisionCache = overrides.decisionCache ?? createDecisionCache();
+  // 日志出口：装载诊断与流程规则求值失败共用，走宿主 logger 或覆盖项。
+  const warn = overrides.log ?? (typeof ctx.logger?.warn === 'function' ? (message) => ctx.logger.warn(message) : undefined);
   const gate = createGate({
     catalog,
     rules: config.rules,
@@ -204,6 +206,7 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     tools: config.tools,
     getActor,
     onDecision: config.onDecision,
+    warn,
     confirmations,
     decisionCache,
     timeoutMs: config.confirmation.timeoutMs,
@@ -247,7 +250,6 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   }
 
   // 全关后只留一条 observe-only 诊断：不是拦截，也不写盘。
-  const warn = overrides.log ?? (typeof ctx.logger?.warn === 'function' ? (message) => ctx.logger.warn(message) : undefined);
   if (isObserveOnly(config.rules)) warn?.(OBSERVE_ONLY_NOTICE);
   // 需要卡片的开关已开、宿主却没有确认通道：装载仍成功，但每次需要卡片的写都会拒绝。
   const injectedChannel = overrides.confirmations !== undefined;
