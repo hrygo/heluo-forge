@@ -80,6 +80,19 @@ jobs:
             echo 'Change classification failed or produced an invalid result.' >&2
             exit 1
           fi
+      # Pull requests are reviewed, re-signed and force-replayed on branches inside
+      # this repository: branch protection, the signing hooks and the repair steps in
+      # CONTRIBUTING.md all assume a writer with repository access. A head from another
+      # repository sits outside those controls, so the required check rejects it before
+      # the checkout and names the in-repository branch as the accepted surface.
+      - name: Reject fork pull requests
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          echo "Pull requests from another repository are not accepted: the head lives in '${HEAD_REPOSITORY:-deleted fork}', not in '${GITHUB_REPOSITORY}'." >&2
+          echo 'Push a branch in this repository instead; a collaborator with write access can open the pull request. See CONTRIBUTING.md#3-变更流程.' >&2
+          exit 1
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

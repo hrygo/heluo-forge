@@ -182,6 +182,8 @@ function expressionValue(expression, scenario, { caseInsensitive = true } = {}) 
     if (token === 'needs.changes.result') return scenario.result;
     if (token === 'needs.changes.outputs.run_platforms') return scenario.output;
     if (token === 'github.event_name') return scenario.event;
+    if (token === 'github.repository') return scenario.repository;
+    if (token === 'github.event.pull_request.head.repo.full_name') return scenario.headRepo;
     if (['cancelled', 'always', 'success', 'failure'].includes(token)) {
       if (!take('(') || !take(')')) throw new Error(`invalid status function ${token}`);
       if (token === 'cancelled') return scenario.cancelled;
@@ -284,6 +286,44 @@ function changesGuardProblems(steps, classifier, full, outputExpression) {
   return errors;
 }
 
+// Pull requests are accepted only from branches inside this repository: the review,
+// re-sign and forced-replay flow assumes a branch that branch protection and the
+// commit hooks control. The condition must keep same-repository pull requests and
+// every non-PR event on the normal path.
+function forkGuardProblems(steps, classificationGuard) {
+  // Step names share the line with the list dash, so match the block prefix.
+  const step = steps.find((candidate) => candidate.startsWith('      - name: Reject fork pull requests\n'));
+  if (!step) return ['verify: missing fork pull request rejection'];
+  const errors = [];
+  if (stepField(step, 'continue-on-error') !== undefined) errors.push('verify: fork rejection must not tolerate failure');
+  const checkout = steps.findIndex((candidate) => stepField(candidate, 'name') === 'Checkout');
+  const index = steps.indexOf(step);
+  if (classificationGuard < 0 || index !== classificationGuard + 1 || (checkout >= 0 && index >= checkout)) {
+    errors.push('verify: fork rejection must follow the classification guard and precede the checkout');
+  }
+  const script = /^ {8}run:[ \t]*\|[ \t]*\n((?: {10}[^\n]*\n|[ \t]*\n)*)/mu.exec(step)?.[1] ?? '';
+  const lines = script.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  if (lines.at(-1) !== 'exit 1' || !lines.slice(0, -1).every((line) => /^(?:echo|printf)\b/u.test(line))) {
+    errors.push('verify: fork rejection must explain the reason and exit 1');
+  }
+  if (!/CONTRIBUTING\.md#/u.test(script)) errors.push('verify: fork rejection must point at the contribution guide');
+  try {
+    const condition = expressionBody(stepField(step, 'if'));
+    const scenarios = [
+      ['pull_request', 'other/fork', true],
+      ['pull_request', 'owner/repo', false],
+      ['push', undefined, false],
+      ['merge_group', undefined, false],
+      ['workflow_dispatch', undefined, false],
+    ];
+    for (const [event, headRepo, expected] of scenarios) {
+      const actual = expressionValue(condition, { event, headRepo, repository: 'owner/repo', result: 'success', output: 'true', cancelled: false });
+      if (actual !== expected) errors.push(`verify: fork rejection is wrong for ${event}/${headRepo ?? '(no head)'}`);
+    }
+  } catch (error) { errors.push(`verify: cannot interpret the fork rejection condition: ${error.message}`); }
+  return errors;
+}
+
 export function workflowProblems(source, { optionalMacOS = false } = {}) {
   const errors = [];
   const jobs = jobsOf(source);
@@ -353,6 +393,7 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
     if (fullCheck < 0 || /^ {8}if:/mu.test(steps[fullCheck] ?? '') || guard < 0 || fullCheck <= guard) {
       errors.push('verify: full check must run unconditionally after a valid classification');
     }
+    errors.push(...forkGuardProblems(steps, guard));
   }
 
   // The changes job rejects every other spelling before it can report success.
@@ -426,6 +467,30 @@ function replaceJob(source, id, transform) {
 
 test('workflow keeps platform contexts fixed and fails closed when classification is uncertain', () => {
   assert.deepEqual(workflowProblems(workflow), []);
+});
+
+test('verify rejects a pull request whose head is another repository', () => {
+  const steps = stepBlocks(stepsOf(workflow, jobsOf(workflow).get('verify')));
+  const step = steps.find((candidate) => candidate.startsWith('      - name: Reject fork pull requests\n'));
+  assert.ok(step, 'verify must reject fork pull requests');
+
+  // Removing the step would accept a head outside the repository's branch surface.
+  const removed = replaceJob(workflow, 'verify', (job) => job.replace(step, ''));
+  assert.match(workflowProblems(removed).join('\n'), /verify: missing fork pull request rejection/u);
+
+  // Comparing against anything but the repository name would also reject same-repository PRs.
+  const widened = replaceJob(workflow, 'verify', (job) => job.replace(
+    'github.event.pull_request.head.repo.full_name != github.repository',
+    "github.event.pull_request.head.repo.full_name != ''",
+  ));
+  assert.match(workflowProblems(widened).join('\n'), /verify: fork rejection is wrong for pull_request\/owner\/repo/u);
+
+  // continue-on-error would turn the rejection into a passing required check.
+  const tolerated = replaceJob(workflow, 'verify', (job) => job.replace(
+    '      - name: Reject fork pull requests\n',
+    '      - name: Reject fork pull requests\n        continue-on-error: true\n',
+  ));
+  assert.match(workflowProblems(tolerated).join('\n'), /verify: fork rejection must not tolerate failure/u);
 });
 
 test('repository checks do not depend on macOS runner availability', () => {
