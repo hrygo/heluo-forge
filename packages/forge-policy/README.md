@@ -1,8 +1,8 @@
 # @heluo/forge-policy
 
-状态：可用（P0 受控写最小门禁 + P1 身份永远开、子代理写拒绝、人工确认卡片与决策复用 + P2 内容闸；流程规则与受保护路径拦截待 P3；未接企业环境，未做双端实机）
+状态：可用（P0 受控写最小门禁 + P1 身份永远开、人工确认卡片与决策复用 + P2 内容闸 + P3 流程闸的四条纯参数规则；受保护路径拦截、`denyHumanRecord`、`denyUnknownAction` 待后续；未接企业环境，未做双端实机）
 
-一句话：只对目录里登记的写动作负责——登记动作必须解析出 IAM 身份、先落前置执行记录再放行、执行前复验身份与参数、执行后结清；`gitee.git.push` 与 `change.clarification.write` 在开关开启时经宿主 `userQuestions` 卡片按次确认；未登记的工具与动作（含全部读动作）不在本门禁作用域，直接放行且不读身份、不记审计；七条规则开关代码默认全关，未实现的开关置真会在装载期被拒绝。
+一句话：只对目录里登记的写动作负责——登记动作必须解析出 IAM 身份、先落前置执行记录再放行、执行前复验身份与参数、执行后结清；`gitee.git.push` 与 `change.clarification.write` 在开关开启时经宿主 `userQuestions` 卡片按次确认；未登记的工具与动作（含全部读动作）不在本门禁作用域，直接放行且不读身份、不记审计；七条规则开关代码默认全关；已接入四条（`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`），其余三条置真会在装载期被拒绝。
 
 | 项 | 内容 |
 |---|---|
@@ -11,15 +11,15 @@
 | 不负责 | 不替代服务端鉴权；不拦截未登记的工具；不对读动作做统计或审计；不维护独立 hook 引擎 |
 | 衔接点 | `tools/pre-execute`（await 判定、身份与前置审计）、`tools.guard`（同步核验一次性收据）、`tools/result`（兜底结清）、宿主 `userQuestions`（确认卡片）、`ctx.commands`（命令面）、`policy` 服务 |
 | 详细设计依据 | CORP-DSH-DESIGN-003；分阶段实施见 [实施计划 §5](../../docs/plans/2026-11-19-policy-minimal-gates.md#5-实施计划) |
-| 实现状态 | 目录编译、判定合成、身份校验、恒开审计（memory/file 两种落点）、一次性收据与执行前复验、命令注册、组织信封验签、路径检查、过程观察投影、子代理来源拒绝、确认卡片与决策复用、内容闸（9 条内置规则、按动作字段映射、跨字段字节预算、截断与读不到语义）均已实现并有离线用例；流程规则与受保护路径拦截尚未接入判定链路，对应开关置真会在装载期拒绝 |
+| 实现状态 | 目录编译、判定合成、身份校验、恒开审计（memory/file 两种落点）、一次性收据与执行前复验、命令注册、组织信封验签、路径检查、过程观察投影、确认卡片与决策复用、内容闸（9 条内置规则、按动作字段映射、跨字段字节预算、截断与读不到语义）、流程闸（保护分支、强制推送、验收小节、评审来源四条规则；正文类规则读 `exec.content` 快照）均已实现并有离线用例；受保护路径拦截与 `denyHumanRecord`、`denyUnknownAction` 尚未接入判定链路，对应开关置真会在装载期拒绝 |
 
 ## 当前实现
 
 | 项 | 状态 |
 |---|---|
 | 目录 | `compileCatalog`：只接受 `action`/`target`/`category`，未知字段（含旧键 `revision`/`enabled`/`kind`/`egress`）与未分类动作一律拒绝装载；类别与默认决策来自内置分类表，运行期不读工具自报属性 |
-| 判定 | `decideAction`：未登记动作在 `denyUnknownAction` 关闭时按 `out-of-scope` 放行；登记动作缺业务目标即拒绝；人工留痕动作在 `denyHumanRecord` 关闭时按 `out-of-scope` 放行；其余登记动作放行并进入身份与审计阶段。`confirmPush` 开启时只有 `gitee.git.push`、`confirmDopWrite` 开启时只有 `change.clarification.write` 进入确认阶段，其余写动作不弹卡；未实现的开关置真一律装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`） |
-| 流水线 | `buildPipeline` 按已实现的开关装配阶段：`resolve → identity → audit → receipt` 常开，内容闸阶段在 `contentGate` 开启时插到确认之前，确认阶段在 `confirmPush`/`confirmDopWrite` 开启时插到审计之前；关闭的规则不出现在阶段表里，因此不会"进入后放行"，也不会因为走过阶段而多写审计 |
+| 判定 | `decideAction`：未登记动作在 `denyUnknownAction` 关闭时按 `out-of-scope` 放行；登记动作缺业务目标即拒绝；人工留痕动作在 `denyHumanRecord` 关闭时按 `out-of-scope` 放行；其余登记动作放行并进入身份与审计阶段。`confirmPush` 开启时只有 `gitee.git.push`、`confirmDopWrite` 开启时只有 `change.clarification.write` 进入确认阶段，其余写动作不弹卡；`enforceProcessRules` 开启时先过流程闸（硬规则直接拒、软规则在有确认通道时并入确认卡）；未实现的开关置真一律装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`） |
+| 流水线 | `buildPipeline` 按已实现的开关装配阶段：`resolve → identity → audit → receipt` 常开，流程闸阶段在 `enforceProcessRules` 开启时插到内容闸之前，内容闸阶段在 `contentGate` 开启时插到确认之前，确认阶段在 `confirmPush`/`confirmDopWrite` 开启时插到审计之前；关闭的规则不出现在阶段表里，因此不会"进入后放行"，也不会因为走过阶段而多写审计 |
 | 身份 | 登记动作必须解析出 IAM actor（宿主 IAM 视图）；解析不出即拒绝，文案指向「设置 → 账号」完成登录后重试；子 Agent 继承父会话身份，不单独查 |
 | 内容闸 | `contentGate` 开启时按动作声明字段扫描正文（issue/pr 的 title+body、review 的 body+comment、变更澄清的 summary+description+aiAc、push 的提交消息与 diff），未知动作退回全局白名单；9 条内置规则分三档：私钥块与云长期密钥不可确认（HARD 直接拒绝），带凭据连接串与常见令牌可确认，`.env` 提交、内网地址、本机绝对路径、超长 base64 只记录；一次调用的所有字段共享 256 KiB 预算（`content.maxBytes`），超出部分记 `truncated` 后按已扫内容判定，二进制跳过；正文读不到按放行并在审计记 `content:unreadable`，该结论不进复用缓存；扫描器自身失败按不可确认拒绝（`POLICY_CONTENT_SCAN_FAILED`）；命中值与正文都不进审计、卡片与错误文案，只留首尾各 4 字符的脱敏摘录 |
 | 确认卡片 | 一次 `ask`、每题一对固定标签「允许本次写入 / 取消本次写入」，只有每题都恰好选中允许标签才放行；动作确认与内容风险同时成立时是一次 `ask` 带两题（先动作、后内容），客户端按题分步呈现、最后一次提交；其余应答（缺失、结构非法、未知标签、带自定义文本）一律按未确认拒绝。卡片只含动作可读名、目标定位与原因类别，不含正文、参数原文、令牌或绝对路径 |
@@ -40,7 +40,7 @@
 
 ## 目标能力（P3，尚未实现）
 
-流程规则（变更号、保护分支、强制推送、验收小节、审查来源）、受保护路径拦截、`denyUnknownAction`/`denyHumanRecord`/`protectPaths`/`enforceProcessRules` 四条开关的实际拦截语义，均按 [实施计划 §5](../../docs/plans/2026-11-19-policy-minimal-gates.md#5-实施计划) 分阶段接入。这些能力未实现前，对应配置键在装载期被拒绝，不存在"配了却静默不生效"的中间态。
+受保护路径拦截与 `denyUnknownAction`/`denyHumanRecord`/`protectPaths` 三条开关的实际拦截语义，按 [实施计划 §5](../../docs/plans/2026-11-19-policy-minimal-gates.md#5-实施计划) 分阶段接入；流程规则中依赖 dop 变更状态与计划状态的两条（`change-in-progress`、`plan-confirmed`）要等事实源注入后才参与判定。这些能力未实现前，对应配置键在装载期被拒绝，不存在"配了却静默不生效"的中间态。
 
 ## IAM隔离许可算法
 

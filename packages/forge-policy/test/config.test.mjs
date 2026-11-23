@@ -13,14 +13,14 @@ import {
 
 const WRITE = { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' };
 
-test('the seven rule keys are all off by default; P2 implements three of them', () => {
+test('the seven rule keys are all off by default; P3 implements four of them', () => {
   assert.deepEqual([...RULE_KEYS].sort(), [
     'confirmDopWrite', 'confirmPush', 'contentGate',
     'denyHumanRecord', 'denyUnknownAction', 'enforceProcessRules', 'protectPaths',
   ]);
   assert.equal(RULE_KEYS.length, 7);
   for (const key of RULE_KEYS) assert.equal(DEFAULT_RULES[key], false, `${key} defaults to off`);
-  assert.deepEqual([...IMPLEMENTED_RULES].sort(), ['confirmDopWrite', 'confirmPush', 'contentGate']);
+  assert.deepEqual([...IMPLEMENTED_RULES].sort(), ['confirmDopWrite', 'confirmPush', 'contentGate', 'enforceProcessRules']);
   assert.equal(DEFAULT_CONFIRMATION_TIMEOUT_MS, 120_000);
 });
 
@@ -130,9 +130,13 @@ test('a surface that is not wired into the decision path is refused at load time
   assert.deepEqual(defaults.content, { maxBytes: 262_144 });
 });
 
-test('the four switches without an implementation still refuse to resolve, naming the key', () => {
+test('the three switches without an implementation still refuse to resolve, naming the key', () => {
   const pending = RULE_KEYS.filter((key) => !IMPLEMENTED_RULES.includes(key));
-  assert.equal(pending.length, 4);
+  assert.deepEqual(
+    [...pending].sort(),
+    ['denyHumanRecord', 'denyUnknownAction', 'protectPaths'],
+    'only the fact-source and path rules remain unimplemented',
+  );
   for (const key of pending) {
     const { issues } = validateConfig({ rules: { [key]: true } });
     assert.equal(issues.length, 1);
