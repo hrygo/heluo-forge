@@ -17,7 +17,7 @@ export {
 } from './classify.mjs';
 export {
   CONFIRMATION_KEYS, DEFAULT_CONFIRMATION_TIMEOUT_MS, DEFAULT_RULES, IMPLEMENTED_RULES, RULE_KEYS,
-  Config, resolveConfig, validateConfig,
+  Config, collectPathTemplates, resolveConfig, validateConfig,
 } from './config.mjs';
 export { MAX_RULES, compileContentRules, digestContent, redactExcerpt, scanPayloads } from './content-rules.mjs';
 export { PERSONA, agentKindOf, personaOf } from './delegation.mjs';
@@ -30,7 +30,14 @@ export { ORG_ENVELOPE_SCHEMA, effectiveDecision, loadOrgPolicy, verifyEnvelope }
 export { STAGE, activeRules, buildPipeline, isObserveOnly } from './pipeline.mjs';
 export { evaluateProcessRules } from './process-rules.mjs';
 export { buildAuditRecord, createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
-export { matchProtected, resolveProtectedRoots } from './paths.mjs';
+export {
+  AUDIT_COLUMNS, DEFAULT_AUDIT_LIMIT, MAX_AUDIT_LIMIT, formatAuditReport, formatAuditRow, formatAuditTime, parseAuditCount,
+} from './audit-query.mjs';
+export { AUDIT_COMMAND_DESCRIPTION, AUDIT_COMMAND_HINT, AUDIT_COMMAND_NAME, registerAuditCommand } from './audit-command.mjs';
+export { collectPathCandidates, targetAsPath } from './path-sources.mjs';
+export {
+  PROTECTED_NAME_PATTERNS, isPathTemplate, judgeProtectedPath, matchProtected, matchProtectedName, resolveProtectedRoots,
+} from './paths.mjs';
 
 export { installPolicy, registerCommand } from './installer.mjs';
 

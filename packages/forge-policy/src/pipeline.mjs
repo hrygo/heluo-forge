@@ -4,6 +4,9 @@
  * 阶段表是装配产物而不是判定分支：关闭的规则在 `buildPipeline` 里根本不出现，
  * 因此不会"进入后 return allow"，也不会因为走过阶段而多写一条审计。P0 只有
  * resolve / identity / audit / receipt 四个常开阶段。
+ *
+ * 人工留痕排在未登记之前：未登记的 human-record 动作应当报"人工留痕不能由 agent
+ * 写"，而不是被误报成"未登记"，与 catalog.decideAction 的判定顺序一致。
  */
 
 import { IMPLEMENTED_RULES } from './config.mjs';
@@ -34,8 +37,8 @@ export const STAGE_RULES = Object.freeze({
 const ORDER = Object.freeze([
   STAGE.RESOLVE,
   STAGE.IDENTITY,
-  STAGE.UNKNOWN_ACTION,
   STAGE.HUMAN_RECORD,
+  STAGE.UNKNOWN_ACTION,
   STAGE.PROTECTED_PATHS,
   STAGE.PROCESS_RULES,
   STAGE.CONTENT_GATE,

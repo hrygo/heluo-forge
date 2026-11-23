@@ -9,7 +9,7 @@
  * `params` 只存摘要，路径只留尾 4 段（D57）。
  */
 
-import { mkdir, appendFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, appendFile, open, readFile, readdir, unlink } from 'node:fs/promises';
 
 export class PolicyAuditError extends Error {
   constructor(message, code, details = undefined) {
@@ -64,7 +64,7 @@ const REDACT_SEGMENTS = 4;
 const SENSITIVE_KEY = /^(token|secret|password|passwd|credential|credentials|authorization|apiKey|api_key|accessToken|refreshToken)$/iu;
 
 /** 路径只留尾 4 段（D57）：审计要能指认位置，但不落完整本机路径。 */
-function redactPath(value) {
+export function redactPath(value) {
   if (typeof value !== 'string' || value.length === 0) return value;
   const looksLikePath = /^([A-Za-z]:)?[\\/]/u.test(value);
   if (!looksLikePath) return value.length <= 128 ? value : `${value.slice(0, 127)}…`;
@@ -151,6 +151,34 @@ async function withTimeout(promise, timeoutMs, code) {
 }
 
 /**
+ * 单次读取最多检视多少条记录：日志很大时只按"最近这么多条"选最新 N 条，
+ * 更早的历史不再参与，避免一次查询把整份日志读进内存。
+ */
+export const AUDIT_SCAN_LIMIT = 5_000;
+
+/** 单个日志文件单次最多读入的字节数（只读尾部）。 */
+export const MAX_FILE_TAIL_BYTES = 2 * 1024 * 1024;
+
+function timeOf(record) {
+  return Number(record?.observedAt) || 0;
+}
+
+/**
+ * 按 `observedAt` 选最新 N 条；同时间按 `order` 升序（`order` 是逆追加顺序，
+ * 越小表示写入越晚），保证并发追加下结果稳定。
+ *
+ * @param {{record: object, order: number}[]} entries
+ * @param {number} max
+ */
+function selectNewest(entries, max) {
+  return entries
+    .slice()
+    .sort((left, right) => (timeOf(right.record) - timeOf(left.record)) || (left.order - right.order))
+    .slice(0, max)
+    .map((entry) => entry.record);
+}
+
+/**
  * memory sink：进程内环形缓冲，超出 `buffer` 覆盖最旧。
  *
  * @param {{buffer?: number, now?: () => number}} [options]
@@ -167,6 +195,22 @@ export function createMemorySink(options = {}) {
       if (entries.length > buffer) entries.splice(0, entries.length - buffer);
     },
     records: () => [...entries],
+    /**
+     * 只读快照：新 → 旧，取前 `limit` 条。不改缓冲、不写审计、不触碰 sink 状态。
+     */
+    read({ limit } = {}) {
+      const max = Number.isInteger(limit) && limit > 0 ? limit : 20;
+      // 按事件时间选最新 N 条：并发写入不保证 `observedAt` 与追加顺序一致，
+      // 直接取尾部会漏掉"后来追加但时间更早"之外的另一种情况——先追加的旧事件
+      // 反而更新。同时间按追加顺序定序（后追加的在前）。
+      const ranked = selectNewest(entries.map((record, order) => ({ record, order })), max);
+      return {
+        records: ranked,
+        corrupt: 0,
+        missing: false,
+        unreadable: false,
+      };
+    },
     size: () => entries.length,
     lastAt: () => (entries.length === 0 ? undefined : entries.at(-1).observedAt ?? clock()),
   });
@@ -197,10 +241,30 @@ export function createFileSink(options = {}) {
   const fs = {
     mkdir: options.fs?.mkdir ?? mkdir,
     appendFile: options.fs?.appendFile ?? appendFile,
+    readFile: options.fs?.readFile ?? readFile,
     readdir: options.fs?.readdir ?? readdir,
+    open: options.fs?.open ?? open,
     unlink: options.fs?.unlink ?? unlink,
   };
   const pattern = /^forge-policy-(\d{4}-\d{2}-\d{2})\.jsonl$/u;
+
+  /** 读文件尾部；被截断时丢掉第一行（可能不完整）。走注入的 `fs.open`，便于测试。 */
+  async function readTail(file) {
+    const handle = await fs.open(file, 'r');
+    try {
+      const { size } = await handle.stat();
+      const length = Math.min(size, MAX_FILE_TAIL_BYTES);
+      if (length === 0) return '';
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, size - length);
+      const text = buffer.toString('utf8');
+      if (size <= length) return text;
+      const firstBreak = text.indexOf('\n');
+      return firstBreak === -1 ? '' : text.slice(firstBreak + 1);
+    } finally {
+      await handle.close();
+    }
+  }
 
   function file(now = clock()) {
     return `${dir}/forge-policy-${dayStamp(now)}.jsonl`;
@@ -245,6 +309,71 @@ export function createFileSink(options = {}) {
           cause: String(error?.message ?? error),
         });
       }
+    },
+    /**
+     * 只读快照：按日期降序读当日与前几日的 JSONL，合并后按 `observedAt` 降序取前
+     * `limit` 条。不 mkdir、不 prune、不写审计、不 spawn 子进程；目录缺席报
+     * `missing`、权限类错误报 `unreadable`，坏行只计入 `corrupt`。
+     */
+    async read({ limit } = {}) {
+      const max = Number.isInteger(limit) && limit > 0 ? limit : 20;
+      let names;
+      try {
+        names = await fs.readdir(dir);
+      } catch (error) {
+        // 目录在首次写入时才创建：ENOENT 是"已装配、还没有记录"的空态，
+        // 不能报成"未装配审计"，否则刚打开 file sink 的会话会被告知审计没开。
+        if (error?.code === 'ENOENT') return { records: [], corrupt: 0, missing: false, unreadable: false };
+        return { records: [], corrupt: 0, missing: false, unreadable: true };
+      }
+      const files = names
+        .map((name) => ({ name: String(name), match: pattern.exec(String(name)) }))
+        .filter((entry) => entry.match !== null)
+        .map((entry) => ({ name: entry.name, day: entry.match[1] }))
+        .sort((left, right) => (left.day === right.day ? 0 : left.day < right.day ? 1 : -1));
+      if (files.length === 0) return { records: [], corrupt: 0, missing: false, unreadable: false };
+      const scanned = [];
+      let corrupt = 0;
+      let readableAny = false;
+      let order = 0;
+      for (const entry of files) {
+        if (scanned.length >= AUDIT_SCAN_LIMIT) break;
+        let text;
+        try {
+          // 只读文件尾部：一天写满也不会把整份日志读进内存。
+          text = await readTail(`${dir}/${entry.name}`);
+        } catch {
+          // 单个文件读不出来只降级这一个文件；所有文件都读不出来才算"不可读"。
+          continue;
+        }
+        readableAny = true;
+        const lines = String(text).split('\n');
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          const trimmed = lines[index].trim();
+          if (trimmed === '') continue;
+          let parsed;
+          try {
+            parsed = JSON.parse(trimmed);
+          } catch {
+            corrupt += 1;
+            continue;
+          }
+          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            corrupt += 1;
+            continue;
+          }
+          // `order` 是"逆追加顺序"：越早遇到越晚写入，用于同时间的稳定次序。
+          scanned.push({ record: parsed, order: order++ });
+          if (scanned.length >= AUDIT_SCAN_LIMIT) break;
+        }
+      }
+      if (readableAny !== true) return { records: [], corrupt: 0, missing: false, unreadable: true };
+      return {
+        records: selectNewest(scanned, max),
+        corrupt,
+        missing: false,
+        unreadable: false,
+      };
     },
     records: () => [],
     size: () => 0,
@@ -355,6 +484,34 @@ export function createAuditBarrier(options = {}) {
     }
   }
 
+  /**
+   * 只读视图：读当前 sink（`setSink` 之后立刻读新 sink，不做缓存）。任何异常都折算成
+   * "不可读"，命令面据此给可操作提示，绝不把异常文本或路径漏给用户。
+   */
+  async function read({ limit } = {}) {
+    const max = Number.isInteger(limit) && limit > 0 ? limit : 20;
+    const target = sink;
+    try {
+      if (target === undefined || target === null) {
+        // 没有 sink 才是"未装配审计"；有 sink 但还没有记录是空快照。
+        return { records: [], corrupt: 0, missing: true, unreadable: false };
+      }
+      if (typeof target.read === 'function') {
+        return await target.read({ limit: max });
+      }
+      const records = typeof target?.records === 'function' ? target.records() : [];
+      // 没有自带 `read` 的 sink 仍可读：空快照就是"确实没有记录"，不是"未配置审计"。
+      return {
+        records: records.slice().reverse().slice(0, max),
+        corrupt: 0,
+        missing: false,
+        unreadable: false,
+      };
+    } catch {
+      return { records: [], corrupt: 0, missing: false, unreadable: true };
+    }
+  }
+
   return {
     setSink: (next) => {
       sink = next;
@@ -365,6 +522,7 @@ export function createAuditBarrier(options = {}) {
     begin,
     record,
     settle,
+    read,
     sinks: () => sink,
     gaps: () => [...gaps],
     acknowledgeGaps: () => {

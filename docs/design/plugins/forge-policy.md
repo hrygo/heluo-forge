@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.17.4 |
+| 版本 | V0.18.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-20 |
+| 最后更新 | 2026-11-23 |
 | 门禁 | G2 |
 | 模块状态 | 可用 |
 
@@ -38,11 +38,11 @@
 
 边界：它不实现沙箱（复用 DSH 沙箱），不实现确认界面（复用宿主 `userQuestions` 卡片），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；P1 交付人工确认卡片与决策复用；P2 交付内容闸（9 条内置规则、按动作字段映射、跨字段字节预算）；流程规则与受保护路径拦截待 P3。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
+P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；P1 交付人工确认卡片与决策复用；P2 交付内容闸（9 条内置规则、按动作字段映射、跨字段字节预算）；P3 交付未登记动作、人工留痕与受保护路径三个语义开关和只读命令 `/policy-audit`；流程规则（`enforceProcessRules`）随 PR #417 接入四条纯参数规则，`change-in-progress` 与 `plan-confirmed` 因需要 DevOps 变更事实源而暂未接入。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
 
-**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现为分类默认决策 + 身份 + 审计三段，外加已接入的三条规则开关（内容闸与两条按次确认）。
+**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现为分类默认决策 + 身份 + 审计，叠加七个已接入的规则开关（内容闸、两条按次确认、未登记动作、人工留痕、受保护路径、流程规则）。
 
-**当前实现（P2，2026-11-20）**：七个策略开关只有 `contentGate`、`confirmPush`、`confirmDopWrite` 三个已实现，其余四个置 `true` 在装载期直接报错。需要人工确认卡片的动作只有 `gitee.git.push`（`confirmPush`）与 `change.clarification.write`（`confirmDopWrite`）两条，其余四条受控写在任何开关组合下都不弹卡；身份校验恒常开启，不占开关。确认等待默认 120000 ms（`confirmation.timeoutMs`），超时、通道不可用、应答非法分别映射 `POLICY_CONFIRM_TIMEOUT` / `_UNAVAILABLE` / `_INVALID_ANSWER`，一律不执行。来源为子代理的调用不再一律拒绝：命中的确认由存活的主会话根代问（卡片弹在主会话，正文标明「本次写入由子代理发起」），找不到唯一存活的根才以 `POLICY_CONFIRM_DELEGATED` 拒绝。已允许的调用按「工具名 + callId + 动作 + 参数摘要 + 正文摘要」复用同一结论，进程内最多 32 条、不落盘并绑定 IAM 主体；命中后仍须重过身份校验、一次性收据、执行前正文复验与执行后复验。正文读不到时摘要只是占位值，这样的结论既不进缓存也不查缓存，重试必须重新确认（D89）。没有桌面确认通道时装载照常完成并告警一次，需要卡片的写全部以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed）。本文其余章节描述的是目标模型，未达成的部分仍以"待实现"标注。
+**当前实现（P3，2026-11-23）**：七个策略开关全部已实现（`contentGate`、`confirmPush`、`confirmDopWrite`、`enforceProcessRules`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`），置 `true` 即生效。三个语义开关只收紧权限、默认关闭：`protectPaths` 在会话工作区与追加根内判九类受保护文件名，`denyHumanRecord` 拒绝 Agent 发起的人工评审留痕，`denyUnknownAction` 拒绝已映射但未登记的写动作。需要人工确认卡片的动作只有 `gitee.git.push`（`confirmPush`）与 `change.clarification.write`（`confirmDopWrite`）两条，其余四条受控写在任何开关组合下都不弹卡；身份校验恒常开启，不占开关。确认等待默认 120000 ms（`confirmation.timeoutMs`），超时、通道不可用、应答非法分别映射 `POLICY_CONFIRM_TIMEOUT` / `_UNAVAILABLE` / `_INVALID_ANSWER`，一律不执行。来源为子代理的调用不再一律拒绝：命中的确认由存活的主会话根代问（卡片弹在主会话，正文标明「本次写入由子代理发起」），找不到唯一存活的根才以 `POLICY_CONFIRM_DELEGATED` 拒绝。已允许的调用按「工具名 + callId + 动作 + 参数摘要 + 正文摘要」复用同一结论，进程内最多 32 条、不落盘并绑定 IAM 主体；命中后仍须重过身份校验、一次性收据、执行前正文复验与执行后复验。正文读不到时摘要只是占位值，这样的结论既不进缓存也不查缓存，重试必须重新确认（D89）。没有桌面确认通道时装载照常完成并告警一次，需要卡片的写全部以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed）。本文其余章节描述的是目标模型，未达成的部分仍以"待实现"标注。
 
 **IAM隔离消费进展**：独立许可/私有operation算法B已通过62新例及210项policy全包回归，独立peer与arguments身份变异已关闭。普通apply未注入该算法；C合成工具/命令的共享installer、发送体与owned finalizer已通过31新例/241项policy回归及独立审阅/变异。D合成模型入口已通过29新例/270项policy回归，包含最终错误桥修复及独立审阅/桥接增量复核；E根16项已验证实际IAM工厂与mock IdP的联合执行，独立审阅与本批完整检查已通过。B/C/D局部fixture本身不是联合证据，E仍不证明生产授权；普通apply不启用合成模型。会话见证、许可字段与整体边界见[IAM-003](<../../contracts/iam-consumer-isolated.md>)和[PLAN-007](<../../plans/2026-11-02-iam-consumer-isolated.md>)。
 
@@ -51,7 +51,7 @@ P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、�
 **目标**
 
 - 对文件访问、命令执行、网络外发三类动作做统一判断，结论只有允许、需确认、拒绝；写类动作再叠加内容与流程规则。
-- 受保护路径检查是目标能力；当前内置动作没有路径参数，门禁不自动拦截文件路径。
+- 受保护路径检查已随 P3 接入判定链路：在会话工作区与显式追加根内按九类文件名硬拒绝，工作区外的路径交给沙箱，不重复判定。
 - 外发前给出可读的"将要发出什么"，用户明确同意后才执行。
 - 所有判断写审计，含结论与依据，不含正文。
 
@@ -95,13 +95,14 @@ P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、�
 | `policy.audit.buffer` | number | 1000 | `sink: memory` 时必填 | 环形缓冲容量 |
 | `policy.audit.keepDays` | number | 7 | `sink: file` 时必填 | 文件审计舱按天保留天数 |
 | `policy.audit.timeoutMs` | number | 2000 | 是 | 前置/补记写入超时；超时按不可写处理并中止本次调用 |
-| `policy.protectedPaths` | string[] | 无（固定 `$DSH_HOME/**`，`$DSH_HOME` 缺席时回落 `~/.dsh`） | 否 | 不再可配置：受保护根固定为默认值，自定义值在装载期拒绝，避免"配了却不生效" |
+| `policy.protectedPaths` | string[] | 空 | 否 | 追加受保护路径模板（绝对路径或 `$VAR/...`），与会话工作区一起构成 `protectPaths` 的判定范围；模板按 `{DSH_HOME: ~/.dsh}` ∪ 进程环境 ∪ `policy.env` 展开，未解析的模板在装载期报错 |
+| `policy.paths.append` | string[] | 空 | 否 | 与 `protectedPaths` 同义的追加入口（历史字段），两者取并集并按原始顺序去重；模板文法与展开规则相同 |
 | `policy.observation.export.enabled` | boolean | `false` | 否 | 过程观察导出开关；**默认关闭**，启用但缺少宿主发送方（`observationSink`）或未登记枚举时停在 `no-provider` / `unregistered-enums`，一次也不发 |
 | `policy.observation.export.idempotentProvider` | boolean | `false` | 否 | 摄取方是否保证按 `event_id` 幂等；**true 才允许**响应未知时有限重送 |
 | `policy.observation.enums` | object | 空 | 启用导出时必填 | 已登记枚举（`status`/`action` 至少各一项）；本仓库不发明枚举取值 |
 | `policy.audit.requireDurable` | boolean | `false` | 否 | 是否要求持久审计落点；组织策略可强制为 `true`，本机不能改回 `false` |
 
-未接入判定链路的配置面一律在装载期拒绝，报错带键路径并列出全部问题，不静默忽略：`categories`、`protectedPaths`、`paths.append`、`confirmation`、`content` 当前都属此列（取值等于默认值时视为未设置，宿主 loader 回灌的规范化配置因此可以原样通过）。旧配置键 `confirmPaths`、全局 `egress`、`egressAllowlist`、`commandPatterns`、`auditSink` 既不被读取也报未知键；配置它们不能建立相应保护。判定链路、文件审计舱与规则开关的现行实现见[实施计划 CORP-DSH-PLAN-024](../../plans/2026-11-19-policy-minimal-gates.md)与包内 [README](../../../packages/forge-policy/README.md)。
+未接入判定链路的配置面一律在装载期拒绝，报错带键路径并列出全部问题，不静默忽略：`categories` 当前属此列（取值等于默认值时视为未设置，宿主 loader 回灌的规范化配置因此可以原样通过）。`protectedPaths` 与 `paths.append` 已接入 `protectPaths` 判定；`confirmation` 与 `content` 已在 P1/P2 接入。旧配置键 `confirmPaths`、全局 `egress`、`egressAllowlist`、`commandPatterns`、`auditSink` 既不被读取也报未知键；配置它们不能建立相应保护。判定链路、文件审计舱与规则开关的现行实现见[实施计划 CORP-DSH-PLAN-024](../../plans/2026-11-19-policy-minimal-gates.md)与包内 [README](../../../packages/forge-policy/README.md)。
 
 内容规则、动作上限与流程规则开关不来自本文件配置：内置集随包编译，组织层来自包内 `policy/` 数据目录的签名信封（§5.1.4），本机层只能收紧，不能放宽。
 
@@ -114,8 +115,19 @@ export interface PolicyService {
   actions(): string[];
   decide(request: { action: string; target?: string }): PolicyDecision;
   authorize(toolName: string, request?: { target?: string }): PolicyDecision;
+  /** 已配置的追加根模板（不含内置会话工作区；工作区范围由 checkPath 的参数给出） */
   protectedPaths(): string[];
-  checkPath(candidate: string): boolean;
+  /**
+   * 判定候选路径是否落在受保护范围（布尔面，沿用既有契约）。
+   * true 表示"已判定且受保护"；判定不了（工作区外、形状不合法）一律 false，
+   * 因为拿不到保护依据时不能把路径当成"受保护"。
+   */
+  checkPath(candidate: string, workspaceRoot?: string): boolean;
+  /**
+   * 同上，明细面：judged=false 表示不在本规则作用域（交给沙箱），
+   * protected=true 时给出类别。需要区分两种 false 的调用方用这个。
+   */
+  judgePath(candidate: string, workspaceRoot?: string): { judged: boolean; protected: boolean; category?: string };
   orgPolicy(): OrgPolicyState;
   policyVersion(): string;
   mode(): 'managed' | 'personal';
@@ -150,9 +162,9 @@ export interface PolicyDecision {
 | `target` | 执行时必须按时给出的目标类型；缺失一律拒绝 |
 | `category` | 类别覆盖；只能落在分类表已允许的范围内，决定默认决策 |
 
-**目标判定顺序（P1–P3）**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后完成必要的确认卡片与前置审计；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
+**判定顺序**：`resolve → identity → human-record → unknown-action → protected-paths → process-rules → content-gate → confirmation → audit → receipt`（`process-rules` 已随 #417 装配；未开启的开关不生成阶段）。动作分类与登记决定是否进入身份段，三个语义开关在其后按固定顺序收紧，路径检查先于确认且不可翻转；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现行实现（P0–P3）**：判定流水线常开 `resolve → identity → audit → receipt` 四段，`enforceProcessRules` 开启时在内容闸之前插入流程闸阶段，`contentGate` 开启时在审计之前插入内容闸阶段，`confirmPush`/`confirmDopWrite` 开启时再插入确认阶段。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未登记动作与未映射工具是 out-of-scope：直接放行，不读身份、不写审计。七条规则开关（`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）代码默认全关，已接入的四条（`enforceProcessRules`、`contentGate`、`confirmPush`、`confirmDopWrite`）可以开启，其余三条置真在装载期被拒绝；仍未接入判定链路的配置面（`categories`、`protectedPaths`、`paths.append`）同样在装载期拒绝，避免"配了却静默不生效"。`confirmation` 与 `content` 已接入，可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
+**现行实现（P0–P3）**：判定流水线常开 `resolve → identity → audit → receipt` 四段；`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`/`confirmDopWrite` 各自插入自己的阶段，顺序为 `human-record → unknown-action → protected-paths → process-rules → content-gate → confirmation`。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未映射工具与未登记的只读动作是 out-of-scope：直接放行，不读身份、不写审计；未登记的写动作在 `denyUnknownAction` 开启后改为拒绝。七条规则开关代码默认全关，且七条都已接入判定链路，置真即生效；仍未接入判定链路的配置面只剩 `categories`，装载期拒绝以避免"配了却静默不生效"。`confirmation`、`content` 与路径模板（`protectedPaths`、`paths.append`）均可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -183,14 +195,14 @@ export interface PolicyDecision {
 | `gitee.pr.write` | 研发写 | allow | 无；内容闸开启后逐次判定 |
 | `gitee.review.publish` | 评审写 | allow | 无；正文须标注 AI 来源与 PR 版本（HARD） |
 | `change.clarification.write` | 研发写 | allow | `confirmDopWrite` 开启后弹确认卡片 |
-| `gitee.git.push` | 远端写 | confirm | `confirmPush` 开启后弹确认卡片；开关未接入前按注册写放行 |
+| `gitee.git.push` | 远端写 | confirm | `confirmPush` 开启后弹确认卡片；关闭时按注册写放行 |
 | `gitee.review.record` | 人工评审留痕 | deny | Agent 不可发起；宿主在人工确认后写入并记录 IAM subject |
 | `git commit` | 本地动作 | 出闸 | 无；首行 `[变更号]` 由 `git-message.mjs` 校验 |
 
 登记语义：
 
-- **未登记即出闸**：目录中没有的动作属于本门禁作用域之外，直接放行、不读身份、不写审计（`out-of-scope`）；`denyUnknownAction` 开启后才改为 `unregistered-action` 硬拒绝。
-- **默认决策不是批准**：`allow` 只表示"不因动作名本身拒绝"，进入身份与审计两段后才真正放行；内容与流程规则在 P1–P3 接入后仍逐次判定，HARD 命中不可被确认提升。
+- **未登记即出闸**：目录中没有的动作属于本门禁作用域之外，直接放行、不读身份、不写审计（`out-of-scope`）；`denyUnknownAction` 开启后，未登记的**写动作**改为 `unregistered-action` 硬拒绝，未登记的只读动作仍是 `out-of-scope`。
+- **默认决策不是批准**：`allow` 只表示"不因动作名本身拒绝"，进入身份与审计两段后才真正放行；内容规则（P2）与受保护路径（P3）已接入并逐次判定，HARD 命中不可被确认提升；流程规则待 #417。
 - **内容与流程规则不在本文复制**：内置规则集、阈值与降级语义见[判定模型 §6、§7](../policy-model.md)；分级阈值与误报只能在真实仓库上评估后冻结。
 - **断言现状**：`packages/forge-policy/test/write-register.test.mjs` 断言本表的动作、类别与默认决策同代码词表逐条一致；`packages/forge-policy/test/apply.test.mjs`、`gate-path.test.mjs`、`execution-lifecycle.test.mjs`、`execution-audit.test.mjs` 覆盖判定、一次性收据、执行前复验与审计字段。
 
@@ -297,9 +309,9 @@ export interface PolicyDecision {
 
 ### 5.2 受保护路径、别名归一与沙箱取严
 
-本节自动硬拒绝为目标行为；当前内置动作未绑定路径参数，仅提供显式 `checkPath` 查询。
+`protectPaths`（默认关闭）开启后，门禁在内容闸与确认之前自动检查参数里的 `path`/`file`（任意深度、数组与嵌套对象）以及可确认为路径的 `target`：命中即拒绝并留一条证据，业务工具零调用。判定范围 = 会话工作区根（`exec.agent.session.header.cwd`）+ `protectedPaths`/`paths.append` 追加根；九类受保护文件名（`.env`、`.env.*`、`*.pem`、`*.key`、`id_rsa*`、`.npmrc`、`.netrc`、`credentials*`、`*.p12`）固定内置，配置只能追加范围、不能移除类别，也不存在"未配置根就放行"的降级。工作区外的路径不由本规则判定，交给沙箱；证据只记类别（`name:<pattern>`）或追加根在配置中的序号（`root:<n>`，从 1 开始），不写绝对路径——追加根允许配置绝对路径，因此原文只保留在返回值的 `template` 里供人看，禁止写入审计。没有路径候选的调用（纯业务目标、命令式写）直接跳过本阶段，不因调用方未带会话工作区而整条拒绝；带相对路径的候选只拼上工作区、不做词法归一，`..` 在符号链接展开之后才折叠，保证同一目标的相对写法与绝对写法得到同一判定。
 
-受保护根按模板解析，默认 `$DSH_HOME/**`。实测（DSH 0.2.1-rc.2 / darwin-arm64）：宿主进程环境里有 `DSH_HOME` 与 `DSH_PROFILE_DIR`，没有 `DSH_AGENTS_HOME`；宿主自有的 `@deepseek-ai/dsh-home-paths` 在插件内**不可导入**，因此本插件只用环境变量契约，并在 `$DSH_HOME` 缺席时回落到宿主默认的 `~/.dsh`（该默认值来自宿主包内说明，不作为独立真源）。凭据按宿主契约位于 `$DSH_HOME/.env`，用户级指令链位于 `$DSH_HOME/AGENTS.md`。
+受保护根按模板解析，默认没有追加根，判定基线是会话工作区。实测（DSH 0.2.1-rc.2 / darwin-arm64）：宿主进程环境里有 `DSH_HOME` 与 `DSH_PROFILE_DIR`，没有 `DSH_AGENTS_HOME`；宿主自有的 `@deepseek-ai/dsh-home-paths` 在插件内**不可导入**，因此本插件只用环境变量契约，并在 `$DSH_HOME` 缺席时回落到宿主默认的 `~/.dsh`（该默认值来自宿主包内说明，不作为独立真源）。凭据按宿主契约位于 `$DSH_HOME/.env`，用户级指令链位于 `$DSH_HOME/AGENTS.md`。
 
 | 规则 | 要求 |
 |---|---|
@@ -308,7 +320,8 @@ export interface PolicyDecision {
 | 不可判定 | 非绝对路径、`ELOOP`、权限不足、路径参数缺失一律拒绝，不按放行处理 |
 | 别名 | 相对穿越、symlink（含 Windows junction/reparse point）经同一归一化落到根内即拒绝；无法判定的按拒绝 |
 | 硬拒绝优先 | 路径检查在确认阶段之前且不可翻转：即使该动作为 `confirm` 且已获批准，命中受保护路径仍然拒绝 |
-| 未配置根 | 声明了路径参数的动作在没有任何受保护根时**关闭**（理由写明未配置），不降级为放行 |
+| 工作区不可得 | 会话工作区缺失、非绝对或无法解析时以 `POLICY_PATH_SCOPE_UNAVAILABLE` 拒绝，不降级为放行 |
+| 追加根不可解析 | 追加根模板在装载期展开失败即报 `POLICY_CONFIG_INVALID` 并列出键路径，不静默少保护一个根 |
 | 与沙箱取严 | 沙箱与策略结论不一致取更严；沙箱或策略缺失、被禁用时，依赖路径保护的动作关闭并记录阻塞，不降级 |
 | 不保证的终端 | 宿主无法给出可核验路径的调用（例如不透明远程执行）标阻塞，不放行 |
 
@@ -341,7 +354,7 @@ export interface PolicyDecision {
 
 ### 5.4 规则开关与准入
 
-七条规则开关各自独立、默认全关，由部署者在插件配置里逐条开启；代码里没有隐式默认开启的拦截。每条开关必须能回答"宿主为什么覆盖不了"，答不出来就不加规则。子代理来源不设开关：一律按"能代问就代问、找不到根才拒绝"处理（见 §5.3.1）。
+七条规则开关各自独立、默认全关，由部署者在插件配置里逐条开启；代码里没有隐式默认开启的拦截。P3 起除 `enforceProcessRules`（随 #417）之外的六条均已接入判定链路；三个语义开关的默认值、命中条件、依赖与 fail-closed 行为见[判定模型 §7](../policy-model.md)。每条开关必须能回答"宿主为什么覆盖不了"，答不出来就不加规则。子代理来源不设开关：一律按"能代问就代问、找不到根才拒绝"处理（见 §5.3.1）。
 
 | 开关 | 拦截什么 | 为什么必须在策略层 |
 |---|---|---|
@@ -353,7 +366,7 @@ export interface PolicyDecision {
 | `confirmPush` | `gitee.git.push` 每次推送 | 宿主没有"这次推送要不要问人"的概念 |
 | `confirmDopWrite` | DOP 变更状态流转 | 同上，状态流转需要业务侧确认 |
 
-共同约束：开关只能收紧权限；置真但规则未实现时装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`）；事实源不可用时流程规则记 `unevaluated` 并继续，不把"不知道"当成"不满足"；审计恒开，与开关状态无关。
+共同约束：开关只能收紧权限；置真但规则未实现时装载期拒绝（`rules.<key>: this rule is not implemented in this phase and cannot be enabled`），当前没有开关属于此列（七条均已实现）；事实源不可用时流程规则记 `unevaluated` 并继续，不把"不知道"当成"不满足"；审计恒开，与开关状态无关。
 
 **流程闸的接线范围**：`enforceProcessRules` 当前接**不需要外部事实源**的四条规则——`push-protected-branch`（`main`/`master`/`release/*` 拒绝）、`push-force`、`pr-acceptance-section`（软命中）、`review-ai-source`（评审正文必须写明 AI 来源与目标版本；正文快照里没有评审正文时记 `unevaluated` 不判）。`change-in-progress` 与 `plan-confirmed` 要读 dop 变更状态与计划状态，事实源未接入前**不参与判定**，避免"查不到状态"被误读成"不满足流程"。规则按 `actions` 限定作用域（推送规则不管建 PR、验收小节规则不管推送），需要正文的规则读的是门禁解析出的**同一份正文快照**——Gitee 工具把建 PR 正文与评审正文放在 `exec.content`、参数只带定位字段，从参数读正文会永远判成"没有正文"；正文读不到时这类规则记 `unevaluated`，不把"看不见"当成"不满足"。
 
@@ -376,9 +389,17 @@ export interface PolicyDecision {
 
 宿主接线：`tools/pre-execute` await 前置审计并保存绑定同一执行对象、调用身份与参数摘要的私有收据；`tools.guard` 同步核验并消费一次，故较早 listener 返回 `allow` 也不能绕过必要审计。`tools/post-execute` 的 `(exec, result, next)` waterfall await 结清；它可能被其他 listener 短路，所以 `tools/result` 的同步观察回调另登记异步兜底结清。**emit 本身不是 awaited 屏障**：pending 在 observer 返回前登记，下一受控动作的 prepare 必须等待，guard 同时拒绝 pending 窗口；双路径按同一收据幂等结清。
 
-`policy.registerCommand` 不借用工具事件，而直接调用同一准备、审计及结清屏障（路径与确认两段在 P1–P3 接入）。简单命令要求明确业务目标；结构化或带路径的命令提供可信 `resolveArguments(invocation)`，规范化参数作为处理函数第二参数。空输入不得以命令名充当目标。需要确认的命令在确认通道未联调前保持关闭。
+`policy.registerCommand` 不借用工具事件，而直接调用同一准备、审计及结清屏障（受保护路径与确认两段已在 P1–P3 接入）。简单命令要求明确业务目标；结构化或带路径的命令提供可信 `resolveArguments(invocation)`，规范化参数作为处理函数第二参数。空输入不得以命令名充当目标。需要确认的命令在确认通道未联调前保持关闭。只读命令 `/policy-audit` 走独立的审计读取路径，不进入执行判定与写路径（见 §5.6）。
 
 卸载或取消发生在 audit begin 或下游 pre listener 的等待期间时，异步返回后须再次拒绝，不能依赖已被卸载的 guard。已获准而结果未明的调用在卸载时记录 `unknown` 缺口，不声称未执行或自动重放。参数摘要仅留私有内存，不写入最小审计记录。
+
+### 5.6 审计查询命令 `/policy-audit`
+
+`/policy-audit [N]` 是只读命令：读最近的审计记录并按新 → 旧展示，不写审计、不改策略状态、不触发重扫。`N` 缺省 20，合法范围 1–200；大于 200 截到 200 并在末尾说明，`0`、负数或非整数回退 20 并给出范围提示。命令在宿主有 `ctx.commands` 服务时注册，缺失时注册为空操作，不影响插件装载。
+
+输出固定八列：`时间 | 阶段 | 动作 | 目标 | 决策 | 规则 | 耗时 | agent.kind`。时间按 UTC 显示；目标只保留路径的最后一段；动作与规则超长截断；缺失字段以 `-` 展示，缺失 `agent.kind` 显示 `unknown`。空审计给"先执行一次受控写，或开启任一规则后重试"的可操作提示；审计源不可读时提示检查 `audit.sink` 与日志目录权限，不显示路径或 errno；文件落点有坏行时在末尾报告跳过的行数。`memory` 与 `file` 两种落点输出同一结构，且都按 `observedAt` 选最新 N 条、同一时间按追加顺序定序（并发追加不保证与事件时间同序）。三种空态分开：没有 sink 是"未装配审计"，已装配但目录尚未创建或还没有记录是"暂无记录"，读失败才是"不可读"。文件落点只读每个日志文件的尾部（单文件最多 2 MiB），一次查询最多检视最近 5000 条记录，更早的历史不参与，避免大日志把内存与延迟一起放大。
+
+命令结果不包含参数值、正文、令牌、绝对路径或底层异常文本；读取动作也不改变审计文件（不创建目录、不清理、不追加）。
 
 ## 6. 权限、凭据与数据
 
@@ -404,9 +425,9 @@ flowchart TD
 
 **并发**：判断无共享可变状态，可并发；审计写入串行，避免交错。
 
-**超时**：确认等待默认 120 秒，超时按拒绝处理；判断本身 1 秒内完成，超时即拒绝。P0 没有确认阶段，判定与前置审计的等待由 `audit.timeoutMs`（默认 2 秒）约束。
+**超时**：确认等待默认 120 秒，超时按拒绝处理；判断本身 1 秒内完成，超时即拒绝。判定与前置审计的等待由 `audit.timeoutMs`（默认 2 秒）约束。
 
-**现行顺序（P0）**：判定（分类默认决策）→ 身份（IAM actor）→ 前置审计 → 一次性收据 → 执行 → 结清；执行前 `recheck` 复验卸载、取消、参数与身份变化。确认与内容/流程两个阶段在 P1–P3 接入。
+**现行顺序（P0–P3）**：`resolve → identity → human-record → unknown-action → protected-paths → process-rules → content-gate → confirmation → audit → receipt`，未开启的开关不生成阶段。执行前 `recheck` 复验卸载、取消、参数与身份变化，随后执行并结清。
 
 **取消**：用户取消工具调用时不写"已执行"审计，只写"已取消"。
 
@@ -504,13 +525,13 @@ flowchart TD
 
 **未验**：企业环境的沙箱实现差异（本机 darwin 为 seatbelt；其他平台按其运行时能力核验）。
 
-**写动作规则**：写动作按类别判定，并应用内容规则、流程规则与策略级批准（三者在 P1–P3 接入）；决策依据见 ADR-27。P0 只应用分类默认决策、身份校验与前置审计。
+**写动作规则**：写动作按类别判定，并应用内容规则、受保护路径与语义开关（三者已在 P1–P3 接入）；流程规则与策略级批准待 #417 与后续阶段。决策依据见 ADR-27。
 
 普通研发写的目标见[需求 §2.3](../../requirements/requirements-baseline.md)。内容闸不判定"谁可以写"，最终授权仍来自 IAM 与平台服务端权限，"缺原生可靠控制时禁用、不自建第二授权系统"继续成立。卡片确认不豁免内容与流程规则，业务决定与正式人工评审仍需真实确认。
 
 ## 10. 测试矩阵
 
-下表是目标测试矩阵；P0 的实际覆盖见包内 `test/`（判定 `apply`/`catalog`/`config`，收据与复验 `gate-path`/`execution-lifecycle`，审计 `audit`/`audit-file`/`execution-audit`，命令面 `command`，组织信封 `org-envelope`，观察 `observe`，包体 `package-shape`）。
+下表是目标测试矩阵；当前实际覆盖见包内 `test/`（判定 `apply`/`catalog`/`config`，三个语义开关 `gate-semantic-switches`/`gate-protected-paths`/`protected-paths`，路径来源 `path-sources`，收据与复验 `gate-path`/`execution-lifecycle`，审计 `audit`/`audit-file`/`execution-audit`，审计查询 `audit-query`/`audit-command`，命令面 `command`，组织信封 `org-envelope`，观察 `observe`，包体 `package-shape`）。
 
 
 | 层级 | 覆盖 | 命令 |
