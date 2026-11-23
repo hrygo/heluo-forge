@@ -29,18 +29,31 @@ export function createMentionsService(ports) {
   }
 
   const now = typeof ports.now === 'function' ? ports.now : () => Date.now();
+  const maxTrackedSessions = Number.isInteger(ports.maxTrackedSessions) && ports.maxTrackedSessions > 0
+    ? ports.maxTrackedSessions
+    : 512;
   let viewVersion = 1;
   let globalVersion = 1;
   const sessionVersions = new Map();
   const sessionLastScope = new Map();
 
+  function setBounded(map, key, value) {
+    map.delete(key);
+    map.set(key, value);
+    if (map.size > maxTrackedSessions) {
+      const oldest = map.keys().next().value;
+      if (oldest !== undefined) map.delete(oldest);
+    }
+  }
+
   function invalidate(scopeEpoch, sessionId = null) {
     viewVersion += 1;
     if (sessionId === null) {
       globalVersion += 1;
+      sessionVersions.clear();
       sessionLastScope.clear();
     } else {
-      sessionVersions.set(sessionId, (sessionVersions.get(sessionId) ?? 0) + 1);
+      setBounded(sessionVersions, sessionId, (sessionVersions.get(sessionId) ?? 0) + 1);
       sessionLastScope.delete(sessionId);
     }
     ports.onMentionsInvalidated?.({ scopeEpoch, sessionId, viewVersion });
@@ -80,10 +93,10 @@ export function createMentionsService(ports) {
     // while isolating per-session scope transitions from unrelated concurrent sessions.
     const prevScope = sessionLastScope.get(cleanSessionId);
     if (prevScope !== undefined && prevScope !== delegationScope) {
-      sessionVersions.set(cleanSessionId, (sessionVersions.get(cleanSessionId) ?? 0) + 1);
+      setBounded(sessionVersions, cleanSessionId, (sessionVersions.get(cleanSessionId) ?? 0) + 1);
       viewVersion += 1;
     }
-    sessionLastScope.set(cleanSessionId, delegationScope);
+    setBounded(sessionLastScope, cleanSessionId, delegationScope);
     const startGlobalVersion = globalVersion;
     const startSessionVersion = sessionVersions.get(cleanSessionId) ?? 0;
     const startVersion = viewVersion;
@@ -187,5 +200,6 @@ export function createMentionsService(ports) {
     list,
     invalidate,
     getViewVersion,
+    trackedSessionCount: () => Math.max(sessionVersions.size, sessionLastScope.size),
   });
 }

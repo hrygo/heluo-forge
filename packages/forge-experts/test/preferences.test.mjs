@@ -53,8 +53,9 @@ test('preferences default disabled, enforce editToken revision concurrency, and 
   });
   await store.open();
   const spec = storage.opened[0];
-  assert.deepEqual(Object.keys(spec.tables), ['preferences'], 'domain spec must declare the table map, not a name array');
+  assert.deepEqual(Object.keys(spec.tables), ['preferences', 'scope_index'], 'domain spec must declare the table map, not a name array');
   assert.equal(typeof spec.tables.preferences.valueSchema?.parse, 'function', 'table spec needs a parse()-able valueSchema');
+  assert.equal(typeof spec.tables.scope_index.valueSchema?.parse, 'function', 'scope_index table spec needs a parse()-able valueSchema');
 
   // Default state is disabled with revision 0.
   const initial = await store.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', authContinuityDigest: digest });
@@ -208,4 +209,35 @@ test('close() rejects new reads/writes while draining and reconcileRevocation de
   assert.equal(res.degraded, true);
   assert.equal(failStore.isDegraded(), true);
   await failStore.close();
+});
+
+test('listConfirmedEnabled survives invalidateScope and cold-start store reopen via durable scope_index', async () => {
+  const storage = createMemoryStorageDomain();
+  const store1 = createPreferencesStore({
+    openStorageDomain: (spec) => storage.open(spec),
+    getScopeSnapshot: () => ({ scopeEpoch: 1, scope: SCOPE }),
+    assertScopeCurrent: () => {},
+    verifyOrgCallable: async () => ({ callableInOrg: true, authContinuityDigest: 'dig-cold' }),
+  });
+  await store1.open();
+  const init = await store1.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-cold', authContinuityDigest: 'dig-cold' });
+  await store1.setEnabled({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-cold', enabled: true, editToken: init.editToken });
+
+  // invalidateScope clears in-memory cache; listConfirmedEnabled must rehydrate from scope_index.
+  store1.invalidateScope(2);
+  const afterInvalidate = await store1.listConfirmedEnabled({ scope: SCOPE });
+  assert.deepEqual(afterInvalidate.map((r) => r.expertId), ['exp-cold']);
+  await store1.close();
+
+  // Cold-start reopen on the same storageDomain must also recover enabled experts.
+  const store2 = createPreferencesStore({
+    openStorageDomain: (spec) => storage.open(spec),
+    getScopeSnapshot: () => ({ scopeEpoch: 1, scope: SCOPE }),
+    assertScopeCurrent: () => {},
+    verifyOrgCallable: async () => ({ callableInOrg: true, authContinuityDigest: 'dig-cold' }),
+  });
+  await store2.open();
+  const afterColdStart = await store2.listConfirmedEnabled({ scope: SCOPE });
+  assert.deepEqual(afterColdStart.map((r) => r.expertId), ['exp-cold']);
+  await store2.close();
 });

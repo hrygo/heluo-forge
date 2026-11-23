@@ -9,6 +9,7 @@ import { ExpertsError } from './errors.mjs';
 export const STORAGE_DOMAIN_NAME = 'forge_experts';
 export const STORAGE_DOMAIN_VERSION = 1;
 export const PREFERENCES_TABLE = 'preferences';
+export const SCOPE_INDEX_TABLE = 'scope_index';
 
 /**
  * DSH `storageDomain.open` takes a DomainSpec whose `tables` is a record of
@@ -25,11 +26,22 @@ function parseRecord(value) {
   return parsed.data;
 }
 
+function parseScopeIndexRecord(value) {
+  const parsed = ScopeIndexRecordSchema.safeParse(value);
+  if (!parsed.success) {
+    const error = new Error(`Invalid scope index record: ${parsed.error}`);
+    error.code = 'invalid-record';
+    throw error;
+  }
+  return parsed.data;
+}
+
 export const PREFERENCES_DOMAIN_SPEC = Object.freeze({
   name: STORAGE_DOMAIN_NAME,
   version: STORAGE_DOMAIN_VERSION,
   tables: Object.freeze({
     [PREFERENCES_TABLE]: Object.freeze({ valueSchema: Object.freeze({ parse: parseRecord }) }),
+    [SCOPE_INDEX_TABLE]: Object.freeze({ valueSchema: Object.freeze({ parse: parseScopeIndexRecord }) }),
   }),
 });
 const DEFAULT_EDIT_TOKEN_TTL_MS = 5 * 60 * 1000;
@@ -37,6 +49,12 @@ const DEFAULT_EDIT_TOKEN_TTL_MS = 5 * 60 * 1000;
 export function derivePreferenceKey({ instanceId, orgId, issuer, subject, expertId }) {
   return createHash('sha256')
     .update(JSON.stringify([instanceId, orgId, issuer, subject, expertId]))
+    .digest('hex');
+}
+
+export function deriveScopeIndexKey({ instanceId, orgId, issuer, subject }) {
+  return createHash('sha256')
+    .update(JSON.stringify(['scope_index', instanceId, orgId, issuer, subject]))
     .digest('hex');
 }
 
@@ -65,6 +83,33 @@ export const PreferenceRecordSchema = Object.freeze({
         enabled: value.enabled,
         revision: value.revision,
         authContinuityDigest: value.authContinuityDigest,
+        updatedAt: value.updatedAt,
+      }),
+    };
+  },
+});
+
+export const ScopeIndexRecordSchema = Object.freeze({
+  safeParse(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { success: false, error: 'Scope index record must be a plain object' };
+    }
+    const allowedKeys = new Set(['schemaVersion', 'expertIds', 'updatedAt']);
+    for (const key of Object.keys(value)) {
+      if (!allowedKeys.has(key)) return { success: false, error: `Unexpected field: ${key}` };
+    }
+    if (value.schemaVersion !== 1) return { success: false, error: 'Unsupported schemaVersion' };
+    if (!Array.isArray(value.expertIds) || value.expertIds.some((id) => typeof id !== 'string' || id.trim().length === 0)) {
+      return { success: false, error: 'expertIds must be an array of non-empty strings' };
+    }
+    if (typeof value.updatedAt !== 'string' || Number.isNaN(Date.parse(value.updatedAt))) {
+      return { success: false, error: 'updatedAt must be ISO datetime string' };
+    }
+    return {
+      success: true,
+      data: Object.freeze({
+        schemaVersion: 1,
+        expertIds: Object.freeze([...new Set(value.expertIds.map((id) => id.trim()))].sort()),
         updatedAt: value.updatedAt,
       }),
     };
@@ -100,6 +145,7 @@ export function createPreferencesStore(ports) {
 
   let domainHandle = null;
   let table = null;
+  let scopeIndexTable = null;
   let closed = false;
   let degraded = false;
   let degradedReason = null;
@@ -115,15 +161,47 @@ export function createPreferencesStore(ports) {
     return JSON.stringify([scope.instanceId, scope.orgId, scope.issuer, scope.subject]);
   }
 
-  function trackEnabled(scope, expertId, enabled) {
-    const key = scopeIndexKey(scope);
-    let set = knownEnabledByScope.get(key);
-    if (!set) {
-      set = new Set();
-      knownEnabledByScope.set(key, set);
+  function hydrateScopeIndex(scope) {
+    const memKey = scopeIndexKey(scope);
+    let set = knownEnabledByScope.get(memKey);
+    if (set) return set;
+    set = new Set();
+    if (scopeIndexTable && !closed && !degraded) {
+      try {
+        const raw = scopeIndexTable.get(deriveScopeIndexKey(scope));
+        if (raw !== undefined && raw !== null) {
+          const parsed = ScopeIndexRecordSchema.safeParse(raw);
+          if (parsed.success) {
+            for (const id of parsed.data.expertIds) set.add(id);
+          }
+        }
+      } catch {
+        // Best-effort hydration; readValidatedRecord below still enforces fail-closed storage state.
+      }
     }
+    knownEnabledByScope.set(memKey, set);
+    return set;
+  }
+
+  function trackEnabled(scope, expertId, enabled) {
+    const set = hydrateScopeIndex(scope);
     if (enabled) set.add(expertId);
     else set.delete(expertId);
+    return set;
+  }
+
+  async function persistScopeIndex(scope, set) {
+    if (!scopeIndexTable || closed || degraded) return;
+    const record = {
+      schemaVersion: 1,
+      expertIds: [...set].sort(),
+      updatedAt: new Date(now()).toISOString(),
+    };
+    try {
+      await scopeIndexTable.put(deriveScopeIndexKey(scope), record);
+    } catch {
+      // Primary preference row is already committed; index self-heals on next read/write.
+    }
   }
 
   function enqueue(task) {
@@ -138,11 +216,13 @@ export function createPreferencesStore(ports) {
     try {
       domainHandle = await ports.openStorageDomain(PREFERENCES_DOMAIN_SPEC);
       table = domainHandle.table(PREFERENCES_TABLE);
+      scopeIndexTable = domainHandle.table(SCOPE_INDEX_TABLE);
       degraded = false;
       degradedReason = null;
     } catch {
       domainHandle = null;
       table = null;
+      scopeIndexTable = null;
       degraded = true;
       degradedReason = 'storage_open_failed';
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage domain is unavailable', { retryable: true });
@@ -162,6 +242,7 @@ export function createPreferencesStore(ports) {
       const closing = domainHandle;
       domainHandle = null;
       table = null;
+      scopeIndexTable = null;
       await closing.close?.();
     }
   }
@@ -414,7 +495,8 @@ export function createPreferencesStore(ports) {
         }
 
         ports.assertScopeCurrent(scopeEpoch, scope);
-        trackEnabled(scope, expertId, validated.data.enabled);
+        const enabledSet = trackEnabled(scope, expertId, validated.data.enabled);
+        await persistScopeIndex(scope, enabledSet);
         viewVersion += 1;
         settlements.set(editToken, {
           expertId,
@@ -480,7 +562,8 @@ export function createPreferencesStore(ports) {
         ports.onPreferenceChanged?.({ scopeEpoch, expertId, viewVersion });
         return { invalidated: true, degraded: true };
       }
-      trackEnabled(scope, expertId, false);
+      const enabledSet = trackEnabled(scope, expertId, false);
+      await persistScopeIndex(scope, enabledSet);
       viewVersion += 1;
       ports.onPreferenceChanged?.({ scopeEpoch, expertId, viewVersion });
       return { invalidated: true, revision: resetRecord.revision };
@@ -493,7 +576,7 @@ export function createPreferencesStore(ports) {
 
   async function listConfirmedEnabled({ scope, expertIds = null }) {
     if (closed || !table || degraded) return [];
-    const ids = Array.isArray(expertIds) ? expertIds : [...(knownEnabledByScope.get(scopeIndexKey(scope)) ?? [])];
+    const ids = Array.isArray(expertIds) ? expertIds : [...hydrateScopeIndex(scope)];
     const results = [];
     for (const expertId of ids) {
       const key = derivePreferenceKey({ ...scope, expertId });
