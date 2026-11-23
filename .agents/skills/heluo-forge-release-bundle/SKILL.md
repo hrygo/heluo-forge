@@ -79,7 +79,7 @@ HELUO_IAM_ALLOW_INSECURE_HTTP=<true 仅内网 http 且已确认>
 HELUO_GITEE_HOST=<gitee host>
 ```
 
-`HELUO_IAM_SCOPES` 显式写 `openid profile`：私版未设置该键时不写 scopes，插件默认值含 `offline_access`，而 6.0.3 换票直接返回刷新令牌、不要求该范围，多带只会扩大授权面。不要填写 `HELUO_IAM_GATEWAY_RESOURCE`：6.0.3 不支持 `resource` 参数，留空即不写该键。`HELUO_IAM_PROFILE_FIELDS` 只在 IAM 书面确认字段名后填写，未确认时删除该行，账户面板不显示姓名而登录不受影响。
+`HELUO_IAM_SCOPES` 显式写 `openid profile`：私版未设置该键时不写 scopes，插件默认值含 `offline_access`，而 6.0.3 换票直接返回刷新令牌、不要求该范围，多带只会扩大授权面。不要填写 `HELUO_IAM_GATEWAY_RESOURCE`：6.0.3 不支持 `resource` 参数，留空即不写该键。`HELUO_IAM_PROFILE_FIELDS` 只在 IAM 书面确认字段名后填写，未确认时删除该行，账户面板不显示姓名而登录不受影响。写成 `键=claim` 逗号分隔对，键只能是 `workNo`/`name`，claim 名只接受 token；键重复、缺 `=` 或 claim 非法时制包直接报 `CONFIG_INVALID`，不会静默丢弃映射。
 
 `HELUO_IAM_DEFAULT_PROVIDER` 使用企业网关的模型路由标识；不确定时向打包人员确认，不要编造。Gitee 未提供时删掉该行。使用 Discovery URL 时 issuer 由文档提供，私版不写入 `issuer`；未配置 Discovery 时，须同时提供 `HELUO_IAM_ISSUER`、`HELUO_IAM_AUTHORIZATION_ENDPOINT`、`HELUO_IAM_TOKEN_ENDPOINT` 和 `HELUO_IAM_JWKS_URI`。授权码换票和刷新使用同一个 `tokenEndpoint` 及登记的同一种认证方法；实际端点和方法须联调确认。仅兼容部署可用 `HELUO_IAM_AUTH_MODE=public`（或省略），方法省略或填 `none`，省略 `HELUO_IAM_CLIENT_SECRET_REF`。机密模式下，显式 `HELUO_IAM_ALLOW_INSECURE_HTTP=true` 同时写入 Host 策略 `allowInsecureClientAuthHttp: true`。
 

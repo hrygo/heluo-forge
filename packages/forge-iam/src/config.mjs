@@ -2,7 +2,10 @@ import { validateManagedModels } from './model-options.mjs';
 import { parseHttpUrl, parseHttpsOrLoopbackUrl, parseRedirectUri } from './http-url.mjs';
 
 // RFC 7230 token: the only shape accepted for a header name, a header value and
-// a claim name. Anything else could break or split the request.
+// a claim name. A field-value may legally carry obs-text and separators, so this
+// is a deliberate narrowing: no deployed gateway value needs those characters,
+// and staying at token level is what stops a newline or a second header from
+// being smuggled in through configuration.
 const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 
 // Mirrors userinfo.PROFILE_FIELD_KEYS. config.mjs also ships in the standalone

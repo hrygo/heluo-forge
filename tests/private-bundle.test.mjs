@@ -825,6 +825,15 @@ test('profile fields refuse unknown keys, missing pairs and non-token claims', (
   }
 });
 
+test('a repeated profile key is refused instead of shipping an empty mapping', () => {
+  // Dropping the mapping would leave the account panel blank with a green build,
+  // which is exactly what this key is meant to prevent.
+  for (const value of ['workNo=work_no,workNo=pinyin', 'name=pinyin,workNo=work_no,name=work_no']) {
+    const entries = parseEnvConfig([...ENV, `HELUO_IAM_PROFILE_FIELDS=${value}`].join('\n'));
+    expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
+  }
+});
+
 test('the shipped profile mapping passes the plugin schema', () => {
   const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=name=pinyin,workNo=work_no'].join('\n'));
   const { iam } = buildConfig(entries);
