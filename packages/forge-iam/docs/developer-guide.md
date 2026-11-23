@@ -18,10 +18,11 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 
 | 配置 | 默认值 | 语义 |
 |---|---|---|
-| `clientId` | 空 | 必需的预注册客户端标识；public 无 secret，隔离 confidential 按显式 Basic/Post 认证。 |
-| `authMode` | `public` | public 保持兼容默认；confidential 还要求具体受信私有来源与独立认可，真实 apply 不注入。 |
-| `clientAuthMethod` | `none` | public 仅 none；confidential 必须显式 client_secret_basic/client_secret_post，不猜测端点支持。 |
-| `clientSecretRef` | 不产生 | 仅 confidential 配置的非空逻辑 selector；不是 SDK 引用、环境变量、路径或记录 key，不触发凭据读取。 |
+| `clientId` | 空 | 必需的预注册客户端标识。 |
+| `authMode` | `public` | public 为兼容默认。要求认证客户端的部署显式使用 confidential。 |
+| `clientAuthMethod` | `none` | public 使用 none。confidential 显式选择 IAM 登记的 `client_secret_basic` 或 `client_secret_post`。 |
+| `clientSecretRef` | 不产生 | confidential 必填的非秘密选择器，匹配 `^[a-z][a-z0-9-]*$`，对应加密记录 `iam-client-secret/<ref>`。 |
+| `allowInsecureClientAuthHttp` | `false` | 仅 confidential 接受此可选布尔字段。仅为 `true` 时，Host 允许携带客户端密钥的 POST 使用 HTTP。 |
 | `discoveryUrl` | 空 | 用于补齐缺失的 issuer、授权、token 或 JWKS 端点。 |
 | `issuer` | 空 | 不使用 discovery 时必需；作为明确的发行者 pin。只配 discovery 仍可配置登录，但旧 grant 复用要求明确 pin 或本实例已验证的 metadata issuer，不能由旧记录自行提供信任。 |
 | `authorizationEndpoint` / `tokenEndpoint` / `jwksUri` | 空 | 无 discovery 时与 issuer 一起必需；显式值优先。 |
@@ -46,15 +47,15 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
 
-显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。协议端点和网关地址接受 HTTP 或 HTTPS；HTTP 不提供传输加密或端点身份认证，令牌、客户端 secret、网关 Key 与业务内容可能被窃取或篡改，OIDC 公钥经 HTTP 获取时签名校验也不能防止网络替换公钥。回调须符合 IAM 登记规则；这里没有已验证的生产配置模板。
+显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。Host 在机密换票、刷新和回调失败撤销 POST 发送前核验实际端点，默认要求 HTTPS。其他端点和网关地址接受 HTTP 或 HTTPS。HTTP 会以明文传输令牌、密钥与业务内容；经 HTTP 获取 OIDC 公钥时，网络可以替换公钥。回调须符合 IAM 登记规则。
 
-所有模式强制 PKCE S256，不能关闭。实际服务已接入隔离 confidential 的授权码、刷新、有效 AT、V2 恢复及回调清理的认证撤销；这些机密认证操作要求具体受信 source/credentials/精确 binding 的独立认可。普通退出则使用 AT 自证 GET，不读取 secret。真实 apply 不传 getClientSecretSource/verifyClientSecretSource；缺失、伪造或异步认可在机密认证操作构造或使用前拒绝，不发送带凭据 POST。配置通过不等于真实来源可用。
+两种模式都强制 PKCE S256。授权码换票、刷新和回调失败清理的撤销 POST 共用配置的机密认证方法。普通退出默认使用 AT 自证 GET。机密模式由 [Host](<../src/index.mjs>)注入内置凭据组合注册的 `iam-client-secret-source`，校验具体凭据实例身份与配置绑定。缺少来源或记录时拒绝机密请求。
 
-[认证 helper](<../src/client-auth.mjs>)与实际服务共同完成隔离来源固定、操作检查和 HTTP 认证，不是原生秘密来源。它不发现 ctx 隐藏来源、不使用环境/文件后备，不从通用 credentials.resolve 推导信任。公共配置带 selector、部分机密配置、原文 secret、自定义认证 header/body 或关闭 S256 均拒绝；其余未知普通字段仍会被忽略。正式 secret 下发、平台存储、远端轮换与生产接入仍未完成。
+[认证实现](<../src/client-auth.mjs>)固定来源与操作绑定，并组装 HTTP 请求。密钥只由专用记录供应。公共配置带 selector、机密配置缺字段、配置含原文 secret、自定义认证 header/body 或停用 S256 均拒绝。预置、轮换及终端配置见[管理员指引](credential-access.md#9-管理员预置与轮换-iam-客户端密钥)。
 
-## 隔离机密服务与会话边界
+## 机密客户端与会话边界
 
-机密测试由实际服务工厂与 localhost mock IdP 驱动，不只是检查请求 helper。测试组合独立认可精确 credentials/source/issuer-clientId-ref-method；source、getter、verifier 或 revision 变化后，旧操作不能借新来源继续。secret 只在来源及短时操作内存中使用，attempt 只保存非秘密 pin，不存原 snapshot 或捕获秘密的闭包。Basic 对标识和 secret 分别 form 编码，Post 只在表单认证；失败不自动换方法。
+来源独立核对 credentials、source 和 issuer/clientId/ref/method。插件在网络和写入边界复验来源及记录 revision 的连续性。attempt 只保存非秘密绑定。Basic 分别对标识和 secret 做表单编码，Post 在表单携带客户端参数。认证方式在两种 grant 之间固定。
 
 public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 authContext，不迁移 V1。两种会话均要求 `sessionInstanceId`，缺少时不被采用。机密 grant 的方法、selector 或 revision 不符时拒绝；有效 AT、恢复、共享刷新完成和最终 token 返回同样复验来源。V2 不是防旧 writer 回滚机制，测试组合不混跑可覆盖同一键的旧 writer。
 
@@ -62,7 +63,7 @@ public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 auth
 
 普通 signOut 校验受信存储、issuer 和客户端绑定及完整 grant 快照，但不读取 secret；来源消失后，满足这些条件的冷启动 V2 仍可用 AT 自证撤销并完成本地清理。撤销失败或结果未确认时保留 pending，不报告清理完成、不重发旧令牌；不同 issuer、客户端或不匹配的会话快照不盲删。回调失败后的认证 POST 清理仍要求原来源及认证上下文有效。
 
-这些正向仅由私有测试工厂注入。手工启动 mock IdP 或修改部署配置不会自动获得来源；没有可供生产直接复制的机密配置模板。正式管理员预置、系统钥匙串与轮换管理仍待设计和验证。
+离线测试覆盖实际 Host 注入、管理员 CLI、SQLite 存储和 mock IdP。企业 IAM 登记、终端预置和实际续期须在目标环境独立取证。
 
 ### 隔离会话见证不授予业务权限
 
@@ -344,17 +345,22 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 
 自动续期和面板同步遇到 SQLite 首次读锁 `CRED_LOCK_TIMEOUT` 时，Host 暂停令牌消费并安排一次 1 秒后的凭据重读。面板轮询共享该重试，持续锁争用时每次失败后继续退避。读回同一绑定中的有效授权后，Host 发布授权、状态和错误码，账号页与服务会话据此恢复。迟到的计时器读锁错误将到期时间交给当前的同一授权重读，包括正在观察 `pending` 的读取。若确认请求未发送且原授权已还原，Host 保留原续期时间，到期后的退避受剩余刷新有效期限制。网关摘要独立核验，普通账号切换等待摘要返回后再次校验当前会话的凭据库和客户端认证绑定。所有 `pending` 等待均固定原子信任绑定及观察截止时间，换绑后旧等待失败关闭。读取后的 claim、Token 端点和提交继续遵守防重放协议。
 
-Host 将会话续期事件写入 `$DSH_HOME/logs/forge-iam-session-renewal.jsonl`。`DSH_HOME` 为空时使用 `~/.dsh/logs/forge-iam-session-renewal.jsonl`。按故障时间查找对应记录，使用 `hostId` 区分插件运行实例，使用 `renewalId` 关联同一实例的后台计时器与刷新尝试。每条记录包含 UTC 时间和插件版本，到期时间和计时器截止时间使用 Unix 毫秒值。
+Host 将授权码换票失败和会话续期事件写入 `$DSH_HOME/logs/forge-iam-session-renewal.jsonl`。`DSH_HOME` 为空时使用 `~/.dsh/logs/forge-iam-session-renewal.jsonl`。按故障时间查找对应记录，使用 `hostId` 区分插件运行实例，使用 `renewalId` 关联同一实例的后台计时器与刷新尝试。每条记录包含 UTC 时间和插件版本，到期时间和计时器截止时间使用 Unix 毫秒值。
 
 每个日志目录保留 1 MiB 活跃文件和一份 1 MiB 的 `.1` 归档，写入时清理已超限的旧文件。共享实际目录的 Host 使用同名 `.lock.sqlite` 空文件串行执行大小检查、轮转和追加。目录重定向使用实际目录的同一把锁，进程退出由操作系统释放该锁。每进程每路径最多积压 128 条待写事件，包含正在写入的一条。争用锁最多等待 250 毫秒，锁等待超时、队列满或 I/O 失败时舍弃对应事件并发出固定告警。日志队列独立于续期和卸载。
 
 | 事件 | 排查内容 |
 |---|---|
 | `host-start`、`host-stop`、`binding-changed`、`session-state`、`store-sync` | 插件装卸、凭据与原子存储绑定、会话状态、读库与跨 Host 轮换观察 |
+| `code-exchange-failed` | 授权码换票的 Token 端点 HTTP 错误与请求认证方式 |
 | `renewal-scheduled`、`renewal-fired`、`renewal-blocked`、`renewal-cancelled`、`renewal-failed` | 计划时间、实际触发延迟、退避以及跳过、取消或失败原因 |
 | `refresh-stage`、`refresh-retry`、`refresh-failed`、`refresh-committed`、`refresh-adopted` | 凭据读取、Discovery/JWKS、刷新占位、Token 请求与校验、条件提交、同一会话的已确认轮换 |
 
-`refresh-failed` 的 `code` 表示 Host 对调用方返回的错误分类，`causeCode` 记录已登记的内部错误。IAM 响应可附 `httpStatus` 和标准 `oauthError`。`timedOut` 表示观察到本地请求超时，`requestUnsent` 表示传输层已确认请求未送出。`refresh-committed` 在存储确认新令牌后记录，可用新的到期时间核对授权是否延长。日志字段使用白名单，凭据、账号标识、地址、请求和响应原文及异常堆栈均不采集。日志写入失败由 Host 报固定警告，认证按正常路径执行。
+`refresh-failed` 的 `code` 表示 Host 对调用方返回的错误分类，`causeCode` 记录已登记的内部错误。换票和刷新收到 Token 端点错误响应时，失败记录包含 `httpStatus` 和实际采用的 `clientAuthMethod`。标准 OAuth 错误在同一条记录中写入 `oauthError`。HTTP 401 缺少标准错误码时，同一条记录的 `oauthErrorResponse` 取值为 `empty`、`nonstandard` 或 `unreadable`。
+
+`clientAuthMethod=none` 表示请求未发送客户端认证。`oauthError=invalid_client` 表示服务端拒绝客户端认证，`refresh-failed` 上的 `oauthError=invalid_grant` 表示服务端拒绝刷新授权。空或非标准响应的拒绝原因由 IAM 登记和服务端记录确认。 [RFC 6749 §5.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-5.2)
+
+`timedOut` 表示观察到本地请求超时，`requestUnsent` 表示传输层已确认请求未送出。`refresh-committed` 在存储确认新令牌后记录，可用新的到期时间核对授权是否延长。日志字段使用白名单，排除凭据、账号标识、地址、请求和响应原文及异常堆栈。日志写入失败时 Host 发出固定告警。
 
 ## 限制与生产门禁
 

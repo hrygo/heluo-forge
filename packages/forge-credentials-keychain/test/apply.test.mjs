@@ -39,6 +39,7 @@ test('apply registers credentials with an explicitly allowed ephemeral backend',
   const backend = createMemoryBackend();
   const dispose = apply(ctx, { backend, allowEphemeral: true });
   assert.equal(typeof ctx.provided.get('credentials')?.resolve, 'function');
+  assert.equal(ctx.provided.has('iam-client-secret-source'), false);
   assert.equal(ctx.effects.length, 1);
   await dispose();
   assert.equal(ctx.provided.has('credentials'), false);

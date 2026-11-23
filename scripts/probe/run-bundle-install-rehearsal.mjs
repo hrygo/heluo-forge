@@ -336,6 +336,17 @@ try {
     ...auditReleaseClosure(engineeringDir, { allowInstalledBinLinks: true }),
   ];
   record('installed-final-tarball-closure', closure.length === 0, { errors: closure, isolatedEmptyCache: true, registryUnreachable: true });
+  const installedIamCli = join(enterpriseDir, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  const provision = spawnSync('node', [
+    installedIamCli, 'client-secret', 'set', '--issuer', 'https://iam.corp.example',
+    '--client-id', 'forge-console', '--method', 'client_secret_post', '--ref', 'enterprise-oidc',
+  ], {
+    env: { ...isolatedEnv, HELUO_FORGE_STORE_DIRECTORY: join(dir, 'provisioning-store') },
+    encoding: 'utf8',
+    input: 'synthetic-client-secret-for-rehearsal',
+  });
+  record('installed-iam-client-secret-provision', provision.status === 0
+    && provision.stdout === '已预置 IAM 客户端密钥。\n' && provision.stderr === '');
   const base = dump();
   const patched = dump([
     join(enterpriseDir, 'cordis.patch.yml'),

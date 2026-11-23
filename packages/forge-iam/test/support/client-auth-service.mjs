@@ -11,7 +11,7 @@ export async function confidentialHarness(t, method = 'client_secret_basic', { c
   t.after(() => mock.close());
   const fixture = createClientSecretFixture(credentials, { issuer: mock.issuer, clientId: mock.clientId, method, value });
   const config = { ...mock.endpoints, ...fixture.config, redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    httpTimeoutMs: 2000, ...extraConfig };
+    httpTimeoutMs: 2000, allowInsecureClientAuthHttp: true, ...extraConfig };
   // This harness has no host; retain caller-provided and loopback origins.
   const redirectUri = config.redirectUri;
   const fixtureOrigin = redirectUri && config.callbackPort == null && !Object.hasOwn(extraOptions, 'getCallbackOrigin')

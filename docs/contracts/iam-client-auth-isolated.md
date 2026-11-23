@@ -1,13 +1,13 @@
-# IAM 机密客户端隔离开发契约
+# IAM 客户端认证契约
 
 ## 文档信息
 
 | 项 | 内容 |
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
-| 文档名称 | IAM 机密客户端隔离开发契约 |
-| 版本 | V1.0.0 |
-| 文档状态 | 生效 |
+| 文档名称 | IAM 客户端认证契约 |
+| 版本 | V1.1.2 |
+| 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
@@ -17,13 +17,12 @@
 | 确认人 | 项目负责人 |
 | 确认日期 | 2026-11-02 |
 | 确认事项 | 批准 IAM-002 与 DESIGN-016 进入 source/mock 实施 |
-| 适用范围 | 可选机密客户端的隔离契约；生产 G1 待取证 |
-| 门禁 | 用户已批准 source/mock 设计；真实来源关闭，生产 G1 未关闭 |
-| 交付门禁 | 用户已批准 source/mock 设计；生产 G1 未关闭 |
+| 适用范围 | 可选机密客户端的 source/mock 隔离契约 |
+| 门禁 | 目标 IAM 客户端登记、实际终端凭据预置及正常计划续期须通过 G1 核验 |
 
-> 适用范围：企业交付采用公开客户端 + PKCE S256（`authMode=public`、`clientAuthMethod=none`），不包含共享 `client_secret`；本契约只约束可选的机密客户端隔离路径。
+> 适用范围：使用授权码与 PKCE S256 的 IAM 登录。要求刷新请求认证客户端的企业部署采用 `authMode=confidential`。客户端认证方法与 IAM 的 `token_endpoint_auth_method` 一致。
 >
-> 编制依据：用户于 2026-11-02 选择管理员预置的隔离基线并批准完整设计进入 source/mock 实施。本契约定义本包的配置、私有组合参数和记录格式。实际隔离服务已接入 Basic/Post 的 code/refresh/revoke、V2 会话、共享刷新与 cleanup，不代表 SDK 新增接口、供应商能力或生产批准。
+> 编制依据：[issue #408 的 IAM 核对结论](https://github.com/hrygo/heluo-forge/issues/408#issuecomment-7034227656)、现有来源隔离与 Host 单记录契约，以及仓库内的组合和离线用例。事故部署的登记方法、正常续期和实际平台交付仍待联合核验。
 >
 > 关联文档：[隔离开发设计](<../design/iam-confidential-isolated.md>)、[现行 IAM 模块](<../design/plugins/forge-iam.md>)、[IAM 回函](<../collaboration/iam-confirmation-letter.md>)。
 
@@ -31,19 +30,20 @@
 
 | 字段 | 提案值与约束 | 语义 |
 |---|---|---|
-| authMode | public / confidential；省略等价 public | 当前企业交付采用 public；confidential 仅为可选隔离路径，真实来源与生产准入仍关闭 |
-| clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | code、refresh、revoke 同一方法，不根据 discovery、401 或失败响应猜测/切换 |
-| clientSecretRef | 仅 confidential 必填非空逻辑 selector | 仅匹配 synthetic source，不是 SDK CredentialRef、CredentialKey、路径或环境变量名，不触发 resolve/readRecord |
+| authMode | public / confidential；省略等价 public | public 适用于 IAM 明确允许无客户端认证换票与刷新的部署；要求客户端认证时显式使用 confidential |
+| clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | 授权码换票、刷新和 `rfc7009` 模式的撤销 POST 共用登记方法 |
+| clientSecretRef | 仅 confidential 必填；匹配 `^[a-z][a-z0-9-]*$` | 指向当前凭据命名空间内的 IAM 专用记录 `iam-client-secret/<ref>` |
+| allowInsecureClientAuthHttp | 仅 confidential 接受可选布尔值；缺省为 `false` | 仅在显式为 `true` 时允许通过 HTTP 读取 Discovery 或发送客户端认证 POST |
 
-公共配置出现任何 clientSecretRef（包括空、null 或显式 undefined）均拒绝；正常 public 归一化结果不产生此键。归一化结果再次验证仍有效。未知 mode/method、部分机密配置、原始 clientSecret/client_secret、自定义 Authorization 或认证 body 覆盖均拒绝；不能静默回落 public。pkce/aigs 不作为本阶段 authMode，plain、关闭 PKCE 或其他降级分支不开放。现行 schema 与实际服务支持该联合；confidential 必须由可信隔离组合注入具体来源与独立认可。真实 apply 无来源，缺失或非法认可仍固定拒绝，不能凭配置启用。
+公共配置出现任何 clientSecretRef（包括空、null 或显式 undefined）均拒绝；正常 public 归一化结果不产生此键。未知 mode/method、部分机密配置、原始 clientSecret/client_secret、自定义 Authorization 或认证 body 覆盖均拒绝。缺少来源、凭据或精确认可时拒绝机密登录和刷新。Discovery、401 和其他响应均不触发认证方式切换。
 
-所有模式保持现有 mandatory PKCE S256、state、nonce、code_verifier。字段只属于本包 source/mock 提案；没有 editor 开关或原生来源自动发现能解除真实来源门禁。
+所有模式要求 PKCE S256、state、nonce 和 code_verifier。私版注入模式、方法及非秘密引用。使用 HTTP 的企业 IAM 沿用制包项 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。机密模式的私版据此自动注入 `allowInsecureClientAuthHttp: true`，适用于 HTTP Discovery 和它选出的 HTTP 端点。密钥预置和轮换走凭据存储的独立运维入口。
 
-**机密客户端轮换答复（2026-11-03 IAM 答复，未联调）**：当时书面答复为企业共用一个 client_id；client_secret 只能人工轮换，后台更新后最迟两分钟经缓存生效；轮换不会作废已发出的访问令牌（按 7200 秒自然过期），刷新接口须同时携带 secret，因此旧刷新令牌在 secret 更换后实际不可用。这些 secret 规则针对机密客户端，不作为当前 public 客户端的刷新要求。本契约对可选机密路径采用更严格的本地策略：认证上下文（method/ref/revision）改变后不采用旧 AT/RT，需新登录；不得用新 secret 重放旧 RT。轮换后至少等待两分钟再判定失败，不在该窗口内反复重建来源或切换方法。本项目内部使用，client_id/client_secret 泄露不在评估范围（用户 2026-11-03 决定，视为无影响）；凭据存放与轮换按存储和运维要求执行。依据见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
+**轮换**：认证上下文（method/ref/revision）变化后需新登录。Host 拒绝采用旧 AT/RT，禁止用新 secret 重放旧 RT。IAM 书面答复称 secret 由管理员轮换，后台更新最迟两分钟经缓存生效，既发 AT 自然过期。实际生效窗口与目标端点行为须联调核验。见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
 
 ## 2. 私有只读来源
 
-以下为已接入隔离服务的私有工厂参数，不是 Cordis Service、SDK API、Remote、HTTP、Client 或配置字段：
+IAM 服务工厂使用以下私有参数。真实 Host 从凭据组合的内部 `iam-client-secret-source` 端口装配它们：
 
 ```ts
 type SecretBinding = Readonly<{ issuer: string; clientId: string; ref: string }>;
@@ -61,14 +61,15 @@ verifyClientSecretSource?: (
 ) => boolean;
 ```
 
-- getter 同步返回同一作用域内的具体 source；替换/解绑就是新作用域。真实 apply 不传 getter/verifier，也不探测 ctx 中的隐藏来源。
-- verifier 由可信 fixture 组合提供，仅对已认可的具体 credentials/source/精确 issuer-clientId-ref-method 返回同步字面 true。缺失、false、抛错或 Promise 均不能授权；异步拒绝收敛但不等待为 true。它独立于 IAM grant 单记录与网关联合能力证明；自报 trusted/keychain/atomic 或方法形状不作证明。
+- 仅内置加密 SQLite 凭据组合注册 `iam-client-secret-source`，并按身份核对同一 `credentials` 实例。Host 在 confidential 模式注入该端口，为同一绑定返回稳定 source；端口解绑或重绑使已捕获的来源失效。
+- verifier 在当前注入作用域检查具体 credentials、source、配置的 clientId/ref/method；记录读取再精确核对 issuer/clientId/method。只有同步字面 `true` 通过。凭据的来源证明独立于 IAM grant 单记录及网关联合写入能力。
 - binding 冻结且不交给来源修改。read 只捕获一次完整内存快照，缺失不查找第二来源；service 独立核对五字段类型、精确 binding、非空 revision/value，不 trim secret。
-- fixture 预置的 snapshot 为不可变数据；替换、删除、恢复都更换 revision，不复用 ABA 版本。source 的同步 isCurrent 只对原快照且仍为本地 current 返回字面 true；Promise、缺失、异常或非 true 视为失效。
+- 当前凭据命名空间的 `iam-client-secret/<ref>` 保留给专用存储端口。通用 provider、离线记录读取和联合操作拒绝访问该域，枚举在解密前跳过。离线 CLI 的专用检查仅返回绑定与 revision 是否匹配。此边界约束凭据接口，文件保护仍依赖操作系统权限。
+- 加密记录沿用 `{ kind: 'grant', payload: { issuer, clientId, method, value } }` 的存储表示，已有预置记录和 revision 可继续使用。每次写入产生新加密信封。`revision` 取已认证信封的摘要。同步 `isCurrent` 确认当前存储可读，并按原快照核对当前行。密钥文件不可用、记录删除或重写时，快照失效。隔离 fixture 同样提供不可变快照和同步检查。
 - service 保留原快照仅用于身份检查，另取私有字段副本用于请求与 pin；每个使用边界检查原数据仍匹配副本，不能让来源改写调用方的秘密或比较基准。
-- value 仅在 fixture 内存和短时 HTTP 操作中可达，不放入 attempt、grant、pending、view、诊断、错误、日志、argv 或交付物。secret、revision、ref 不由客户端上传或生成可信证明。
+- secret 原值仅进入管理员标准输入、加密记录的读写及必要 HTTP 操作；attempt、会话 grant、pending、view、诊断、错误、日志、argv 和交付物均不携带原值。
 
-本阶段不定义真实 secret 持久格式、写入 API、管理员工具、MDM、环境变量、文件回落或 native adapter。系统钥匙串生产适配另行设计；普通 SDK resolve 有环境回落，不能直接用于本契约。
+管理员使用 `heluo-forge client-secret set` 在目标 Host 使用的目录和命名空间预置或轮换。该命令更新已有引用时须匹配原 issuer/clientId/method。更正同一引用的绑定使用 `client-secret replace`，从标准输入读取密钥，在同一次单记录更新中检查原 issuer/clientId/method 并写入新绑定。记录缺失或旧绑定不符时中止更新并返回 `IAM_CLIENT_SECRET_BINDING_MISMATCH`。来源直接读专用加密记录，任何环境变量、配置值和其他凭据引用都不能提供 secret。运维步骤见 [IAM 凭据接入指南](../../packages/forge-iam/docs/credential-access.md)。
 
 ## 3. HTTP 认证
 
@@ -80,9 +81,11 @@ verifyClientSecretSource?: (
 | client_secret_basic | Basic；clientId、secret 分别 form-urlencoded 后以冒号连接，再 UTF-8/Base64 | 不放 client_id/client_secret 认证参数 |
 | client_secret_post | 无 | URLSearchParams 编码 client_id/client_secret |
 
-共享纯构造函数供 code、refresh、revoke 及失败 cleanup 使用。secret 不进授权 URL、重定向或日志；Basic 编码串也视为秘密。端点接受 HTTP(S)，保留 redirect:error、超时、取消和现有资源/回调上下文；HTTP 不提供传输加密或端点身份认证，secret 与令牌可能被窃取或篡改。POST 是显式兼容选项，不是推荐默认；不得自动 Basic↔Post 切换、无认证降级或重试。
+机密模式实际读取 Discovery 时默认要求 HTTPS。未显式启用 `allowInsecureClientAuthHttp` 的 HTTP Discovery 在发出请求前返回 `IAM_CONFIG_INVALID`。显式配置已提供当前操作所需的端点和 issuer 时直接使用显式配置。
 
-依 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)，有客户端凭据时撤销也认证；真实 IAM 的方法、token/revoke 能否采用同一选择仍待供应商确认。本地 fixture 接受某方法不证明真实端点接受。
+共享纯构造函数供授权码换票、刷新及 `rfc7009` 模式的撤销 POST 使用。发送前按实际选定的端点校验协议，包括运行时 Discovery 返回的端点。机密 POST 默认要求 HTTPS，显式启用 `allowInsecureClientAuthHttp` 时允许 HTTP。拒绝换票或刷新时返回 `IAM_CONFIG_INVALID`，撤销端点拒绝归入 `failed` / `IAM_REVOKE_ENDPOINT_INVALID`。刷新在写入 pending 前预检端点。保留 `redirect: 'error'`、超时、取消和现有资源/回调上下文。HTTP 会以明文传输 secret 与令牌。secret 和 Basic 编码串仅在必要的 POST 中使用。每次请求固定使用已配置的方法。
+
+退出和失败回调清理共用 `revocationMode`。标准私版使用默认的 `access_token_query`，向 D1 端点发送访问令牌自证 GET。D1 回执只覆盖访问令牌。Host 显式配置 `rfc7009` 时，两个入口均使用表单 POST 及配置的客户端认证；有刷新令牌时优先撤销刷新令牌。目标端点对该方法的支持须独立验证。 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)
 
 ## 4. 会话与记录隔离
 
@@ -103,5 +106,9 @@ verifyClientSecretSource?: (
 | IAM_CLIENT_AUTH_CONTEXT_INVALID | 当前 grant 与所选模式/方法/ref/revision 不符；需新登录 | 401 |
 
 三个 IAM_CLIENT_AUTH_* 码已由实际管理 handler 验证503/409/401；不据此宣称 IAM_CONFIG_INVALID 已映射400。消息固定，不附 source 异常、原始响应、secret、ref、完整 snapshot、header 或表单。既有 OAuth 标准码只允许精确白名单；unknown/mixed error 不保留。成功业务响应不因错误脱敏而被删改。
+
+授权码换票和刷新收到 Token 端点 HTTP 错误时，失败记录包含 `httpStatus` 和实际采用的 `clientAuthMethod`。标准 OAuth 错误在同一条记录中写入 `oauthError`。HTTP 401 缺少标准错误码时，同一条记录的 `oauthErrorResponse` 取值为 `empty`、`nonstandard` 或 `unreadable`。空或非标准响应的拒绝原因由 IAM 登记与服务端记录确认。
+
+机密续期因 SQLite 读锁无法完成凭据快照复核时，失败返回 `IAM_CREDENTIALS_UNAVAILABLE`（503），日志记录 `CRED_LOCK_TIMEOUT`。发起方确认写入本次 pending 后，首次复核若遇到该超时，在准备发送前按 SQLite 读时限再核验一次同一凭据快照。仅在原绑定仍有效、完整 pending 匹配且原子还原得到确认后，才安排续期重试。
 
 检查只能拒绝可观察的旧结果，不能撤回已发请求、证明远端旧 secret 失效、远端 token 后代撤销或跨进程一致。IAM 答复旧访问令牌不随 secret 轮换作废；按范围前提，轮换按运维窗口执行。未知不补偿、不借新来源重试。secret 不可用时，本地退出仍按既有精确快照和受信 grant 规则处理；远端 revoke 不发送无认证请求，不盲删其他模式/主体记录，结果如实标未确认。

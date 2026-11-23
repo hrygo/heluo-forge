@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIamService } from './support/trusted-service.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
+import { createClientSecretFixture } from './support/client-secret-source.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 
 const config = {
@@ -163,6 +164,73 @@ test('same-Host sign-out revokes the confirmed refresh without publishing its to
   assert.equal(renewalEvents.some(({ event, renewalId }) => event === 'refresh-failed' && renewalId === handoffs[0].renewalId), false);
   assert.doesNotMatch(JSON.stringify(renewalEvents), /synthetic-new-(?:access|refresh)/);
 });
+
+async function signOutWhilePinReadWaits(t, stage, dispatched) {
+  const credentials = new MemoryCredentials();
+  const fixture = createClientSecretFixture(credentials, { issuer: config.issuer, clientId: config.clientId });
+  await createGrantStore(credentials).write({
+    version: 2, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer,
+    subject: 'synthetic-user', clientId: config.clientId, scope: 'openid',
+    refreshToken: 'synthetic-old-refresh', accessToken: 'synthetic-old-access',
+    obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+    authContext: { mode: 'confidential', method: fixture.config.clientAuthMethod,
+      secretRef: fixture.config.clientSecretRef, secretRevision: fixture.snapshot().revision },
+  });
+  const entered = deferred();
+  const release = deferred();
+  let waitForRead = false;
+  const source = {
+    ...fixture.source,
+    async retryRead(_snapshot, check) {
+      if (waitForRead) {
+        waitForRead = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return check();
+    },
+  };
+  const requests = [];
+  const service = createIamService({ ...config, ...fixture.config }, {
+    ...fixture.options,
+    getClientSecretSource: () => source,
+    verifyClientSecretSource: (candidate, current) => candidate === credentials && current === source,
+    logRenewal(event, fields) {
+      if (event === 'refresh-stage' && fields.stage === stage) waitForRead = true;
+    },
+    async fetch(url, { method }) {
+      const { pathname, searchParams } = new URL(url);
+      if (pathname === '/jwks') return Response.json({ keys: [] });
+      if (pathname === '/token') {
+        requests.push({ path: pathname, method });
+        return Response.json({ access_token: 'synthetic-new-access', refresh_token: 'synthetic-new-refresh', token_type: 'Bearer', expires_in: 3600 });
+      }
+      requests.push({ path: pathname, method, accessToken: searchParams.get('access_token') });
+      return Response.json({ result: true });
+    },
+  });
+  t.after(() => { release.resolve(); return service.dispose(); });
+  const blockedGetter = assert.rejects(service.resolveToken(), { code: 'IAM_DISPOSED' });
+  await Promise.race([entered.promise, blockedGetter.then(() => assert.fail('the refresh pin read did not wait'))]);
+  const signingOut = service.signOut();
+  release.resolve();
+  const [result] = await Promise.all([signingOut, blockedGetter]);
+
+  assert.equal(result.revocation, 'ok');
+  assert.equal(result.view.state, 'signed-out');
+  assert.deepEqual(requests, [
+    ...(dispatched ? [{ method: 'POST', path: '/token' }] : []),
+    { method: 'GET', path: '/revoke', accessToken: dispatched ? 'synthetic-new-access' : 'synthetic-old-access' },
+  ]);
+  assert.deepEqual(await credentials.readRecord(GRANT_KEY), {
+    kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' },
+  });
+}
+
+for (const [stage, dispatched] of [['token-endpoint', false], ['validate-response', true]]) {
+  test(`same-Host sign-out completes while a confidential refresh pin read waits at ${stage}`,
+    { timeout: 5000 }, (t) => signOutWhilePinReadWaits(t, stage, dispatched));
+}
 
 test('same-Host sign-out cannot consume the result or revoke a replacement login during refresh', { timeout: 5000 }, async (t) => {
   const { credentials, grant, release, requests, service, refresh } = await startLocalRefresh(t, () =>

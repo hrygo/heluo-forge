@@ -278,7 +278,8 @@ for (const [scenario, title] of [
   ['elapsed', 'cannot start a new refresh once its SQLite grant has expired'],
   ['unmatched', 'rejects a pending SQLite receipt from a different grant baseline'],
 ]) {
-  test(`an expired warm model catalogue ${title}`, { timeout: 10_000 }, async (t) => {
+  // Allow real SQLite setup and teardown on slower runners. The service enforces the refresh deadlines.
+  test(`an expired warm model catalogue ${title}`, { timeout: 60_000 }, async (t) => {
     const directory = await mkdtemp(join(tmpdir(), 'forge-gateway-warm-renewal-'));
     const baseURL = 'https://gateway.corp.example/v1';
     const modelConfig = { ...config, defaultProvider: 'enterprise', managedModels: { baseURL } };

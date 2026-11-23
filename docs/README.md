@@ -73,7 +73,7 @@
 | 终端打包 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
 | 试点推广 | 分批计划、指标采集、支持渠道、退出条件，人数与范围见[需求基线](requirements/requirements-baseline.md#2-范围边界唯一真源) |
 
-IAM 隔离开发见[机密认证设计](design/iam-confidential-isolated.md)、[机密客户端契约](contracts/iam-client-auth-isolated.md)和[消费隔离契约](contracts/iam-consumer-isolated.md)。验收证据见[机密客户端实施记录](plans/2026-11-02-iam-confidential-isolated.md)及[消费隔离实施记录](plans/2026-11-02-iam-consumer-isolated.md)。
+IAM 隔离开发见[机密认证设计](design/iam-confidential-isolated.md)、[客户端认证契约](contracts/iam-client-auth-isolated.md)和[消费隔离契约](contracts/iam-consumer-isolated.md)。终端凭据预置与计划续期的验证范围见[IAM 验证记录](design/verification/forge-iam.md)。历史离线验收见[机密客户端实施记录](plans/2026-11-02-iam-confidential-isolated.md)及[消费隔离实施记录](plans/2026-11-02-iam-consumer-isolated.md)。
 
 企业研发跨模块草案：[全流程能力设计](design/plugins/forge-devops-lifecycle.md)、[工具动作契约](contracts/engineering-tools.md)、[观察事件契约](contracts/metrics-events.md)。覆盖已确认受控写目标与待审批项，不改变上述十项团队交付物的负责关系，也不代表接口已核验。
 

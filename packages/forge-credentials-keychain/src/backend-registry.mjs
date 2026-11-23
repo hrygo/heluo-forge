@@ -1,4 +1,5 @@
 import { createCredentialStore } from './credential-store.mjs';
+import { getIamClientSecretRecords } from './encrypted-adapter.mjs';
 
 // Add only implementations whose claimed capabilities are independently
 // covered by contract and cross-process tests. Never trust backend self-reports.
@@ -7,6 +8,7 @@ const BACKENDS = Object.freeze({
   sqlite: Object.freeze({
     create: createCredentialStore,
     capabilities: Object.freeze({ crossProcessLock: true, jointAtomic: true }),
+    iamClientSecretRecords: getIamClientSecretRecords,
   }),
 });
 
@@ -29,5 +31,10 @@ export function createRegisteredBackend(name, options) {
 // This selection is static; injected backends never pass through this function.
 export function createDefaultBackend(options) {
   const selected = registration(DEFAULT_BACKEND);
-  return Object.freeze({ backend: selected.create(options), capabilities: selected.capabilities });
+  const backend = selected.create(options);
+  return Object.freeze({
+    backend,
+    capabilities: selected.capabilities,
+    iamClientSecretRecords: selected.iamClientSecretRecords?.(backend),
+  });
 }

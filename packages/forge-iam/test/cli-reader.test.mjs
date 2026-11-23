@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, fork } from 'node:child_process';
+import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { apply as applyCredentials, setIamClientSecret } from '@heluo/forge-credentials-keychain';
+import { BRIDGE_REF } from '../src/bridge.mjs';
+import { SESSION_RECORD_KEY } from '../src/cli-session.mjs';
 import { refreshBaseId } from '../src/service-helpers.mjs';
 
 const run = promisify(execFile);
@@ -25,6 +29,10 @@ export async function openCredentialReader(options) {
   if (process.env.TEST_OPEN_ERROR) throw error(process.env.TEST_OPEN_ERROR);
   return {
     async readRecord(key) { mark({read:key}); if (process.env.TEST_READ_ERROR) throw error(process.env.TEST_READ_ERROR); reads++; if (reads > 1 && process.env.TEST_RECHECK_ERROR) throw error(process.env.TEST_RECHECK_ERROR); return JSON.parse((reads > 1 && process.env.TEST_RECORD_AFTER !== undefined ? process.env.TEST_RECORD_AFTER : process.env.TEST_RECORD) || 'null'); },
+    async readIamSession(selectBinding) {
+      const record = await this.readRecord('heluo-iam/session');
+      return { record, clientSecretCurrent: selectBinding(record) === undefined };
+    },
     async resolve(key) { mark({resolve:key}); if (process.env.TEST_RESOLVE_ERROR) throw error(process.env.TEST_RESOLVE_ERROR); return {value:'placeholder-capability'}; },
     async close() { mark({close:true}); },
   };
@@ -49,6 +57,99 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 
 const grant = { kind: 'grant', payload: { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z', subject: 'E1001', issuer: 'https://iam.corp.example',
   refreshToken: 'placeholder-refresh', accessToken: 'placeholder-access', accessExpiresAt: '2099-01-01T00:00:00.000Z' } };
+
+test('confidential CLI rechecks the session after its SQLite read retries', async (t) => {
+  const marker = Buffer.alloc(32, 5).toString('base64url');
+  for (const [name, change, bridge, expected] of [
+    ['pending sign-out', { signOutOperation: { id: marker, version: 1, state: 'pending' } }, false, 'IAM_INVALID_GRANT'],
+    ['pending refresh', { refreshOperation: { id: marker, base: marker, version: 1, state: 'pending' } }, false, 'IAM_REAUTH_REQUIRED'],
+    ['replaced bridge session', { sessionInstanceId: marker }, true, 'IAM_CREDENTIALS_UNAVAILABLE'],
+  ]) await t.test(name, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'forge-cli-auth-read-'));
+    let closeCredentials;
+    t.after(async () => {
+      try { await closeCredentials?.(); }
+      finally { await rm(directory, { recursive: true, force: true }); }
+    });
+    const storeDirectory = join(directory, 'store');
+    const services = new Map();
+    closeCredentials = applyCredentials({
+      get: (name) => services.get(name),
+      provide(name, service) { services.set(name, service); return () => services.delete(name); },
+      effect: (activate) => activate(),
+    }, { storeDirectory });
+    const credentials = services.get('credentials');
+    const source = services.get('iam-client-secret-source');
+    const { issuer, clientId } = grant.payload;
+    const scope = { issuer, clientId, ref: 'cli-fixture', method: 'client_secret_post' };
+    await setIamClientSecret(scope, 'synthetic-client-secret', { directory: storeDirectory });
+    const { revision } = await source.read(scope);
+    const payload = { ...grant.payload, version: 2,
+      authContext: { mode: 'confidential', method: scope.method, secretRef: scope.ref, secretRevision: revision } };
+    await credentials.modifyRecord(SESSION_RECORD_KEY, () => ({ kind: 'grant', payload }));
+
+    const env = { HELUO_FORGE_STORE_DIRECTORY: storeDirectory, NODE_NO_WARNINGS: '1' };
+    if (bridge) {
+      await credentials.set(BRIDGE_REF, 'synthetic-bridge-capability');
+      const server = createServer((_req, res) => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ token: payload.accessToken }));
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      t.after(() => new Promise((resolve) => server.close(resolve)));
+      env.HELUO_FORGE_IAM_URL = `http://127.0.0.1:${server.address().port}`;
+      const active = await run(process.execPath, [bin, 'auth', 'token'], { env });
+      assert.equal(active.stdout, `${payload.accessToken}\n`);
+    }
+
+    // Inject SQLite contention at the secret read. Keep it busy until the
+    // writer has committed, so the reader must retry with the current grant.
+    const hook = `import { StatementSync } from 'node:sqlite';
+let paused = false;
+let committed = false;
+process.on('message', () => { committed = true; });
+const get = StatementSync.prototype.get;
+StatementSync.prototype.get = function (...args) {
+  if (!committed && args[0]?.endsWith?.('/record/iam-client-secret/cli-fixture')) {
+    if (!paused) { paused = true; process.send('secret-read-paused'); }
+    throw Object.assign(new Error('synthetic database contention'), { errcode: 5 });
+  }
+  return get.apply(this, args);
+};`;
+    const child = fork(bin, ['auth', 'token', '--json'], {
+      execArgv: ['--import', `data:text/javascript,${encodeURIComponent(hook)}`],
+      env,
+      silent: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    const exited = once(child, 'close');
+    try {
+      const [message] = await once(child, 'message', { signal: AbortSignal.timeout(8000) });
+      assert.equal(message, 'secret-read-paused');
+      await credentials.modifyRecord(SESSION_RECORD_KEY, (current) => ({ ...current, payload: { ...current.payload, ...change } }));
+      child.send('session-write-committed');
+      const [code] = await exited;
+      assert.equal(stdout, '');
+      assert.equal(code, bridge ? 4 : 3);
+      assert.equal(JSON.parse(stderr).error.code, expected);
+    } finally {
+      child.kill();
+      await exited;
+    }
+    if (bridge) {
+      await setIamClientSecret(scope, 'synthetic-client-secret', { directory: storeDirectory });
+      await assert.rejects(run(process.execPath, [bin, 'auth', 'token', '--json'], { env }), (error) => {
+        assert.equal(error.stdout, '');
+        assert.equal(error.code, 4);
+        assert.equal(JSON.parse(error.stderr).error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
+        return true;
+      });
+    }
+  });
+});
 
 test('CLI opens the shared reader with its namespace, preserves output and closes it', async (t) => {
   const f = await fixture(t, { TEST_RECORD: JSON.stringify(grant) });

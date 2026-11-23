@@ -13,10 +13,8 @@
  *      add a redacted `heluo-private-release.json`;
  *   4. rebuild the archive from the original bytes and recompute the manifest.
  *
- * Confidential client secrets are deliberately NOT accepted yet: the IAM plugin
- * has no approved bundle-backed secret source (issue #222 work item ⑨), and
- * writing a secret into `cordis.patch.yml` would either be ignored or unlock
- * nothing. Refusing is the honest failure; see `BUNDLE_SECRET_EMBED_UNSUPPORTED`.
+ * Confidential IAM settings carry only the method and non-secret reference.
+ * The endpoint administrator supplies the secret outside the artifact.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -96,6 +94,7 @@ export const SECRET_ENV_KEYS = Object.freeze(['HELUO_IAM_CLIENT_SECRET', 'HELUO_
 const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...SECRET_ENV_KEYS]);
 const INTEGER_KEYS = new Set(['HELUO_IAM_CALLBACK_PORT', 'HELUO_GITEE_TIMEOUT_MS']);
 const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
+const validatedConfigs = new WeakSet();
 // Mirror the plugin's callbackAddress enum. `auto` tries 127.0.0.1 first and
 // only falls back to ::1 when that family is missing; a pinned literal is used
 // verbatim. `localhost` is not a host the IAM prefix covers, and the bracketed
@@ -253,7 +252,7 @@ export function parseEnvConfig(text) {
     if (SECRET_ENV_KEYS.includes(entry.key)) {
       fail(
         'BUNDLE_SECRET_EMBED_UNSUPPORTED',
-        `${entry.key} must not be written into a bundle yet: forge-iam has no approved bundle-backed client-secret source (issue #222 item 9). Keep the secret in the installer/credential backend and do not place it in this file.`,
+        `${entry.key} is forbidden in bundle configuration. Provision the client's secret separately in the target credential store.`,
       );
     }
   }
@@ -388,8 +387,7 @@ export function buildConfig(entries) {
     if (iam.clientSecretRef !== undefined) problems.push('public authentication must not contain HELUO_IAM_CLIENT_SECRET_REF');
   } else {
     if (!['client_secret_basic', 'client_secret_post'].includes(iam.clientAuthMethod)) problems.push('confidential authentication requires HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic|client_secret_post');
-    if (typeof iam.clientSecretRef !== 'string' || iam.clientSecretRef.trim() === '') problems.push('confidential authentication requires HELUO_IAM_CLIENT_SECRET_REF');
-    problems.push('confidential authentication is not supported by this maker yet (issue #222 item 9: no approved bundle-backed secret source)');
+    if (iam.clientSecretRef === undefined) problems.push('confidential authentication requires HELUO_IAM_CLIENT_SECRET_REF');
   }
   for (const field of ['issuer', 'discoveryUrl', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri', 'revocationEndpoint', 'endSessionEndpoint', 'userInfoEndpoint', 'gatewayConsoleUrl']) {
     const value = iam[field];
@@ -436,14 +434,34 @@ export function buildConfig(entries) {
     fail('CONFIG_INVALID', 'configuration is invalid:\n- IAM login is incomplete: set HELUO_IAM_DISCOVERY_URL (preferred) or HELUO_IAM_ISSUER plus HELUO_IAM_AUTHORIZATION_ENDPOINT, HELUO_IAM_TOKEN_ENDPOINT and HELUO_IAM_JWKS_URI');
   }
 
-  return {
+  const config = freezeConfig({
     iam,
     gitee,
     keys: [
       ...Object.keys(iam).map((key) => `iam.${key}`),
       ...Object.keys(gitee).map((key) => `gitee.${key}`),
     ].sort(),
-  };
+  });
+  validatedConfigs.add(config);
+  return config;
+}
+
+function freezeConfig(config) {
+  for (const value of Object.values(config)) {
+    if (value !== null && typeof value === 'object') freezeConfig(value);
+  }
+  return Object.freeze(config);
+}
+
+function requireValidatedConfig(config) {
+  if (!validatedConfigs.has(config)) fail('CONFIG_INVALID', 'configuration snapshot must come from buildConfig');
+  return config;
+}
+
+/** Use the validated configuration from the caller or read it once from the file. */
+export function resolveBundleConfig({ config, configPath }) {
+  if (config !== undefined) return requireValidatedConfig(config);
+  return buildConfig(parseEnvConfig(readConfigFile(resolve(configPath))));
 }
 
 /** Only double-quoted JSON strings are emitted; JSON escapes are valid YAML scalars. */
@@ -696,9 +714,10 @@ export function assertIamValidatorMatches(entries, { toolRoot } = {}) {
  * Build the private tarball bytes from public entries.
  *
  * @param {{entries: Array<{path: string, content: Buffer, mode: string}>, version: string,
- *   config: {iam: object, gitee: object, keys: string[]}, baseSha256: string, requireVersionChange?: boolean}} input
+ *   config: ReturnType<typeof buildConfig>, baseSha256: string, requireVersionChange?: boolean}} input
  */
 export function buildPrivateTarball({ entries, version, config, baseSha256, requireVersionChange = true }) {
+  requireValidatedConfig(config);
   if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) {
     fail('VERSION_INVALID', 'private version must be a semver string with an explicit bump');
   }
@@ -717,10 +736,12 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const neutral = assertNeutralPatch(patchTexts, { required: requiredRowsForEntry(root.name) });
   if (neutral.length > 0) fail('PUBLIC_TARBALL_INVALID', `public tarball is not configuration-neutral: ${neutral.join('; ')}`);
 
-  const runtimeIam = { ...config.iam };
-  // The opt-in controls packaging and Discovery validation only. The runtime
-  // ignores this field, so emitting it would falsely imply a runtime guard.
-  delete runtimeIam.allowInsecureHttp;
+  const { allowInsecureHttp, ...runtimeIam } = config.iam;
+  // Keep the legacy profile key inert at runtime. Only a confidential private
+  // deployment with an explicit maker opt-in may send client secrets over HTTP.
+  if (runtimeIam.authMode === 'confidential' && allowInsecureHttp === true) {
+    runtimeIam.allowInsecureClientAuthHttp = true;
+  }
   // Which layer owns which row is a bundle decision, not this tool's: find the
   // row in whichever patch carries it and rewrite there.
   const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));
@@ -804,7 +825,8 @@ function assertArtifactClosure(bytes, { code, label }) {
 /**
  * Full maker flow. Returns the written paths and a redacted summary.
  *
- * @param {{publicPath: string, expectedSha256: string, configPath: string, version: string,
+ * @param {{publicPath: string, expectedSha256: string, configPath?: string,
+ *   config?: ReturnType<typeof buildConfig>, version: string,
  *   output: string, repoRoot?: string, requireVersionChange?: boolean}} input
  */
 export function makePrivateBundle(input) {
@@ -836,9 +858,8 @@ export function makePrivateBundle(input) {
     const entries = readdirSync(output);
     if (entries.length > 0) fail('OUTPUT_EXISTS', `output directory is not empty: ${output}`);
   }
-  const text = readConfigFile(resolve(input.configPath));
-  const entries = parseEnvConfig(text);
-  const config = buildConfig(entries);
+  // The CLI passes the validated configuration used for Discovery and confirmation.
+  const config = resolveBundleConfig(input);
   const privateEntries = readBundleEntries(publicBytes, { withContent: true });
   const built = buildPrivateTarball({
     entries: privateEntries,

@@ -16,10 +16,16 @@
 model = "openai/muse-spark-1.3-contributor"
 # Same gateway and key; used only when the primary model rejects or times out.
 fallback_models = ["openai/deepseek-v4.1-flash"]
-# The primary model is absent from PR-Agent's token table. Keep both caps
-# aligned with the GitHub Action environment so large diffs have the same budget.
+# Supply the context window for models missing token metadata and bound the
+# size of individual requests. Mirror these settings in the Action environment.
 custom_model_max_tokens = 256000
-max_model_tokens = 256000
+max_model_tokens = 64000
+# Allow three minutes per request before moving directly to the fallback model.
+ai_timeout = 180
+retry_same_model_on_timeout = false
+# Surface exhausted model attempts even when some chunks produced useful reviews.
+# The workflow runs summary and review separately so one tool cannot block the other.
+propagate_tool_errors = true
 # Project documents and PR discussion are written in Chinese.
 response_language = "zh-CN"
 # Use the default branch's agent conventions as shared context across commands.
@@ -27,6 +33,7 @@ repo_context_files = ["AGENTS.md"]
 
 [github_action_config]
 # A push refreshes the summary and full review, including merge and bot commits.
+# The workflow selects one of these commands in each action step.
 handle_push_trigger = true
 push_commands = ["/describe", "/review"]
 push_trigger_ignore_bot_commits = false
@@ -48,7 +55,9 @@ persistent_comment = true
 # Disappearance from an AI review alone does not prove an old finding was fixed.
 persistent_finding_state = false
 final_update_message = false
-# Surface omitted files and clipped patches in the review comment.
+# Review large diffs in bounded chunks and disclose omitted or clipped patches.
+enable_large_pr_chunking = true
+max_number_of_calls = 5
 enable_review_coverage_footer = true
 num_max_findings = 4
 extra_instructions = """
@@ -66,7 +75,7 @@ extra_instructions = """
 # comment, so the repository's PR template stays the authoritative record.
 publish_description_as_comment = true
 publish_description_as_comment_persistent = true
-enable_pr_diagram = false
+enable_pr_diagram = true
 extra_instructions = """
 用简体中文概括差异中可见的主要行为变化和实际影响。行为变更多时按用户影响归并，逐文件细节放在文件清单。PR 正文只提供目的与范围。验证结论以输入中可见的证据为准，未提供的检查结果保持未知。
 """

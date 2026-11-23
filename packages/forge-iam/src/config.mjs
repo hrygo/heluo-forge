@@ -17,6 +17,7 @@ export const CONFIG_FIELDS = [
   'authMode',
   'clientAuthMethod',
   'clientSecretRef',
+  'allowInsecureClientAuthHttp',
   'discoveryUrl',
   'issuer',
   'authorizationEndpoint',
@@ -132,17 +133,25 @@ export function validateConfig(input) {
     if (Object.hasOwn(source, 'clientSecretRef')) issues.push(issue('clientSecretRef', 'public authentication must not contain a secret reference'));
   } else {
     const validMethod = ['client_secret_basic', 'client_secret_post'].includes(method);
-    const validRef = typeof source.clientSecretRef === 'string' && source.clientSecretRef.trim().length > 0;
+    const validRef = typeof source.clientSecretRef === 'string' && /^[a-z][a-z0-9-]*$/u.test(source.clientSecretRef);
     if (!validMethod || !validRef) {
       issues.push(issue('authMode', 'confidential authentication requires an explicit method and reference'));
       if (!validMethod) issues.push(issue('clientAuthMethod', 'confidential authentication requires an explicit supported method'));
-      issues.push(issue('clientSecretRef', 'a confidential reference requires the complete authentication configuration'));
+      if (!validRef) issues.push(issue('clientSecretRef', 'confidential authentication requires a record selector matching ^[a-z][a-z0-9-]*$'));
     } else {
       value.clientAuthMethod = method;
       value.clientSecretRef = source.clientSecretRef;
     }
   }
   if (mode === 'confidential') value.authMode = mode;
+  if (Object.hasOwn(source, 'allowInsecureClientAuthHttp')) {
+    const allowInsecureClientAuthHttp = source.allowInsecureClientAuthHttp;
+    if (mode !== 'confidential' || typeof allowInsecureClientAuthHttp !== 'boolean') {
+      issues.push(issue('allowInsecureClientAuthHttp', 'allowInsecureClientAuthHttp must be a boolean and is only valid for confidential authentication'));
+    } else {
+      value.allowInsecureClientAuthHttp = allowInsecureClientAuthHttp;
+    }
+  }
 
   for (const key of STRING_FIELDS) {
     const raw = source[key];

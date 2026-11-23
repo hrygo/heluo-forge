@@ -27,6 +27,7 @@ export async function startMockOidc({
   accessTtl = 3600,
   clientAuthMethod = 'none',
   clientSecret,
+  allowPublicCodeExchange = false,
   // Test-only fault injection: hold the token response long enough for a client
   // timeout, or rotate the refresh token and then drop the connection so the
   // client never learns the new value.
@@ -51,13 +52,13 @@ export async function startMockOidc({
   const lastRevokeAccess = { set: null };
   let issuer;
   const component = (value) => new URLSearchParams([['', value]]).toString().slice(1);
-  const authenticated = (req, form) => {
-    if (clientAuthMethod === 'client_secret_basic') {
+  const authenticated = (req, form, method = clientAuthMethod) => {
+    if (method === 'client_secret_basic') {
       const expected = `Basic ${Buffer.from(`${component(clientId)}:${component(clientSecret)}`).toString('base64')}`;
       return req.headers.authorization === expected && !form.has('client_id') && !form.has('client_secret');
     }
     return req.headers.authorization === undefined && form.get('client_id') === clientId
-      && (clientAuthMethod === 'none' ? !form.has('client_secret') : form.get('client_secret') === clientSecret);
+      && (method === 'none' ? !form.has('client_secret') : form.get('client_secret') === clientSecret);
   };
 
   const server = createServer(async (req, res) => {
@@ -113,8 +114,18 @@ export async function startMockOidc({
       if (url.pathname === '/token' && req.method === 'POST') {
         counts.token += 1;
         const form = await parseBody(req);
-        if (!authenticated(req, form)) return json(res, 400, { error: 'invalid_client' });
-        if (form.get('grant_type') === 'authorization_code') {
+        const grantType = form.get('grant_type');
+        const publicCode = allowPublicCodeExchange && grantType === 'authorization_code'
+          && authenticated(req, form, 'none');
+        if (!publicCode && !authenticated(req, form)) {
+          if (allowPublicCodeExchange && grantType === 'refresh_token') {
+            res.writeHead(401);
+            res.end();
+            return;
+          }
+          return json(res, 400, { error: 'invalid_client' });
+        }
+        if (grantType === 'authorization_code') {
           const entry = codes.get(form.get('code'));
           if (!entry) return json(res, 400, { error: 'invalid_grant' });
           const verifier = form.get('code_verifier') ?? '';
@@ -136,7 +147,7 @@ export async function startMockOidc({
             id_token: signIdToken({ nonce: entry.nonce, subject }),
           });
         }
-        if (form.get('grant_type') === 'refresh_token') {
+        if (grantType === 'refresh_token') {
           const old = form.get('refresh_token');
           if (!old || !refreshTokens.has(old) || revoked.has(old)) return json(res, 400, { error: 'invalid_grant' });
           refreshTokens.delete(old);

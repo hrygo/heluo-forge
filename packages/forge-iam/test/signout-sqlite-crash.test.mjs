@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createCredentialStore, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { accessTokenOf } from '../src/cli-session.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
@@ -333,6 +334,85 @@ test('RFC 7009 sign-out fences an unavailable client-auth read and retries under
     await reopened.backend.close();
   }
 });
+
+for (const endpointSource of ['configured', 'discovered', 'discovery-only', 'configured-with-discovery', 'configured-with-cached-discovery']) {
+  test(`RFC 7009 sign-out can retry after correcting a refused ${endpointSource} HTTP endpoint`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-endpoint-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const directory = join(root, 'store');
+    const discoveryUrl = `${grant.issuer}/discovery`;
+    const binding = { issuer: grant.issuer, clientId: grant.clientId };
+    const requests = [];
+    let pinned;
+
+    async function signOut(revocationEndpoint, changes = {}) {
+      const opened = open(directory);
+      const fixture = createClientSecretFixture(opened.credentials, binding);
+      const endpoints = {
+        ...(endpointSource !== 'configured' ? { discoveryUrl } : {}),
+        revocationEndpoint: endpointSource.startsWith('configured') ? revocationEndpoint : '',
+        issuer: ['configured', 'discovered'].includes(endpointSource) ? grant.issuer : '',
+      };
+      const service = createIamService({ ...config, ...fixture.config, ...endpoints, revocationMode: 'rfc7009', ...changes }, {
+        ...fixture.options,
+        async fetch(url, init) {
+          const target = String(url);
+          if (target === discoveryUrl) return Response.json({ issuer: grant.issuer, revocation_endpoint: revocationEndpoint });
+          requests.push({ url: target, method: init.method, authenticated: Boolean(init.headers.authorization) });
+          return new Response(null, { status: 200 });
+        },
+      });
+      try {
+        if (pinned) fixture.restore(pinned);
+        else {
+          pinned = fixture.snapshot();
+          await opened.store.write({ ...grant, version: 2, authContext: {
+            mode: 'confidential', method: fixture.config.clientAuthMethod,
+            secretRef: fixture.config.clientSecretRef, secretRevision: pinned.revision,
+          } });
+          if (endpointSource === 'configured-with-cached-discovery') assert.equal((await service.hydrate()).state, 'ready');
+        }
+        const result = await service.signOut();
+        if (result.revocation === 'failed') {
+          assert.deepEqual(await opened.store.read(), { ok: false, reason: 'sign-out-pending' });
+          await assert.rejects(service.resolveToken(), { code: 'IAM_INVALID_GRANT' });
+        }
+        return { result, record: await opened.credentials.readRecord(GRANT_KEY) };
+      } finally {
+        await service.dispose();
+        await opened.backend.close();
+      }
+    }
+
+    const refused = await signOut(config.revocationEndpoint.replace('https:', 'http:'));
+    assert.equal(refused.result.revocation, 'failed');
+    assert.equal(refused.result.revocationError, 'IAM_REVOKE_ENDPOINT_INVALID');
+    assert.deepEqual(requests, []);
+    assertCompatiblePendingMarker(refused.record.payload.signOutOperation);
+    if (endpointSource === 'configured') {
+      const cli = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
+      const result = spawnSync(process.execPath, [cli, 'auth', 'token'], {
+        env: { HELUO_FORGE_STORE_DIRECTORY: directory }, encoding: 'utf8',
+      });
+      assert.equal(result.status, 3);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /IAM_INVALID_GRANT/u);
+    }
+
+    for (const changes of [{ revocationMode: 'access_token_query' }, { gatewayResource: 'https://resource.corp.example' }]) {
+      const mismatched = await signOut(config.revocationEndpoint, changes);
+      assert.equal(mismatched.result.revocation, 'unknown');
+      assert.deepEqual(mismatched.record, refused.record);
+      assert.deepEqual(requests, []);
+    }
+
+    const retried = await signOut(config.revocationEndpoint);
+    assert.equal(retried.result.revocation, 'ok');
+    assert.equal(retried.result.view.state, 'signed-out');
+    assert.deepEqual(requests, [{ url: config.revocationEndpoint, method: 'POST', authenticated: true }]);
+    assert.deepEqual(retried.record, { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } });
+  });
+}
 
 test('a legacy pending sign-out recovers only through an explicitly configured issuer-origin D1 endpoint', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-legacy-'));

@@ -270,7 +270,13 @@ export function checkRepo(root) {
     for (const match of text.matchAll(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*([^\r\n]*)$/gm)) {
       const reference = match[1].replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
       if (reference.startsWith('./')) continue;
-      if (!/@[0-9a-f]{40}$/.test(reference)) errors.push(`repo: ${name} action ${reference} is not pinned to a full commit SHA`);
+      if (reference.startsWith('docker://')) {
+        if (!/^docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/.test(reference)) {
+          errors.push(`repo: ${name} Docker image ${reference} is not pinned to a full sha256 digest`);
+        }
+      } else if (!/@[0-9a-f]{40}$/.test(reference)) {
+        errors.push(`repo: ${name} action ${reference} is not pinned to a full commit SHA`);
+      }
     }
   }
 

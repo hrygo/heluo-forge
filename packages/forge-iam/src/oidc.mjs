@@ -6,7 +6,8 @@ import {
   timingSafeEqual,
   verify as verifySignature,
 } from 'node:crypto';
-import { assertClientAuthCurrent, buildClientAuthRequest } from './client-auth.mjs';
+import { assertClientAuthEndpoint, buildClientAuthRequest, withCurrentClientAuth } from './client-auth.mjs';
+import { IamError } from './errors.mjs';
 import { parseHttpUrl } from './http-url.mjs';
 
 export const OAUTH_ERROR_CODES = Object.freeze([
@@ -14,6 +15,7 @@ export const OAUTH_ERROR_CODES = Object.freeze([
   'unsupported_grant_type', 'invalid_scope', 'unsupported_token_type',
   'access_denied', 'unsupported_response_type', 'server_error', 'temporarily_unavailable',
 ]);
+export const OAUTH_ERROR_RESPONSE_CLASSES = Object.freeze(['empty', 'nonstandard', 'unreadable']);
 
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
@@ -259,38 +261,45 @@ function preconnectSocketError(cause) {
     && ['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ETIMEDOUT'].includes(cause.code);
 }
 
-export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, expectedStatus, clientAuthentication } = {}) {
+export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, expectedStatus, clientAuthentication, beforeSend } = {}) {
   if (typeof fetchImpl !== 'function') throw new OidcError('IAM_HTTP_UNAVAILABLE', 'fetch is unavailable');
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signals = [timeout];
-  if (signal) signals.push(signal);
-  let response;
+  const endpoint = assertClientAuthEndpoint(url, clientAuthentication);
   // Local invalidation is not a network failure. Nothing awaits between this
-  // synchronous check and the actual fetch invocation.
-  assertClientAuthCurrent(clientAuthentication);
-  try {
-    response = await fetchImpl(url, {
-      method,
-      headers,
-      body,
-      redirect: 'error',
-      signal: AbortSignal.any(signals),
-    });
-  } catch (cause) {
-    // Native fetch failed while opening the connection. An injected fetcher
-    // can catch and rethrow a later failure, so its cause cannot prove delivery.
-    const unsent = method === 'POST' && fetchImpl === globalThis.fetch
-      && !signal?.aborted && !timeout.aborted && provenPreconnectFailure(cause?.cause);
-    throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable', {
-      ...(unsent ? { requestUnsent: true } : {}),
-      ...(timeout.aborted ? { timedOut: true } : {}),
-    });
-  }
+  // synchronous check and the actual fetch invocation. Retry only the read.
+  let timeout;
+  const response = await withCurrentClientAuth(clientAuthentication, async () => {
+    if (signal?.aborted) throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable');
+    beforeSend?.();
+    timeout = AbortSignal.timeout(timeoutMs);
+    const signals = signal ? [timeout, signal] : [timeout];
+    try {
+      return await fetchImpl(endpoint, { method, headers, body, redirect: 'error', signal: AbortSignal.any(signals) });
+    } catch (cause) {
+      // Native fetch can prove a preconnect failure. An injected fetcher cannot.
+      const unsent = method === 'POST' && fetchImpl === globalThis.fetch
+        && !signal?.aborted && !timeout.aborted && provenPreconnectFailure(cause?.cause);
+      throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable', {
+        ...(unsent ? { requestUnsent: true } : {}),
+        ...(timeout.aborted ? { timedOut: true } : {}),
+      });
+    }
+  });
   if (!response.ok) {
     let oauthError;
+    let oauthErrorResponse;
     let timedOut = false;
     try {
-      const payload = await response.json();
+      let payload;
+      if (response.status === 401) {
+        // Read once so a missing body is distinguishable from a non-OAuth
+        // response. The contents stay local to this error parser.
+        oauthErrorResponse = 'unreadable';
+        const content = await response.text();
+        oauthErrorResponse = content.trim() ? 'nonstandard' : 'empty';
+        if (oauthErrorResponse === 'nonstandard') payload = JSON.parse(content);
+      } else {
+        payload = await response.json();
+      }
       const candidate = payload?.error;
       // Copy only exact standard codes, never provider text that may echo credentials.
       if (OAUTH_ERROR_CODES.includes(candidate)) oauthError = candidate;
@@ -300,7 +309,7 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
     }
     throw new OidcError('IAM_HTTP_ERROR', `IAM endpoint returned ${response.status}`, {
       status: response.status,
-      ...(oauthError ? { oauthError } : {}),
+      ...(oauthError ? { oauthError } : oauthErrorResponse ? { oauthErrorResponse } : {}),
       ...(timedOut ? { timedOut: true } : {}),
     });
   }
@@ -337,6 +346,10 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, optio
     && (needsOptional || !config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
   if (needsDiscovery) {
     const discoveryUrl = assertHttpEndpoint(config.discoveryUrl, 'discoveryUrl');
+    if (config.authMode === 'confidential' && discoveryUrl.protocol === 'http:'
+      && config.allowInsecureClientAuthHttp !== true) {
+      throw new OidcError('IAM_CONFIG_INVALID', 'Confidential IAM Discovery requires HTTPS');
+    }
     document = await fetchJson(discoveryUrl, { fetchImpl, timeoutMs, signal });
     if (document === null || typeof document !== 'object' || Array.isArray(document)) {
       throw new OidcError('IAM_DISCOVERY_INVALID', 'discovery document must be an object');
@@ -423,10 +436,10 @@ function normalizeTokenResponse(payload) {
   };
 }
 
-async function postForm(endpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody = false, expectedStatus }) {
+async function postForm(endpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody = false, expectedStatus, beforeSend }) {
   const request = buildClientAuthRequest(clientId, form, clientAuthentication);
   return fetchJson(endpoint, {
-    fetchImpl, timeoutMs, signal, clientAuthentication, ignoreBody, expectedStatus,
+    fetchImpl, timeoutMs, signal, clientAuthentication, ignoreBody, expectedStatus, beforeSend,
     method: 'POST',
     headers: ignoreBody ? request.headers : { ...request.headers, accept: 'application/json' },
     body: request.body,
@@ -441,10 +454,10 @@ export async function exchangeCode({ tokenEndpoint, code, codeVerifier, redirect
   return normalizeTokenResponse(await postForm(tokenEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal }));
 }
 
-export async function refreshTokens({ tokenEndpoint, refreshToken, clientId, resource, fetchImpl, timeoutMs, signal, clientAuthentication }) {
+export async function refreshTokens({ tokenEndpoint, refreshToken, clientId, resource, fetchImpl, timeoutMs, signal, clientAuthentication, beforeSend }) {
   const form = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken });
   if (resource) form.set('resource', resource);
-  return normalizeTokenResponse(await postForm(tokenEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal }));
+  return normalizeTokenResponse(await postForm(tokenEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, beforeSend }));
 }
 
 export async function revokeToken({ revocationEndpoint, token, tokenTypeHint = 'refresh_token', clientId, fetchImpl, timeoutMs, signal, clientAuthentication }) {
@@ -496,6 +509,9 @@ export async function revokeSessionToken({
     }
     if (error?.code === 'IAM_HTTP_ERROR') return revokeHttpOutcome(error.details.status);
     if (error?.code === 'IAM_REVOKE_UNCONFIRMED') return { state: 'unknown', code: error.code };
+    if (error instanceof IamError && error.code === 'IAM_CONFIG_INVALID') {
+      return { state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' };
+    }
     return { state: 'unknown', code: 'IAM_REVOKE_UNREACHABLE' };
   } finally {
     boundSignal.removeEventListener('abort', onAbort);

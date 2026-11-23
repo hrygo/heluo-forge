@@ -17,14 +17,12 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
 import {
-  buildConfig,
   inspectPublicTarball,
   isLoginConfigured,
   makePrivateBundle,
-  parseEnvConfig,
   planDigest,
   PrivateBundleError,
-  readConfigFile,
+  resolveBundleConfig,
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
@@ -96,7 +94,6 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const repoRoot = resolve(options.repoRoot);
   const publicPath = resolve(options.publicPath);
-  const configPath = resolve(options.configPath);
   const output = resolve(options.output);
   // The output boundary is a path-component, symlink-resolved question, not a
   // string-prefix question: the CLI must not be the one place where a `..secret`
@@ -110,8 +107,7 @@ async function main() {
   if (publicInfo.problems.length > 0) {
     throw new PrivateBundleError('PUBLIC_UNSAFE', `public input failed preflight:\n- ${publicInfo.problems.join('\n- ')}`);
   }
-  const entries = parseEnvConfig(readConfigFile(configPath));
-  const config = buildConfig(entries);
+  const config = resolveBundleConfig({ configPath: options.configPath });
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }
     : await verifyDiscovery(config.iam);
@@ -152,7 +148,7 @@ async function main() {
   const result = makePrivateBundle({
     publicPath,
     expectedSha256: options.publicSha256,
-    configPath,
+    config,
     version: options.version,
     output,
     repoRoot,
