@@ -8,10 +8,17 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
     const API_BASE = '/api/forge-experts';
+    const EDIT_TOKEN_HEADER = 'x-forge-experts-edit-token';
     const REQUEST_HEADERS = Object.freeze({
       'x-forge-experts-request': '1',
       'content-type': 'application/json',
     });
+
+    const ACCEPTING_LABELS = Object.freeze(Object.assign(Object.create(null), {
+      accepting: '可接单',
+      paused: '暂不接单',
+      unavailable: '暂不可用',
+    }));
 
     const ERROR_NOTICE = Object.freeze(Object.assign(Object.create(null), {
       EXPERT_MANAGEMENT_DISABLED: '专家智能体管理入口当前未开放。',
@@ -77,8 +84,8 @@ window.__ModuleLoader__.load({
     }
 
     async function reconcilePreference(expertId, editToken) {
-      const suffix = editToken ? `?editToken=${encodeURIComponent(editToken)}` : '';
-      const response = await fetch(`${API_BASE}/preferences/${encodeURIComponent(expertId)}${suffix}`);
+      const init = editToken ? { headers: { [EDIT_TOKEN_HEADER]: editToken } } : undefined;
+      const response = await fetch(`${API_BASE}/preferences/${encodeURIComponent(expertId)}`, init);
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
@@ -109,14 +116,20 @@ window.__ModuleLoader__.load({
         callable: item?.access?.callableInOrg === true,
         pending,
         enabled,
-        acceptingLabel: accepting === 'accepting'
-          ? '可接单'
-          : accepting === 'paused'
-            ? '暂不接单'
-            : accepting === 'unavailable'
-              ? '暂不可用'
-              : '接单状态未知',
+        acceptingLabel: ACCEPTING_LABELS[accepting] ?? '接单状态未知',
       };
+    }
+
+    function formatSummaryText(summary) {
+      if (summary?.disclosureState === 'available') {
+        return summary.responsibility ?? '已获准披露能力摘要';
+      }
+      return '能力与权限摘要暂不可披露或未提供';
+    }
+
+    function formatActionLabel(busy, enabled) {
+      if (busy) return '待确认…';
+      return enabled ? '停用' : '启用';
     }
 
     // §5 管理页视图
@@ -218,6 +231,37 @@ window.__ModuleLoader__.load({
         }
       };
 
+      let listBody;
+      if (state.phase === 'loading') {
+        listBody = h('div', { 'data-testid': 'fexp-loading' }, '正在加载专家目录…');
+      } else if (state.items.length === 0) {
+        const emptyText = view === 'callable' ? '暂无可调用专家。' : '暂无可见专家。';
+        listBody = h('div', { 'data-testid': 'fexp-empty' }, emptyText);
+      } else {
+        listBody = h('ul', { className: 'fexp-list' },
+          ...state.items.map((item) => {
+            const row = deriveRowStatus(item);
+            const busy = Boolean(state.savingIds[item.expertId]) || row.pending;
+            const actionNode = row.callable
+              ? h('button', {
+                type: 'button',
+                disabled: busy || !item.preference?.editToken,
+                onClick: () => toggleExpert(item),
+              }, formatActionLabel(busy, row.enabled))
+              : h('span', null, '仅可查看');
+            return h('li', { key: item.expertId, 'data-expert-id': item.expertId },
+              h('div', null,
+                h('strong', null, item.displayName),
+                item.disambiguation ? h('span', null, ` · ${item.disambiguation}`) : null,
+                h('span', null, ` (${row.acceptingLabel})`),
+              ),
+              h('div', null, formatSummaryText(item.summary)),
+              actionNode,
+            );
+          }),
+        );
+      }
+
       return h('div', { className: 'forge-experts-ui', 'data-testid': 'forge-experts-panel' },
         h('div', { className: 'fexp-header' },
           h('h2', null, '专家智能体'),
@@ -235,33 +279,7 @@ window.__ModuleLoader__.load({
           }),
         ),
         state.notice ? h('div', { role: 'status', 'data-testid': 'fexp-notice' }, state.notice) : null,
-        state.phase === 'loading'
-          ? h('div', { 'data-testid': 'fexp-loading' }, '正在加载专家目录…')
-          : state.items.length === 0
-            ? h('div', { 'data-testid': 'fexp-empty' }, view === 'callable' ? '暂无可调用专家。' : '暂无可见专家。')
-            : h('ul', { className: 'fexp-list' },
-              ...state.items.map((item) => {
-                const row = deriveRowStatus(item);
-                const busy = Boolean(state.savingIds[item.expertId]) || row.pending;
-                return h('li', { key: item.expertId, 'data-expert-id': item.expertId },
-                  h('div', null,
-                    h('strong', null, item.displayName),
-                    item.disambiguation ? h('span', null, ` · ${item.disambiguation}`) : null,
-                    h('span', null, ` (${row.acceptingLabel})`),
-                  ),
-                  h('div', null, item.summary?.disclosureState === 'available'
-                    ? (item.summary.responsibility ?? '已获准披露能力摘要')
-                    : '能力与权限摘要暂不可披露或未提供'),
-                  row.callable
-                    ? h('button', {
-                      type: 'button',
-                      disabled: busy || !item.preference?.editToken,
-                      onClick: () => toggleExpert(item),
-                    }, busy ? '待确认…' : (row.enabled ? '停用' : '启用'))
-                    : h('span', null, '仅可查看'),
-                );
-              }),
-            ),
+        listBody,
       );
     }
 
@@ -277,6 +295,8 @@ window.__ModuleLoader__.load({
 
       const dropGroup = () => {
         generation += 1;
+        activeEpoch = 0;
+        activeVersion = 0;
         if (typeof unregister === 'function') {
           const fn = unregister;
           unregister = null;

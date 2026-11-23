@@ -5,6 +5,7 @@ import { ExpertsError, serializeError } from './errors.mjs';
 
 export const API_PREFIX = '/api/forge-experts';
 export const REQUEST_HEADER = 'x-forge-experts-request';
+export const EDIT_TOKEN_HEADER = 'x-forge-experts-edit-token';
 const REQUEST_HEADER_VALUE = '1';
 const MAX_BODY_BYTES = 8 * 1024;
 
@@ -135,7 +136,9 @@ export function createExpertsRoutes(ports) {
         res.setHeader('x-content-type-options', 'nosniff');
         sseClients.add(res);
         res.write(`data: ${JSON.stringify({ type: 'ready', scopeEpoch: scope.scopeEpoch, viewVersion: ports.getViewVersion() })}\n\n`);
-        req.on?.('close', () => sseClients.delete(res));
+        const cleanup = () => sseClients.delete(res);
+        req.on?.('close', cleanup);
+        res.on?.('close', cleanup);
         return true;
       }
 
@@ -184,7 +187,16 @@ export function createExpertsRoutes(ports) {
       }
 
       if (url.pathname.startsWith(`${API_PREFIX}/preferences/`)) {
-        const expertId = decodeURIComponent(url.pathname.slice(`${API_PREFIX}/preferences/`.length));
+        const rawId = url.pathname.slice(`${API_PREFIX}/preferences/`.length);
+        if (!rawId || rawId.includes('/') || /%2f/i.test(rawId)) {
+          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId');
+        }
+        let expertId;
+        try {
+          expertId = decodeURIComponent(rawId);
+        } catch {
+          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId encoding');
+        }
         if (!expertId || expertId.includes('/')) {
           throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId');
         }
@@ -198,7 +210,10 @@ export function createExpertsRoutes(ports) {
         }
 
         if (req.method === 'GET') {
-          const editToken = url.searchParams.get('editToken');
+          const rawEditToken = req?.headers?.[EDIT_TOKEN_HEADER];
+          const editToken = typeof rawEditToken === 'string' && rawEditToken.trim().length > 0
+            ? rawEditToken.trim()
+            : null;
           const result = editToken
             ? await ports.getEditSettlement({
               scope,

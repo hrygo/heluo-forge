@@ -108,7 +108,7 @@ test('client single bundle registers settings.section, keeps production @ trigge
   }
 });
 
-test('isolated mentions preview registers @ group, validates onPick version, drops group on SSE invalidation/disconnect without touching native groups, and restores on ready', async () => {
+test('isolated mentions preview registers @ group, validates onPick version, resets version on dropGroup, drops group on SSE invalidation/disconnect without touching native groups, and restores on ready', async () => {
   const eventSources = [];
   let releaseDelayedFetch;
   let callIndex = 0;
@@ -184,12 +184,13 @@ test('isolated mentions preview registers @ group, validates onPick version, dro
     assert.equal(source.onPick(rows[0]).accepted, true);
     assert.equal(source.onPick({ ...rows[0], viewVersion: 999 }).accepted, false);
 
-    // In-flight query interrupted by SSE disconnect must be discarded and group unregistered.
+    // In-flight query interrupted by SSE disconnect must be discarded, group unregistered, and stale picked item rejected.
     const slowQuery = source.query('slow', { sessionId: 'sess-1' });
     assert.equal(eventSources.length, 1);
     eventSources[0].fail();
     assert.equal(unregisterCalls, 1);
     assert.equal(activeGroups.has('forge-experts-mentions'), false);
+    assert.equal(source.onPick(rows[0]).accepted, false, 'stale item must be rejected after dropGroup resets active version');
     assert.equal(activeGroups.has('native-files'), true, 'native file group must remain untouched');
     assert.equal(activeGroups.has('native-sessions'), true, 'native session group must remain untouched');
     releaseDelayedFetch();

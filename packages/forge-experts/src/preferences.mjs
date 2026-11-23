@@ -100,6 +100,7 @@ export function createPreferencesStore(ports) {
 
   let domainHandle = null;
   let table = null;
+  let closed = false;
   let degraded = false;
   let degradedReason = null;
   let viewVersion = 1;
@@ -132,7 +133,8 @@ export function createPreferencesStore(ports) {
   }
 
   async function open() {
-    if (domainHandle) return;
+    if (domainHandle && !closed) return;
+    closed = false;
     try {
       domainHandle = await ports.openStorageDomain(PREFERENCES_DOMAIN_SPEC);
       table = domainHandle.table(PREFERENCES_TABLE);
@@ -148,8 +150,9 @@ export function createPreferencesStore(ports) {
   }
 
   async function close() {
-    // Let queued writes finish before the domain handle goes away, otherwise a
-    // close during a PUT loses the record the caller was told was confirmed.
+    // Reject new reads/writes immediately while draining already-queued writes
+    // before the domain handle is closed.
+    closed = true;
     await writeChain.catch(() => {});
     editTokens.clear();
     settlements.clear();
@@ -167,11 +170,17 @@ export function createPreferencesStore(ports) {
     for (const [token, meta] of editTokens.entries()) {
       if (meta.scopeEpoch !== scopeEpoch) editTokens.delete(token);
     }
+    for (const [token, settled] of settlements.entries()) {
+      if (settled.scopeEpoch !== scopeEpoch && settled.status !== 'pending') {
+        settlements.delete(token);
+      }
+    }
+    knownEnabledByScope.clear();
     viewVersion += 1;
   }
 
   async function readValidatedRecord(key) {
-    if (!table || degraded) {
+    if (closed || !table || degraded) {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is unavailable', { retryable: true });
     }
     let raw;
@@ -203,7 +212,17 @@ export function createPreferencesStore(ports) {
   function pruneEditTokens() {
     const at = now();
     for (const [token, meta] of editTokens.entries()) {
-      if (at >= meta.expiresAt && !meta.used) editTokens.delete(token);
+      if (at < meta.expiresAt) continue;
+      const settled = settlements.get(token);
+      if (!meta.used || (settled && settled.status !== 'pending')) {
+        editTokens.delete(token);
+      }
+    }
+    for (const [token, settled] of settlements.entries()) {
+      if (settled.status === 'pending') continue;
+      if (at - (settled.settledAt ?? at) >= editTokenTtlMs) {
+        settlements.delete(token);
+      }
     }
   }
 
@@ -227,6 +246,9 @@ export function createPreferencesStore(ports) {
   }
 
   async function get({ scope, scopeEpoch, expertId, authContinuityDigest }) {
+    if (closed) {
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is closing', { retryable: true });
+    }
     const key = derivePreferenceKey({ ...scope, expertId });
     if (pendingKeys.has(key)) {
       return Object.freeze({ expertId, pending: true, viewVersion });
@@ -248,6 +270,9 @@ export function createPreferencesStore(ports) {
   }
 
   async function getEditSettlement({ scope, scopeEpoch, expertId, editToken, authContinuityDigest }) {
+    if (closed) {
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is closing', { retryable: true });
+    }
     const settled = settlements.get(editToken);
     if (settled && settled.expertId === expertId && settled.scopeEpoch === scopeEpoch) {
       if (settled.status === 'pending') {
@@ -270,7 +295,7 @@ export function createPreferencesStore(ports) {
   }
 
   async function setEnabled({ scope, scopeEpoch, expertId, enabled, editToken }) {
-    if (degraded || !table) {
+    if (closed || degraded || !table) {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference storage is unavailable', { retryable: true });
     }
     const tokenMeta = editTokens.get(editToken);
@@ -312,7 +337,7 @@ export function createPreferencesStore(ports) {
 
     tokenMeta.used = true;
     tokenMeta.targetEnabled = enabled;
-    settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'pending' });
+    settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'pending', settledAt: now() });
 
     const key = derivePreferenceKey({ ...scope, expertId });
     // Mark before enqueueing: a second reader arriving while the write waits in
@@ -327,23 +352,31 @@ export function createPreferencesStore(ports) {
         const auth = await ports.verifyOrgCallable(scope, expertId);
         ports.assertScopeCurrent(scopeEpoch, scope);
         if (!auth?.callableInOrg || !auth.authContinuityDigest) {
-          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed' });
+          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed', settledAt: now() });
           throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Employee no longer has org-level callable permission for this expert');
         }
         if (auth.authContinuityDigest !== tokenMeta.authContinuityDigest) {
-          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed' });
+          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed', settledAt: now() });
           throw new ExpertsError('EXPERT_REVISION_CONFLICT', 'Authorization continuity changed; refresh before updating');
         }
 
         const existing = await readValidatedRecord(key);
         const current = effectiveState(existing, auth.authContinuityDigest);
         if (current.revision !== tokenMeta.revision) {
-          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed' });
+          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed', settledAt: now() });
           throw new ExpertsError('EXPERT_REVISION_CONFLICT', 'Preference revision is stale');
         }
 
         if (current.continuous && current.enabled === enabled) {
-          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'saved', enabled: current.enabled, revision: current.revision });
+          settlements.set(editToken, {
+            expertId,
+            scopeEpoch,
+            targetEnabled: enabled,
+            status: 'saved',
+            enabled: current.enabled,
+            revision: current.revision,
+            settledAt: now(),
+          });
           const nextToken = issueEditToken({ scope, scopeEpoch, expertId, authContinuityDigest: auth.authContinuityDigest, revision: current.revision });
           return Object.freeze({
             status: 'confirmed',
@@ -373,10 +406,10 @@ export function createPreferencesStore(ports) {
           if (error?.outcome === 'unknown' || error?.code === 'EXPERT_PREF_SAVE_UNKNOWN') {
             degraded = true;
             degradedReason = 'write_outcome_unknown';
-            settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'pending' });
+            settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'pending', settledAt: now() });
             throw new ExpertsError('EXPERT_PREF_SAVE_UNKNOWN', 'Preference save outcome is unknown; read back to reconcile', { retryable: true });
           }
-          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed' });
+          settlements.set(editToken, { expertId, scopeEpoch, targetEnabled: enabled, status: 'not_executed', settledAt: now() });
           throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Preference write failed before confirmation', { retryable: true });
         }
 
@@ -390,6 +423,7 @@ export function createPreferencesStore(ports) {
           status: 'saved',
           enabled: validated.data.enabled,
           revision: validated.data.revision,
+          settledAt: now(),
         });
         ports.onPreferenceChanged?.({ scopeEpoch, expertId, viewVersion });
         const nextToken = issueEditToken({
@@ -418,9 +452,10 @@ export function createPreferencesStore(ports) {
     for (const [token, meta] of editTokens.entries()) {
       if (meta.expertId === expertId && meta.scopeEpoch === scopeEpoch) editTokens.delete(token);
     }
-    if (!table || degraded) return { invalidated: true };
+    if (closed || !table || degraded) return { invalidated: true };
     const key = derivePreferenceKey({ ...scope, expertId });
     return enqueue(async () => {
+      if (closed || !table || degraded) return { invalidated: true };
       const existing = await readValidatedRecord(key).catch((error) => {
         if (error?.code === 'EXPERT_STORAGE_UNAVAILABLE') return null;
         throw error;
@@ -433,7 +468,18 @@ export function createPreferencesStore(ports) {
         authContinuityDigest: `revoked:${existing.revision + 1}`,
         updatedAt: new Date(now()).toISOString(),
       };
-      await table.put(key, resetRecord);
+      try {
+        await table.put(key, resetRecord);
+      } catch (error) {
+        degraded = true;
+        degradedReason = error?.outcome === 'unknown' || error?.code === 'EXPERT_PREF_SAVE_UNKNOWN'
+          ? 'revocation_write_outcome_unknown'
+          : 'revocation_write_failed';
+        trackEnabled(scope, expertId, false);
+        viewVersion += 1;
+        ports.onPreferenceChanged?.({ scopeEpoch, expertId, viewVersion });
+        return { invalidated: true, degraded: true };
+      }
       trackEnabled(scope, expertId, false);
       viewVersion += 1;
       ports.onPreferenceChanged?.({ scopeEpoch, expertId, viewVersion });
@@ -446,7 +492,7 @@ export function createPreferencesStore(ports) {
   }
 
   async function listConfirmedEnabled({ scope, expertIds = null }) {
-    if (!table || degraded) return [];
+    if (closed || !table || degraded) return [];
     const ids = Array.isArray(expertIds) ? expertIds : [...(knownEnabledByScope.get(scopeIndexKey(scope)) ?? [])];
     const results = [];
     for (const expertId of ids) {

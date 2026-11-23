@@ -30,13 +30,17 @@ export function createMentionsService(ports) {
 
   const now = typeof ports.now === 'function' ? ports.now : () => Date.now();
   let viewVersion = 1;
+  let globalVersion = 1;
+  const sessionVersions = new Map();
   const sessionLastScope = new Map();
 
   function invalidate(scopeEpoch, sessionId = null) {
     viewVersion += 1;
     if (sessionId === null) {
+      globalVersion += 1;
       sessionLastScope.clear();
     } else {
+      sessionVersions.set(sessionId, (sessionVersions.get(sessionId) ?? 0) + 1);
       sessionLastScope.delete(sessionId);
     }
     ports.onMentionsInvalidated?.({ scopeEpoch, sessionId, viewVersion });
@@ -72,12 +76,16 @@ export function createMentionsService(ports) {
     }
     const delegationScope = sessionBinding.delegationScope.trim();
 
-    // Ensure A -> B -> A round-trip on the same session always advances viewVersion (§3.5).
+    // Ensure A -> B -> A round-trip on the same session always advances viewVersion (§3.5)
+    // while isolating per-session scope transitions from unrelated concurrent sessions.
     const prevScope = sessionLastScope.get(cleanSessionId);
     if (prevScope !== undefined && prevScope !== delegationScope) {
+      sessionVersions.set(cleanSessionId, (sessionVersions.get(cleanSessionId) ?? 0) + 1);
       viewVersion += 1;
     }
     sessionLastScope.set(cleanSessionId, delegationScope);
+    const startGlobalVersion = globalVersion;
+    const startSessionVersion = sessionVersions.get(cleanSessionId) ?? 0;
     const startVersion = viewVersion;
 
     const enabledRecords = await ports.listConfirmedEnabled({ scope });
@@ -108,9 +116,9 @@ export function createMentionsService(ports) {
       throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Unable to verify session expert eligibility', { retryable: true });
     }
 
-    // Re-verify scope epoch and version before publishing candidates (discard stale in-flight responses).
+    // Re-verify scope epoch, global invalidations, and this session's version before publishing.
     ports.assertScopeCurrent(startEpoch, scope);
-    if (startVersion !== viewVersion) {
+    if (startGlobalVersion !== globalVersion || startSessionVersion !== (sessionVersions.get(cleanSessionId) ?? 0)) {
       throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Mention projection was invalidated while loading', { retryable: true });
     }
     if (checkResult?.scopeVerified !== true) {

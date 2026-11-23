@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createExpertsHost } from '../src/index.mjs';
+import { EDIT_TOKEN_HEADER } from '../src/routes.mjs';
 
 function mockHttp(handler, { method, url, headers = {}, body = null }) {
   return new Promise((resolve, reject) => {
@@ -47,7 +48,7 @@ function mockHttp(handler, { method, url, headers = {}, body = null }) {
   });
 }
 
-function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = false, sessionScopes = null } = {}) {
+function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = false, sessionScopes = null, checkDelegraSessionScope = null } = {}) {
   const data = new Map();
   const scope = { instanceId: 'inst-1', orgId: 'org-a', issuer: 'https://iam.example', subject: 'emp-1', validUntil: '2027-01-01T00:00:00Z' };
   const scopesMap = sessionScopes ?? new Map([['sess-1', 'proj-a']]);
@@ -109,7 +110,7 @@ function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = f
       const ds = scopesMap.get(sessionId);
       return ds ? { delegationScope: ds } : null;
     },
-    checkDelegraSessionScope: async ({ delegationScope, expertIds }) => ({
+    checkDelegraSessionScope: checkDelegraSessionScope ?? (async ({ delegationScope, expertIds }) => ({
       scopeVerified: true,
       validUntil: '2027-01-01T00:00:00Z',
       results: expertIds.map((id) => ({
@@ -118,7 +119,7 @@ function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = f
         acceptingTasks: id === 'exp-paused' ? 'paused' : 'accepting',
         authContinuityDigest: id === 'exp-1' ? 'dig-1' : 'dig-2',
       })),
-    }),
+    })),
   });
 }
 
@@ -133,12 +134,29 @@ test('management disabled by default returns 503 EXPERT_MANAGEMENT_DISABLED', as
   assert.equal(JSON.parse(res.body).error.code, 'EXPERT_MANAGEMENT_DISABLED');
 });
 
-test('routes enforce connection auth, CSRF header, view-only rejection, PUT persistence, and SSE invalidation', async () => {
+test('routes enforce connection auth, CSRF header, view-only rejection, malformed expertId 422, PUT persistence, header settlement readback, and SSE invalidation', async () => {
   const host = makeHost({ managementEnabled: true });
   await host.open();
 
   const unauth = await mockHttp(host.handleRequest, { method: 'GET', url: '/api/forge-experts/catalog?view=directory' });
   assert.equal(unauth.statusCode, 401);
+
+  // Malformed percent encoding and encoded slash must return 422 EXPERT_REQUEST_INVALID, not 500.
+  const badEncoding = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/preferences/%ZZ',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(badEncoding.statusCode, 422);
+  assert.equal(JSON.parse(badEncoding.body).error.code, 'EXPERT_REQUEST_INVALID');
+
+  const encodedSlash = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/preferences/exp%2F1',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(encodedSlash.statusCode, 422);
+  assert.equal(JSON.parse(encodedSlash.body).error.code, 'EXPERT_REQUEST_INVALID');
 
   const sse = await mockHttp(host.handleRequest, {
     method: 'GET',
@@ -187,6 +205,15 @@ test('routes enforce connection auth, CSRF header, view-only rejection, PUT pers
   const saved = JSON.parse(put.body);
   assert.equal(saved.enabled, true);
   assert.equal(saved.revision, 1);
+
+  // Settlement reconciliation reads editToken from header rather than URL query string.
+  const settled = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/preferences/exp-1',
+    headers: { 'x-dsh-auth': 'ok', [EDIT_TOKEN_HEADER]: exp1.preference.editToken },
+  });
+  assert.equal(settled.statusCode, 200);
+  assert.equal(JSON.parse(settled.body).settlement, 'saved');
 
   sse.close?.();
   await host.close();
@@ -292,6 +319,97 @@ test('mentions route stays closed by default and enforces three-way intersection
     headers: { 'x-dsh-auth': 'ok' },
   })).body);
   assert.equal(afterDisable.candidates.length, 0);
+
+  await host.close();
+});
+
+test('concurrent mentions queries isolate per-session scope transitions while still honoring global invalidation', async () => {
+  const sessionScopes = new Map([
+    ['sess-a', 'proj-a'],
+    ['sess-b', 'proj-a'],
+  ]);
+  let releaseSessA;
+  let blockNextProjA = false;
+
+  const host = makeHost({
+    managementEnabled: true,
+    isolatedMentionsPreviewEnabled: true,
+    sessionScopes,
+    checkDelegraSessionScope: async ({ delegationScope, expertIds }) => {
+      if (blockNextProjA && delegationScope === 'proj-a') {
+        blockNextProjA = false;
+        await new Promise((resolve) => { releaseSessA = resolve; });
+      }
+      return {
+        scopeVerified: true,
+        validUntil: '2027-01-01T00:00:00Z',
+        results: expertIds.map((id) => ({
+          expertId: id,
+          callableInScope: delegationScope === 'proj-a',
+          acceptingTasks: 'accepting',
+          authContinuityDigest: 'dig-1',
+        })),
+      };
+    },
+  });
+  await host.open();
+
+  const dir = JSON.parse((await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/catalog?view=callable',
+    headers: { 'x-dsh-auth': 'ok' },
+  })).body);
+  const exp1 = dir.items.find((i) => i.expertId === 'exp-1');
+  await mockHttp(host.handleRequest, {
+    method: 'PUT',
+    url: '/api/forge-experts/preferences/exp-1',
+    headers: { 'x-dsh-auth': 'ok', 'x-forge-experts-request': '1', 'content-type': 'application/json' },
+    body: { enabled: true, editToken: exp1.preference.editToken },
+  });
+
+  // Prime sess-b on proj-a so switching sess-b to proj-b advances sess-b's version.
+  const primeB = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-b',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(primeB.statusCode, 200);
+
+  // Start slow query for sess-a, then switch sess-b to proj-b concurrently.
+  blockNextProjA = true;
+  const inflightA = mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-a',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  sessionScopes.set('sess-b', 'proj-b');
+  const resB = await mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-b',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  assert.equal(resB.statusCode, 200);
+  assert.equal(JSON.parse(resB.body).candidates.length, 0);
+
+  releaseSessA();
+  const resA = await inflightA;
+  assert.equal(resA.statusCode, 200, 'unrelated session scope transition must not invalidate sess-a');
+  assert.equal(JSON.parse(resA.body).candidates.length, 1);
+
+  // Global invalidation while sess-a is in-flight must still reject with 409 EXPERT_SCOPE_MISMATCH.
+  blockNextProjA = true;
+  const inflightA2 = mockHttp(host.handleRequest, {
+    method: 'GET',
+    url: '/api/forge-experts/mentions?sessionId=sess-a',
+    headers: { 'x-dsh-auth': 'ok' },
+  });
+  // Wait one microtask so inflightA2 enters checkDelegraSessionScope.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  host.mentions.invalidate(1, null);
+  releaseSessA();
+  const resA2 = await inflightA2;
+  assert.equal(resA2.statusCode, 409);
+  assert.equal(JSON.parse(resA2.body).error.code, 'EXPERT_SCOPE_MISMATCH');
 
   await host.close();
 });

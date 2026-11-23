@@ -191,6 +191,9 @@ export async function apply(ctx, config = {}) {
   const unregisterRoute = webServer && typeof webServer.register === 'function'
     ? webServer.register({ kind: 'prefix', path: API_PREFIX, handler: host.handleRequest })
     : null;
+  if (typeof unregisterRoute !== 'function' && typeof ctx.logger?.warn === 'function') {
+    ctx.logger.warn('[forge-experts] webServer route registration unavailable');
+  }
 
   ctx.provide?.('forgeExperts', host);
   // Cordis runs a plain function plugin with `new` and never emits a `dispose`

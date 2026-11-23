@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPreferencesStore, derivePreferenceKey } from '../src/preferences.mjs';
 
-function createMemoryStorageDomain({ failWrite = null, initial = {} } = {}) {
+function createMemoryStorageDomain({ failWrite = null, onPut = null, initial = {} } = {}) {
   const data = new Map(Object.entries(initial));
   const opened = [];
   return {
@@ -18,6 +18,7 @@ function createMemoryStorageDomain({ failWrite = null, initial = {} } = {}) {
           return {
             get(key) { return data.get(key); },
             async put(key, value) {
+              if (onPut) await onPut(key, value);
               if (failWrite) throw failWrite;
               data.set(key, value);
             },
@@ -92,12 +93,21 @@ test('preferences default disabled, enforce editToken revision concurrency, and 
   const afterRegrant = await store.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', authContinuityDigest: digest });
   assert.equal(afterRegrant.enabled, false);
 
-  // Expired editToken cannot enqueue a write.
+  // Expired editToken cannot enqueue a write and expired settlement is pruned on subsequent reads.
   nowMs += 120_000;
   await assert.rejects(
     () => store.setEnabled({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', enabled: true, editToken: afterRegrant.editToken }),
     (err) => err.code === 'EXPERT_EDIT_TOKEN_EXPIRED',
   );
+  await store.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', authContinuityDigest: digest });
+  const expiredSettlement = await store.getEditSettlement({
+    scope: SCOPE,
+    scopeEpoch: 1,
+    expertId: 'exp-1',
+    editToken: initial.editToken,
+    authContinuityDigest: digest,
+  });
+  assert.equal(expiredSettlement.settlement, 'not_executed');
   await store.close();
 });
 
@@ -137,4 +147,65 @@ test('unknown write outcome degrades store fail-closed and preserves unknown sch
   assert.equal(store2.isDegraded(), true);
   assert.deepEqual(storage2.data.get(key), futureRecord);
   await store2.close();
+});
+
+test('close() rejects new reads/writes while draining and reconcileRevocation degrades safely on write failure', async () => {
+  let releasePut;
+  const storage = createMemoryStorageDomain({
+    onPut: async () => {
+      await new Promise((resolve) => { releasePut = resolve; });
+    },
+  });
+  const store = createPreferencesStore({
+    openStorageDomain: (spec) => storage.open(spec),
+    getScopeSnapshot: () => ({ scopeEpoch: 1, scope: SCOPE }),
+    assertScopeCurrent: () => {},
+    verifyOrgCallable: async () => ({ callableInOrg: true, authContinuityDigest: 'dig-1' }),
+  });
+  await store.open();
+  const initial = await store.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', authContinuityDigest: 'dig-1' });
+  const inflightWrite = store.setEnabled({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', enabled: true, editToken: initial.editToken });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const closing = store.close();
+  await assert.rejects(
+    () => store.get({ scope: SCOPE, scopeEpoch: 1, expertId: 'exp-1', authContinuityDigest: 'dig-1' }),
+    (err) => err.code === 'EXPERT_STORAGE_UNAVAILABLE',
+  );
+  releasePut();
+  await inflightWrite;
+  await closing;
+
+  // Revocation write failure degrades cleanly without throwing unhandled rejection.
+  const key = derivePreferenceKey({ ...SCOPE, expertId: 'exp-rev' });
+  const failStorage = createMemoryStorageDomain({
+    failWrite: Object.assign(new Error('disk unknown'), { outcome: 'unknown' }),
+    initial: {
+      [key]: {
+        schemaVersion: 1,
+        enabled: true,
+        revision: 1,
+        authContinuityDigest: 'dig-1',
+        updatedAt: '2026-11-22T00:00:00.000Z',
+      },
+    },
+  });
+  const failStore = createPreferencesStore({
+    openStorageDomain: (spec) => failStorage.open(spec),
+    getScopeSnapshot: () => ({ scopeEpoch: 1, scope: SCOPE }),
+    assertScopeCurrent: () => {},
+    verifyOrgCallable: async () => ({ callableInOrg: false, authContinuityDigest: null }),
+  });
+  await failStore.open();
+  const res = await failStore.reconcileRevocation({
+    scope: SCOPE,
+    scopeEpoch: 1,
+    expertId: 'exp-rev',
+    callableInOrg: false,
+    authContinuityDigest: null,
+  });
+  assert.equal(res.invalidated, true);
+  assert.equal(res.degraded, true);
+  assert.equal(failStore.isDegraded(), true);
+  await failStore.close();
 });
