@@ -5,7 +5,29 @@
  * 任一步无法判定（非绝对路径、ELOOP、权限不足）都抛错，由门禁按拒绝处理。
  */
 import { realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse as parsePath, sep } from 'node:path';
+
+/**
+ * 模板展开的取值基线：`DSH_HOME` 默认宿主口径 `~/.dsh`，再让进程环境与插件配置覆盖。
+ *
+ * 装载期校验（`config.mjs`）与装配期展开（`installer.mjs`）共用本函数，
+ * 避免两处各写一份基线而漂移。
+ */
+export function defaultTemplateValues() {
+  return { DSH_HOME: join(homedir(), '.dsh') };
+}
+
+/**
+ * 合并后的模板取值环境：基线 → 进程环境 → 配置里的 `env`。
+ *
+ * @param {unknown} [inputEnv]
+ * @returns {Record<string, string | undefined>}
+ */
+export function templateEnv(inputEnv) {
+  const configured = inputEnv !== null && typeof inputEnv === 'object' && !Array.isArray(inputEnv) ? inputEnv : {};
+  return { ...defaultTemplateValues(), ...process.env, ...configured };
+}
 
 export class PolicyPathError extends Error {
   constructor(message, code, details = undefined) {

@@ -50,7 +50,7 @@ test('the seven implemented switches assemble their stage in order', () => {
     denyUnknownAction: true, denyHumanRecord: true, protectPaths: true,
   });
   assert.deepEqual(everything.map((stage) => stage.stage), [
-    'resolve', 'identity', 'unknown-action', 'human-record', 'protected-paths', 'process-rules',
+    'resolve', 'identity', 'human-record', 'unknown-action', 'protected-paths', 'process-rules',
     'content-gate', 'confirmation', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ confirmPush: true }).map((stage) => stage.stage), [

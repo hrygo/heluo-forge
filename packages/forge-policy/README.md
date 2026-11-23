@@ -32,7 +32,7 @@
 | 记录最小化 | 只写白名单字段；`arguments`/`content`/`stdout`/`stderr` 等禁用字段直接报错；`params` 只存摘要，路径只留尾 4 段 |
 | 收据 | 一次性收据绑定同一执行对象与静态摘要；`tools.guard` 同步核验并消费，执行前 `recheck` 复验卸载、取消、参数与身份变化，任一变化即拒绝执行；结清立即释放准入条目（`pendingAdmissions()` 可查在途数） |
 | 命令面 | `policy.registerCommand`：未登记动作拒绝注册；判定、身份、前置审计与结清复用同一屏障；简单命令须有明确业务目标，结构化命令提供 `resolveArguments(invocation)`，处理函数第二参数为规范化参数 |
-| 受保护路径 | `protectPaths` 开启后按"会话工作区 cwd + `protectedPaths`/`paths.append` 追加根"判包含：`path`/`file` 字段任意深度、`target` 仅在可确认为路径时判定；工作区内固定九类文件名（`.env`、`.env.*`、`*.pem`、`*.key`、`id_rsa*`、`.npmrc`、`.netrc`、`credentials*`、`*.p12`）与追加根命中即拒绝，证据只记 `name:<pattern>`/`root:<template>`，不写绝对路径；工作区外交给沙箱；工作区不可得、符号链接循环或不可判定一律 fail-closed。服务暴露 `protectedPaths()`（仅配置的追加根模板）与 `checkPath(candidate, workspaceRoot?)` 返回 `{ judged, protected, category? }` |
+| 受保护路径 | `protectPaths` 开启后按"会话工作区 cwd + `protectedPaths`/`paths.append` 追加根"判包含：`path`/`file` 字段任意深度、`target` 仅在可确认为路径时判定；工作区内固定九类文件名（`.env`、`.env.*`、`*.pem`、`*.key`、`id_rsa*`、`.npmrc`、`.netrc`、`credentials*`、`*.p12`）与追加根命中即拒绝，证据只记 `name:<pattern>`/`root:<template>`，不写绝对路径；工作区外交给沙箱；工作区不可得、符号链接循环或不可判定一律 fail-closed。服务暴露 `protectedPaths()`（仅配置的追加根模板）、`checkPath(candidate, workspaceRoot?)` 返回布尔（true = 已判定且受保护）与 `judgePath(candidate, workspaceRoot?)` 返回 `{ judged, protected, category? }` |
 | 审计查询 | 宿主有 `ctx.commands` 时注册只读命令 `/policy-audit [N]`（默认 20、上限 200）：按新 → 旧展示最近记录，八列 `时间/阶段/动作/目标/决策/规则/耗时/agent.kind`，memory 与 file 落点同构；无记录、审计源不可读与坏行分别给可操作提示；不写审计、不改策略状态、不触发重扫 |
 | 组织信封 | `heluo.policy.org.v1` 的 Ed25519 验签信封：`verified` 进托管模式、`absent` 是个人模式、`invalid` 只降级写动作；`caps` 只能收紧不能放宽 |
 | 过程观察 | 默认关闭导出；有界内存缓冲、按契约字段白名单整条拒绝未知载荷；观察链路故障只降级观察，不改变判定与必要审计 |

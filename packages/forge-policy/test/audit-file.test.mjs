@@ -264,3 +264,49 @@ test('the barrier reads through the current sink and falls back to its ring', as
   combined.setSink(legacy);
   assert.deepEqual((await combined.read({ limit: 1 })).records.map((record) => record.observedAt), [2], 'setAuditSink affects later reads');
 });
+
+test('a read stops once it has enough records instead of parsing the whole history', async () => {
+  const { dir, clean } = tempDir();
+  try {
+    const file = join(dir, 'forge-policy-2026-11-23.jsonl');
+    writeFileSync(file, `not-json\n${JSON.stringify({ ...RECORD, observedAt: 5 })}\n${JSON.stringify({ ...RECORD, observedAt: 6 })}\n`);
+    const sink = createFileSink({ dir });
+    const snapshot = await sink.read({ limit: 1 });
+    assert.deepEqual(snapshot.records.map((record) => record.observedAt), [6]);
+    assert.equal(snapshot.corrupt, 0, 'lines older than the requested window are never parsed');
+  } finally {
+    clean();
+  }
+});
+
+test('one unreadable day is skipped instead of losing the readable history', async () => {
+  const sink = createFileSink({
+    dir: '/mixed',
+    fs: {
+      readdir: async () => ['forge-policy-2026-11-23.jsonl', 'forge-policy-2026-11-22.jsonl'],
+      readFile: async (file) => {
+        if (String(file).includes('2026-11-23')) {
+          const error = new Error('permission denied');
+          error.code = 'EACCES';
+          throw error;
+        }
+        return `${JSON.stringify({ ...RECORD, observedAt: 1000 })}\n`;
+      },
+    },
+  });
+  const snapshot = await sink.read({ limit: 5 });
+  assert.deepEqual(snapshot.records.map((record) => record.observedAt), [1000]);
+  assert.equal(snapshot.unreadable, false, 'a partially readable history is still a history');
+  assert.equal(snapshot.missing, false);
+});
+
+test('an audit directory with no matching files is empty history, not unreadable', async () => {
+  const sink = createFileSink({
+    dir: '/empty',
+    fs: {
+      readdir: async () => ['other.log'],
+      readFile: async () => '',
+    },
+  });
+  assert.deepEqual(await sink.read({ limit: 5 }), { records: [], corrupt: 0, missing: false, unreadable: false });
+});

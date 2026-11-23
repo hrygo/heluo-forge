@@ -14,12 +14,19 @@ export const AUDIT_COLUMNS = '时间 | 阶段 | 动作 | 目标 | 决策 | 规�
 
 export const AUDIT_EMPTY_COPY = '暂无审计记录：先执行一次受控写，或开启任一规则后重试。';
 export const AUDIT_UNREADABLE_COPY = '审计源不可读：请检查 audit.sink 配置与日志目录权限后重试。';
+export const AUDIT_MISSING_COPY = '本会话没有启用审计：策略服务未装配审计屏障，无记录可查。';
 
 const TRUNCATION_MARK = '…';
 
+/**
+ * 记录里的字符串可能来自业务参数：先把换行与控制字符折成空格，
+ * 否则一行记录能伪造出第二行、终端转义也能污染输出。
+ */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/gu;
+
 function truncate(value, max) {
   if (value === undefined || value === null || value === '') return '-';
-  const text = String(value);
+  const text = String(value).replace(CONTROL_CHARS, ' ');
   return text.length > max ? `${text.slice(0, max - 1)}${TRUNCATION_MARK}` : text;
 }
 
@@ -46,7 +53,8 @@ export function parseAuditCount(raw) {
   if (raw === undefined || raw === null) return { limit: DEFAULT_AUDIT_LIMIT };
   const text = String(raw).trim();
   if (text === '') return { limit: DEFAULT_AUDIT_LIMIT };
-  if (!/^[+-]?\d+$/u.test(text)) {
+  // 只收规范十进制：`+5`、`-0`、`007` 看上去与解析出的数不是一个东西。
+  if (!/^(?:0|[1-9]\d*)$/u.test(text)) {
     return { limit: DEFAULT_AUDIT_LIMIT, note: '条数需为 1–200 的整数，已回退为 20。' };
   }
   const value = Number(text);
@@ -114,6 +122,10 @@ export function formatAuditReport(snapshot = {}) {
     return Object.freeze({ kind: 'error', text: AUDIT_UNREADABLE_COPY });
   }
   const records = Array.isArray(snapshot?.records) ? snapshot.records : [];
+  if (records.length === 0 && snapshot?.missing === true) {
+    // 「没启用审计」与「启用了但没记录」是两件事，不能共用同一句文案。
+    return Object.freeze({ kind: 'error', text: AUDIT_MISSING_COPY });
+  }
   if (records.length === 0) {
     return Object.freeze({ kind: 'error', text: AUDIT_EMPTY_COPY });
   }

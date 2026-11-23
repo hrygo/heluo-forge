@@ -40,7 +40,7 @@
 
 P0 已交付受控写骨架：动作目录、IAM 身份校验、恒开审计、一次性收据与执行前复验、命令面同源判定；P1 交付人工确认卡片与决策复用；P2 交付内容闸（9 条内置规则、按动作字段映射、跨字段字节预算）；P3 交付未登记动作、人工留痕与受保护路径三个语义开关和只读命令 `/policy-audit`。流程规则（`enforceProcessRules`）与 #417 一并待后续阶段，当前置真仍在装载期拒绝。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
 
-**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现为分类默认决策 + 身份 + 审计，叠加六个已接入的规则开关（内容闸、两条按次确认、未登记动作、人工留痕、受保护路径）。
+**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 与 DOP 状态流转在开关开启后弹确认卡片。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。现行实现为分类默认决策 + 身份 + 审计，叠加七个已接入的规则开关（内容闸、两条按次确认、未登记动作、人工留痕、受保护路径、流程规则）。
 
 **当前实现（P3，2026-11-23）**：七个策略开关全部已实现（`contentGate`、`confirmPush`、`confirmDopWrite`、`enforceProcessRules`、`denyUnknownAction`、`denyHumanRecord`、`protectPaths`），置 `true` 即生效。三个语义开关只收紧权限、默认关闭：`protectPaths` 在会话工作区与追加根内判九类受保护文件名，`denyHumanRecord` 拒绝 Agent 发起的人工评审留痕，`denyUnknownAction` 拒绝已映射但未登记的写动作。需要人工确认卡片的动作只有 `gitee.git.push`（`confirmPush`）与 `change.clarification.write`（`confirmDopWrite`）两条，其余四条受控写在任何开关组合下都不弹卡；身份校验恒常开启，不占开关。确认等待默认 120000 ms（`confirmation.timeoutMs`），超时、通道不可用、应答非法分别映射 `POLICY_CONFIRM_TIMEOUT` / `_UNAVAILABLE` / `_INVALID_ANSWER`，一律不执行。来源为子代理的调用不再一律拒绝：命中的确认由存活的主会话根代问（卡片弹在主会话，正文标明「本次写入由子代理发起」），找不到唯一存活的根才以 `POLICY_CONFIRM_DELEGATED` 拒绝。已允许的调用按「工具名 + callId + 动作 + 参数摘要 + 正文摘要」复用同一结论，进程内最多 32 条、不落盘并绑定 IAM 主体；命中后仍须重过身份校验、一次性收据、执行前正文复验与执行后复验。正文读不到时摘要只是占位值，这样的结论既不进缓存也不查缓存，重试必须重新确认（D89）。没有桌面确认通道时装载照常完成并告警一次，需要卡片的写全部以 `POLICY_CONFIRM_UNAVAILABLE` 拒绝（fail-closed）。本文其余章节描述的是目标模型，未达成的部分仍以"待实现"标注。
 
@@ -118,10 +118,16 @@ export interface PolicyService {
   /** 已配置的追加根模板（不含内置会话工作区；工作区范围由 checkPath 的参数给出） */
   protectedPaths(): string[];
   /**
-   * 判定候选路径是否落在受保护范围：工作区由会话上下文提供；
-   * judged=false 表示不在本规则作用域（交给沙箱），protected=true 时给出类别。
+   * 判定候选路径是否落在受保护范围（布尔面，沿用既有契约）。
+   * true 表示"已判定且受保护"；判定不了（工作区外、形状不合法）一律 false，
+   * 因为拿不到保护依据时不能把路径当成"受保护"。
    */
-  checkPath(candidate: string, workspaceRoot?: string): { judged: boolean; protected: boolean; category?: string };
+  checkPath(candidate: string, workspaceRoot?: string): boolean;
+  /**
+   * 同上，明细面：judged=false 表示不在本规则作用域（交给沙箱），
+   * protected=true 时给出类别。需要区分两种 false 的调用方用这个。
+   */
+  judgePath(candidate: string, workspaceRoot?: string): { judged: boolean; protected: boolean; category?: string };
   orgPolicy(): OrgPolicyState;
   policyVersion(): string;
   mode(): 'managed' | 'personal';
@@ -156,9 +162,9 @@ export interface PolicyDecision {
 | `target` | 执行时必须按时给出的目标类型；缺失一律拒绝 |
 | `category` | 类别覆盖；只能落在分类表已允许的范围内，决定默认决策 |
 
-**判定顺序**：`resolve → identity → unknown-action → human-record → protected-paths → content-gate → confirmation → audit → receipt`（流程域对应的 `process-rules` 阶段尚未装配，见 #417；未开启的开关不生成阶段）。动作分类与登记决定是否进入身份段，三个语义开关在其后按固定顺序收紧，路径检查先于确认且不可翻转；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
+**判定顺序**：`resolve → identity → human-record → unknown-action → protected-paths → process-rules → content-gate → confirmation → audit → receipt`（`process-rules` 已随 #417 装配；未开启的开关不生成阶段）。动作分类与登记决定是否进入身份段，三个语义开关在其后按固定顺序收紧，路径检查先于确认且不可翻转；执行前复验身份、策略版本、目标与受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未登记写动作（开关开启后）、缺失目标以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现行实现（P0–P3）**：判定流水线常开 `resolve → identity → audit → receipt` 四段；`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`/`confirmDopWrite` 各自插入自己的阶段，顺序为 `unknown-action → human-record → protected-paths → process-rules → content-gate → confirmation`。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未映射工具与未登记的只读动作是 out-of-scope：直接放行，不读身份、不写审计；未登记的写动作在 `denyUnknownAction` 开启后改为拒绝。七条规则开关代码默认全关，且七条都已接入判定链路，置真即生效；仍未接入判定链路的配置面只剩 `categories`，装载期拒绝以避免"配了却静默不生效"。`confirmation`、`content` 与路径模板（`protectedPaths`、`paths.append`）均可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
+**现行实现（P0–P3）**：判定流水线常开 `resolve → identity → audit → receipt` 四段；`denyUnknownAction`、`denyHumanRecord`、`protectPaths`、`enforceProcessRules`、`contentGate`、`confirmPush`/`confirmDopWrite` 各自插入自己的阶段，顺序为 `human-record → unknown-action → protected-paths → process-rules → content-gate → confirmation`。已登记动作按分类默认决策放行或拒绝，放行后必须解析出 IAM actor，然后先落前置审计记录、签发一次性收据，再由 `tools.guard` 同步核验；执行前 `recheck` 复验卸载、取消、参数与身份变化，执行后结清。未映射工具与未登记的只读动作是 out-of-scope：直接放行，不读身份、不写审计；未登记的写动作在 `denyUnknownAction` 开启后改为拒绝。七条规则开关代码默认全关，且七条都已接入判定链路，置真即生效；仍未接入判定链路的配置面只剩 `categories`，装载期拒绝以避免"配了却静默不生效"。`confirmation`、`content` 与路径模板（`protectedPaths`、`paths.append`）均可按需设置。目标设计的其余部分按[实施计划](../../plans/2026-11-19-policy-minimal-gates.md)分阶段接入，未实现前不能视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -421,7 +427,7 @@ flowchart TD
 
 **超时**：确认等待默认 120 秒，超时按拒绝处理；判断本身 1 秒内完成，超时即拒绝。判定与前置审计的等待由 `audit.timeoutMs`（默认 2 秒）约束。
 
-**现行顺序（P0–P3）**：`resolve → identity → unknown-action → human-record → protected-paths → content-gate → confirmation → audit → receipt`，未开启的开关不生成阶段；流程域 `process-rules` 未装配（#417）。执行前 `recheck` 复验卸载、取消、参数与身份变化，随后执行并结清。
+**现行顺序（P0–P3）**：`resolve → identity → human-record → unknown-action → protected-paths → process-rules → content-gate → confirmation → audit → receipt`，未开启的开关不生成阶段。执行前 `recheck` 复验卸载、取消、参数与身份变化，随后执行并结清。
 
 **取消**：用户取消工具调用时不写"已执行"审计，只写"已取消"。
 

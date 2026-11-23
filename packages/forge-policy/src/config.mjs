@@ -7,11 +7,8 @@
  * `IMPLEMENTED_RULES`，默认值与校验保持同源。
  */
 
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-
 import { catalogIssues } from './catalog.mjs';
-import { isPathTemplate, resolveProtectedRoots } from './paths.mjs';
+import { isPathTemplate, resolveProtectedRoots, templateEnv } from './paths.mjs';
 
 export class PolicyConfigError extends Error {
   constructor(issues) {
@@ -186,18 +183,6 @@ function checkPaths(issues, paths) {
 
 function checkProtectedPaths(issues, protectedPaths) {
   checkTemplateList(issues, protectedPaths, 'protectedPaths');
-}
-
-/**
- * 与装载期同一套展开基线：`DSH_HOME` 默认 `~/.dsh`，再让进程环境与 `config.env` 覆盖。
- * 语法合法但无法展开（变量缺席、展开结果非绝对路径）在这里与 L1 问题一起报。
- */
-function templateEnv(inputEnv) {
-  return {
-    DSH_HOME: join(homedir(), '.dsh'),
-    ...process.env,
-    ...(isPlainObject(inputEnv) ? inputEnv : {}),
-  };
 }
 
 function checkTemplateExpansion(issues, input) {

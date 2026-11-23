@@ -174,3 +174,26 @@ test('缺少会话工作区、循环链接或候选超限都按无法判定拒�
   assert.equal(tooMany.code, 'POLICY_PATH_UNRESOLVABLE');
   assert.ok(denyRecords(sink).length >= 2);
 });
+
+test('截断或过深的路径候选按"无法确认"拒绝，不拿半截值去判', async (t) => {
+  const workspace = fixture(t);
+  const { gate, sink } = gateFor({ rules: { protectPaths: true } });
+
+  // 超长值被截断后已不是原路径：判不了就拒，而不是拿前 4096 个字符去猜。
+  const overLong = await pre(gate, execFor(
+    { target: 'acme/demo!1', path: `${join(workspace, 'notes.txt')}${'x'.repeat(5_000)}` },
+    { cwd: workspace },
+  ));
+  assert.equal(overLong.kind, 'deny');
+  assert.equal(overLong.code, 'POLICY_PATH_UNRESOLVABLE');
+  assert.equal(String(overLong.reason).includes(workspace), false);
+
+  // 超过深度上限的子树里可能藏着 path 键：既然没看完，就不能当成"没有路径"。
+  const tooDeep = await pre(gate, execFor(
+    { target: 'acme/demo!1', a: { b: { c: { d: { e: { path: join(workspace, '.env') } } } } } },
+    { cwd: workspace },
+  ));
+  assert.equal(tooDeep.kind, 'deny');
+  assert.equal(tooDeep.code, 'POLICY_PATH_UNRESOLVABLE');
+  assert.ok(denyRecords(sink).length >= 2);
+});

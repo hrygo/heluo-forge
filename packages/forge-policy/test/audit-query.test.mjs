@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   AUDIT_COLUMNS,
   AUDIT_EMPTY_COPY,
+  AUDIT_MISSING_COPY,
   AUDIT_UNREADABLE_COPY,
   DEFAULT_AUDIT_LIMIT,
   MAX_AUDIT_LIMIT,
@@ -78,7 +79,10 @@ test('long fields are truncated and missing fields fall back', () => {
 });
 
 test('an empty or unreadable sink gets an actionable error, not a success header', () => {
-  assert.deepEqual(formatAuditReport({ records: [], missing: true }), { kind: 'error', text: AUDIT_EMPTY_COPY });
+  // 未配置审计（missing）与"配置了但确实没有记录"是两件事，文案不能混。
+  assert.deepEqual(formatAuditReport({ records: [], missing: true }), { kind: 'error', text: AUDIT_MISSING_COPY });
+  assert.deepEqual(formatAuditReport({ records: [] }), { kind: 'error', text: AUDIT_EMPTY_COPY });
+  assert.match(AUDIT_MISSING_COPY, /没有启用审计/u);
   assert.deepEqual(formatAuditReport({ unreadable: true }), { kind: 'error', text: AUDIT_UNREADABLE_COPY });
   assert.match(AUDIT_EMPTY_COPY, /暂无审计记录/u);
   assert.match(AUDIT_UNREADABLE_COPY, /审计源不可读/u);
@@ -100,4 +104,25 @@ test('a report lists newest-first rows and mentions skipped corrupt lines', () =
 
   const clean = formatAuditReport({ records });
   assert.equal(clean.text.includes('无法解析'), false);
+});
+
+test('control characters in a field cannot forge rows or move the cursor', () => {
+  const report = formatAuditReport({
+    records: [{ observedAt: 0, action: 'gitee.issue.write\n伪造行\u001b[2K', decision: 'allow' }],
+  });
+  assert.equal(report.kind, 'success');
+  // 换行与控制符被换成空格：既不会多出一行，也不会留下终端控制序列。
+  assert.equal(report.text.includes('\n伪造行'), false);
+  assert.equal(/[\u0000-\u0009\u000b-\u001f\u007f]/u.test(report.text), false);
+  assert.equal(report.text.includes('伪造行'), true, 'the text itself is kept, only the layout characters are neutralized');
+});
+
+test('the count parser only accepts canonical decimals', () => {
+  for (const raw of ['+5', '-0', '007', '1e3', '5 5']) {
+    const parsed = parseAuditCount(raw);
+    assert.equal(parsed.limit, DEFAULT_AUDIT_LIMIT, `${raw} must fall back to the default`);
+    assert.equal(typeof parsed.note, 'string');
+  }
+  assert.deepEqual(parseAuditCount('7'), { limit: 7 });
+  assert.equal(parseAuditCount(` ${DEFAULT_AUDIT_LIMIT} `).limit, DEFAULT_AUDIT_LIMIT);
 });

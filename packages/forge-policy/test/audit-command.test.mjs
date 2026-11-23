@@ -7,7 +7,7 @@ import {
   AUDIT_COMMAND_NAME,
   registerAuditCommand,
 } from '../src/audit-command.mjs';
-import { AUDIT_EMPTY_COPY, AUDIT_UNREADABLE_COPY } from '../src/audit-query.mjs';
+import { AUDIT_EMPTY_COPY, AUDIT_MISSING_COPY, AUDIT_UNREADABLE_COPY } from '../src/audit-query.mjs';
 
 // P3 · `/policy-audit [N]` 注册与只读行为：命令只读审计源，不写审计、不改策略状态。
 function harness({ audit, commands = true } = {}) {
@@ -130,6 +130,12 @@ test('an unreadable sink becomes a readable error without a path or errno', asyn
 test('a missing audit source reports the empty-state hint, not a zero-row success', async () => {
   for (const audit of [undefined, { read: async () => ({ records: [], missing: true }) }]) {
     const { registered } = harness({ audit });
+    const result = await registered.get(AUDIT_COMMAND_NAME).handler({ rawInput: '' });
+    assert.deepEqual(result, { kind: 'error', text: AUDIT_MISSING_COPY });
+  }
+  // 可读但没有记录：是"暂无记录"，不是"未启用"。
+  {
+    const { registered } = harness({ audit: { read: async () => ({ records: [] }) } });
     const result = await registered.get(AUDIT_COMMAND_NAME).handler({ rawInput: '' });
     assert.deepEqual(result, { kind: 'error', text: AUDIT_EMPTY_COPY });
   }

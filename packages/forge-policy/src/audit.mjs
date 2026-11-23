@@ -64,7 +64,7 @@ const REDACT_SEGMENTS = 4;
 const SENSITIVE_KEY = /^(token|secret|password|passwd|credential|credentials|authorization|apiKey|api_key|accessToken|refreshToken)$/iu;
 
 /** 路径只留尾 4 段（D57）：审计要能指认位置，但不落完整本机路径。 */
-function redactPath(value) {
+export function redactPath(value) {
   if (typeof value !== 'string' || value.length === 0) return value;
   const looksLikePath = /^([A-Za-z]:)?[\\/]/u.test(value);
   if (!looksLikePath) return value.length <= 128 ? value : `${value.slice(0, 127)}…`;
@@ -278,18 +278,24 @@ export function createFileSink(options = {}) {
         .filter((entry) => entry.match !== null)
         .map((entry) => ({ name: entry.name, day: entry.match[1] }))
         .sort((left, right) => (left.day === right.day ? 0 : left.day < right.day ? 1 : -1));
+      if (files.length === 0) return { records: [], corrupt: 0, missing: false, unreadable: false };
       const records = [];
       let corrupt = 0;
+      let readableAny = false;
       for (const entry of files) {
+        if (records.length >= max) break;
         let text;
         try {
           text = await fs.readFile(`${dir}/${entry.name}`, 'utf8');
-        } catch (error) {
-          if (error?.code === 'ENOENT') continue;
-          return { records: [], corrupt: 0, missing: false, unreadable: true };
+        } catch {
+          // 单个文件读不出来只降级这一个文件；所有文件都读不出来才算"不可读"。
+          continue;
         }
-        for (const line of String(text).split('\n')) {
-          const trimmed = line.trim();
+        readableAny = true;
+        // 同一天内记录按追加顺序，从文件尾部往前取；凑够 limit 就不再解析更早的文件。
+        const lines = String(text).split('\n');
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          const trimmed = lines[index].trim();
           if (trimmed === '') continue;
           try {
             const parsed = JSON.parse(trimmed);
@@ -298,8 +304,10 @@ export function createFileSink(options = {}) {
           } catch {
             corrupt += 1;
           }
+          if (records.length >= max) break;
         }
       }
+      if (readableAny !== true) return { records: [], corrupt: 0, missing: false, unreadable: true };
       records.sort((left, right) => (Number(right?.observedAt) || 0) - (Number(left?.observedAt) || 0));
       return { records: records.slice(0, max), corrupt, missing: false, unreadable: false };
     },
@@ -424,10 +432,11 @@ export function createAuditBarrier(options = {}) {
         return await target.read({ limit: max });
       }
       const records = typeof target?.records === 'function' ? target.records() : [];
+      // 没有自带 `read` 的 sink 仍可读：空快照就是"确实没有记录"，不是"未配置审计"。
       return {
         records: records.slice().reverse().slice(0, max),
         corrupt: 0,
-        missing: records.length === 0,
+        missing: false,
         unreadable: false,
       };
     } catch {

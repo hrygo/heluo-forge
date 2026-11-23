@@ -61,7 +61,7 @@ export function targetAsPath(value, options = {}) {
  *
  * @param {unknown} args 工具调用参数（`arguments`）
  * @param {{workspaceRoot?: string, stat?: (candidate: string) => boolean}} [options]
- * @returns {{candidates: readonly {field: string, value: string}[], truncated: boolean}}
+ * @returns {{candidates: readonly {field: string, value: string, truncated?: boolean}[], truncated: boolean}}
  *   `truncated` 为真表示候选超过上限，调用方必须按"无法确认"拒绝。
  */
 export function collectPathCandidates(args, options = {}) {
@@ -74,14 +74,21 @@ export function collectPathCandidates(args, options = {}) {
       truncated = true;
       return;
     }
+    const truncatedValue = value.length > MAX_PATH_VALUE_LENGTH;
     candidates.push(Object.freeze({
       field,
-      value: value.length > MAX_PATH_VALUE_LENGTH ? value.slice(0, MAX_PATH_VALUE_LENGTH) : value,
+      value: truncatedValue ? value.slice(0, MAX_PATH_VALUE_LENGTH) : value,
+      ...(truncatedValue ? { truncated: true } : {}),
     }));
   }
 
   function walk(node, depth, field) {
-    if (depth > MAX_PATH_DEPTH || node === null || typeof node !== 'object') return;
+    if (depth > MAX_PATH_DEPTH) {
+      // 再深就可能藏着 path/file 键：既然看不到，就不能声称"没有候选"。
+      truncated = true;
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
       // 普通数组里的字符串不是路径来源（例如 labels、tags）；只有从 path/file
       // 键进入的数组才把字符串算作候选，对象项继续展开。

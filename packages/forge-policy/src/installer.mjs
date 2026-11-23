@@ -1,4 +1,3 @@
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { createObservationRuntime } from './observe.mjs';
@@ -10,7 +9,7 @@ import { createGate } from './gate.mjs';
 import { createDecisionCache } from './reuse.mjs';
 import { createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
 import { loadOrgPolicy } from './org-policy.mjs';
-import { judgeProtectedPath, matchProtected, resolveProtectedRoots } from './paths.mjs';
+import { judgeProtectedPath, matchProtected, resolveProtectedRoots, templateEnv } from './paths.mjs';
 import { buildPipeline, isObserveOnly } from './pipeline.mjs';
 import { Config, PolicyConfigError, collectPathTemplates, resolveConfig, validateConfig } from './config.mjs';
 import { registerAuditCommand } from './audit-command.mjs';
@@ -40,14 +39,6 @@ const DEFAULT_PROTECTED_PATHS = Object.freeze([]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/**
- * 宿主自有解析器（`@deepseek-ai/dsh-home-paths`）在插件内不可导入（实测），
- * 因此按宿主契约使用环境变量，并在 `$DSH_HOME` 缺席时回落到宿主默认的 `~/.dsh`。
- */
-function defaultTemplateValues() {
-  return { DSH_HOME: join(homedir(), '.dsh') };
 }
 
 /**
@@ -181,7 +172,7 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     throw new PolicyCatalogError('organization policy requires a durable audit sink: set audit.sink to "file"', 'POLICY_AUDIT_NOT_DURABLE');
   }
 
-  const env = { ...defaultTemplateValues(), ...process.env, ...(config.env ?? {}) };
+  const env = templateEnv(config.env);
   // 两层模板合并后按同一基线展开：九类名称固定生效，配置只能追加受保护范围。
   // 展开失败已在 `validateConfig` 与 L1 问题一起报过；这里保留防御性汇总，避免装配到一半。
   const configuredTemplates = collectPathTemplates(config);
@@ -271,6 +262,23 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     warn?.(CONFIRMATION_UNAVAILABLE_NOTICE);
   }
 
+  // 路径判定的两副面孔：`checkPath` 保持既往的布尔契约，`judgePath` 给需要区分
+  // "不判" 与 "判了但不受保护" 的调用方。两者共用同一份判定，结论不会漂移。
+  const judgePathOf = (candidate, workspaceRoot) => {
+    if (workspaceRoot === undefined) {
+      const result = matchProtected(candidate, protectedRoots);
+      if (!result.protected) return Object.freeze({ judged: false, protected: false });
+      return Object.freeze({ judged: true, protected: true, category: `root:${result.root}` });
+    }
+    const result = judgeProtectedPath(candidate, { workspaceRoot, roots: protectedRoots });
+    if (!result.judged) return Object.freeze({ judged: false, protected: false });
+    return Object.freeze({
+      judged: true,
+      protected: result.protected === true,
+      ...(result.category === undefined ? {} : { category: result.category }),
+    });
+  };
+
   const service = Object.freeze({
     catalog,
     actions: () => [...catalog.keys()],
@@ -279,23 +287,16 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     /** 配置追加的模板（展开前原文）；九类名称在代码里恒开，不出现在这里。 */
     protectedPaths: () => configuredTemplates,
     /**
-     * 路径判定查询：给工作区根时按"工作区内九类 + 配置追加根"判定；不给时只判追加根，
-     * 因为九类名称只在会话工作区内生效。返回对象而非布尔，调用方不必猜缺省含义。
+     * 路径判定查询（布尔面，沿用既有契约）：`true` 表示"已判定且受保护"。
+     * 判定不了的路径（工作区外、形状不合法）返回 `false`——查询方拿不到保护依据时
+     * 不能把它当"受保护"。需要区分两种 false 请用 `judgePath`。
      */
-    checkPath: (candidate, workspaceRoot) => {
-      if (workspaceRoot === undefined) {
-        const result = matchProtected(candidate, protectedRoots);
-        if (!result.protected) return Object.freeze({ judged: false, protected: false });
-        return Object.freeze({ judged: true, protected: true, category: `root:${result.root}` });
-      }
-      const result = judgeProtectedPath(candidate, { workspaceRoot, roots: protectedRoots });
-      if (!result.judged) return Object.freeze({ judged: false, protected: false });
-      return Object.freeze({
-        judged: true,
-        protected: result.protected === true,
-        ...(result.category === undefined ? {} : { category: result.category }),
-      });
-    },
+    checkPath: (candidate, workspaceRoot) => judgePathOf(candidate, workspaceRoot).protected === true,
+    /**
+     * 路径判定查询（明细面）：给工作区根时按"工作区内九类 + 配置追加根"判定；不给时
+     * 只判追加根，因为九类名称只在会话工作区内生效。
+     */
+    judgePath: (candidate, workspaceRoot) => judgePathOf(candidate, workspaceRoot),
     orgPolicy: () => (org.state === 'verified'
       ? { state: org.state, policyVersion: org.policyVersion, issuedBy: org.issuedBy, issuedAt: org.issuedAt, digest: org.digest, keyId: org.keyId }
       : { state: org.state, reason: org.reason }),

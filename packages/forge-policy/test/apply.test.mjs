@@ -246,7 +246,7 @@ test('the mounted service exposes only the P1 members', () => {
   const host = mount();
   const policy = host.policy;
   for (const member of [
-    'catalog', 'actions', 'decide', 'authorize', 'protectedPaths', 'checkPath', 'orgPolicy',
+    'catalog', 'actions', 'decide', 'authorize', 'protectedPaths', 'checkPath', 'judgePath', 'orgPolicy',
     'policyVersion', 'mode', 'contentRuleIds', 'setAuditSink', 'auditRecords', 'auditGaps',
     'acknowledgeAuditGaps', 'auditDegraded', 'executeAction', 'registerCommand', 'observations',
     'confirmationAvailable', 'decisionCacheSize',
@@ -261,12 +261,16 @@ test('the mounted service exposes only the P1 members', () => {
     assert.equal(removed in policy, false, `${removed} must be gone`);
   }
   assert.deepEqual(policy.protectedPaths(), [], 'no append root is configured by default');
-  // checkPath 返回对象而不是布尔：工作区内的九类按名称判，工作区外且不在追加根内不判。
+  // checkPath 保持布尔契约（true = 已判定且受保护），judgePath 给明细：
+  // 工作区内的九类按名称判，工作区外且不在追加根内不判。
   const workspace = mkdtempSync(join(tmpdir(), 'forge-policy-apply-'));
   try {
-    assert.deepEqual(policy.checkPath(join(workspace, '.env'), workspace), { judged: true, protected: true, category: 'name:.env' });
-    assert.deepEqual(policy.checkPath(join(workspace, 'notes.txt'), workspace), { judged: true, protected: false });
-    assert.deepEqual(policy.checkPath('/etc/passwd'), { judged: false, protected: false });
+    assert.equal(policy.checkPath(join(workspace, '.env'), workspace), true);
+    assert.equal(policy.checkPath(join(workspace, 'notes.txt'), workspace), false);
+    assert.equal(policy.checkPath('/etc/passwd'), false);
+    assert.deepEqual(policy.judgePath(join(workspace, '.env'), workspace), { judged: true, protected: true, category: 'name:.env' });
+    assert.deepEqual(policy.judgePath(join(workspace, 'notes.txt'), workspace), { judged: true, protected: false });
+    assert.deepEqual(policy.judgePath('/etc/passwd'), { judged: false, protected: false });
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

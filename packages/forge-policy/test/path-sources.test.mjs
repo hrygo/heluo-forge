@@ -73,7 +73,10 @@ test('depth is capped: level four is read, level five is not', () => {
   const atLimit = { a: { b: { c: { path: '/tmp/.env' } } } };
   assert.equal(collectPathCandidates(atLimit).candidates.length, 1);
   const tooDeep = { a: { b: { c: { d: { e: { path: '/tmp/.env' } } } } } };
-  assert.deepEqual(collectPathCandidates(tooDeep).candidates, []);
+  const deep = collectPathCandidates(tooDeep);
+  assert.deepEqual(deep.candidates, []);
+  // 看不到的层里可能藏着 path 键：不能声称"没有候选"，必须报截断让调用方拒绝。
+  assert.equal(deep.truncated, true);
 });
 
 test('more than the candidate limit is reported as truncated, never sampled', () => {
@@ -88,5 +91,7 @@ test('over-long values are truncated before judging', () => {
   const collected = collectPathCandidates({ path: value });
   assert.equal(collected.candidates.length, 1);
   assert.equal(collected.candidates[0].value.length, MAX_PATH_VALUE_LENGTH);
+  // 被截断的值已经不是原值：单独标记，调用方按"无法确认"处理，别拿半截去判。
+  assert.equal(collected.candidates[0].truncated, true);
   assert.equal(collected.truncated, false);
 });

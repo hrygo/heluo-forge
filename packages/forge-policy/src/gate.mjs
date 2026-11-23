@@ -14,6 +14,7 @@ import { isAbsolute, resolve as resolvePath } from 'node:path';
 import { decideAction } from './catalog.mjs';
 import { CATEGORY, classifyAction } from './classify.mjs';
 import { collectPathCandidates } from './path-sources.mjs';
+import { redactPath } from './audit.mjs';
 import { canonicalize, judgeProtectedPath } from './paths.mjs';
 import {
   compileContentRules,
@@ -412,6 +413,8 @@ export function createGate({
    */
   function requiresGate(action) {
     // 目录缺失时不能因为"看起来未登记"就放行：映射到了策略动作就交给门禁，由 admit 报 fail closed。
+    // admitOnce 里也判一次同样的条件，但那一步是对外的 fail-closed 结论（带错误码），
+    // 这里的判定只决定"要不要进门禁"，两处职责不同，不能合并。
     if (!(catalog instanceof Map)) return true;
     if (isControlled(action)) return true;
     const category = classifyCategory(action);
@@ -423,14 +426,14 @@ export function createGate({
     return Object.freeze({ kind: 'allow', rule: 'out-of-scope' });
   }
 
-  /** 语义阶段拒绝用的审计字段：只写允许字段，不含参数原文与路径值。 */
+  /** 语义阶段拒绝用的审计字段：只写允许字段，不含参数原文；路径只留尾 4 段。 */
   function semanticFields(exec, action, target, meta, extra = {}) {
     const subject = subjectOf(exec?.name, action);
     return {
       ...(subject === undefined ? {} : { subject }),
       actor: meta.actor,
       action,
-      target,
+      target: redactPath(target),
       tool: exec?.name,
       decision: 'deny',
       agent: { kind: meta.kind },
@@ -453,6 +456,7 @@ export function createGate({
       return denyWithEvidence(scopeFields, PATH_SCOPE_COPY(target), 'POLICY_PATH_SCOPE_UNAVAILABLE');
     }
     try {
+      // 只为校验工作区本身可归一化；结果不参与判定，路径由下面的候选逐个归一化。
       canonicalize(workspaceRoot);
     } catch {
       return denyWithEvidence(scopeFields, PATH_SCOPE_COPY(target), 'POLICY_PATH_SCOPE_UNAVAILABLE');
@@ -468,6 +472,8 @@ export function createGate({
     );
     if (collected.truncated === true) return unresolvable('path');
     for (const candidate of collected.candidates) {
+      // 超长路径被截断后就不再是原值：按"无法确认真实路径"拒绝，而不是拿截断值去判。
+      if (candidate.truncated === true) return unresolvable(candidate.field);
       let judged;
       try {
         // 相对参数按会话工作区解释；绝对参数原样归一化。两者都走同一条 canonicalize。
@@ -543,8 +549,10 @@ export function createGate({
 
   async function admitOnce(ctx, exec, action) {
     const target = targetOf(exec);
-    // 判定顺序（AC-8）：动作解析 → 身份 → 未登记动作 → 人工留痕 → 受保护路径 →
-    // 内容闸 → 确认 → 审计 → 回执。前三个语义阶段命中即拒绝并留证据，卡片无法翻转。
+    // 判定顺序（AC-8）：动作解析 → 身份 → 人工留痕 → 未登记动作 → 受保护路径 →
+    // 流程闸 → 内容闸 → 确认 → 审计 → 回执。前三个语义阶段命中即拒绝并留证据，卡片
+    // 无法翻转。人工留痕排在未登记之前：未登记的人工留痕动作应当报"人工留痕不能由
+    // agent 写"，而不是被误报成"未登记"，与 catalog.decideAction 的口径一致。
     if (!(catalog instanceof Map)) {
       return deny('no compiled policy catalog is available', 'POLICY_CATALOG_UNAVAILABLE');
     }
@@ -560,17 +568,6 @@ export function createGate({
       return deny(IDENTITY_COPY(action));
     }
     const meta = { actor, kind, operationId };
-    if (!registered && rules?.denyUnknownAction === true && category !== CATEGORY.READ) {
-      return denyWithEvidence(
-        semanticFields(exec, action, target, meta, {
-          rule: 'denyUnknownAction',
-          ruleIds: ['unregistered-action'],
-          summary: `未登记动作 ${action} 命中 denyUnknownAction，已拒绝`,
-        }),
-        UNREGISTERED_COPY(action),
-        'POLICY_UNREGISTERED_ACTION',
-      );
-    }
     if (category === CATEGORY.HUMAN_RECORD && rules?.denyHumanRecord === true) {
       // 人工留痕：不执行、不弹卡、不留正文；证据里只有动作与规则。
       return denyWithEvidence(
@@ -581,6 +578,17 @@ export function createGate({
         }),
         HUMAN_RECORD_COPY(action),
         'POLICY_HUMAN_RECORD',
+      );
+    }
+    if (!registered && rules?.denyUnknownAction === true && category !== CATEGORY.READ) {
+      return denyWithEvidence(
+        semanticFields(exec, action, target, meta, {
+          rule: 'denyUnknownAction',
+          ruleIds: ['unregistered-action'],
+          summary: `未登记动作 ${action} 命中 denyUnknownAction，已拒绝`,
+        }),
+        UNREGISTERED_COPY(action),
+        'POLICY_UNREGISTERED_ACTION',
       );
     }
     if (!registered) return allowOutOfScope();

@@ -170,3 +170,26 @@ test('开关关闭时结果里不会出现"已阻止"或任何拒绝码', async 
     assert.equal(/已阻止|已拒绝/u.test(String(decision.reason ?? '')), false);
   }
 });
+
+test('未登记的人工留痕动作按人工留痕拒绝，不会被误报成未登记', async () => {
+  // 两个开关都开、动作没进目录，但分类表认得它是 human-record：
+  // 结论必须与 catalog.decideAction 一致（先判人工留痕），否则人看到的原因会指错方向。
+  const { gate, sink } = gateFor({
+    rules: { denyHumanRecord: true, denyUnknownAction: true },
+    catalogActions: [ISSUE],
+  });
+  const decision = await gate.preExecute({}, execFor('forge_review_record', { target: 'acme/demo!1' }));
+  assert.equal(decision.kind, 'deny');
+  assert.equal(decision.code, 'POLICY_HUMAN_RECORD');
+  assert.equal(denies(sink)[0].rule, 'denyHumanRecord');
+});
+
+test('语义拒绝的证据里，路径形状的 target 只留尾四段', async () => {
+  const { gate, sink } = gateFor({ rules: { denyUnknownAction: true } });
+  const target = ['', 'Users', 'svc', 'private', 'secret', 'notes.env'].join('/');
+  const decision = await gate.preExecute({}, execFor('forge_pr_write', { target }));
+  assert.equal(decision.kind, 'deny');
+  const record = denies(sink)[0];
+  assert.equal(record.target, ['svc', 'private', 'secret', 'notes.env'].join('/'));
+  assert.equal(JSON.stringify(record).includes(['', 'Users'].join('/')), false);
+});
