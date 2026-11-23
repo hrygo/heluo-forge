@@ -311,6 +311,8 @@ function forkGuardProblems(steps, classificationGuard) {
     const condition = expressionBody(stepField(step, 'if'));
     const scenarios = [
       ['pull_request', 'other/fork', true],
+      // A deleted or moved fork head has no repo, and must stay on the rejection side.
+      ['pull_request', undefined, true],
       ['pull_request', 'owner/repo', false],
       ['push', undefined, false],
       ['merge_group', undefined, false],
