@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.6.1 |
+| 版本 | V3.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-20 |
+| 最后更新 | 2026-11-23 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
@@ -40,7 +40,7 @@
 
 为满足企业生产级合规与安全要求，系统遵循以下架构约束基线：
 
-1. **预注册客户端**。要求刷新请求认证客户端的企业部署使用 `authMode=confidential`。授权码换票与刷新按登记的 `token_endpoint_auth_method` 使用同一客户端认证，授权码使用 PKCE S256。明确允许两个 grant 均无客户端认证的部署可用 `public` / `none`。目标部署的登记与计划续期须联调验证。 [issue #408 的 IAM 核对结论](https://github.com/hrygo/heluo-forge/issues/408#issuecomment-7034227656)
+1. **预注册客户端**。要求刷新请求认证客户端的企业部署使用 `authMode=confidential`。授权码换票与刷新按登记的 `token_endpoint_auth_method` 使用同一客户端认证，授权码使用 PKCE S256。明确允许两个 grant 均无客户端认证的部署可用 `public` / `none`。目标部署的登记与计划续期须联调验证。 [issue #408 的 IAM 核对结论](https://github.com/hrygo/heluo-forge/issues/408#issuecomment-7034227656) 能力基线按 ADR-32 固定在 IAM 6.0.3 版本反馈：厂商 21 项回函、内部校验回函(3)、接入确认函 C1—C11 与 D1—D3、最终确认函 13 题；6.3.0 与 AIGS 的能力只作演进观察，不构成本设计的前提。同一版本内答复冲突时取企业 IAM 团队较新日期的书面答复，无先后可取时按不假设能力存在处理。
 2. **令牌生命周期与轮换**：
    - 企业 IAM 签发访问令牌（Access Token），有效期设计基线为 7200 秒。刷新成功后旧访问令牌即时作废。
    - 刷新令牌（Refresh Token）的滑动有效期设计基线为 7300 秒，无绝对上限。轮换成功后旧刷新令牌即时作废。
@@ -232,7 +232,9 @@ flowchart TB
 | `llm-deepseek` | `@deepseek-ai/dsh-llm-deepseek-api-key` | `disabled: true` | 官方 API Key 旁路入口 |
 | `ui-settings-account` | `@deepseek-ai/dsh-client-ui-settings-account` | `disabled: true` | 官方账户页与侧边栏入口 |
 
-模块启动和关键操作时通过 `src/exclusive.mjs` 检测 `ctx.get('deepseekAccount')`：发现该服务残留即拒绝受保护操作。该检查不覆盖其他官方行；`exclusive-violation` 审计事件及持久落点仍是待验证的目标，不能由本地诊断或拒绝行为推断已交付。
+补丁层在目标 Profile 下共停用七行：上表四项之外，还有 `llm-pi-ai`（自由添加网关）、`ui-settings-models`（自由配置模型入口）与 `credentials`（官方明文凭据提供方）。后三行同样构成旁路，不因本表只列账号相关四行而省略。
+
+装配期的官方行核验由 `@heluo/forge-enterprise` 的补丁与 `OFFICIAL_ROWS` 断言承担：缺席的行记为 `absent`，Loader 警告跳过不等于已禁用。插件自身的运行期独占断言位于 `src/exclusive.mjs`，只检查 `ctx.get('deepseekAccount')` 服务是否残留，发现残留即拒绝受保护操作；该断言不覆盖其余官方行，其余行的残留只能由装配期断言发现，运行期不产生告警。环境变量旁路（如 `DEEPSEEK_API_KEY`）当前无运行期检测，检测与处置列为目标项。`exclusive-violation` 审计事件及持久落点仍是待验证目标，不能由本地诊断或拒绝行为推断已交付。
 
 ### 4.4 客户端 UI 交互设计
 
@@ -260,7 +262,7 @@ flowchart TB
 
 | 项 | 终态口径 |
 |---|---|
-| 登记形态 | IAM 管理台登记的是回调 URL **前缀**，只需 `http://127.0.0.1`；端口与路径由客户端决定，不逐条登记 |
+| 登记形态 | 按 IAM 6.0.3 反馈：管理台登记的是回调 URL **前缀**，合法形态只有 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；主机被字面量约束，`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均非法，端口与路径由客户端决定。同一版本答复另确认支持固定端口预登记与精确匹配、支持登记多个固定端口，因此固定端口是可选形态，不是唯一登记方式 |
 | 监听 | `callbackPort: 0` 由系统分配回环端口；`1024–65535` 固定该端口。插件只绑定回环地址，只接受 `GET <redirectPath>`（默认 `/iam/callback`） |
 | 生命周期 | 监听随登录尝试建立，尝试结束（成功、取消、超时、签出、provider 更换）即停止接受连接；不常驻 |
 | 地址族 | `callbackAddress` 默认 `auto`：始终先试 IPv4 回环，仅当本机没有 IPv4 回环时才试 IPv6；也可固定 `127.0.0.1` 或 `::1`。IPv6 需另登记前缀 `http://[::1]`，地址写作 `http://[::1]:<port><redirectPath>` |
@@ -268,6 +270,8 @@ flowchart TB
 | 显式 URI | 配置 `callbackPort` 时，仅固定端口允许显式 `redirectUri`，且必须与固定回环地址逐字节相等；省略 `callbackPort` 时可使用宿主回调 URI。显式 URI 必须与所选实时回调 Origin 同源，不符以 `IAM_CONFIG_INVALID` 拒绝 |
 | 端口冲突 | 绑定失败记 `IAM_CALLBACK_PORT_UNAVAILABLE`，登录发起即拒；不回落宿主端口，不改写 `redirect_uri`。地址族只在 `EADDRNOTAVAIL`／`EAFNOSUPPORT` 时切换，端口占用不切换 |
 | Origin 来源 | 省略 `callbackPort` 时取宿主实时 Origin；配置后取已绑定回环监听的实时 Origin，二者不互相回落。所选 Origin 缺失、获取异常或不是有效 HTTP(S) 地址时，以 `IAM_CALLBACK_UNAVAILABLE` 拒绝登录，不生成授权链接。复用登录链接前重新核验地址，来源失效或变更时取消旧尝试 |
+
+企业部署默认采用系统分配端口（`callbackPort: 0`）配合前缀登记：端口随机、由前缀约束，路径与端口由客户端自校验。需要精确校验或固定端口审计时才改为登记固定端口。两种形态不在同一部署交替使用，也不在失败时互相回落。
 
 启用 `callbackPort` 后，回调不再注册到宿主 `webServer`；管理 API 仍留在宿主。
 
@@ -313,10 +317,10 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `tokenEndpoint` | string | 空 | 条件 | 显式换票请求端点 |
 | `jwksUri` | string | 空 | 条件 | 显式公钥集地址，用于验签算法核验 |
 | `revocationEndpoint` | string | 空 | 否 | 令牌撤销端点。缺失时使用匹配 issuer 的发现文档值 |
-| `revocationMode` | string | `access_token_query` | 否 | 回调清理和退出共用的撤销协议。`access_token_query` 使用企业访问令牌撤销 GET，`rfc7009` 使用 OAuth 表单 POST |
+| `revocationMode` | string | `access_token_query` | 否 | 回调清理和退出共用的撤销协议。`access_token_query` 使用企业访问令牌撤销 GET，`rfc7009` 使用 OAuth 表单 POST。IAM 6.0.3 反馈只有按访问令牌一条路径且刷新令牌不可撤销，企业部署固定使用 `access_token_query` |
 | `endSessionEndpoint` | string | 空 | 条件 | RP 退出端点。启用 RP 时由显式配置或匹配 issuer 的发现文档提供 |
 | `userInfoEndpoint` | string | 空 | 否 | 有身份字段映射时读取的 UserInfo 端点。缺失时按需发现 |
-| `scopes` | string[] | `['openid', 'profile', 'offline_access']` | 是 | 申请授权范围，必须显式包含 `openid` |
+| `scopes` | string[] | `['openid', 'profile', 'offline_access']` | 是 | 申请授权范围，必须显式包含 `openid`。IAM 6.0.3 反馈的换票响应直接返回 `refresh_token`，未把 `offline_access` 列为必要条件，企业部署模板显式设置不含该项的 `scopes`（不依赖插件默认值）；兼容默认值保持不变 |
 | `redirectPath` | string | `/iam/callback` | 否 | 本机 Loopback 回调绝对路径 |
 | `callbackPort` | number | 空 | 否 | 省略时沿用宿主 Origin（开发/兼容）；`0` 由系统分配回环端口；1024–65535 固定该端口 |
 | `callbackAddress` | string | `auto` | 否 | `auto` 始终先试 `127.0.0.1`，仅在该地址族不可用时退到 `::1`；也可固定其中之一。IPv6 需 IAM 额外登记 `http://[::1]` |
@@ -329,6 +333,8 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `httpTimeoutMs` | number | 10000 | 否 | HTTP 请求默认超时上限（毫秒）；刷新与撤销请求设 5000ms 硬上限 |
 | `logoutMode` | string | `local` | 否 | `local` 完成本地退出与已配置的撤销。`rp` 还可生成全局登出地址 |
 | `requireExclusive` | boolean | `true` | 否 | 排他性强断言开关；检测到官方服务残留时阻断就绪 |
+
+授权请求恒定携带 `code_challenge` 与 `code_challenge_method=S256`；`pkce`、`pkceMethod`、`codeChallengeMethod`、`disablePkce` 一律按禁止配置项处理，不能通过配置关闭或降级。IAM 6.0.3 反馈称授权码 PKCE 能力具备、允许 `plain`、未强制 S256；S256 是否被接受既无书面结论也无实测证据。本实现固定使用 S256，不提供 `plain` 降级，接受度待实测，见 §12.1 第 16 项。
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
 
@@ -1091,8 +1097,8 @@ flowchart TD
 
 | 序号 | 待决技术事项 | 责任方 | 影响范围与推进准入 |
 |---|---|---|---|
-| 1 | IAM 是否支持 `resource` 参数及细粒度 Audience 划分 | IAM 团队 | 支撑后续 MCP 服务的细粒度鉴权；V1 网关暂不依赖 |
-| 2 | Refresh 轮换、重用检测与撤销的服务端联调闭环 | IAM 团队 | 确认刷新令牌自然失效（7300s）的真实端点表现 |
+| 1 | `resource` 参数与细粒度 Audience 划分：6.0.3 反馈明确不支持，本条转为 6.3.0 及以后的能力观察 | IAM 团队 | 仅在启用 MCP 等多受众场景时重估；当前不外发 `resource` 参数，不列为 V1 待答复项 |
+| 2 | Refresh 轮换、重用检测与撤销的端点表现：6.0.3 反馈已书面确认轮换、滑动 7300 秒、重用返回 `invalid_grant` 且仅拒绝当次、并发首个成功 | IAM 团队 + 平台组 | 只剩真实端点表现与休眠恢复待实测，不再是能力待确认项 |
 | 3 | IAM 客户端类型、两个 grant 权限、客户端认证方法、PKCE S256 及回调登记 | IAM + 平台组 | 以实际登记校验部署配置。预置密钥后新登录，正常计划续期记录 `refresh-committed`，新令牌可用且会话保持 `ready` |
 | 4 | 回调路由在复杂反向代理与 SSH 端口转发环境下的穿透性 | 平台组 | 评估复杂开发网络环境下的 Loopback 回调可用性 |
 | 5 | 禁用官方行后 Shell、设置与 Onboarding 完整性双端验证 | 平台组 | 验证 O3 独占方案在各宿主版本上的 GUI 稳定性 |
@@ -1103,9 +1109,14 @@ flowchart TD
 | 10 | 撤销实现改造联调：`GET ?access_token=` 撤销端点企业环境验证 | 平台组 + IAM | 验证服务端撤销回执、错误码及脱敏一致性 |
 | 11 | 刷新令牌不可撤销的用户端文案与审计字段呈现规范 | 平台组 | 保证界面与审计如实呈现“访问令牌已撤销 / 刷新令牌自然过期” |
 | 12 | 机密客户端的凭据预置与轮换 | 平台组 + IAM | 核对目标终端预置、服务端轮换生效、旧会话拒绝和新登录 |
-| 13 | 企业 IAM 实际访问令牌与滑动刷新令牌有效期，以及是否返回 `refresh_expires_in` | IAM 团队 + 平台组 | G2 核验真实签发响应与休眠、断网恢复。调整提前量时按[后台续期时机与恢复余量](#731-后台续期时机与恢复余量)复核恢复目标 |
-| 14 | UserInfo 工号与姓名标准声明字段最终口径对齐 | IAM 团队 | 统一账户页展示名与审计主体显示名 |
+| 13 | 实际签发响应是否与书面基线一致（AT 7200 秒、RT 滑动 7300 秒），以及是否返回 `refresh_expires_in` | IAM 团队 + 平台组 | 书面基线已由 6.0.3 反馈给出，本条只核验真实响应与休眠、断网恢复；调整提前量时按[后台续期时机与恢复余量](#731-后台续期时机与恢复余量)复核恢复目标 |
+| 14 | UserInfo 工号与姓名字段的最终口径：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法 | IAM 团队 | 取较新日期的 `work_no`/`pinyin` 为默认候选映射，联调确认前不把任一字段名写入契约；统一账户页展示名与审计主体显示名 |
 | 15 | 回调前缀匹配的边界：合法前缀限定为 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均被拒。大小写、尾斜杠与非数字端口未验 | IAM 团队 | 用真实 IAM 补负面用例，确认非法写法的拒绝形态 |
+| 16 | PKCE S256 的接受度：6.0.3 反馈只答“PKCE 能力具备、允许 `plain`、未强制 S256”，未答 S256 是否被接受；厂商回函另称不支持 PKCE | IAM 团队 + 平台组 | 以一次授权请求实测收口。仅当 S256 被拒时才讨论降级，且降级属安全取舍，由用户裁决，不默认开启 |
+| 17 | 网关身份头名与 consumer 类型的配置化，以及切换为 `Authorization: Bearer` 的适配边界 | 平台组 | V1 只做配置化、默认值保持现值；实际切换随 AIGS 立项，不阻塞 V1 |
+| 18 | 官方旁路环境变量（如 `DEEPSEEK_API_KEY`）的运行期检测与处置口径 | 平台组 | 检测默认告警；是否阻断须用户裁决，不能以关闭检测换取可用性 |
+| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 与第 14 项的 IAM 答复配套实现；未配置时不读取 UserInfo，不显示未知字段 |
+| 20 | 运行期独占断言的覆盖面扩展：从单一 `deepseekAccount` 服务到装配可见的官方行结论 | 平台组 | 与装配期 `OFFICIAL_ROWS` 断言口径一致，避免两处判定标准分裂 |
 
 ### 12.2 已审定不采用的设计选项
 
