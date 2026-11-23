@@ -216,8 +216,15 @@ export async function verifyDiscovery(iam, { fetchImpl = globalThis.fetch, timeo
   return { checked: true, matched, revocationEndpoint };
 }
 
-/** Parse one `.env` file strictly. No `export`, no escapes, no continuation lines. */
-export function parseEnvConfig(text) {
+/**
+ * Parse one `.env` file strictly. No `export`, no escapes, no continuation lines.
+ *
+ * Secret-bearing keys stay refused by default. `allowSecret` is the explicit,
+ * per-run opt-in (`release-delivery --embed-client-secret`) that lets the maker
+ * carry one client secret into the delivery directory for the installer to
+ * provision into the target credential store.
+ */
+export function parseEnvConfig(text, { allowSecret = false } = {}) {
   if (typeof text !== 'string') fail('CONFIG_INVALID', 'configuration must be text');
   const entries = [];
   const seen = new Set();
@@ -249,10 +256,10 @@ export function parseEnvConfig(text) {
     if (!ALL_KEYS.has(entry.key)) {
       fail('CONFIG_UNKNOWN_KEY', `.env line ${entry.line}: unknown key "${entry.key}" (refusing to guess where it belongs)`);
     }
-    if (SECRET_ENV_KEYS.includes(entry.key)) {
+    if (SECRET_ENV_KEYS.includes(entry.key) && !allowSecret) {
       fail(
         'BUNDLE_SECRET_EMBED_UNSUPPORTED',
-        `${entry.key} is forbidden in bundle configuration. Provision the client's secret separately in the target credential store.`,
+        `${entry.key} requires an explicit embed request (release-delivery --embed-client-secret). Without it, provision the client's secret separately in the target credential store.`,
       );
     }
   }
@@ -301,6 +308,11 @@ function redirectPathProblem(value) {
 export function buildConfig(entries) {
   const byKey = new Map(entries.map((entry) => [entry.key, entry.value]));
   const allowInsecureHttp = byKey.get('HELUO_IAM_ALLOW_INSECURE_HTTP') === 'true';
+  // The client secret never joins `iam`, so it cannot reach the patch layer: the
+  // Host plugin refuses an inline secret. It is carried beside the configuration
+  // and only the installer writes it into the target credential store.
+  const secretKeys = entries.filter((entry) => SECRET_ENV_KEYS.includes(entry.key));
+  let clientSecret;
   const iam = {};
   const gitee = {};
   const problems = [];
@@ -380,6 +392,25 @@ export function buildConfig(entries) {
     put(gitee, field, raw);
   }
 
+  if (secretKeys.length > 1) {
+    problems.push('set only one of HELUO_IAM_CLIENT_SECRET and HELUO_IAM_CLIENT_SECRET_FILE');
+  } else if (secretKeys.length === 1) {
+    const [entry] = secretKeys;
+    let value = entry.value;
+    if (entry.key === 'HELUO_IAM_CLIENT_SECRET_FILE') {
+      const path = resolve(value);
+      try {
+        value = readFileSync(path, 'utf8').replace(/\r?\n$/u, '');
+      } catch {
+        problems.push('HELUO_IAM_CLIENT_SECRET_FILE must point at a readable file');
+        value = '';
+      }
+    }
+    if (value === '') problems.push(`${entry.key} must contain the client secret`);
+    else if (value.includes('\0')) problems.push(`${entry.key} must not contain a NUL byte`);
+    else clientSecret = value;
+  }
+
   const mode = iam.authMode ?? 'public';
   if (!['public', 'confidential'].includes(mode)) problems.push('HELUO_IAM_AUTH_MODE must be public or confidential');
   if (mode === 'public') {
@@ -388,6 +419,9 @@ export function buildConfig(entries) {
   } else {
     if (!['client_secret_basic', 'client_secret_post'].includes(iam.clientAuthMethod)) problems.push('confidential authentication requires HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_basic|client_secret_post');
     if (iam.clientSecretRef === undefined) problems.push('confidential authentication requires HELUO_IAM_CLIENT_SECRET_REF');
+  }
+  if (clientSecret !== undefined && mode !== 'confidential') {
+    problems.push('HELUO_IAM_CLIENT_SECRET(_FILE) is only valid with HELUO_IAM_AUTH_MODE=confidential');
   }
   for (const field of ['issuer', 'discoveryUrl', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri', 'revocationEndpoint', 'endSessionEndpoint', 'userInfoEndpoint', 'gatewayConsoleUrl']) {
     const value = iam[field];
@@ -441,6 +475,8 @@ export function buildConfig(entries) {
       ...Object.keys(iam).map((key) => `iam.${key}`),
       ...Object.keys(gitee).map((key) => `gitee.${key}`),
     ].sort(),
+    // Kept out of `keys` on purpose: every redacted summary prints that list.
+    ...(clientSecret === undefined ? {} : { secret: { clientSecret } }),
   });
   validatedConfigs.add(config);
   return config;
@@ -459,9 +495,9 @@ function requireValidatedConfig(config) {
 }
 
 /** Use the validated configuration from the caller or read it once from the file. */
-export function resolveBundleConfig({ config, configPath }) {
+export function resolveBundleConfig({ config, configPath, allowSecret = false }) {
   if (config !== undefined) return requireValidatedConfig(config);
-  return buildConfig(parseEnvConfig(readConfigFile(resolve(configPath))));
+  return buildConfig(parseEnvConfig(readConfigFile(resolve(configPath)), { allowSecret }));
 }
 
 /** Only double-quoted JSON strings are emitted; JSON escapes are valid YAML scalars. */
@@ -781,7 +817,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     entry: { name: root.name, version },
     base: { version: root.version, tarballSha256: baseSha256 },
     tool: { name: TOOL_NAME, version: TOOL_VERSION },
-    config: { keys: config.keys, secretEmbedded: false },
+    config: { keys: config.keys, secretEmbedded: config.secret !== undefined },
   };
 
   const replaced = new Map([
@@ -929,6 +965,7 @@ export function makePrivateBundle(input) {
     base: built.metadata.base,
     changed: built.changed,
     configKeys: built.metadata.config.keys,
+    secretEmbedded: built.metadata.config.secretEmbedded,
     manifest: join(output, 'bundle-manifest.json'),
     release: join(output, 'private-release.json'),
     verified: true,

@@ -73,6 +73,7 @@ function parseArguments(argv) {
     toolRoot: undefined,
     dryRun: false,
     skipDiscoveryCheck: false,
+    embedClientSecret: false,
     json: false,
   };
   const valued = new Map([
@@ -105,6 +106,12 @@ function parseArguments(argv) {
       options.skipDiscoveryCheck = true;
       continue;
     }
+    // 显式承受「交付目录里存在明文客户端密钥」的风险：安装器会在装完后立即把它写入
+    // 目标机凭据库并删除该文件。默认仍然拒绝 HELUO_IAM_CLIENT_SECRET。
+    if (argument === '--embed-client-secret') {
+      options.embedClientSecret = true;
+      continue;
+    }
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
   }
   for (const [flag, key] of [
@@ -119,8 +126,8 @@ function parseArguments(argv) {
   return options;
 }
 
-export function readDeliveryConfig(configPath) {
-  return { config: resolveBundleConfig({ configPath }) };
+export function readDeliveryConfig(configPath, { allowSecret = false } = {}) {
+  return { config: resolveBundleConfig({ configPath, allowSecret }) };
 }
 
 function assertOutsideRepo(path, repoRoot, label) {
@@ -199,7 +206,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 3
 fi
 HASH=$(/usr/bin/shasum -a 256 "$ROOT/enterprise-plugin"/*.tgz | cut -d' ' -f1)
-exec /usr/bin/env node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile auto --install-host --sha256 "$HASH" "$@"
+exec /usr/bin/env node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile "\${HELUO_PROFILE:-auto}" --install-host --sha256 "$HASH" "$@"
 `,
   'install-linux.sh': `#!/bin/sh
 # 终端运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
@@ -216,7 +223,7 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   HASH=$(shasum -a 256 "$ROOT/enterprise-plugin"/*.tgz | cut -d' ' -f1)
 fi
-exec node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile auto --install-host --sha256 "$HASH" "$@"
+exec node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile "\${HELUO_PROFILE:-auto}" --install-host --sha256 "$HASH" "$@"
 `,
   'install-windows.cmd': `@echo off
 chcp 65001 >nul
@@ -225,6 +232,7 @@ set "HERE=%~dp0"
 for %%I in ("%HERE%..") do set "ROOT=%%~fI"
 set "LOG=%TEMP%\\heluo-enterprise-install.log"
 if not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh"
+if not defined HELUO_PROFILE set "HELUO_PROFILE=auto"
 echo [heluo] Enterprise plugin installer
 echo [heluo] DSH_HOME=%DSH_HOME%
 where node >nul 2>nul
@@ -242,13 +250,17 @@ if errorlevel 1 (
   echo [heluo] dsh was not found on PATH; it will be installed with npm now.
 )
 echo [heluo] Preparing the official DSH and installing the plugin ...
-node "%HERE%init-enterprise-plugin.mjs" --release "%ROOT%\\enterprise-plugin" --profile auto --install-host > "%LOG%" 2>&1
+node "%HERE%init-enterprise-plugin.mjs" --release "%ROOT%\\enterprise-plugin" --profile "%HELUO_PROFILE%" --install-host > "%LOG%" 2>&1
 set "CODE=%ERRORLEVEL%"
 type "%LOG%"
 echo.
 if "%CODE%"=="0" (
-  echo [heluo] OK: plugin installed into the web profile and verified locally.
-  echo [heluo] Start it with: dsh web
+  echo [heluo] OK: plugin installed into profile "%HELUO_PROFILE%" and verified locally.
+  if "%HELUO_PROFILE%"=="web" (
+    echo [heluo] Start it with: dsh web
+  ) else (
+    echo [heluo] Start it with: dsh --profile "%HELUO_PROFILE%"
+  )
   echo [heluo] Desktop is a separate profile; opening it will NOT show this install.
   echo [heluo] Then open Settings -^> Plugins to confirm it is loaded.
 ) else (
@@ -283,6 +295,14 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 校验插件摘要 → 检查 profile 内是否已有其它版本的企业插件（有旧版本时先执行
 dsh plugin remove 卸载旧版本）→ 执行 dsh plugin add → 读回配置确认插件已登记。
 已装版本与本次交付相同时，脚本不再写入，只读回配置核对。
+
+要装到别的 profile（例如另留一个 uat 试新版本）：给启动器加环境变量 HELUO_PROFILE
+再运行，macOS/Linux 例如「HELUO_PROFILE=uat sh installer/install-linux.sh」，Windows 先
+「set HELUO_PROFILE=uat」再双击；也可以直接调用安装器：
+node installer/init-enterprise-plugin.mjs --release enterprise-plugin --profile uat。
+自定义 profile 不存在时，安装器会用官方宿主的 --from-default-profile web 从 web 模板创建。
+
+安装成功后启动它（profile 名为 uat 时）：dsh --profile uat，换端口用 --port <端口>。
 看到 mounted=unknown 是正常的：运行期挂载需要在下一步确认。
 
 启动器传入的摘要是**同一交付包内 tgz 的自算值**（自证）：它只能发现制品在拷贝中损坏，
@@ -292,8 +312,9 @@ dsh plugin remove 卸载旧版本）→ 执行 dsh plugin add → 读回配置�
 
 1. 在终端运行 dsh web，打开它打印的本机地址（默认安装写入的是 web profile）。
 2. 在「设置 → 插件」确认 @heluo/forge-enterprise 已加载。
-3. 企业 IAM 要求客户端认证时，首次登录前确认管理员已为当前系统账号预置客户端密钥。
-   按企业身份登录后录入**你个人**的网关 Key。
+3. 本包内嵌了企业 IAM 客户端密钥，安装脚本会把它写入本机凭据库并删除包内副本；
+   若安装时访问不到企业 IAM，脚本会报 IAM_DISCOVERY_FAILED 并**保留**该文件，
+   恢复网络后重跑安装即可重新预置。按企业身份登录后录入**你个人**的网关 Key。
 
 **不要用「打开 Desktop」代替第 1 步**：Desktop 使用自己的 desktop profile，看不到本次
 装进 web profile 的插件。
@@ -341,6 +362,36 @@ Desktop 的 desktop profile 由应用独占，本启动器不会写入它（只�
 - 不要把个人 Key、token 写入任何文件或发给他人。
 `;
 
+/** 内嵌客户端密钥时追加到安装说明末尾的章节（未内嵌时整篇不含此段）。 */
+const EMBEDDED_SECRET_NOTE = `
+
+## 关于本包内嵌的 IAM 客户端密钥
+
+本交付包携带企业 IAM 客户端的密钥（enterprise-plugin/iam-client-secret.txt，权限 0600），
+安装脚本会在插件装好之后：
+
+1. 读取企业 IAM 的 Discovery 文档，取其中声明的 issuer（不用包内写死的第二个 issuer）；
+2. 执行 client-secret set，把密钥写进本机 Host 凭据库，绑定 issuer / clientId / 认证方式 / 引用名；
+3. 成功后删除 enterprise-plugin/iam-client-secret.txt，失败则保留文件并以
+   IAM_CLIENT_SECRET_PROVISION_FAILED 结束，不会留下“装好了但登录不了”的假成功。
+
+因此员工不需要执行任何与密钥有关的命令。看到 \`IAM 客户端密钥：已写入本机凭据库\` 即可。
+
+失败时按提示在失败的那台机器上重跑启动器即可（文件仍在，会重新预置）；也可以手工执行：
+
+\`\`\`sh
+node "$DSH_HOME/profiles/web/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs" \
+  client-secret set --issuer <Discovery 文档里的 issuer> --client-id <本包 clientId> \
+  --method client_secret_post --ref <本包 clientSecretRef> < enterprise-plugin/iam-client-secret.txt
+\`\`\`
+
+预置完成后 \`shasum -a 256 -c SHA256SUMS\` 会因该文件已删除而报一行失败，这是预期的；
+其余文件必须全部 OK。
+
+安全边界：这是管理员选择的内网交付方式——密钥在交付目录里是明文。分发、拷贝、终端日志与
+备份都应把它当作密钥对待；本机凭据库同样无法阻止同账号进程读取（见凭据存储说明）。
+`;
+
 function launcherFiles() {
   return Object.entries(LAUNCHERS).map(([name, body]) => ({ name, body }));
 }
@@ -367,7 +418,11 @@ export function buildDelivery(input) {
   }
   const toolRoot = resolve(input.toolRoot ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
   const installer = installerSource(toolRoot);
-  const config = resolveBundleConfig(input);
+  const config = resolveBundleConfig({
+    config: input.config,
+    configPath: input.configPath,
+    allowSecret: input.embedClientSecret === true,
+  });
   const digest = planDigest({
     publicSha256: publicInfo.sha256,
     version: input.version,
@@ -389,6 +444,7 @@ export function buildDelivery(input) {
     archive: `${output}.zip`,
     configKeys: config.keys,
     configValues: 'redacted',
+    clientSecretEmbedded: config.secret !== undefined,
     loginReady: isLoginConfigured(config.iam),
     gatewayConfigured: Boolean(config.iam.managedModels && config.iam.defaultProvider),
     revocationConfigured: Boolean(config.iam.revocationEndpoint),
@@ -446,6 +502,30 @@ export function buildDelivery(input) {
       fail('VERIFY_FAILED', `private artifact failed verification:\n- ${verified.errors.join('\n- ')}`);
     }
 
+    // 客户端密钥只落在交付目录、不进 tgz（插件拒收内联密钥）：安装器装完后用
+    // Discovery 的 issuer 把它写入目标机凭据库，然后删除该文件。
+    let clientSecretFile = null;
+    if (config.secret !== undefined) {
+      clientSecretFile = 'iam-client-secret.txt';
+      const secretBytes = Buffer.from(config.secret.clientSecret, 'utf8');
+      const secretPath = join(pluginDir, clientSecretFile);
+      writeFileSync(secretPath, secretBytes, { mode: 0o600 });
+      chmodSync(secretPath, 0o600);
+      const bindingPath = join(pluginDir, 'client-secret.json');
+      writeFileSync(bindingPath, `${JSON.stringify({
+        schema: 'heluo-client-secret/1',
+        file: clientSecretFile,
+        sha256: sha256(secretBytes),
+        bytes: secretBytes.length,
+        discoveryUrl: config.iam.discoveryUrl ?? null,
+        issuer: config.iam.issuer ?? null,
+        clientId: config.iam.clientId ?? null,
+        clientAuthMethod: config.iam.clientAuthMethod ?? null,
+        clientSecretRef: config.iam.clientSecretRef ?? null,
+      }, null, 2)}\n`, { mode: 0o600 });
+      chmodSync(bindingPath, 0o600);
+    }
+
     const installerDir = join(content, 'installer');
     mkdirSync(installerDir, { recursive: true });
     cpSync(installer, join(installerDir, INSTALLER_SCRIPT));
@@ -455,7 +535,11 @@ export function buildDelivery(input) {
       writeFileSync(path, body);
       chmodSync(path, 0o755);
     }
-    writeFileSync(join(content, 'INSTALL.md'), EMPLOYEE_GUIDE);
+    const guide = clientSecretFile === null
+      ? EMPLOYEE_GUIDE
+      : `${EMPLOYEE_GUIDE
+        .replace('→ 读回配置确认插件已登记。', '→ 读回配置确认插件已登记 → 取 Discovery 的 issuer，把包内客户端密钥写入本机凭据库并删除该文件。')}${EMBEDDED_SECRET_NOTE}`;
+    writeFileSync(join(content, 'INSTALL.md'), guide);
 
     const files = [];
     const walk = (directory) => {
@@ -508,6 +592,7 @@ export function buildDelivery(input) {
       privateSha256: made.sha256,
       privateVersion: made.version,
       configKeys: made.configKeys,
+      clientSecretEmbedded: made.secretEmbedded,
       verified: verified.ok,
     };
   } finally {
@@ -524,7 +609,7 @@ export function buildDelivery(input) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  const { config } = readDeliveryConfig(options.configPath);
+  const { config } = readDeliveryConfig(options.configPath, { allowSecret: options.embedClientSecret });
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }
     : await verifyDiscovery(config.iam);
@@ -538,6 +623,7 @@ async function main() {
     dryRun: options.dryRun,
     confirm: options.confirm,
     discovery,
+    embedClientSecret: options.embedClientSecret,
   });
   if (options.dryRun) {
     console.error(JSON.stringify(result.plan, null, 2));
@@ -560,6 +646,7 @@ async function main() {
       verified: result.verified,
     },
     configKeys: result.configKeys,
+    clientSecretEmbedded: result.clientSecretEmbedded,
     loginReady: result.plan.loginReady,
     gatewayConfigured: result.plan.gatewayConfigured,
     revocationConfigured: result.plan.revocationConfigured,
