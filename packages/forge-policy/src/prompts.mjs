@@ -59,12 +59,12 @@ const SELF = Object.freeze({
     zh: '这条确认只放行本次调用。',
   },
   card: {
-    en: 'It runs as soon as you confirm; leaving it unanswered cancels the call.',
-    zh: '确认后立即执行；不选择视为取消。',
+    en: 'It runs as soon as you confirm; leaving it unanswered cancels the call. The result is recorded in this session, so the sidebar still shows it afterwards.',
+    zh: '确认后立即执行；不选择视为取消。执行结果记入本次会话，可在侧栏会话中查看。',
   },
   cardChild: {
-    en: 'A sub-agent asked for this write; confirming runs it immediately, leaving it unanswered cancels it.',
-    zh: '本次写入由子代理发起；确认后立即执行，不选择视为取消。',
+    en: 'A sub-agent asked for this write; confirming runs it immediately, leaving it unanswered cancels it. The result is recorded in this session, so the sidebar still shows it afterwards.',
+    zh: '本次写入由子代理发起；确认后立即执行，不选择视为取消。执行结果记入本次会话，可在侧栏会话中查看。',
   },
 });
 
@@ -115,13 +115,12 @@ function branchOf(args) {
 }
 
 /**
- * 正文行的左侧补齐。
+ * 正文只写后果与结果去处，标题行已经说明这是什么确认。
  *
- * 宿主确认卡片的标题行有 24px 左内边距，正文容器只有 2px 左外边距（`dsh-client-ui-user-questions`
- * 的 `.header`/.detail 样式），于是正文比标题左移 22px。正文走 Markdown 渲染、ASCII 空格会被折叠，
- * 这里用三个 en 空格（16px 字号下各约 7.7px）把起点对齐到标题，宿主修好排版后即可删除。
+ * 宿主确认卡片的标题与正文共用同一条 24px 水平内边距（已核对本机安装的 DSH 客户端样式：
+ * `.questionTitle{margin:5px 24px 0}` 与 `.detail{margin:0 24px 8px}`），因此正文不需要任何
+ * 不可见字符补偿；`test/confirmation-card.test.mjs` 会拦住这类补丁重新混进来。
  */
-const CARD_DETAIL_INDENT = '\u2002\u2002\u2002';
 
 /**
  * Presentation copy for one confirmation card question (one reason per question).
@@ -141,7 +140,7 @@ export function confirmationCardCopy({ action, target, args = {}, reason = 'acti
   return {
     question: `${lead}允许${what.zh}${branchOf(args)}？`,
     // 标题行已经说了这是什么确认，正文只说用户还需要知道的事：确认后立刻执行，放着不管等于取消。
-    detail: `${CARD_DETAIL_INDENT}${origin === 'subagent' ? SELF.cardChild.zh : SELF.card.zh}`,
+    detail: origin === 'subagent' ? SELF.cardChild.zh : SELF.card.zh,
   };
 }
 
