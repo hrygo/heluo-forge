@@ -20,6 +20,7 @@ import { grantIdentity, safeMessage } from './service-helpers.mjs';
 import { createCredentialRegistry } from './credential-registry.mjs';
 import { createExtTokenStore } from './ext-token-store.mjs';
 import { createExtTokensService, createCredentialBroker } from './service-ext-tokens.mjs';
+import { createTokenExchangeService } from './service-token-exchange.mjs';
 
 /**
  * Host-side IAM session. Login is OIDC authorization-code + PKCE against
@@ -287,8 +288,26 @@ export function createIamService(rawConfig, options = {}) {
 
   const extCredentialBroker = createCredentialBroker({ extTokens, registry: credentialRegistry });
 
+  const tokenExchange = createTokenExchangeService({
+    targets: config.tokenExchangeTargets,
+    getSessionRef: () => (canUseExtensionCredentials() && ctx.lastGrant
+      ? {
+        issuer: ctx.lastGrant.issuer,
+        subject: ctx.lastGrant.subject,
+        accessExpiresAt: ctx.lastGrant.accessExpiresAt,
+        epoch: `${authEpoch}:${sessionEpoch}:${ctx.lastGrant.sessionInstanceId ?? ''}:${ctx.lastGrant.version ?? ''}`,
+      }
+      : null),
+    resolveSubjectToken: () => token.resolveToken(),
+    fetchImpl,
+    now,
+    httpTimeoutMs: config.httpTimeoutMs,
+  });
+
   const service = {
     extCredentialBroker,
+    exchangeAudienceCredential: (input) => tokenExchange.exchange(input),
+    listTokenExchangeTargets: () => tokenExchange.listTargets(),
     listExtCredentials: () => extTokens.listProjectedStatuses(),
     saveExtCredential: (input) => extTokens.saveToken(input),
     clearExtCredential: (input) => extTokens.clearToken(input),
@@ -450,6 +469,7 @@ clearGatewayCredential: gateway.clearCredential,
 
     async dispose() {
       consumptionWitness?.dispose();
+      tokenExchange.revokeAll();
       if (ctx.disposed) return;
       ctx.disposed = true;
       token.cancelRenewal('disposed');

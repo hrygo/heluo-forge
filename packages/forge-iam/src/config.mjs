@@ -38,6 +38,7 @@ export const CONFIG_FIELDS = [
   'defaultProvider',
   'defaultModel',
   'managedModels',
+  'tokenExchangeTargets',
   'refreshSkewSeconds',
   'attemptTimeoutSeconds',
   'httpTimeoutMs',
@@ -85,6 +86,7 @@ const DEFAULTS = {
   defaultProvider: 'enterprise',
   defaultModel: '',
   managedModels: null,
+  tokenExchangeTargets: null,
   // On-demand refresh lead and fallback for short background renewal windows.
   refreshSkewSeconds: 60,
   attemptTimeoutSeconds: 300,
@@ -292,6 +294,53 @@ export function validateConfig(input) {
   else value.managedModels = managed.value;
   if (value.managedModels && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value.defaultProvider)) {
     issues.push(issue('defaultProvider', 'managed model provider must be an exact route ID'));
+  }
+
+  if (source.tokenExchangeTargets !== undefined && source.tokenExchangeTargets !== null) {
+    if (!isPlainObject(source.tokenExchangeTargets)) {
+      issues.push(issue('tokenExchangeTargets', 'tokenExchangeTargets must be an object mapping target IDs to configs'));
+    } else {
+      const normalizedTargets = {};
+      for (const [targetId, rawTarget] of Object.entries(source.tokenExchangeTargets)) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(targetId)) {
+          issues.push(issue(`tokenExchangeTargets.${targetId}`, 'target ID must be alphanumeric with . _ -'));
+          continue;
+        }
+        if (!isPlainObject(rawTarget)) {
+          issues.push(issue(`tokenExchangeTargets.${targetId}`, 'target config must be an object'));
+          continue;
+        }
+        const validEndpoint = typeof rawTarget.endpoint === 'string' && Boolean(parseHttpUrl(rawTarget.endpoint));
+        const validAudience = typeof rawTarget.audience === 'string' && rawTarget.audience.trim().length > 0;
+        const validResource = typeof rawTarget.resource === 'string' && Boolean(parseHttpUrl(rawTarget.resource));
+        if (!validEndpoint) {
+          issues.push(issue(`tokenExchangeTargets.${targetId}.endpoint`, 'endpoint must be an absolute HTTP or HTTPS URL'));
+        }
+        if (!validAudience) {
+          issues.push(issue(`tokenExchangeTargets.${targetId}.audience`, 'audience must be a non-empty string'));
+        }
+        if (!validResource) {
+          issues.push(issue(`tokenExchangeTargets.${targetId}.resource`, 'resource must be an absolute HTTP or HTTPS URL'));
+        }
+        let maxTtlSeconds = 300;
+        if (rawTarget.maxTtlSeconds !== undefined && rawTarget.maxTtlSeconds !== null) {
+          if (!Number.isInteger(rawTarget.maxTtlSeconds) || rawTarget.maxTtlSeconds < 1 || rawTarget.maxTtlSeconds > 300) {
+            issues.push(issue(`tokenExchangeTargets.${targetId}.maxTtlSeconds`, 'maxTtlSeconds must be an integer between 1 and 300'));
+          } else {
+            maxTtlSeconds = rawTarget.maxTtlSeconds;
+          }
+        }
+        if (validEndpoint && validAudience && validResource) {
+          normalizedTargets[targetId] = Object.freeze({
+            endpoint: rawTarget.endpoint.trim(),
+            audience: rawTarget.audience.trim(),
+            resource: rawTarget.resource.trim().replace(/\/+$/u, ''),
+            maxTtlSeconds,
+          });
+        }
+      }
+      value.tokenExchangeTargets = Object.freeze(normalizedTargets);
+    }
   }
 
   if (issues.length) return { issues };
