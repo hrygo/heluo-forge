@@ -48,9 +48,25 @@ function resolveScopedUrl(resourceRoot, pathOrUrl) {
   if (resolved.origin !== resourceRoot.origin) {
     throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'Request origin does not match exchanged credential resource');
   }
-  if (resourceRoot.basePath && resolved.pathname !== resourceRoot.basePath
-    && !resolved.pathname.startsWith(`${resourceRoot.basePath}/`)) {
-    throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'Request path escapes exchanged credential resource root');
+
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(resolved.pathname);
+  } catch {
+    throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'Request path contains invalid percent-encoding');
+  }
+  // Re-normalize after decoding so percent-encoded dot segments (%2e%2e) cannot
+  // bypass the resource root prefix check when decoded by an upstream server.
+  const normalizedPath = new URL(decodedPath.replace(/\\+/gu, '/'), resourceRoot.origin).pathname;
+
+  if (resourceRoot.basePath) {
+    const rawOk = resolved.pathname === resourceRoot.basePath
+      || resolved.pathname.startsWith(`${resourceRoot.basePath}/`);
+    const decodedOk = normalizedPath === resourceRoot.basePath
+      || normalizedPath.startsWith(`${resourceRoot.basePath}/`);
+    if (!rawOk || !decodedOk) {
+      throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'Request path escapes exchanged credential resource root');
+    }
   }
   return resolved.toString();
 }
@@ -170,12 +186,14 @@ export function createTokenExchangeService(ports) {
       }
 
       const headers = new Headers(init?.headers ?? undefined);
-      headers.delete('authorization');
+      headers.delete('cookie');
+      headers.delete('proxy-authorization');
       headers.set('authorization', `Bearer ${token}`);
 
       return fetchImpl(targetUrl, {
         ...init,
         headers,
+        redirect: 'manual',
       });
     };
 
@@ -254,6 +272,7 @@ export function createTokenExchangeService(ports) {
     try {
       response = await fetchImpl(spec.endpoint, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
           accept: 'application/json',
@@ -316,7 +335,6 @@ export function createTokenExchangeService(ports) {
     const resourceRoot = normalizeResourceRoot(spec.resource);
     activeHandles.set(handleId, {
       token: payload.access_token.trim(),
-      epoch: afterFetchSession.epoch,
       expiresAt,
       resource: spec.resource,
       singleUse: singleUse !== false,

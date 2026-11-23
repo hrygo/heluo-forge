@@ -58,7 +58,7 @@ test('validateConfig normalizes tokenExchangeTargets and rejects invalid endpoin
   assert.ok('issues' in badUrl);
 });
 
-test('RFC 8693 exchange sends spec parameters, returns opaque handle with zero token leak, and enforces single-use scoped fetch', async () => {
+test('RFC 8693 exchange sends spec parameters with redirect:error, returns opaque handle with zero token leak, and enforces single-use scoped fetch with redirect:manual', async () => {
   const nowMs = 1_700_000_000_000;
   const requests = [];
   const subjectToken = 'iam-subject-secret-token-xyz';
@@ -70,7 +70,7 @@ test('RFC 8693 exchange sends spec parameters, returns opaque handle with zero t
     getSessionRef: () => ({
       issuer: 'https://iam.corp.example',
       subject: 'emp-10086',
-      epoch: '1:0:sess-1:1',
+      epoch: '1:0',
       accessExpiresAt: nowMs + 600_000,
     }),
     resolveSubjectToken: async () => ({ accessToken: subjectToken }),
@@ -101,10 +101,11 @@ test('RFC 8693 exchange sends spec parameters, returns opaque handle with zero t
 
   const handle = await svc.exchange({ target: 'delegra', scope: 'experts:read' });
 
-  // Verify RFC 8693 form body sent to pinned endpoint.
+  // Verify RFC 8693 form body and redirect:'error' sent to pinned endpoint.
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, TARGETS.delegra.endpoint);
   assert.equal(requests[0].init.method, 'POST');
+  assert.equal(requests[0].init.redirect, 'error');
   const form = new URLSearchParams(requests[0].init.body);
   assert.equal(form.get('grant_type'), TOKEN_EXCHANGE_GRANT_TYPE);
   assert.equal(form.get('subject_token'), subjectToken);
@@ -121,13 +122,20 @@ test('RFC 8693 exchange sends spec parameters, returns opaque handle with zero t
   assert.equal(handle.expiresAt, nowMs + 120_000);
   assert.equal(svc.activeHandleCount(), 1);
 
-  // Scoped fetch injects Bearer token, strips caller Authorization, and consumes single-use handle.
+  // Scoped fetch injects Bearer token, strips caller credential headers, disables auto-redirect, and consumes single-use handle.
   const downstream = await handle.fetch('/experts?view=callable', {
-    headers: { authorization: 'Bearer attacker-header' },
+    headers: {
+      authorization: 'Bearer attacker-header',
+      cookie: 'session=attacker',
+      'proxy-authorization': 'Basic attacker',
+    },
   });
   assert.equal(downstream.status, 200);
   assert.equal(requests[1].url, 'https://delegra.corp.example/api/v1/employee/experts?view=callable');
+  assert.equal(requests[1].init.redirect, 'manual');
   assert.equal(requests[1].init.headers.get('authorization'), `Bearer ${exchangedToken}`);
+  assert.equal(requests[1].init.headers.get('cookie'), null);
+  assert.equal(requests[1].init.headers.get('proxy-authorization'), null);
   assert.equal(handle.isValid(), false);
   assert.equal(svc.activeHandleCount(), 0);
 
@@ -148,7 +156,7 @@ test('expires_in is strictly clamped to min(300s, IAM remaining TTL) and expires
     getSessionRef: () => ({
       issuer: 'https://iam.corp.example',
       subject: 'emp-10086',
-      epoch: '1:0:sess-1:1',
+      epoch: '1:0',
       accessExpiresAt: nowMs + iamRemainingMs,
     }),
     resolveSubjectToken: async () => 'iam-subject-token',
@@ -180,7 +188,7 @@ test('expires_in is strictly clamped to min(300s, IAM remaining TTL) and expires
   );
 });
 
-test('scoped fetch rejects cross-origin and out-of-resource-root URLs without invoking transport', async () => {
+test('scoped fetch rejects cross-origin, out-of-resource-root, and percent-encoded traversal URLs without invoking transport', async () => {
   const nowMs = 1_700_000_000_000;
   let outboundCalls = 0;
 
@@ -190,7 +198,7 @@ test('scoped fetch rejects cross-origin and out-of-resource-root URLs without in
     getSessionRef: () => ({
       issuer: 'https://iam.corp.example',
       subject: 'emp-10086',
-      epoch: '1:0:sess-1:1',
+      epoch: '1:0',
       accessExpiresAt: nowMs + 300_000,
     }),
     resolveSubjectToken: async () => 'iam-subject-token',
@@ -208,21 +216,26 @@ test('scoped fetch rejects cross-origin and out-of-resource-root URLs without in
   });
 
   const handle = await svc.exchange({ target: 'delegra' });
-  await assert.rejects(
-    () => handle.fetch('https://evil.example/api/v1/employee/experts'),
-    (err) => err.code === 'IAM_TOKEN_EXCHANGE_INVALID',
-  );
-  await assert.rejects(
-    () => handle.fetch('https://delegra.corp.example/api/v1/admin/secrets'),
-    (err) => err.code === 'IAM_TOKEN_EXCHANGE_INVALID',
-  );
+  for (const bad of [
+    'https://evil.example/api/v1/employee/experts',
+    'https://delegra.corp.example/api/v1/admin/secrets',
+    '/foo/%2e%2e/%2e%2e/admin',
+    '/%2e%2e/admin',
+    '/%ZZ',
+  ]) {
+    await assert.rejects(
+      () => handle.fetch(bad),
+      (err) => err.code === 'IAM_TOKEN_EXCHANGE_INVALID',
+      `expected IAM_TOKEN_EXCHANGE_INVALID for ${bad}`,
+    );
+  }
   assert.equal(outboundCalls, 0);
   handle.dispose();
 });
 
 test('session epoch change invalidates both in-flight exchange and already-issued handles', async () => {
   const nowMs = 1_700_000_000_000;
-  let epoch = '1:0:sess-1:1';
+  let epoch = '1:0';
   let releaseExchange;
 
   const svc = createTokenExchangeService({
@@ -255,11 +268,11 @@ test('session epoch change invalidates both in-flight exchange and already-issue
   );
 
   // Session ending while exchange is in-flight must discard response and reject.
-  epoch = '2:0:sess-2:1';
+  epoch = '2:0';
   releaseExchange = 'wait';
   const inflight = svc.exchange({ target: 'delegra' });
   await new Promise((resolve) => setTimeout(resolve, 10));
-  epoch = '3:0:sess-3:1';
+  epoch = '3:0';
   releaseExchange();
   await assert.rejects(
     () => inflight,
@@ -278,7 +291,7 @@ test('fail-closed errors redact secrets and createIamService exposes exchangeAud
     getSessionRef: () => ({
       issuer: 'https://iam.corp.example',
       subject: 'emp-10086',
-      epoch: '1:0:sess-1:1',
+      epoch: '1:0',
       accessExpiresAt: nowMs + 300_000,
     }),
     resolveSubjectToken: async () => secret,

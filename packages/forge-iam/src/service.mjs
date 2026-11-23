@@ -295,7 +295,9 @@ export function createIamService(rawConfig, options = {}) {
         issuer: ctx.lastGrant.issuer,
         subject: ctx.lastGrant.subject,
         accessExpiresAt: ctx.lastGrant.accessExpiresAt,
-        epoch: `${authEpoch}:${sessionEpoch}:${ctx.lastGrant.sessionInstanceId ?? ''}:${ctx.lastGrant.version ?? ''}`,
+        // Only session-identity epochs belong here so on-demand token refresh
+        // inside resolveToken() does not falsely look like a sign-out.
+        epoch: `${authEpoch}:${sessionEpoch}`,
       }
       : null),
     resolveSubjectToken: () => token.resolveToken(),
