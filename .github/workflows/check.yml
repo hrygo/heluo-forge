@@ -84,7 +84,10 @@ jobs:
       # this repository: branch protection, the signing hooks and the repair steps in
       # CONTRIBUTING.md all assume a writer with repository access. A head from another
       # repository sits outside those controls, so the required check rejects it before
-      # the checkout and names the in-repository branch as the accepted surface.
+      # the checkout and names the in-repository branch as the accepted surface. This
+      # workflow definition is loaded from the pull request's merge commit, so the step
+      # states the accepted surface rather than enforcing it: the base-loaded
+      # sensitive-attestation check and CODEOWNERS review are what a PR cannot edit.
       - name: Reject fork pull requests
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         env:
