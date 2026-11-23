@@ -1,5 +1,5 @@
 import { validateManagedModels } from './model-options.mjs';
-import { parseHttpUrl, parseRedirectUri } from './http-url.mjs';
+import { parseHttpUrl, parseHttpsOrLoopbackUrl, parseRedirectUri } from './http-url.mjs';
 
 // Cordis 用 standard-schema 校验插件配置：Config['~standard'].validate(config)
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
@@ -310,17 +310,18 @@ export function validateConfig(input) {
           issues.push(issue(`tokenExchangeTargets.${targetId}`, 'target config must be an object'));
           continue;
         }
-        const validEndpoint = typeof rawTarget.endpoint === 'string' && Boolean(parseHttpUrl(rawTarget.endpoint));
-        const validAudience = typeof rawTarget.audience === 'string' && rawTarget.audience.trim().length > 0;
-        const validResource = typeof rawTarget.resource === 'string' && Boolean(parseHttpUrl(rawTarget.resource));
+        const validEndpoint = typeof rawTarget.endpoint === 'string' && Boolean(parseHttpsOrLoopbackUrl(rawTarget.endpoint));
+        const trimmedAudience = typeof rawTarget.audience === 'string' ? rawTarget.audience.trim() : '';
+        const validAudience = trimmedAudience.length > 0 && trimmedAudience.length <= 255;
+        const validResource = typeof rawTarget.resource === 'string' && Boolean(parseHttpsOrLoopbackUrl(rawTarget.resource));
         if (!validEndpoint) {
-          issues.push(issue(`tokenExchangeTargets.${targetId}.endpoint`, 'endpoint must be an absolute HTTP or HTTPS URL'));
+          issues.push(issue(`tokenExchangeTargets.${targetId}.endpoint`, 'endpoint must be an HTTPS URL (HTTP is permitted only for loopback hosts)'));
         }
         if (!validAudience) {
-          issues.push(issue(`tokenExchangeTargets.${targetId}.audience`, 'audience must be a non-empty string'));
+          issues.push(issue(`tokenExchangeTargets.${targetId}.audience`, 'audience must be a non-empty string of at most 255 characters'));
         }
         if (!validResource) {
-          issues.push(issue(`tokenExchangeTargets.${targetId}.resource`, 'resource must be an absolute HTTP or HTTPS URL'));
+          issues.push(issue(`tokenExchangeTargets.${targetId}.resource`, 'resource must be an HTTPS URL (HTTP is permitted only for loopback hosts)'));
         }
         let maxTtlSeconds = 300;
         if (rawTarget.maxTtlSeconds !== undefined && rawTarget.maxTtlSeconds !== null) {

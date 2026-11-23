@@ -10,6 +10,20 @@ export function parseHttpUrl(value) {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * Parse an absolute HTTPS URL, permitting plaintext HTTP only on loopback hosts
+ * so local tests work without allowing cleartext credential transmission over
+ * the network.
+ */
+export function parseHttpsOrLoopbackUrl(value) {
+  const url = parseHttpUrl(value);
+  if (!url) return null;
+  if (url.protocol === 'https:') return url;
+  return LOOPBACK_HOSTS.has(url.hostname.toLowerCase()) ? url : null;
+}
+
 /** URL.search and URL.hash omit empty delimiters, but href preserves them. */
 export function hasQueryOrFragment(url) {
   return /[?#]/u.test(url.href);

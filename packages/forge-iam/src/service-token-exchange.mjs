@@ -11,6 +11,7 @@ import { IamError } from './errors.mjs';
 export const TOKEN_EXCHANGE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 export const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
 export const MAX_EXCHANGED_TTL_SECONDS = 300;
+export const MAX_ACTIVE_HANDLES = 256;
 const MIN_REMAINING_MS = 1000;
 
 function isNonEmptyString(value) {
@@ -179,6 +180,8 @@ export function createTokenExchangeService(ports) {
       const targetUrl = resolveScopedUrl(resourceRoot, pathOrUrl);
       const token = entry.token;
       if (entry.singleUse) {
+        // Consume before dispatch so a single-use bearer credential cannot be
+        // replayed concurrently; callers re-exchange on transient transport errors.
         entry.used = true;
         entry.disposed = true;
         entry.token = null;
@@ -214,6 +217,9 @@ export function createTokenExchangeService(ports) {
 
   async function exchange({ target, scope = undefined, singleUse = true } = {}) {
     pruneExpired();
+    if (activeHandles.size >= MAX_ACTIVE_HANDLES) {
+      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Too many active exchanged credential handles; dispose unused handles first');
+    }
     if (!isNonEmptyString(target)) {
       throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'target is required for token exchange');
     }
@@ -330,6 +336,10 @@ export function createTokenExchangeService(ports) {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Exchanged credential lifetime is zero after TTL clamping');
     }
 
+    pruneExpired();
+    if (activeHandles.size >= MAX_ACTIVE_HANDLES) {
+      throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'Too many active exchanged credential handles; dispose unused handles first');
+    }
     const expiresAt = at + effectiveTtlSec * 1000;
     const handleId = randomBytes(16).toString('hex');
     const resourceRoot = normalizeResourceRoot(spec.resource);

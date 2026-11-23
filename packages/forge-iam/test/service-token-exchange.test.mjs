@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { validateConfig } from '../src/config.mjs';
+import { failureCode } from '../src/gateway-failure.mjs';
 import { createIamService } from '../src/service.mjs';
 import {
   ACCESS_TOKEN_TYPE,
+  MAX_ACTIVE_HANDLES,
   MAX_EXCHANGED_TTL_SECONDS,
   TOKEN_EXCHANGE_GRANT_TYPE,
   createTokenExchangeService,
@@ -56,6 +58,48 @@ test('validateConfig normalizes tokenExchangeTargets and rejects invalid endpoin
     },
   });
   assert.ok('issues' in badUrl);
+
+  const plainScheme = 'http://';
+  const cleartextRemote = validateConfig({
+    tokenExchangeTargets: {
+      delegra: {
+        endpoint: `${plainScheme}delegra.corp.example/oauth/token-exchange`,
+        audience: 'delegra-prod-cn-01',
+        resource: `${plainScheme}delegra.corp.example/api/v1/employee`,
+      },
+    },
+  });
+  assert.ok('issues' in cleartextRemote);
+  assert.ok(cleartextRemote.issues.some((i) => i.path.includes('tokenExchangeTargets.delegra.endpoint')));
+  assert.ok(cleartextRemote.issues.some((i) => i.path.includes('tokenExchangeTargets.delegra.resource')));
+
+  const loopbackHttp = validateConfig({
+    tokenExchangeTargets: {
+      local: {
+        endpoint: `${plainScheme}127.0.0.1:8080/oauth/token-exchange`,
+        audience: 'delegra-local',
+        resource: `${plainScheme}localhost:8080/api/v1/employee`,
+      },
+      ipv6: {
+        endpoint: `${plainScheme}[::1]:8080/oauth/token-exchange`,
+        audience: 'delegra-local-v6',
+        resource: `${plainScheme}[::1]:8080/api/v1/employee`,
+      },
+    },
+  });
+  assert.ok('value' in loopbackHttp);
+
+  const longAudience = validateConfig({
+    tokenExchangeTargets: {
+      delegra: {
+        endpoint: 'https://delegra.corp.example/oauth/token-exchange',
+        audience: 'a'.repeat(256),
+        resource: 'https://delegra.corp.example/api/v1/employee',
+      },
+    },
+  });
+  assert.ok('issues' in longAudience);
+  assert.ok(longAudience.issues.some((i) => i.path.includes('tokenExchangeTargets.delegra.audience')));
 });
 
 test('RFC 8693 exchange sends spec parameters with redirect:error, returns opaque handle with zero token leak, and enforces single-use scoped fetch with redirect:manual', async () => {
@@ -324,4 +368,49 @@ test('fail-closed errors redact secrets and createIamService exposes exchangeAud
     (err) => err.code === 'IAM_NOT_SIGNED_IN',
   );
   await iam.dispose();
+
+  assert.equal(failureCode({ code: 'IAM_TOKEN_EXCHANGE_INVALID' }), 'ENTERPRISE_REQUEST_UNSUPPORTED');
+});
+
+test('activeHandles enforces MAX_ACTIVE_HANDLES cap and recovers after dispose', async () => {
+  const nowMs = 1_700_000_000_000;
+  let seq = 0;
+
+  const svc = createTokenExchangeService({
+    targets: TARGETS,
+    now: () => nowMs,
+    getSessionRef: () => ({
+      issuer: 'https://iam.corp.example',
+      subject: 'emp-10086',
+      epoch: '1:0',
+      accessExpiresAt: nowMs + 600_000,
+    }),
+    resolveSubjectToken: async () => 'iam-subject-token',
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        seq += 1;
+        return { access_token: `exchanged-${seq}`, token_type: 'Bearer', expires_in: 120 };
+      },
+    }),
+  });
+
+  const handles = [];
+  for (let i = 0; i < MAX_ACTIVE_HANDLES; i += 1) {
+    handles.push(await svc.exchange({ target: 'delegra' }));
+  }
+  assert.equal(svc.activeHandleCount(), MAX_ACTIVE_HANDLES);
+
+  await assert.rejects(
+    () => svc.exchange({ target: 'delegra' }),
+    (err) => err.code === 'IAM_TOKEN_EXCHANGE_FAILED',
+  );
+
+  handles[0].dispose();
+  assert.equal(svc.activeHandleCount(), MAX_ACTIVE_HANDLES - 1);
+  const replacement = await svc.exchange({ target: 'delegra' });
+  assert.equal(replacement.isValid(), true);
+  svc.revokeAll();
+  assert.equal(svc.activeHandleCount(), 0);
 });
