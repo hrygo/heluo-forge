@@ -66,6 +66,9 @@ function fakeGitHub({ releases = [], tags = [TAG], faults = {} } = {}) {
       authorization: init.headers?.authorization,
       contentType: init.headers?.['content-type'],
       body,
+      // Whether fetch was handed a stream body: only a buffered body makes the
+      // real client send the Content-Length the upload endpoint requires.
+      streamedBody: init.body instanceof ReadableStream,
     });
     const { pathname: path } = parsed;
     const upload = /^\/repos\/[^/]+\/[^/]+\/releases\/(\d+)\/assets$/u.exec(path);
@@ -175,6 +178,18 @@ test('a new draft is created for an existing tag and every file is attached and 
   // Every request carries the token; no request carries it anywhere else.
   assert.ok(github.calls.every((call) => call.authorization === `Bearer ${TOKEN}`));
   assert.equal(github.calls.some((call) => `${call.path}${call.query}`.includes(TOKEN) || call.body?.includes(TOKEN)), false);
+});
+
+test('assets are uploaded as buffered bodies, because a stream body carries no Content-Length', async (t) => {
+  const github = fakeGitHub();
+  const dir = directory(t, { 'a.zip': '01234567' });
+  await run(github, dir);
+  const uploaded = github.of('POST', /\/assets$/u);
+  assert.equal(uploaded.length, 1);
+  // The first real tag push failed with "HTTP 400 Bad Content-Length": fetch
+  // sends a stream body chunked, and the upload API rejects a request whose
+  // length it cannot know up front. The body must therefore be buffered.
+  assert.equal(uploaded[0].streamedBody, false);
 });
 
 test('an existing draft is reused and its same-name assets are replaced', async (t) => {
