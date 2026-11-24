@@ -2,14 +2,9 @@
 // service, so a leftover `deepseekAccount` means the official login path is
 // still mounted even when the four rows were supposedly disabled.
 
-/**
- * Host services that prove an official login path is still mounted. config.mjs
- * carries the same list as its schema default and cannot import this module: the
- * maker toolchain ships config.mjs together with a fixed validator closure. A
- * unit test compares the two literals instead, so this module stays a leaf that
- * callers (the Host probe included) can load on its own.
- */
-export const DEFAULT_EXCLUSIVE_SERVICES = Object.freeze(['deepseekAccount']);
+import { DEFAULT_EXCLUSIVE_SERVICES } from './config.mjs';
+
+export { DEFAULT_EXCLUSIVE_SERVICES };
 
 /**
  * @param {Record<string, unknown>} [config]
@@ -19,6 +14,39 @@ export function exclusiveServices(config) {
   const configured = config?.exclusiveServices;
   if (!Array.isArray(configured) || configured.length === 0) return [...DEFAULT_EXCLUSIVE_SERVICES];
   return configured;
+}
+
+/**
+ * Single-pass scan over configured exclusive services so naming diagnostics and
+ * fail-closed exclusivity verdicts share identical traversal and error semantics.
+ *
+ * @param {{ get?: (name: string) => unknown } | undefined} ctx
+ * @param {Record<string, unknown>} [config]
+ * @param {(name: string) => void} [onUnreadable]
+ * @returns {{ status: 'ok' } | { status: 'violation', mounted: string } | { status: 'unavailable' }}
+ */
+function scanExclusiveServices(ctx, config, onUnreadable) {
+  if (!ctx || typeof ctx.get !== 'function') {
+    return { status: 'unavailable' };
+  }
+  let unreadable = false;
+  for (const name of exclusiveServices(config)) {
+    let service;
+    try {
+      service = ctx.get(name);
+    } catch {
+      // An unreadable lookup proves nothing; keep scanning so an explicitly
+      // mounted official service still produces a violation verdict, and fall
+      // back to unavailable (fail-closed) if none is found.
+      unreadable = true;
+      onUnreadable?.(name);
+      continue;
+    }
+    if (service !== undefined && service !== null) {
+      return { status: 'violation', mounted: name };
+    }
+  }
+  return unreadable ? { status: 'unavailable' } : { status: 'ok' };
 }
 
 /**
@@ -33,48 +61,33 @@ export function exclusiveServices(config) {
  * @returns {string | undefined}
  */
 export function officialServicePresent(ctx, config, onUnreadable) {
-  if (!ctx || typeof ctx.get !== 'function') return undefined;
-  for (const name of exclusiveServices(config)) {
-    let service;
-    try {
-      service = ctx.get(name);
-    } catch {
-      // An unreadable lookup proves nothing; the caller's fail-closed path
-      // reports the unavailable check separately. Naming the service keeps that
-      // result attributable.
-      onUnreadable?.(name);
-      continue;
-    }
-    if (service !== undefined && service !== null) return name;
-  }
-  return undefined;
+  const scan = scanExclusiveServices(ctx, config, onUnreadable);
+  return scan.status === 'violation' ? scan.mounted : undefined;
 }
 
 /**
  * @param {{ get?: (name: string) => unknown } | undefined} ctx
  * @param {Record<string, unknown>} config
+ * @param {{
+ *   onMounted?: (name: string) => void,
+ *   onUnreadable?: (name: string) => void,
+ * }} [diagnostics]
  * @returns {{ ok: true } | { ok: false, reason: 'exclusive-violation' | 'exclusive-check-unavailable' }}
  */
-export function checkExclusive(ctx, config) {
+export function checkExclusive(ctx, config, diagnostics) {
   if (config?.requireExclusive === false) return { ok: true };
 
-  if (!ctx || typeof ctx.get !== 'function') {
-    return { ok: false, reason: 'exclusive-check-unavailable' };
+  const scan = scanExclusiveServices(ctx, config, diagnostics?.onUnreadable);
+  if (scan.status === 'violation') {
+    diagnostics?.onMounted?.(scan.mounted);
+    return { ok: false, reason: 'exclusive-violation' };
   }
-
-  try {
-    for (const name of exclusiveServices(config)) {
-      const service = ctx.get(name);
-      if (service !== undefined && service !== null) {
-        return { ok: false, reason: 'exclusive-violation' };
-      }
-    }
-    return { ok: true };
-  } catch {
+  if (scan.status === 'unavailable') {
     // A context that cannot answer the service lookup must not be treated as
     // proof that the official account path is absent.
     return { ok: false, reason: 'exclusive-check-unavailable' };
   }
+  return { ok: true };
 }
 
 // Official bypasses that live in the environment rather than in a Host service:

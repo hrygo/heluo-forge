@@ -82,13 +82,42 @@ test('apply stays quiet without a bypass and under the explicit opt-out', () => 
 
 test('a throwing service lookup is attributed next to the fail-closed result', () => {
   const debug = [];
-  const warnings = [];
   const get = () => {
     throw new Error('lookup failed');
   };
   assert.deepEqual(checkExclusive({ get }, minimalConfig), { ok: false, reason: 'exclusive-check-unavailable' });
-  const { provided } = applyWith({}, minimalConfig, { get, debug });
+  const { warnings, provided } = applyWith({}, minimalConfig, { get, debug });
   assert.deepEqual(debug, ['forge-iam: exclusive lookup failed for deepseekAccount']);
   assert.deepEqual(warnings, []);
   assert.equal(provided.has('iam'), true, 'an unreadable lookup still mounts the service so it fails closed');
+});
+
+test('apply probes each exclusive service only once at load', () => {
+  const configured = ['deepseekAccount', 'llm-deepseek'];
+  const lookups = [];
+  const get = (name) => {
+    if (configured.includes(name)) lookups.push(name);
+    return undefined;
+  };
+  applyWith({}, { ...minimalConfig, exclusiveServices: configured }, { get });
+  assert.deepEqual(lookups, configured);
+});
+
+test('a throwing lookup before a mounted service still reports exclusive-violation and both diagnostics', () => {
+  const unreadable = [];
+  const mounted = [];
+  const ctx = {
+    get(name) {
+      if (name === 'deepseekAccount') throw new Error('unreadable');
+      if (name === 'llm-deepseek') return {};
+      return undefined;
+    },
+  };
+  const result = checkExclusive(ctx, { exclusiveServices: ['deepseekAccount', 'llm-deepseek'] }, {
+    onUnreadable: (name) => unreadable.push(name),
+    onMounted: (name) => mounted.push(name),
+  });
+  assert.deepEqual(result, { ok: false, reason: 'exclusive-violation' });
+  assert.deepEqual(unreadable, ['deepseekAccount']);
+  assert.deepEqual(mounted, ['llm-deepseek']);
 });
