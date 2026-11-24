@@ -13,7 +13,7 @@
  * 否则会出现"命令收得下、产物写不出"的分叉。
  */
 import { CHANGE_ID_PATTERN } from './artifacts.mjs';
-import { cardReadyFor, cardStatusOf } from './change-context.mjs';
+import { cardReadyFor, cardStatusOf, READY_STATUS } from './change-context.mjs';
 import { CLI_PAGE_HINT } from './cli-config.mjs';
 import { READ_REASONS } from './read.mjs';
 
@@ -144,8 +144,16 @@ function blockedOutcomeOf(card) {
       typeof card.reason === 'string' && singleLine(card.reason) !== ''
         ? singleLine(card.reason)
         : ENTRY_REASONS.CONTEXT_BLOCKED;
-    return { reason, headline: '阻塞：上下文读取失败，未取回可推进的变更事实。' };
+    // 入参错误根本没发起读取：别用"读取失败"描述它，否则恢复方向会往 dop 上带偏。
+    return {
+      reason,
+      headline:
+        reason === ENTRY_REASONS.MISSING_OR_INVALID
+          ? '阻塞：变更号不合法，未发起平台读取。'
+          : '阻塞：上下文读取失败，未取回可推进的变更事实。',
+    };
   }
+  // 判据走 `cardStatusOf`（只去空白），展示前再 `singleLine` 折控制字符：状态里的换行会打断多行文案。
   const status = singleLine(cardStatusOf(card));
   if (status === '') {
     return {
@@ -160,7 +168,7 @@ function blockedOutcomeOf(card) {
       headline: '阻塞：上下文卡未自报成功（缺少 ok=true），按未确认处理，未取回可推进的变更事实。',
     };
   }
-  if (status === 'ready') {
+  if (status === READY_STATUS) {
     return {
       reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
       headline: '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。',
@@ -188,8 +196,14 @@ function blockedText(result, changeId) {
   // 恢复方向按原因并列：配置问题指配置页，变更号不可确认时提示核对号与读面回填；
   // 两条同时成立就都给（配置没通也可能伴随号对不上），都不成立才退到通用重试方向。
   const next = [];
-  if (CONFIG_REASONS.includes(reason) || items.some((item) => CONFIG_REASONS.includes(item.reason))) {
+  if (
+    reason !== ENTRY_REASONS.MISSING_OR_INVALID &&
+    (CONFIG_REASONS.includes(reason) || items.some((item) => CONFIG_REASONS.includes(item.reason)))
+  ) {
     next.push(`下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`);
+  }
+  if (reason === ENTRY_REASONS.MISSING_OR_INVALID) {
+    next.push(`下一步：修正变更号格式后重跑 ${chain}——${ENTRY_EXPECTED_FORMAT}。`);
   }
   if (reason === ENTRY_REASONS.CONTEXT_UNCONFIRMED) {
     next.push(`下一步：核对请求的变更号 ${changeId} 是否确为本次目标；号无误时检查读面为何未回填该号，再重跑 ${chain}。`);
@@ -197,12 +211,17 @@ function blockedText(result, changeId) {
   if (next.length === 0) {
     next.push(`下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`);
   }
+  // 入参错误只给"改参数"一条方向：dop 可用与否与变更号写错无关，不掺配置与重试旁白。
+  const missing =
+    items.length === 0
+      ? reason === ENTRY_REASONS.MISSING_OR_INVALID
+        ? '缺失项：无（未发起读取）。'
+        : '缺失项：无（卡片未列出未知项，按未就绪处理）。'
+      : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`;
   const lines = [
     `${ENTRY_NAME}：${reason}${detail}`,
     headline,
-    items.length === 0
-      ? '缺失项：无（卡片未列出未知项，按未就绪处理）。'
-      : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`,
+    missing,
     ...next,
     '本次不进入澄清/计划/实现步骤，也不改写会话绑定。',
   ];

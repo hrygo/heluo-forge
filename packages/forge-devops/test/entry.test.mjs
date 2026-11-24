@@ -237,6 +237,42 @@ test('卡片不回填 ok：状态 ready 也不报成功，按未确认处理', a
   assert.ok(!result.text.includes('澄清/计划/实现的后续步骤'), '不追加成功旁白');
 });
 
+test('阻塞归因按固定顺序归口：读面失败 / 空状态 / 未自报成功 / 未就绪各归各码', async () => {
+  const cases = [
+    { card: { ok: false, reason: 'COMMAND_FAILED' }, expect: 'COMMAND_FAILED', why: 'ok:false 先归读面失败' },
+    { card: { ok: false }, expect: 'CONTEXT_BLOCKED', why: 'ok:false 且无状态仍归读面失败' },
+    { card: {}, expect: 'CONTEXT_EMPTY', why: '空响应无状态' },
+    { card: { ok: true }, expect: 'CONTEXT_EMPTY', why: 'ok:true 但缺状态' },
+    { card: { ok: true, status: 'blocked', changeId: 'ARD123456' }, expect: 'CONTEXT_BLOCKED', why: '未就绪' },
+    { card: { status: 'ready', changeId: 'ARD123456' }, expect: 'CONTEXT_UNCONFIRMED', why: 'ok 缺失按不可确认' },
+    { card: { ok: true, status: 'ready', changeId: 'ARD999999' }, expect: 'CONTEXT_UNCONFIRMED', why: '号不符' },
+  ];
+  for (const item of cases) {
+    const { ctx, registered } = host();
+    registerEntry(ctx, spyService(item.card).service);
+    const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+    assert.equal(result.kind, 'error', item.why);
+    assert.match(result.text, new RegExp(item.expect, 'u'), item.why);
+    assert.ok(!result.text.includes(ENTRY_NEXT_STEPS), `${item.why}：不得追加成功旁白`);
+  }
+});
+
+test('入参错误信封：只给修正变更号格式的方向，不掺配置与 dop 重试旁白', async () => {
+  const { ctx, registered } = host();
+  registerEntry(
+    ctx,
+    spyService({ ok: false, reason: 'MISSING_OR_INVALID', text: '上下文卡未产出：请给出一个系统变更号（例如 CHG-2026-0042）。' })
+      .service,
+  );
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /变更号不合法，未发起平台读取/u);
+  assert.match(result.text, /缺失项：无（未发起读取）/u);
+  assert.match(result.text, /修正变更号格式后重跑 devops-change ARD123456/u);
+  assert.ok(!result.text.includes('设置 → 企业 DevOps'), '入参错误不是配置问题');
+  assert.ok(!result.text.includes('确认 dop 可用'), '不要把人引去排查 dop');
+});
+
 test('状态里带控制字符：压成单行再嵌入，不打断多行阻塞文案', async () => {
   const { ctx, registered } = host();
   registerEntry(

@@ -67,7 +67,10 @@ const EVIDENCE_KINDS = Object.freeze([
 export const CHANGE_SOURCE_TYPES = Object.freeze(['mock', 'enterprise']);
 
 /** 卡片状态是流程态（与平台动作的 done/failed/denied/unknown 不是一套词，渲染时不得混用）。 */
-export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
+export const READY_STATUS = 'ready';
+
+/** 状态词表：就绪与阻塞两种，词面只在这一处定义，判据与文案都引用常量。 */
+export const CONTEXT_STATUSES = Object.freeze([READY_STATUS, 'blocked']);
 
 /**
  * 卡片状态的归一化读法（issue #342）：`ready` / `blocked` 字面量以外的形状一律归空串。
@@ -99,7 +102,7 @@ export function cardStatusOf(card) {
 export function cardReadyFor(card, changeId) {
   if (card === null || typeof card !== 'object') return false;
   if (card.ok !== true) return false;
-  if (cardStatusOf(card) !== 'ready') return false;
+  if (cardStatusOf(card) !== READY_STATUS) return false;
   const wanted = typeof changeId === 'string' ? changeId.trim() : '';
   if (wanted === '') return false;
   const reported = [card.changeId, card.context?.change?.changeId]
