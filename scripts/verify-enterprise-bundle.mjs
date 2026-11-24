@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readBundleEntries, summarizeBundle } from './lib/bundle-archive.mjs';
+import { ARCHIVE_LIMITS, readBundleEntries, summarizeBundle } from './lib/bundle-archive.mjs';
 import { createBundleManifest, diffBundleManifest, parseBundleManifest } from './lib/bundle-manifest.mjs';
 import { auditPackagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
 
@@ -119,16 +119,35 @@ function inspectBundle(entries) {
  * @param {{ manifestPath?: string }} [options] explicit manifest; a sibling
  *   `bundle-manifest.json` is used automatically when present.
  */
-export function verifyBundle(tarballPath, { manifestPath } = {}) {
+export function verifyBundle(tarballPath, { manifestPath, limits = ARCHIVE_LIMITS } = {}) {
   const tarball = resolve(tarballPath);
   const bytes = readFileSync(tarball);
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const errors = [];
   let entries = [];
+  // The manifest is loadable without parsing the artifact, so a trusted digest
+  // is checked before any structure is read: a corrupted or substituted
+  // artifact must be reported as such, not as a pile of file diffs.
+  const manifestFile = manifestPath === undefined ? join(dirname(tarball), MANIFEST_FILE) : resolve(manifestPath);
+  const manifestText = manifestPath === undefined && !existsSync(manifestFile) ? null : readFileSync(manifestFile, 'utf8');
+  let manifest = null;
+  if (manifestText !== null) {
+    try {
+      manifest = parseBundleManifest(manifestText);
+    } catch (error) {
+      errors.push(`${MANIFEST_FILE}: ${stripPrefix(error.message, 'bundle manifest: ')}`);
+    }
+  }
+  const trusted = manifest?.tarball?.sha256;
+  const digestMismatch = typeof trusted === 'string' && trusted !== sha256;
+  if (digestMismatch) errors.push(`tarball: digest mismatch (expected ${trusted}, got ${sha256})`);
+  // Structure is still inspected: the digest says the artifact is not the one
+  // the manifest describes, the file diff says where it drifted.
   try {
-    entries = readBundleEntries(bytes, { withContent: true });
+    entries = readBundleEntries(bytes, { withContent: true, limits });
   } catch (error) {
-    errors.push(`tarball: ${stripPrefix(error.message, 'bundle archive: ')}`);
+    const category = error?.code === 'BUNDLE_ARCHIVE_TOO_LARGE' ? 'archive budget exceeded' : 'archive unreadable';
+    errors.push(`tarball: ${category}: ${stripPrefix(error.message, 'bundle archive: ')}`);
   }
   let root = null;
   const members = new Map();
@@ -139,16 +158,6 @@ export function verifyBundle(tarballPath, { manifestPath } = {}) {
     errors.push(...inspected.errors);
     root = inspected.root;
     for (const [name, version] of inspected.members) members.set(name, version);
-  }
-  const manifestFile = manifestPath === undefined ? join(dirname(tarball), MANIFEST_FILE) : resolve(manifestPath);
-  const manifestText = manifestPath === undefined && !existsSync(manifestFile) ? null : readFileSync(manifestFile, 'utf8');
-  let manifest = null;
-  if (manifestText !== null) {
-    try {
-      manifest = parseBundleManifest(manifestText);
-    } catch (error) {
-      errors.push(`${MANIFEST_FILE}: ${stripPrefix(error.message, 'bundle manifest: ')}`);
-    }
   }
   // Compare only when both sides exist: a broken root manifest already failed
   // above, and inventing an entry name here would bury the real cause.

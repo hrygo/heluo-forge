@@ -85,6 +85,17 @@ test('blocks unsupported binary, oversized and malformed xlsx', t => {
   }
 });
 
+test('a malformed workbook is reported by category and scope only (issue #402)', t => {
+  const { repo, git, run } = setup(t);
+  writeFileSync(join(repo, 'broken.xlsx'), Buffer.from('not a spreadsheet'));
+  git('add', 'broken.xlsx');
+  const r = run();
+  assert.equal(r.status, 1);
+  // The submitter learns what failed and on what, never the parser internals.
+  assert.match(r.stderr, /工作簿格式不受支持（范围：workbook）/u);
+  assert.doesNotMatch(r.stderr, /unsupported workbook part|not a gzip|inflate|zip/u);
+});
+
 function syntheticWorkbook(xml, extra = {}) {
   const entries = { 'xl/workbook.xml': xml, ...extra };
   const locals = []; const centrals = []; let offset = 0;

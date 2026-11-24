@@ -79,6 +79,8 @@
 
 `scripts/lib/bundle-rules.mjs` 接入 `scripts/lib/repo-rules.mjs`，对 `packages/*` 做静态闭包核验：包名与目录一致、`engines.dsh` 具体、无 install 期构建脚本、不依赖 DSH 内核、`files`/`main`/`bin`/`exports` 目标存在、`@heluo/*` 依赖必须 `workspace:` 且可解析、不跨包导入源码路径、补丁层随包发行且 `insert:` 不指向不存在的包、不挂历史市场包、`locale` 双语文案随包发行。规则来源与用途见[企业组合设计 §5.3](../design/plugins/forge-enterprise.md#53-组合与包体闭包e01-37)；正反向夹具在 `tests/bundle-closure.test.mjs`。静态规则不替代真实 tarball 与安装语义验证。
 
+企业制品的离线验包统一走 `scripts/verify-enterprise-bundle.mjs` 的 `verifyBundle()`：`verify:bundle`、私版制作预检与交付预检都调用这一个入口，不各自复制校验逻辑。归档读取层（`scripts/lib/bundle-archive.mjs`）对压缩输入、解压总量与单文件设三档预算，默认值按实测制品定：企业包 0.41 MB 压缩 / 1.46 MB 解压 / 264 KB 最大单文件，工程包 0.51 MB / 1.64 MB / 189 KB（2026-11-24 实测），预算取 32 MiB / 128 MiB / 64 MiB，保留约两个数量级余量以容纳原生扩展与镜像。超预算、内容损坏与摘要不符分别给出 `archive budget exceeded`、`archive unreadable`、`digest mismatch` 三类诊断；有随包清单的可信摘要时先比对摘要再解析结构，结构检查仍继续，用于指出具体漂移。团队敏感扫描对无法解析的工作簿只回固定类别「工作簿格式不受支持（范围：workbook）」，不把解析器内部信息带给提交者。
+
 `scripts/check-bundle-tarballs.mjs` 对每个有清单的包跑 `npm pack --dry-run --json`，核对实际进包的文件与模式位（声明项、入口、`bin` 执行位、locale 成对、不得混入测试/lockfile）。它用 npm 而不是 pnpm：CI 只装 Node，不安装 pnpm。`node --run check` 已包含该步，也可单跑 `pnpm check:tarballs`。
 
 该步固定使用**与当前 Node 同目录的 npm**（`npmExecutable()`），不走 `PATH` 上的任意 npm：npm 11 输出数组、npm 12 输出按包名索引的对象，`--dry-run` 的文件选择也按 npm 版本变化，混用会让"tarball 内容"这一断言随机器漂移。解析失败时错误信息带 npm 路径、版本与 stdout 开头，不再只说"没有可解析的文件列表"。（2026-10-24 在 Linux aarch64 + Node 24.21.0 上复现并按此修复。）

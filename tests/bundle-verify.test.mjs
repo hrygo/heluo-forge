@@ -200,19 +200,21 @@ test('content tamper, undeclared file, deleted file and mode drift are all rejec
   rewrite(replace('package/src/index.mjs', 'export const fixture = trVe;\n'));
   let verdict = verifyBundle(fixture.tarballPath);
   assert.equal(verdict.ok, false);
-  assert.match(verdict.errors[0], /^package\/src\/index\.mjs: sha256 mismatch/u);
+  // The trusted digest is compared first; the file diff still names the drift.
+  assert.match(verdict.errors[0], /^tarball: digest mismatch/u);
+  assert.ok(verdict.errors.some((line) => /^package\/src\/index\.mjs: sha256 mismatch/u.test(line)));
 
   // ② a file the manifest never declared.
   rewrite([...fixture.files, { name: 'package/extra.mjs', body: 'export const extra = true;\n' }]);
   verdict = verifyBundle(fixture.tarballPath);
   assert.equal(verdict.ok, false);
-  assert.equal(verdict.errors[0], 'package/extra.mjs: not declared in manifest');
+  assert.ok(verdict.errors.includes('package/extra.mjs: not declared in manifest'));
 
   // ④ a declared file removed from the tarball.
   rewrite(fixture.files.filter((file) => file.name !== 'package/README.md'));
   verdict = verifyBundle(fixture.tarballPath);
   assert.equal(verdict.ok, false);
-  assert.equal(verdict.errors[0], 'package/README.md: missing from tarball');
+  assert.ok(verdict.errors.includes('package/README.md: missing from tarball'));
 });
 
 test('structure rules catch workspace references, shipped tests and a non-executable bin', (t) => {
@@ -299,7 +301,7 @@ test('verifier CLI uses exit codes 0/1/2 as documented', (t) => {
   const failed = runCli(verifier, [fixture.tarballPath]);
   assert.equal(failed.status, 1);
   const lines = failed.stdout.trimEnd().split('\n');
-  assert.match(lines.at(-1), /^bundle: failed with \d+ error\(s\); first: package\/README\.md: (sha256|size) mismatch/u);
+  assert.match(lines.at(-1), /^bundle: failed with \d+ error\(s\); first: tarball: digest mismatch/u);
   assert.ok(!/\n\s+at /u.test(failed.stdout), 'no stack traces on the CLI surface');
 });
 
@@ -325,9 +327,52 @@ test('the verifier CLI emits one machine-readable verdict with --json', (t) => {
   const failedVerdict = JSON.parse(failedRun.stdout);
   assert.equal(failedVerdict.ok, false);
   assert.ok(failedVerdict.errors.length > 0);
-  assert.match(failedVerdict.errors[0], /package\/README\.md: (sha256|size) mismatch/u);
+  assert.match(failedVerdict.errors[0], /^tarball: digest mismatch/u);
+  assert.ok(failedVerdict.errors.some((line) => /package\/README\.md: (sha256|size) mismatch/u.test(line)));
 
   // Usage errors stay exit 2 and stay on the text surface.
   assert.equal(runCli(verifier, ['--json']).status, 2);
   assert.equal(runCli(verifier, [fixture.tarballPath, '--json', fixture.tarballPath]).status, 2);
+});
+
+test('archive budgets bound compressed input, inflated total and single files (issue #402)', (t) => {
+  const fixture = artifact(t);
+  const bytes = readFileSync(fixture.tarballPath);
+  const entries = readBundleEntries(bytes);
+  const total = summarizeBundle(entries).totalBytes;
+  const largest = Math.max(...entries.map((entry) => entry.size));
+  const overBudget = (limits, pattern) => assert.throws(
+    () => readBundleEntries(bytes, { limits }),
+    (error) => error.code === 'BUNDLE_ARCHIVE_TOO_LARGE' && pattern.test(error.message),
+  );
+  overBudget({ compressedBytes: bytes.length - 1, totalBytes: total, fileBytes: largest }, /compressed input/u);
+  overBudget({ compressedBytes: bytes.length, totalBytes: total - 1, fileBytes: largest }, /inflated content/u);
+  // Keep the inflated-total budget generous so this case isolates the per-file limit.
+  overBudget({ compressedBytes: bytes.length, totalBytes: 1024 * 1024, fileBytes: largest - 1 }, /is \d+ bytes, budget/u);
+  // The same archive inside the budget is read normally.
+  assert.ok(readBundleEntries(bytes, { limits: { compressedBytes: bytes.length, totalBytes: total, fileBytes: largest } }).length > 0);
+});
+
+test('the verifier names budget and corruption as distinct categories (issue #402)', (t) => {
+  const fixture = artifact(t);
+  const tight = verifyBundle(fixture.tarballPath, { limits: { compressedBytes: 10, totalBytes: 10, fileBytes: 10 } });
+  assert.equal(tight.ok, false);
+  assert.match(tight.errors[0], /^tarball: archive budget exceeded:/u);
+
+  const dir = mkdtempSync(join(tmpdir(), 'forge-bundle-corrupt-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const broken = join(dir, 'broken.tgz');
+  writeFileSync(broken, Buffer.from('not a gzip stream'));
+  const corrupt = verifyBundle(broken);
+  assert.equal(corrupt.ok, false);
+  assert.match(corrupt.errors[0], /^tarball: archive unreadable:/u);
+});
+
+test('every product entry verifies through the shared function (issue #402)', () => {
+  // Same budget and same diagnostics for the CLI, the private-build preflight
+  // and the delivery preflight: they must all call `verifyBundle()`.
+  for (const relative of ['scripts/lib/private-bundle.mjs', 'scripts/release-delivery.mjs', 'scripts/build-public-release.mjs']) {
+    const text = readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8');
+    assert.match(text, /verifyBundle/u, `${relative} must verify through the shared entry`);
+  }
 });

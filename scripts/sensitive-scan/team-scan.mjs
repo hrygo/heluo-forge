@@ -2,6 +2,16 @@ import { readFileSync } from 'node:fs';
 import { crc32, inflateRawSync } from 'node:zlib';
 
 const MAX_TEXT_BYTES = 10 * 1024 * 1024;
+/**
+ * Submitter-facing diagnosis for a workbook this scanner cannot read. Only the
+ * scope and the failure category travel: the underlying parser message may name
+ * internal parts and is kept for the console, not for the person's report.
+ */
+const WORKBOOK_FORMAT = Object.freeze({
+  code: 'SENSITIVE_SCAN_WORKBOOK_FORMAT',
+  scope: 'workbook',
+  category: '工作簿格式不受支持',
+});
 const MAX_XLSX_BYTES = 20 * 1024 * 1024;
 const XLSX_EXTENSIONS = new Set(['.xlsx', '.xlsm', '.xltx']);
 
@@ -183,7 +193,14 @@ export function scanBuffer(buffer, filePath, rules) {
     if (buffer.length > MAX_XLSX_BYTES) {
       return { kind: 'xlsx-too-large', findings: [], skippedReason: 'xlsx 超过 20 MB' };
     }
-    const parts = readXlsxParts(buffer);
+    let parts;
+    try {
+      parts = readXlsxParts(buffer);
+    } catch {
+      // A malformed or unsupported workbook is a format problem, not a finding:
+      // report the category so the submitter can fix the file and retry.
+      return { kind: 'xlsx-invalid', findings: [], formatError: { ...WORKBOOK_FORMAT } };
+    }
     const findings = parts.flatMap((part) =>
       scanText(part.text, rules, { part: part.name }),
     );
