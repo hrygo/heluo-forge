@@ -1,8 +1,8 @@
 {
   "brand": "河洛 / Heluo Forge",
   "theme": "河洛苍螭 / 潜龙出渊 (Cyber Long Unified Family)",
-  "version": "V2.1.4",
-  "date": "2026-10-23",
+  "version": "V2.1.5",
+  "date": "2026-11-24",
   "status": "已确认选型（方案 B · 螭龙变体族谱）",
   "palette": {
     "primaryDark": "#070C16",
@@ -675,6 +675,16 @@
       "sha256": "5c7983760f8e824181a4efab25d1f97209d4afef3bc7f97be5fa814ceb4926ae"
     },
     {
+      "path": "icons/app-icon.icns",
+      "bytes": 287869,
+      "sha256": "cb77874357b6d67157626a3207e1e43cc1f33bf873d575709a026fefae6c75d3"
+    },
+    {
+      "path": "icons/app-icon.ico",
+      "bytes": 51642,
+      "sha256": "c954eb0863977d7e8bd48b84b16fc445bb1feedf670bae01fd8935b0ec9c3dbb"
+    },
+    {
       "path": "index.html",
       "bytes": 34559,
       "sha256": "15c44bc6cafa4ad97fa019e1fe3044657f7348f914d50f25f60f5d6bd21f1c72"
@@ -850,14 +860,34 @@
       "sha256": "006aa20936bd900b85ef71514026e242fe9a49e35cddbd630db72a06a3031345"
     },
     {
+      "path": "sizes/app-icon-16.png",
+      "bytes": 794,
+      "sha256": "30cc5bac649d3a07875d61dab5afa56b992192ac8b86f4df9ebd7a91932993a2"
+    },
+    {
       "path": "sizes/app-icon-256.png",
       "bytes": 27974,
       "sha256": "9b67f55eb25b357cdda21bd4dcbca870ca5548d0b117fc1f929ece0d3b5aa89e"
     },
     {
+      "path": "sizes/app-icon-32.png",
+      "bytes": 2065,
+      "sha256": "9b5eb0d4616f29c702cea272a6d4731ce871c259d7388733f17d5b0d08b9ea8d"
+    },
+    {
+      "path": "sizes/app-icon-48.png",
+      "bytes": 3756,
+      "sha256": "542c4b01b27279e43362d26e5913f3128586a0fd50e7b99f844e4151663edaec"
+    },
+    {
       "path": "sizes/app-icon-512.png",
       "bytes": 69867,
       "sha256": "221a949d700001a3de2c948af2a588e7707ee64be00ad56e6f7ddbdfe17f050c"
+    },
+    {
+      "path": "sizes/app-icon-64.png",
+      "bytes": 5736,
+      "sha256": "b39fdcd6115476803e7b01cc8acb4965522651f728cb0e580dc0c5cffd973d74"
     },
     {
       "path": "sizes/devops-mcp-1024.png",
