@@ -227,6 +227,16 @@ test('状态带空白：入口与装配层同一归一化口径，按就绪处�
   assert.ok(result.text.includes(ENTRY_NEXT_STEPS));
 });
 
+test('卡片不回填 ok：状态 ready 也不报成功，按未确认处理', async () => {
+  const { ctx, registered } = host();
+  registerEntry(ctx, spyService({ status: 'ready', changeId: 'ARD123456', text: '## 上下文卡' }).service);
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error', 'ok 缺失不能靠 status 单独放行');
+  assert.match(result.text, /CONTEXT_UNCONFIRMED/u);
+  assert.match(result.text, /缺少 ok=true/u);
+  assert.ok(!result.text.includes('澄清/计划/实现的后续步骤'), '不追加成功旁白');
+});
+
 test('状态里带控制字符：压成单行再嵌入，不打断多行阻塞文案', async () => {
   const { ctx, registered } = host();
   registerEntry(

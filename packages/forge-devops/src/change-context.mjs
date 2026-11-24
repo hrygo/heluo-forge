@@ -87,7 +87,7 @@ export function cardStatusOf(card) {
  * 卡片是否"就绪且属于这次请求"：入口与装配层共用同一判据（issue #342），
  * 避免出现"命令说成功、会话却没绑定"的分叉。
  *
- * - `ok === false` 一律不算就绪（读面本身失败）；
+ * - `ok` 必须是显式的 `true`：`false` 是读面失败，缺失则说明实现没自报成功，一律不算就绪（fail closed）；
  * - `status` 必须是 `ready`；
  * - 卡片必须**自报**变更号且全部等于请求号：报不上来视为不可确认，不绑定（fail closed），
  *   否则换一个不回填变更号的注入实现，就绪卡会把"别的变更"静默绑进会话。
@@ -98,7 +98,7 @@ export function cardStatusOf(card) {
  */
 export function cardReadyFor(card, changeId) {
   if (card === null || typeof card !== 'object') return false;
-  if (card.ok === false) return false;
+  if (card.ok !== true) return false;
   if (cardStatusOf(card) !== 'ready') return false;
   const wanted = typeof changeId === 'string' ? changeId.trim() : '';
   if (wanted === '') return false;

@@ -153,6 +153,13 @@ function blockedOutcomeOf(card) {
       headline: '阻塞：响应没有卡片状态，无法确认已取回匹配的变更事实。',
     };
   }
+  // `ok` 缺失同样不可确认：注入实现不回填 `ok` 时不能只靠 status 放行（与 cardReadyFor 同一个 fail-closed 口径）。
+  if (card?.ok !== true) {
+    return {
+      reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
+      headline: '阻塞：上下文卡未自报成功（缺少 ok=true），按未确认处理，未取回可推进的变更事实。',
+    };
+  }
   if (status === 'ready') {
     return {
       reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
