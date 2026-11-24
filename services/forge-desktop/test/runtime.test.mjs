@@ -311,3 +311,71 @@ test('what the process prints after readiness is still read, so its pipe never f
   assert.equal(runtime.snapshot().phase, 'ready');
   assert.equal(runtime.snapshot().origin, ORIGIN);
 });
+
+test('an announcement cut in two by the pipe is taken only once its line is complete', async () => {
+  const { runtime, fake } = fixture();
+  const starting = runtime.start();
+  fake.say(`dsh web: ${ORIGIN}/?to`);
+  await flush();
+  // Half an address is not an address: taking it would load the wrong port or path.
+  assert.equal(runtime.snapshot().phase, 'starting');
+  fake.say(`ken=${TOKEN}\n`);
+  assert.equal((await starting).href, `${ORIGIN}/?token=${TOKEN}`);
+});
+
+test('a character split across two chunks is decoded whole', async () => {
+  const seen = [];
+  const fake = fakeProcess();
+  const runtime = createRuntime({
+    spawn: () => fake.handle,
+    findLaunchUrl: (text) => {
+      seen.push(text);
+      return null;
+    },
+  });
+  const starting = runtime.start();
+  const bytes = Buffer.from('启动日志：就绪\n');
+  fake.handle.output.push(bytes.subarray(0, 1));
+  fake.handle.output.push(bytes.subarray(1));
+  await flush();
+  assert.deepEqual(seen, ['启动日志：就绪\n']);
+  const stopping = runtime.stop();
+  await rejectsCode(starting, 'STOPPED');
+  fake.exit();
+  await stopping;
+});
+
+test('an announcement that never gets its newline is taken when the stream ends', async () => {
+  const { runtime, fake } = fixture();
+  const starting = runtime.start();
+  fake.say(`dsh web: ${ORIGIN}/?token=${TOKEN}`);
+  await flush();
+  assert.equal(runtime.snapshot().phase, 'starting');
+  fake.handle.output.end();
+  assert.equal((await starting).origin, ORIGIN);
+});
+
+test('each line is looked at once: the scanning grows with what is printed, not with its square', async () => {
+  const scanned = [];
+  const fake = fakeProcess();
+  const runtime = createRuntime({
+    spawn: () => fake.handle,
+    findLaunchUrl: (text) => {
+      scanned.push(text.length);
+      return null;
+    },
+  });
+  const starting = runtime.start();
+  let printed = 0;
+  for (let index = 0; index < 300; index += 1) {
+    const line = `log line ${index}\n`;
+    printed += line.length;
+    fake.say(line);
+  }
+  await flush();
+  assert.equal(scanned.reduce((sum, length) => sum + length, 0), printed);
+  const stopping = runtime.stop();
+  await rejectsCode(starting, 'STOPPED');
+  fake.exit();
+  await stopping;
+});

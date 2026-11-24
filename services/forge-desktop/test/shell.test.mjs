@@ -10,10 +10,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { EMPLOYEE_PACKAGE_SCHEMA } from '../src/first-run.mjs';
 import { createRuntime } from '../src/runtime.mjs';
-import { startShell } from '../src/shell.mjs';
+import { guidanceFor, startShell } from '../src/shell.mjs';
 
 const TOKEN = 'process-token-7f3a9c';
 const ORIGIN = 'http://127.0.0.1:43210';
@@ -211,7 +212,7 @@ function webProfile() {
 }
 
 /** A whole shell world: package, marker, installer, web profile and the Electron stand-in. */
-function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets } = {}) {
+function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates } = {}) {
   const fx = fakeElectron(electron);
   const root = temp(t);
   // `assets` reuses a package that already exists (typically one a first run consumed).
@@ -221,7 +222,7 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
   const exec = () => {};
   const shell = startShell(fx.electron, {
     platform: electron.platform ?? 'linux',
-    assetsCandidates: [pkg.directory],
+    assetsCandidates: candidates ?? [pkg.directory],
     markerPath: markerPath ?? join(root, 'userData', 'first-run.json'),
     profile: 'web',
     bindHost,
@@ -279,10 +280,15 @@ test('the first run installs the package, then a window shows the local service 
   assert.equal(navigated(`${ORIGIN}/session/1`), false);
   assert.equal(navigated('https://example.corp.example/help'), true);
   assert.equal(navigated('file:///etc/passwd'), true);
+  // A redirect is stopped, and nothing is opened in its place: it did not come
+  // from anything done on the user's behalf. A redirect inside the service goes on.
   const redirected = { prevented: false, preventDefault: () => { redirected.prevented = true; } };
   window.webContents.own['will-redirect'](redirected, 'https://example.corp.example/');
   assert.equal(redirected.prevented, true);
-  assert.deepEqual(fx.externals, ['https://example.corp.example/help', 'https://example.corp.example/']);
+  const inside = { prevented: false, preventDefault: () => { inside.prevented = true; } };
+  window.webContents.own['will-redirect'](inside, `${ORIGIN}/next`);
+  assert.equal(inside.prevented, false);
+  assert.deepEqual(fx.externals, ['https://example.corp.example/help']);
   // New windows are never allowed, whichever address asked for one.
   assert.deepEqual(window.open({ url: 'https://example.corp.example/doc' }), { action: 'deny' });
   assert.deepEqual(window.open({ url: 'file:///etc/passwd' }), { action: 'deny' });
@@ -332,16 +338,67 @@ test('a failed first run stops the shell before any service or window exists', a
   assert.equal(fx.log.at(-1), 'quit');
 });
 
-test('without an intact package, or with a forbidden bind address, nothing starts', async (t) => {
+test('without a package, with a broken one, or with a forbidden bind address, nothing starts', async (t) => {
   const tampered = world(t);
   writeFileSync(join(tampered.pkg.directory, TARBALL), 'changed');
-  assert.deepEqual(await tampered.shell.outcome, { started: false, code: 'ASSETS_NOT_FOUND' });
+  assert.deepEqual(await tampered.shell.outcome, { started: false, code: 'ASSETS_INVALID' });
   assert.equal(tampered.processes.length, 0);
-  assert.match(tampered.messages[0].message, /ASSETS_NOT_FOUND/);
+  assert.match(tampered.messages[0].message, /ASSETS_INVALID/);
+
+  const none = world(t, { candidates: [join(temp(t), 'absent')] });
+  assert.deepEqual(await none.shell.outcome, { started: false, code: 'ASSETS_NOT_FOUND' });
+  assert.equal(none.installs.length, 0);
 
   const elsewhere = world(t, { bindHost: '0.0.0.0' });
   assert.deepEqual(await elsewhere.shell.outcome, { started: false, code: 'BIND_HOST_REJECTED' });
   assert.equal(elsewhere.installs.length, 0);
+});
+
+test('a broken package that comes first is reported; the shell does not quietly take another', async (t) => {
+  const intact = employeePackage(join(temp(t), 'intact'));
+  const broken = employeePackage(join(temp(t), 'broken'));
+  writeFileSync(join(broken.directory, TARBALL), 'changed');
+  const fx = world(t, { candidates: [broken.directory, intact.directory] });
+  // Taking the intact one would leave the record of the first run pointing at
+  // a package other than the first, and the next start would not agree with it.
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'ASSETS_INVALID' });
+  assert.equal(fx.installs.length, 0);
+  assert.equal(fx.processes.length, 0);
+  assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), false);
+});
+
+test('a lost record of the first run costs one more installer run, not a start that never succeeds', async (t) => {
+  const markerPath = join(temp(t), 'userData', 'first-run.json');
+  const pkg = employeePackage(join(temp(t), 'assets'));
+  const first = world(t, { assets: pkg.directory, candidates: [pkg.directory], markerPath });
+  assert.equal((await first.shell.outcome).started, true);
+  assert.equal(first.installs.length, 1);
+  pkg.consumeSecret();
+  // The record did not survive (a crash between the installer and the record);
+  // the package is already consumed.
+  rmSync(markerPath);
+  const again = world(t, { assets: pkg.directory, candidates: [pkg.directory], markerPath });
+  assert.equal((await again.shell.outcome).started, true);
+  assert.equal(again.installs.length, 1, 'the installer runs once more; it is idempotent');
+  assert.equal(again.messages.length, 0);
+  const settled = world(t, { assets: pkg.directory, candidates: [pkg.directory], markerPath });
+  assert.equal((await settled.shell.outcome).started, true);
+  assert.equal(settled.installs.length, 0);
+});
+
+test('every failure the modules can raise has guidance for the user', () => {
+  const sourceDir = fileURLToPath(new URL('../src', import.meta.url));
+  const codes = new Set();
+  for (const name of readdirSync(sourceDir)) {
+    if (!name.endsWith('.mjs')) continue;
+    const source = readFileSync(join(sourceDir, name), 'utf8');
+    for (const match of source.matchAll(/(?:fail|failStart|failWith)\('([A-Z_]+)'|new ShellError\('([A-Z_]+)'/g)) codes.add(match[1] ?? match[2]);
+  }
+  assert.ok(codes.size >= 12, `expected the modules to raise a dozen codes, found ${codes.size}`);
+  for (const code of codes) {
+    assert.equal(typeof guidanceFor(code), 'string', `${code} reaches the user without guidance`);
+  }
+  assert.equal(guidanceFor('NO_SUCH_CODE'), null);
 });
 
 test('a web profile that cannot start is reported, and the shell leaves', async (t) => {

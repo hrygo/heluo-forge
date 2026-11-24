@@ -198,7 +198,7 @@
 **实施记录（2026-11-23，代码先行、验证后置）**：
 
 - 第 5 项对应 §4.0 改造清单第 1–5、7 项已实现：`.github/workflows/release-bundle.yml`、`scripts/build-employee-package.mjs`、`scripts/upload-draft-release.mjs`、`scripts/lib/release-config.mjs`（配置键清单，检查器与构建脚本共用）、`scripts/lib/repo-rules.mjs` 的窄例外，以及 `tests/check-repo.test.mjs`、`tests/build-employee-package.test.mjs`、`tests/upload-draft-release.test.mjs` 三份用例。离线证据：用例 45 项通过，18 个规则变异全部被对应用例杀死，全量离线检查通过；真实链路本机冒烟一次通过（合成配置、隔离目录）。未做：第 6 项 Secrets 与仓库设置（`release-bundle` 环境的必需评审人与部署分支限制、两个仓库变量），以及首次推 tag 远端实测。
-- 壳工程的设计先行部分已完成：[桌面壳详细设计](<../design/services/desktop-shell.md>)（CORP-DSH-DESIGN-025）已登记设计索引；`services/forge-desktop/` 实现了不依赖 Electron 的判断模块（进程状态机、launch URL 解析与回环校验、导航与权限判定、登录 shell 环境合并、企业资产校验与首启、关窗与退出判定）和以注入接口装配的 `shell.mjs`。离线证据：37 项用例与 3 项构建—壳契约用例通过，15 个规则变异全部被杀死。壳已建 `package.json`（暂不声明依赖，锁文件只登记工作区成员）并标「状态：可用」，未接 Electron 运行，未打包。
+- 壳工程的设计先行部分已完成：[桌面壳详细设计](<../design/services/desktop-shell.md>)（CORP-DSH-DESIGN-025）已登记设计索引；`services/forge-desktop/` 实现了不依赖 Electron 的判断模块（进程状态机、launch URL 解析与回环校验、导航与权限判定、登录 shell 环境合并、企业资产校验与首启、关窗与退出判定）和以注入接口装配的 `shell.mjs`。离线证据：47 项用例与 3 项构建—壳契约用例通过，24 个规则变异全部被对应用例杀死。壳已建 `package.json`（暂不声明依赖，锁文件只登记工作区成员）并标「状态：可用」，未接 Electron 运行，未打包。2026-11-24 按代码评审修正壳的七处问题（摘要来源不一致、符号链接逃逸、跨块解码、重复扫描、重定向处置、输出上限、错误码文案），并写明员工包的信任模型；新用例已在未修代码的隔离副本上确认会失败。
 - 第 3 项（外层品牌资产派生）的脚本已具备：`scripts/derive-brand-icons.mjs` 从品牌源文件派生 Windows `.ico`、macOS `.icns` 与缺失的小尺寸切图，输入按品牌 `manifest.json` 的 SHA-256 闭环校验，派生产物另记 `derivation-manifest.json`，不改写源文件；栅格化依次尝试 `rsvg-convert` 与 `sips`，两者皆无且缺尺寸时以 `MISSING_RASTERIZER` 失败。离线证据：`tests/derive-brand-icons.test.mjs` 10 项通过；对仓库真实品牌资产的本机冒烟一次通过（`file` 识别出 6 条目的 ICO 与 ICNS，源文件零改动）。未做：接入 Release 流水线 CI、派生资产登记入 manifest 校验体系。
 - 第 1、2、4 项（forge-brand 包、品牌资源随包、外层品牌规范）未实现。
 

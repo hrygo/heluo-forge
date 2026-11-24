@@ -5,15 +5,17 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { ShellError } from '../src/errors.mjs';
 import {
+  CLIENT_SECRET_PATH,
   EMPLOYEE_PACKAGE_SCHEMA,
   firstRunNeeded,
+  identifyEmployeePackage,
   initializeProfile,
   inspectEmployeePackage,
   locateEnterpriseAssets,
@@ -22,6 +24,7 @@ import {
 } from '../src/first-run.mjs';
 
 const TARBALL = 'enterprise-plugin/heluo-forge-enterprise-1.2.3-corp.1.tgz';
+const SECRET = CLIENT_SECRET_PATH;
 const sha256Of = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function temp(t) {
@@ -31,7 +34,7 @@ function temp(t) {
 }
 
 /** An employee package in the shape the unified build writes. */
-function employeePackage(t, { beforeSums } = {}) {
+function employeePackage(t, { beforeSums, secret = false } = {}) {
   const dir = temp(t);
   const put = (relative, content) => {
     mkdirSync(dirname(join(dir, relative)), { recursive: true });
@@ -41,6 +44,7 @@ function employeePackage(t, { beforeSums } = {}) {
   put('enterprise-plugin/private-release.json', '{"schema":"heluo-private-release/1"}\n');
   put(TARBALL, 'tarball bytes');
   put('INSTALL.md', '# guide\n');
+  if (secret) put(SECRET, 'synthetic client secret');
   put('employee-manifest.json', `${JSON.stringify({
     schema: EMPLOYEE_PACKAGE_SCHEMA,
     tag: 'v1.2.3',
@@ -64,13 +68,21 @@ function employeePackage(t, { beforeSums } = {}) {
   return dir;
 }
 
-function refused(fn, code, pattern) {
+/** Runs `fn`, requires a ShellError with `code`, and returns it. */
+function refusedCode(fn, code, pattern) {
+  let caught;
   assert.throws(fn, (error) => {
-    assert.ok(error instanceof ShellError, `expected ShellError, got ${error?.message}`);
-    assert.equal(error.code, code, error.message);
-    if (pattern !== undefined) assert.match(error.message, pattern);
+    caught = error;
     return true;
   });
+  assert.ok(caught instanceof ShellError, `expected ShellError, got ${caught}`);
+  assert.equal(caught.code, code, caught.message);
+  if (pattern !== undefined) assert.match(caught.message, pattern);
+  return caught;
+}
+
+function refused(fn, code, pattern) {
+  refusedCode(fn, code, pattern);
 }
 
 test('an intact employee package is accepted and named by its parts', (t) => {
@@ -107,15 +119,97 @@ test('anything the shell relies on that is missing, altered or unlisted refuses 
   assert.match(problemOf({ beforeSums: ({ put }) => put('employee-manifest.json', JSON.stringify({ schema: EMPLOYEE_PACKAGE_SCHEMA, packages: [] })) }), /names no enterprise plugin/);
 });
 
-test('the first intact candidate is the enterprise assets; without one there is nothing to start from', (t) => {
-  const broken = employeePackage(t);
-  writeFileSync(join(broken, TARBALL), 'tampered');
+test('the first candidate that carries a manifest is the package; a broken one is reported, never swapped for another', (t) => {
   const intact = employeePackage(t);
-  const found = locateEnterpriseAssets({ candidates: ['', undefined, join(temp(t), 'absent'), broken, intact] });
+  const found = locateEnterpriseAssets({ candidates: ['', undefined, join(temp(t), 'absent'), intact] });
   assert.equal(found.directory, intact);
   assert.equal(found.ok, true);
-  refused(() => locateEnterpriseAssets({ candidates: [broken, join(temp(t), 'absent')] }), 'ASSETS_NOT_FOUND', /no intact employee package/);
-  refused(() => locateEnterpriseAssets({ candidates: [] }), 'ASSETS_NOT_FOUND');
+  assert.equal(found.manifestDigest, sha256Of(readFileSync(join(intact, 'employee-manifest.json'))));
+  assert.deepEqual(identifyEmployeePackage({ candidates: [intact] }), { directory: intact, manifestDigest: found.manifestDigest });
+  assert.equal(identifyEmployeePackage({ candidates: ['', join(temp(t), 'absent')] }), null);
+
+  // The identified package is the one that is verified and installed. When it
+  // is broken the shell says so: taking a later candidate instead would leave
+  // the record of the first run pointing at a package other than the first.
+  const broken = employeePackage(t);
+  writeFileSync(join(broken, TARBALL), 'tampered');
+  const problem = refusedCode(() => locateEnterpriseAssets({ candidates: [broken, intact] }), 'ASSETS_INVALID');
+  assert.match(problem.message, /not intact/);
+  assert.deepEqual(problem.details.problems, [`${TARBALL} does not match its digest`]);
+  refusedCode(() => locateEnterpriseAssets({ candidates: [broken, join(temp(t), 'absent')] }), 'ASSETS_INVALID');
+  refusedCode(() => locateEnterpriseAssets({ candidates: [join(temp(t), 'absent')] }), 'ASSETS_NOT_FOUND');
+  refusedCode(() => locateEnterpriseAssets({ candidates: [] }), 'ASSETS_NOT_FOUND');
+});
+
+test('a listed path that is, or goes through, a symbolic link is refused even when its bytes match', (t) => {
+  const link = (target, path, type) => {
+    try {
+      symlinkSync(target, path, type);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const tryLink = (t, build) => {
+    const dir = employeePackage(t);
+    if (!build(dir)) {
+      t.skip('symbolic links cannot be created here');
+      return;
+    }
+    const inspected = inspectEmployeePackage(dir);
+    assert.equal(inspected.ok, false, 'a package with a link was accepted');
+    assert.match(inspected.problems.join('\n'), /symbolic link|not a regular file/);
+  };
+  // A file of the package replaced by a link to an identical file outside it.
+  tryLink(t, (dir) => {
+    const outside = join(temp(t), 'outside.tgz');
+    writeFileSync(outside, 'tarball bytes');
+    rmSync(join(dir, TARBALL));
+    return link(outside, join(dir, TARBALL));
+  });
+  // A directory of the package replaced by a link: every file under it now lives elsewhere.
+  tryLink(t, (dir) => {
+    const elsewhere = temp(t);
+    // The same bytes the digest list expects, but outside the package.
+    writeFileSync(join(elsewhere, 'init-enterprise-plugin.mjs'), 'export async function runInit() {}\n');
+    rmSync(join(dir, 'installer'), { recursive: true });
+    return link(elsewhere, join(dir, 'installer'), 'dir');
+  });
+  // The manifest itself.
+  tryLink(t, (dir) => {
+    const outside = join(temp(t), 'manifest.json');
+    writeFileSync(outside, readFileSync(join(dir, 'employee-manifest.json')));
+    rmSync(join(dir, 'employee-manifest.json'));
+    return link(outside, join(dir, 'employee-manifest.json'));
+  });
+
+  // Reaching the package through a link is ordinary (a symlinked parent directory); what matters is what is inside.
+  const real = employeePackage(t);
+  const alias = join(temp(t), 'alias');
+  if (link(real, alias, 'dir')) {
+    assert.equal(inspectEmployeePackage(alias).ok, true);
+  }
+});
+
+test('the client secret may be gone, because the installer removes it; anything else about it is refused', (t) => {
+  const withSecret = () => employeePackage(t, { secret: true });
+  assert.equal(inspectEmployeePackage(withSecret()).ok, true);
+  const consumed = withSecret();
+  rmSync(join(consumed, SECRET));
+  assert.equal(inspectEmployeePackage(consumed).ok, true, 'a consumed secret file is not a broken package');
+  const altered = withSecret();
+  writeFileSync(join(altered, SECRET), 'another secret');
+  assert.match(inspectEmployeePackage(altered).problems.join('\n'), /iam-client-secret\.txt does not match its digest/);
+  const linked = withSecret();
+  const outside = join(temp(t), 'secret');
+  writeFileSync(outside, 'synthetic client secret');
+  rmSync(join(linked, SECRET));
+  try {
+    symlinkSync(outside, join(linked, SECRET));
+    assert.match(inspectEmployeePackage(linked).problems.join('\n'), /iam-client-secret\.txt is missing, or reached through a symbolic link/);
+  } catch {
+    t.skip('symbolic links cannot be created here');
+  }
 });
 
 test('the profile is initialized again only when it never was, or the package changed', (t) => {

@@ -13,7 +13,6 @@ import { addressInUse, findLaunchUrl } from './launch-url.mjs';
  */
 
 const OUTPUT_TAIL = 64 * 1024;
-const decoder = new TextDecoder();
 
 /**
  * Owns the lifecycle of the web profile's process: one phase at a time, every
@@ -63,7 +62,6 @@ export function createRuntime({
       return Promise.reject(failWith('SPAWN_FAILED', `the web profile could not be started (${error?.code ?? 'UNKNOWN'})`));
     }
     child = handle;
-    let output = '';
     let errors = '';
     let settled = false;
     let resolveStart;
@@ -80,35 +78,56 @@ export function createRuntime({
       rejectStart(failWith(code, message));
     };
     const tail = (text) => (text.length > OUTPUT_TAIL ? text.slice(-OUTPUT_TAIL) : text);
+    const settleReady = (lines) => {
+      let url;
+      try {
+        url = findUrl(lines);
+      } catch (error) {
+        // An address the shell may not load is not waited out: the
+        // service is stopped now, or it would keep listening where it is.
+        handle.kill('SIGKILL');
+        failStart(error?.code ?? 'LAUNCH_URL_REJECTED', error?.message ?? 'the web profile announced an address the shell may not load');
+        return;
+      }
+      if (url === null) return;
+      settled = true;
+      clearTimer(timer);
+      launch = url;
+      lastFailure = null;
+      starting = null;
+      cancelStart = null;
+      enter('ready');
+      resolveStart({ ...url });
+    };
     // Read a stream to its end. Reading continues after readiness on purpose:
     // a pipe nobody drains would block the web profile on its next line.
-    const watch = async (stream, assign, current, scan) => {
+    // `keep` is where a stream that is not scanned keeps its tail.
+    const watch = async (stream, keep, scan) => {
+      // One decoder per stream, in streaming mode: a character split across
+      // two chunks is joined, not replaced.
+      const decoder = new TextDecoder();
+      // For the announcement: the text after the last newline, which is not a
+      // whole line yet. Only whole lines are looked at, so an address cut in
+      // two by the pipe is never taken for complete.
+      let rest = '';
       try {
         for await (const chunk of stream) {
-          const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk);
-          assign(tail(`${current()}${text}`));
-          if (!scan || settled) continue;
-          let url;
-          try {
-            url = findUrl(output);
-          } catch (error) {
-            // An address the shell may not load is not waited out: the
-            // service is stopped now, or it would keep listening where it is.
-            handle.kill('SIGKILL');
-            failStart(error?.code ?? 'LAUNCH_URL_REJECTED', error?.message ?? 'the web profile announced an address the shell may not load');
-            return;
+          const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+          if (!scan) {
+            keep.assign(tail(`${keep.current()}${text}`));
+            continue;
           }
-          if (url !== null) {
-            settled = true;
-            clearTimer(timer);
-            launch = url;
-            lastFailure = null;
-            starting = null;
-            cancelStart = null;
-            enter('ready');
-            resolveStart({ ...url });
-          }
+          if (settled) continue;
+          rest = tail(`${rest}${text}`);
+          const cut = rest.lastIndexOf('\n');
+          // Each line is looked at once, when it is complete.
+          if (cut === -1) continue;
+          const lines = rest.slice(0, cut + 1);
+          rest = rest.slice(cut + 1);
+          settleReady(lines);
         }
+        // A stream that ends may leave an announcement without its newline.
+        if (scan && !settled && rest.trim() !== '') settleReady(`${rest}\n`);
       } catch {
         // A stream that breaks is not a verdict; the exit handling below is.
       }
@@ -149,8 +168,17 @@ export function createRuntime({
       handle.kill('SIGKILL');
       failStart('START_TIMEOUT', `the web profile did not announce its address within ${startTimeoutMs} ms`);
     }, startTimeoutMs);
-    void watch(handle.output, (text) => { output = text; }, () => output, true);
-    void watch(handle.errors, (text) => { errors = text; }, () => errors, false);
+    void watch(handle.output, null, true);
+    void watch(
+      handle.errors,
+      {
+        assign: (text) => {
+          errors = text;
+        },
+        current: () => errors,
+      },
+      false,
+    );
     return starting;
   }
 
