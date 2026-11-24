@@ -100,6 +100,12 @@ test('环境变量与位置服务不一致：不 arm 根，降级为指纹兜底
       const decision = await hooks.pre(execOf('read', { file_path: join(keyDirectory, 'keyring.json') }), async () => ({ kind: 'allow' }));
       assert.equal(decision.kind, 'deny');
       assert.equal(decision.code, 'POLICY_STORE_ACCESS_DENIED');
+      const unrelated = await hooks.pre(execOf('read', { file_path: join(base, 'HeluoForge-notes.md') }),
+        async () => ({ kind: 'allow' }));
+      assert.equal(unrelated.kind, 'allow');
+      const token = await hooks.pre(execOf('bash', { command: 'heluo-forge auth token' }),
+        async () => ({ kind: 'allow' }));
+      assert.equal(token.code, 'POLICY_IAM_TOKEN_DENIED');
     });
   } finally {
     rmSync(base, { recursive: true, force: true });
@@ -152,6 +158,34 @@ test('装配后的 pre 钩子拒绝读库与取票，工具体不执行', async 
       assert.equal(tokenDenied.kind, 'deny');
       assert.equal(tokenDenied.code, 'POLICY_IAM_TOKEN_DENIED');
       assert.equal(executed, false);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('位置服务晚到、移除和替换时，策略跟随当前注入作用域', () => {
+  const { base, directory, keyDirectory } = fixture();
+  try {
+    withEnv(undefined, () => {
+      const { ctx, native } = host();
+      let notify;
+      ctx.inject = (_names, callback) => { notify = callback; return () => {}; };
+      installPolicy(ctx, {}, native);
+      const service = ctx.get('policy');
+      assert.deepEqual(service.storeDirectories(), []);
+      const first = notify({ get: () => ({ directory, keyDirectory, isDefault: true }) });
+      assert.deepEqual(service.storeDirectories(), [directory, keyDirectory]);
+      first();
+      assert.deepEqual(service.storeDirectories(), []);
+      const replacement = join(base, 'replacement');
+      const second = notify({ get: () => ({
+        directory: replacement, keyDirectory: replacement + '.keys', isDefault: true,
+      }) });
+      first();
+      assert.deepEqual(service.storeDirectories(), [replacement, replacement + '.keys']);
+      second();
+      assert.deepEqual(service.storeDirectories(), []);
     });
   } finally {
     rmSync(base, { recursive: true, force: true });

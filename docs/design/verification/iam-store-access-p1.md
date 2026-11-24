@@ -91,3 +91,8 @@ DSH_HOST_PROBE_EXPECT=fingerprint node scripts/probe/run-store-access-p1-probe.m
 | `pnpm check:docs` / `check:repo` / `check:version` | 均通过；`git diff --check` 干净 |
 
 > 补丁层不携带 `rules`：守卫由位置服务驱动，企业补丁与工程补丁都无需写开关；`tests/plugin-patch-layers.test.mjs` 的反向断言（补丁层不得写 rules）保持有效。
+
+
+## 评审修复复验
+
+PR #457 评审修复版在 darwin-arm64、DSH `0.2.1-rc.5`、Node `24.21.0` 上以隔离 profile 和合成数据复跑 P1。企业单装、engineering → enterprise、enterprise → engineering 三组各 13/13 通过。位置服务装载失败、移除与替换通过模拟宿主测试验证。真实企业 IAM、Windows/Linux 宿主和执行环境隔离仍待验收。

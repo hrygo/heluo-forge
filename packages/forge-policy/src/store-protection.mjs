@@ -10,7 +10,7 @@
  * - 不复制平台布局：存档目录来自 `credentials-store-location`（由内置凭据后端提供），
  *   本模块只接受 `{directory, keyDirectory}`，不臆造默认目录。
  */
-import { isAbsolute, resolve as resolvePath } from 'node:path';
+import { isAbsolute, sep } from 'node:path';
 
 import { canonicalize, matchProtected } from './paths.mjs';
 import { collectPathCandidates } from './path-sources.mjs';
@@ -29,6 +29,7 @@ const STORE_FILE_FINGERPRINTS = Object.freeze([/^credentials\.sqlite(?:[-.].*)?$
 
 /** 存档目录名指纹（仅在路径无法归一化时兜底使用）。 */
 const STORE_DIR_FINGERPRINTS = Object.freeze(['HeluoForge', 'heluo-iam-store']);
+export const STORE_DIRECTORY_ENV = 'HELUO_FORGE_STORE_DIRECTORY';
 
 /** 通用兜底跳过的参数键：内容型字段不是路径，也不该按命令判定。 */
 const NON_PATH_KEYS = new Set([
@@ -44,7 +45,26 @@ const NON_PATH_KEYS = new Set([
   'text',
 ]);
 
-const SHELL_SEPARATORS = /[;&|\n]+/u;
+const SHELL_WORDS = /[;&|\n]+|#[^\n]*|(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s;&|'"\\])+/gu;
+const FILE_COMMANDS = new Set(['cat', 'cp', 'du', 'find', 'head', 'less', 'ls', 'mv', 'rm', 'rsync', 'sqlite3', 'stat', 'tail', 'touch']);
+
+function* commandSegments(text) {
+  let words = [];
+  for (const word of text.match(SHELL_WORDS) ?? []) {
+    if (word.startsWith('#')) continue;
+    if (/^[;&|\n]+$/u.test(word)) {
+      if (words.length > 0) yield words;
+      words = [];
+    } else {
+      words.push(word);
+    }
+  }
+  if (words.length > 0) yield words;
+}
+
+function unquote(token) {
+  return token.replace(/^(['"])([\s\S]*)\1$/u, '$2');
+}
 
 /**
  * 由位置服务解析出受保护根：库目录与密钥目录，两者都必须已是绝对路径。
@@ -74,15 +94,17 @@ export function storeRootsFrom(location) {
   return Object.freeze(roots);
 }
 
-function expandVariables(token, cwd) {
-  return token
+function expandVariables(token) {
+  if (token.startsWith("'")) return unquote(token);
+  return unquote(token)
     .replace(/^\$?\{?HOME\}?(?=\/|$)/u, process.env.HOME ?? '')
     .replace(/^\$?\{?XDG_DATA_HOME\}?(?=\/|$)/u, process.env.XDG_DATA_HOME ?? '')
     .replace(/^\$?\{?LOCALAPPDATA\}?(?=\/|$)/u, process.env.LOCALAPPDATA ?? '')
-    .replace(/^\$?\{?HELUO_FORGE_STORE_DIRECTORY\}?(?=\/|$)/u, process.env.HELUO_FORGE_STORE_DIRECTORY ?? '')
+    .replace(/^\$\{?([A-Z_]+)\}?(?=\/|$)/u, (original, name) => (
+      name === STORE_DIRECTORY_ENV ? process.env[STORE_DIRECTORY_ENV] ?? original : original
+    ))
     .replace(/^~/u, process.env.HOME ?? '~')
-    .replace(/\\(.)/gu, '$1')
-    .replace(/^['"]|['"]$/gu, '');
+    .replace(process.platform === 'win32' ? /\\([ "';&|])/gu : /\\(.)/gu, '$1');
 }
 
 function looksLikePath(token) {
@@ -99,19 +121,37 @@ function looksLikePath(token) {
  * @returns {{kind: 'path'|'command', text: string}[]}
  */
 export function parseCommandTargets(text, options = {}) {
-  if (typeof text !== 'string' || text.trim() === '') return [];
-  const stripped = text.replace(/(^|\s)#[^\n]*/gu, '$1');
+  return collectCommandTargets(text, options.cwd);
+}
+
+function collectCommandTargets(text, workdir, depth = 0) {
+  if (typeof text !== 'string' || text.trim() === '' || depth > 4) return [];
   const targets = [];
-  for (const segment of stripped.split(SHELL_SEPARATORS)) {
-    for (const raw of segment.split(/\s+/u)) {
-      const token = expandVariables(raw, options.cwd);
-      if (token === '') continue;
-      const base = token.split(/[\\/]/u).pop() ?? token;
-      if (STORE_FILE_FINGERPRINTS.some((pattern) => pattern.test(base))) {
-        targets.push(Object.freeze({ kind: 'command', text: base }));
-        continue;
+  const cwd = typeof workdir === 'string' && isAbsolute(workdir) ? workdir : undefined;
+  for (const segment of commandSegments(text)) {
+    const { executable, args } = commandInvocation(segment.map(unquote));
+    const script = shellScript(executable, args);
+    if (script !== undefined) {
+      targets.push(...collectCommandTargets(script, cwd, depth + 1));
+      continue;
+    }
+    const words = segment.map(expandVariables);
+    const fileCommand = FILE_COMMANDS.has(executable.split(/[\\/]/u).at(-1));
+    for (const [index, token] of words.entries()) {
+      if (token === '' || token.startsWith('-')) continue;
+      const fingerprint = commandFingerprintHit(token);
+      const pathLike = looksLikePath(token) || fingerprint;
+      const fileOperand = index > 0 && fileCommand && /^[\w.-]+$/u.test(token);
+      if (isAbsolute(token)) {
+        targets.push(Object.freeze({ kind: 'path', text: token }));
+      } else if (cwd !== undefined && (pathLike || fileOperand)) {
+        // Preserve parent components until the shared physical resolver evaluates them.
+        targets.push(Object.freeze({ kind: 'path', text: cwd + sep + token }));
+      } else if (fingerprint) {
+        targets.push(Object.freeze({ kind: 'command', text: token }));
+      } else if (pathLike) {
+        targets.push(Object.freeze({ kind: 'path', text: token }));
       }
-      if (looksLikePath(token)) targets.push(Object.freeze({ kind: 'path', text: token }));
     }
   }
   return targets;
@@ -171,7 +211,7 @@ export function extractStoreTargets(exec) {
     targets.push(Object.freeze({ kind: 'path', text: value, recursive }));
   };
 
-  const keys = PATH_TOOL_KEYS[name];
+  const keys = Object.hasOwn(PATH_TOOL_KEYS, name) ? PATH_TOOL_KEYS[name] : undefined;
   if (keys !== undefined) {
     for (const key of keys) pushPath(args[key], RECURSIVE_TOOLS.has(name));
     // `file_path` 是 read/write/edit 的路径键，path-sources 只认 path/file，
@@ -209,13 +249,14 @@ export function extractStoreTargets(exec) {
 }
 
 function isWithinRoot(candidate, root) {
-  return candidate === root || candidate.startsWith(root.endsWith('/') ? root : `${root}/`);
+  return candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
 function pathFingerprintHit(text) {
-  const base = text.split(/[\\/]/u).pop() ?? text;
+  const components = text.split(/[\\/]/u).filter(Boolean);
+  const base = components.at(-1) ?? text;
   return STORE_FILE_FINGERPRINTS.some((pattern) => pattern.test(base))
-    || STORE_DIR_FINGERPRINTS.some((name) => text.includes(name));
+    || components.some((part) => STORE_DIR_FINGERPRINTS.some((name) => part === name || part === name + '.keys'));
 }
 
 function commandFingerprintHit(text) {
@@ -231,8 +272,7 @@ function commandFingerprintHit(text) {
  * @returns {{hit: false} | {hit: true, artifact: string, reason: 'path'|'ancestor'|'command', recursive: boolean}}
  */
 export function judgeStoreAccess(exec, roots = []) {
-  // 位置服务缺席（无根）时仍按存档文件名/目录名指纹拒绝：凭据后端没装配不代表
-  // 存档不存在，点名 `credentials.sqlite` / `keyring.json` / 存档目录的调用照样拦。
+  // 调用方在位置服务缺席时跳过本判定。服务存在但目录不一致时以空根启用指纹兜底。
   const rootList = Array.isArray(roots) ? roots : [];
   for (const target of extractStoreTargets(exec)) {
     if (target.kind === 'command') {
@@ -246,9 +286,7 @@ export function judgeStoreAccess(exec, roots = []) {
       canonical = canonicalize(target.text);
     } catch {
       // 不可判定的路径只在文本点名存档时拒绝；其余交给沙箱。
-      const base = target.text.split(/[\\/]/u).pop() ?? target.text;
-      if (STORE_FILE_FINGERPRINTS.some((pattern) => pattern.test(base))
-        || STORE_DIR_FINGERPRINTS.some((name) => target.text.includes(name))) {
+      if (pathFingerprintHit(target.text)) {
         return Object.freeze({ hit: true, artifact: STORE_ARTIFACT.STORE_DIR, reason: 'path', recursive: false });
       }
       continue;
@@ -310,19 +348,41 @@ function isCliToken(token) {
   return CLI_NAMES.includes(base);
 }
 
-function scanTokens(tokens) {
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (!isCliToken(token)) continue;
-    // `heluo-forge auth token` 与 `heluo-forge auth --json token` 都算；`auth whoami` 不算。
-    for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
-      const word = tokens[cursor];
-      if (word === 'auth') {
-        const next = tokens.slice(cursor + 1).find((item) => !item.startsWith('-'));
-        if (next === 'token') return { hit: true, executable: token };
-        break;
+function commandInvocation(tokens) {
+  let cursor = 0;
+  let wrapper = false;
+  while (cursor < tokens.length) {
+    const word = tokens[cursor];
+    const name = word.split(/[\\/]/u).at(-1);
+    if (NODE_PREFIXES.has(name)) {
+      wrapper = true;
+    } else if (!/^[A-Za-z_]\w*=/u.test(word) && !(wrapper && word.startsWith('-'))) {
+      break;
+    }
+    cursor += 1;
+  }
+  return { executable: tokens[cursor] ?? '', args: tokens.slice(cursor + 1) };
+}
+
+function shellScript(executable, args) {
+  if (!SHELLS.has(executable.split(/[\\/]/u).at(-1))) return undefined;
+  const flagIndex = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/u.test(arg));
+  return flagIndex === -1 ? undefined : args[flagIndex + 1];
+}
+
+function scanCommands(text, depth = 0) {
+  if (depth > 4) return { hit: false };
+  for (const words of commandSegments(text)) {
+    const { executable, args } = commandInvocation(words.map(unquote));
+    const script = shellScript(executable, args);
+    if (script !== undefined) {
+      const nested = scanCommands(script, depth + 1);
+      if (nested.hit) return { ...nested, reason: 'shell' };
+    } else if (isCliToken(executable)) {
+      const [command, subcommand] = args.filter((word) => !word.startsWith('-'));
+      if (command === 'auth' && subcommand === 'token') {
+        return { hit: true, executable, reason: 'cli' };
       }
-      if (!word.startsWith('-') && word !== 'auth') break;
     }
   }
   return { hit: false };
@@ -350,26 +410,8 @@ export function judgeTokenInvocation(exec) {
   }
   for (const text of texts) {
     if (typeof text !== 'string' || text.trim() === '') continue;
-    const segments = text.replace(/(^|\s)#[^\n]*/gu, '$1').split(SHELL_SEPARATORS);
-    for (const segment of segments) {
-      const tokens = segment.split(/\s+/u).map((token) => expandVariables(token)).filter(Boolean);
-      const direct = scanTokens(tokens);
-      if (direct.hit) return Object.freeze({ hit: true, executable: direct.executable, reason: 'cli' });
-      // `sh -c '<cmd>'`：把引号内的脚本再扫一遍（token 已被去引号）。
-      const shellIndex = tokens.findIndex((token) => SHELLS.has(token.split(/[\\/]/u).pop() ?? token));
-      if (shellIndex !== -1) {
-        const script = tokens.slice(shellIndex + 1).join(' ');
-        const nested = scanTokens(script.split(/\s+/u));
-        if (nested.hit) return Object.freeze({ hit: true, executable: nested.executable, reason: 'shell' });
-      }
-      // `node <cli>` / `npx <cli>`：前缀 token 不改变结论，但要求 CLI token 出现。
-      const prefixed = tokens.filter((token, index) => index > 0 && NODE_PREFIXES.has(tokens[index - 1]));
-      for (const token of prefixed) {
-        if (!isCliToken(token)) continue;
-        const nested = scanTokens([token, ...tokens.slice(tokens.indexOf(token) + 1)]);
-        if (nested.hit) return Object.freeze({ hit: true, executable: token, reason: 'node' });
-      }
-    }
+    const verdict = scanCommands(text);
+    if (verdict.hit) return Object.freeze(verdict);
   }
   return Object.freeze({ hit: false });
 }

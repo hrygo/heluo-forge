@@ -184,6 +184,22 @@ test('a pinned IAM client secret is unavailable while its keyring cannot be read
   assert.equal(source.isCurrent(current), true);
 });
 
+test('failed service publication rolls back the built-in composition', async (t) => {
+  const root = await outsideRepositoryTmpAsync('heluo-credentials-failed-publication-');
+  ownDirectory(t, root);
+  for (const failedService of ['credentials', 'iam-client-secret-source', 'credentials-store-location']) {
+    const ctx = context();
+    const provide = ctx.provide.bind(ctx);
+    const failure = new Error('synthetic service registration failure');
+    ctx.provide = (name, value) => {
+      if (name === failedService) throw failure;
+      return provide(name, value);
+    };
+    assert.throws(() => apply(ctx, { storeDirectory: join(root, 'data') }), (error) => error === failure);
+    assert.deepEqual([...ctx.provided.keys()], []);
+  }
+});
+
 test('a backend cannot grant itself trust by claiming atomic capabilities', async (t) => {
   const ctx = context();
   const backend = Object.assign(createMemoryBackend(), {

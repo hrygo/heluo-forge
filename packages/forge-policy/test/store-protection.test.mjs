@@ -31,7 +31,7 @@ function fixture() {
 }
 
 const read = (file_path) => ({ name: 'read', arguments: { file_path } });
-const bash = (command) => ({ name: 'bash', arguments: { command } });
+const bash = (command, workdir) => ({ name: 'bash', arguments: { command, workdir } });
 
 test('storeRootsFrom 只接受绝对目录，且区分库目录与密钥目录', () => {
   const roots = storeRootsFrom({ directory: '/tmp/a/store', keyDirectory: '/tmp/a/store.keys' });
@@ -121,9 +121,27 @@ test('取票通道：CLI、node、npx、shell -c 都命中；whoami 与运行期
     'heluo-forge auth whoami --json',
     'heluo-forge auth login',
     'git status',
+    "echo 'Usage: heluo-forge auth token'",
+    "echo 'See the manual; heluo-forge auth token'",
+    `sh -c "echo 'heluo-forge auth token'"`,
   ]) {
     assert.equal(judgeTokenInvocation(bash(command)).hit, false, command);
   }
   // 已知缺口：运行期拼装的可执行名不在调用参数里，判不出来（方案 §3.3 记为不覆盖）。
   assert.equal(judgeTokenInvocation(bash('H=$(which heluo-forge); "$H" auth token')).hit, false);
+});
+
+test('shell paths use the supplied workdir and compare known paths before file names', () => {
+  const { base, storeDir, outside, roots } = fixture();
+  try {
+    assert.equal(judgeStoreAccess(bash('cat notes.txt', outside), roots).hit, false);
+    assert.equal(judgeStoreAccess(bash('cat version.txt', storeDir), roots).hit, true);
+    assert.equal(judgeStoreAccess(bash('cat ./version.txt', storeDir), roots).hit, true);
+    assert.equal(judgeStoreAccess(bash('cat credentials.sqlite', outside), roots).hit, false);
+    assert.equal(judgeStoreAccess(bash('cat "' + join(outside, 'space name', 'keyring.json') + '"'), roots).hit, false);
+    assert.equal(judgeStoreAccess(bash('cat "' + join(storeDir, 'space name', 'keyring.json') + '"'), roots).hit, true);
+    assert.equal(judgeStoreAccess(bash('cat credentials.sqlite'), roots).hit, true);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

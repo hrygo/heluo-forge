@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-027 |
 | 文档名称 | 禁止 Agent 直连 IAM 凭据库：策略拦截实施方案 |
-| 版本 | V0.1.8 |
+| 版本 | V0.1.9 |
 | 文档状态 | 评审稿（2026-11-24 用户裁决落定；步骤 0 的 P0-A/B/C 与 P1-A…E 探针全部执行并落盘；处置见 §14、执行记录见 §5 步骤 0） |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -19,6 +19,8 @@
 > 编制依据：issue [#375](https://github.com/hrygo/heluo-forge/issues/375) 正文与完成标准、2026-11-23 作者「并入 #434」的处置意见，以及对本仓库 `packages/forge-policy`、`packages/forge-credentials-keychain`、`packages/forge-iam` 源码与宿主 `tools/pre-execute` 事件面的只读核验。当前只有源码级结论与离线用例计划，**没有**目标宿主实机拦截证据，也不代表生产可用。
 >
 > 关联文档：[策略与审计设计](<../design/plugins/forge-policy.md>)、[受控写最小门禁实施计划](<2026-11-19-policy-minimal-gates.md>)、[IAM 身份、令牌与业务凭据接入指南](<../../packages/forge-iam/docs/credential-access.md>)、[SQLite 存储扩展与使用规范](<../engineering/sqlite-storage-conventions.md>)、[DSH 插件高阶规范](<../engineering/dsh-plugin-conventions.md>)。
+
+**修订说明（V0.1.9）**：补齐位置服务装载回滚与替换、按工作目录解析命令路径、同名文件放行及取票命令位置判定的离线回归。修复版在本机 DSH 上复跑企业单装和双向叠装，三组均为 13/13，见 [P1 探针记录](../design/verification/iam-store-access-p1.md#评审修复复验)。
 
 **修订说明（V0.1.8）**：按 2026-11-24 裁决 C 改守卫形态——两条 IAM 守卫不再绑定规则开关：`packages/forge-policy` 无条件注册 `ctx.inject(['credentials-store-location'], …)`，内置凭据后端提供该服务即生效，服务始终缺席（engineering 单装）即不判定；`rules.denyIamStoreAccess`/`rules.denyIamTokenAccess` 取消，配置中出现按「已取消开关」点名拒绝；`STAGE.STORE` 恒在流水线首位、不再由开关插入；装载期不再抛 `POLICY_STORE_LOCATION_UNAVAILABLE`，目录错配只降级为指纹兜底。五场景实测全绿（企业单装 13/13、两方向叠装各 13/13、engineering 单装 4/4、目录错配 4/4），P1-D 通过。逐条处置见 §15。
 
@@ -350,8 +352,8 @@ tools/pre-execute (waterfall)
 | 命令 | `node scripts/probe/run-store-access-p1-probe.mjs --label enterprise` 及 `--patch` 组合（见复跑清单） |
 | P1-A | 13/13 通过：`read` 读库/读密钥、`write`、`bash sqlite3`/`cat`、`glob`、`rm -rf`、`auth token` 全部被拒；拒绝后 `probe_canary` 记录内容与 `PRAGMA data_version` 未变 |
 | P1-B | 目录错配（keychain 平台默认目录 + `HELUO_FORGE_STORE_DIRECTORY` 指向临时目录）不 arm、退回指纹兜底：读库与 `sqlite3` 被拒、根外读取放行（4/4） |
-| P1-C | 位置服务缺失时 `installPolicy` 抛 `POLICY_STORE_LOCATION_UNAVAILABLE`、policy 未挂载，此时读/写/`sqlite3`/`glob`/`rm` 对存档全部成功——**装载失败等于没有门禁**；错配态由指纹兜底阻断；运行中卸载未单独复现 |
-| P1-D | **未通过**：企业单装 13/13；`engineering→enterprise` 13/13；`enterprise→engineering` **2/13**（config 后者整体覆盖，工程包不写 rules → 规则丢失）；engineering 单装 4/4（规则关闭，符合预期） |
+| P1-C | 当前裁决下，位置服务缺席时策略正常挂载，IAM 守卫不判定；目录错配进入指纹兜底。策略自身挂载失败及运行中卸载的证据范围见 P1 探针记录。 |
+| P1-D | 裁决 C 生效后的探针：企业单装 13/13，两种叠装顺序均 13/13，engineering 单装 4/4；旧开关方案的 2/13 留在 V0.1.7 修订记录。 |
 | P1-E | `heluo-forge auth token` 被拒且包装脚本哨兵未生成（CLI 未启动）；`auth whoami` 未被策略拒绝（探针环境无登录，CLI 自身退出 4） |
 | 未覆盖 | Windows/Linux、真实默认目录端到端登录与续期、运行中卸载时序、模型自决调用 |
 | 证据 | [IAM 存档访问 P1 探针记录](../design/verification/iam-store-access-p1.md) |
@@ -837,8 +839,8 @@ tools/pre-execute (waterfall)
 | 0 | **探针闸门**（§5 步骤 0）：P0（宿主事件面，`scripts/probe/run-store-access-p0-probe.mjs`，**已执行 15/15 通过**）与 P1（真实企业组合包另跑一轮） | 探针记录落盘（脱敏，`docs/design/verification/iam-store-access-p0.md`、`iam-store-access-p1.md`）；**P0-A 未通过即停止**；P1-A/B/C/D/E 任一未通过则企业装配不宣称守卫生效 | P0-A/C 已过；P1-A/B/C/D/E 已全部通过（2026-11-24）；P0-B 部分覆盖（`run_code` 未注册） |
 | 1 | 分支与工作区核对：`git switch -c feat/issue-375-iam-store-access origin/main`；`git status --short` 确认 `docs/teamflow/**` 未跟踪产物不被覆盖 | 工作区干净（除已知未跟踪产物） | — |
 | 2 | 新建 `src/store-protection.mjs` + `test/store-protection.test.mjs`（§5 步骤 1，含 `judgeTokenInvocation`） | 单测全绿；位置服务注入、无双平台黄金表；取票五种形态命中、`auth whoami`/非 CLI 文本不命中、运行期拼装断言不覆盖 | 步骤 1 |
-| 3 | `config.mjs` 增两条开关（**不加目录配置面**）、`pipeline.mjs` 增 `store-access` 阶段（§5 步骤 2） | config/pipeline 用例全绿；`store: {...}` 被拒；两条开关各自可单独装配 | 步骤 2 |
-| 4 | keychain 提供 `credentials-store-location`（含 `isDefault`）；`gate.mjs` 先行判定（存档 + 取票两个分支）、`installer.mjs` 位置校验与两个冲突分支、服务投影、`index.mjs` 导出（§5 步骤 3） | `apply.test.mjs` 全绿；缺失、变量不一致、变量缺席+自定义目录三种情况装载被拒，默认目录放行；只开取票规则时无位置服务也可装载 | 步骤 3 |
+| 3 | `config.mjs` 拒绝已取消的两条开关，`pipeline.mjs` 恒定登记 `store-access` 阶段（§5 步骤 2） | 配置用例拒绝已取消的开关及 `store: {...}` | 步骤 2 |
+| 4 | keychain 提供 `credentials-store-location`（含 `isDefault`）；`gate.mjs` 先行判定（存档 + 取票两个分支）、`installer.mjs` 位置校验与两个冲突分支、服务投影、`index.mjs` 导出（§5 步骤 3） | 装配测试覆盖位置服务缺席、就绪、错配降级、移除及替换；凭据装配测试覆盖注册失败回滚 | 步骤 3 |
 | 5 | `test/gate-store.test.mjs` 全矩阵（存档 + 取票 + 不覆盖项）+ 真实合成库副作用断言 + 未修版本对照（§5 步骤 4、§7） | 拒绝/放行/关闭/证据/最小化全绿；`POLICY_IAM_TOKEN_DENIED` 断言 CLI 未启动；对照跑变红 | 步骤 4 |
 | 6 | `test/store-command.test.mjs` 词法用例（§5 步骤 5） | 全绿；上限放宽后拒绝用例仍拒绝 | 步骤 5 |
 | 7 | **无需改补丁**：企业包插入 keychain 后守卫自动生效（§5 步骤 6，前置 P1-A/B/C/D/E 与 §8.4 通过） | patch 形状用例、`pnpm check:repo`、P1-D 三装配结论齐备（叠装两方向守卫生效）、P1-E 取证齐备 | 步骤 6 |

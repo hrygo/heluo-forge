@@ -10,7 +10,7 @@ import { createDecisionCache } from './reuse.mjs';
 import { createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
 import { loadOrgPolicy } from './org-policy.mjs';
 import { canonicalize, judgeProtectedPath, matchProtected, resolveProtectedRoots, templateEnv } from './paths.mjs';
-import { storeRootsFrom } from './store-protection.mjs';
+import { STORE_DIRECTORY_ENV, storeRootsFrom } from './store-protection.mjs';
 import { buildPipeline, isObserveOnly } from './pipeline.mjs';
 import { Config, PolicyConfigError, collectPathTemplates, resolveConfig, validateConfig } from './config.mjs';
 import { registerAuditCommand } from './audit-command.mjs';
@@ -199,7 +199,6 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   // 注册注入回调，服务出现即 arm；服务始终缺席（例如 engineering 单装、没有内置凭据后端）
   // 时守卫不生效，等价于关闭。arm 失败（目录与环境变量不一致）只降级为指纹兜底。
   const storeGuard = { available: false, roots: [] };
-  let storeArmed = false;
   const warnStore = (message) => {
     if (typeof overrides.log === 'function') overrides.log(message);
     else if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(message);
@@ -207,9 +206,9 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   const armStore = (location) => {
     if (location === undefined || location === null) return;
     storeGuard.available = true;
-    if (storeArmed) return;
+    storeGuard.roots = [];
     try {
-      const declared = process.env.HELUO_FORGE_STORE_DIRECTORY;
+      const declared = process.env[STORE_DIRECTORY_ENV];
       if (typeof declared === 'string' && declared.trim() !== '') {
         if (canonicalize(declared) !== canonicalize(String(location.directory))) {
           throw new PolicyCatalogError(
@@ -223,13 +222,11 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
           'POLICY_STORE_DIRECTORY_CONFLICT',
         );
       }
-      storeGuard.roots.push(...storeRootsFrom(location));
-      storeArmed = true;
+      storeGuard.roots = storeRootsFrom(location);
     } catch (error) {
       warnStore(`the IAM store location cannot be armed (${error?.code ?? 'POLICY_STORE_LOCATION_INVALID'}); the gate falls back to store file/directory fingerprints`);
     }
   };
-  if (typeof ctx.get === 'function') armStore(ctx.get('credentials-store-location'));
 
   const pipeline = buildPipeline(config.rules);
   const getActor = overrides.getActor ?? (() => readActor(ctx));
@@ -279,10 +276,17 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   if (typeof ctx.inject === 'function') {
     // 服务就绪后 arm；服务始终缺席时守卫保持关闭（与 engineering 单装的验收口径一致）。
     const disposeArming = ctx.inject(['credentials-store-location'], (scoped) => {
-      armStore(typeof scoped.get === 'function' ? scoped.get('credentials-store-location') : undefined);
-      return () => {};
+      armStore(scoped.get('credentials-store-location'));
+      const activeRoots = storeGuard.roots;
+      return () => {
+        if (storeGuard.roots !== activeRoots) return;
+        storeGuard.available = false;
+        storeGuard.roots = [];
+      };
     });
     if (typeof disposeArming === 'function') disposers.push(disposeArming);
+  } else {
+    armStore(ctx.get('credentials-store-location'));
   }
   if (typeof disposeAuditCommand === 'function') disposers.push(disposeAuditCommand);
   disposers.push(native.guard((exec) => (owned ? owned.guard(gate, exec) : gate.guard(exec))));
