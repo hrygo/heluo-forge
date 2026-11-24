@@ -71,6 +71,8 @@ importers:
 
   packages/forge-policy: {}
 
+  services/forge-desktop: {}
+
 packages:
 
   react@19.3.1:

@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.50.4 |
+| 版本 | V0.50.6 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 负责 | 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-22 |
+| 最后更新 | 2026-11-24 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -97,6 +97,7 @@ Delegra 侧的专家执行面横跨运行时镜像与 Kubernetes 沙箱，同属
 |---|---|---|---|---|
 | DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设，当前不建设 | CLI 前提不成立时先评审形态变更、范围与成本，批准后才启动 |
 | 索引契约与校验 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 评审稿；只读校验器可用 | AIHUB 索引 URL/JSON/更新 SLA、Artifactory 终端认证与三目标安装待验 |
+| 河洛 Forge 企业版桌面壳 | `services/forge-desktop/` | [services/desktop-shell.md](services/desktop-shell.md) | 草案；模块、用例与清单已具备（状态：可用），Electron 运行与打包链未验证 | 锁定版 launch URL 形态、Electron 内嵌 Node 下的凭据存储、`web` profile 并发与三平台打包链以计划 CORP-DSH-PLAN-026 的 P0 探针为准 |
 
 [ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 为唯一 npm 源与 AIHUB 原生索引；企业私版也可经内部文件交付；007/012 为评审稿，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。部署与运维边界见[部署说明](../../deploy/README.md)。
 
