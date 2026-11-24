@@ -8,6 +8,8 @@ importers:
 
   .: {}
 
+  packages/forge-brand: {}
+
   packages/forge-credentials-keychain: {}
 
   packages/forge-devops:
@@ -36,6 +38,9 @@ importers:
 
   packages/forge-enterprise:
     dependencies:
+      '@heluo/forge-brand':
+        specifier: workspace:*
+        version: link:../forge-brand
       '@heluo/forge-credentials-keychain':
         specifier: workspace:*
         version: link:../forge-credentials-keychain

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="180" viewBox="0 0 720 180" role="img" aria-label="河洛 · 彩色纯字标">
+          <g transform="translate(30, 85)">
+            <text font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif" font-size="64" font-weight="800" fill="#FFFFFF" letter-spacing="-0.02em">
+              河洛
+              <tspan font-size="32" font-weight="700" fill="#00D2FE" letter-spacing="0.14em" dx="18" dy="-12">HELUO FORGE</tspan>
+            </text>
+            <text y="50" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif" font-size="16" font-weight="500" fill="#94A3B8" letter-spacing="0.2em">
+              企业级智能研发平台
+            </text>
+          </g>
+        </svg>

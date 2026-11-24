@@ -1,0 +1,31 @@
+{
+  "name": "@heluo/forge-brand",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Heluo Forge Enterprise brand token bundle: product name, logo, accent and theme defaults with fail-open fallbacks",
+  "icon": "./icon.svg",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./config": "./src/config.mjs",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./assets/wordmark-color.svg": "./assets/wordmark-color.svg"
+  },
+  "files": [
+    "src",
+    "assets",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "docs"
+  ]
+}

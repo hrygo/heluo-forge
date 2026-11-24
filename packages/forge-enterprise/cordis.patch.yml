@@ -59,3 +59,7 @@
           keepDays: 7
     - id: heluo-iam
       name: '@heluo/forge-iam'
+    # 品牌令牌 bundle：行不带 config（公版中性），「河洛 Forge 企业版」身份是包内默认值，
+    # 经 ctx.provide('forge-brand') 暴露；宿主消费面待真实宿主联调（CORP-DSH-DESIGN-006 §12）。
+    - id: heluo-brand
+      name: '@heluo/forge-brand'

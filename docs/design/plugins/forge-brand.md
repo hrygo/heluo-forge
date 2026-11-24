@@ -6,16 +6,16 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-006 |
 | 文档名称 | 品牌与外观详细设计 |
-| 版本 | V0.1.1 |
+| 版本 | V0.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-11-24 |
 | 门禁 | G2 |
-| 模块状态 | 规划 |
+| 模块状态 | 可用（开发骨架；宿主消费面待实测） |
 
 > 编制依据：2026-10-20 片段级核验 `dsh-brand` 与 `dsh-client-ui-*` 系列包的存在性，确认品牌信息可由插件覆盖。**未核验**：可覆盖的 token 清单、Logo 资源解析路径、深浅色主题的覆盖粒度。
 >
@@ -27,7 +27,7 @@
 
 边界：可改名称、Logo、主色调、默认主题与页脚；不可改功能文案、安全提示、审批与审计入口。白标对外发行不在范围内。
 
-还缺两件事才能进实现：可覆盖 token 清单实测、Logo 资源在双端的解析路径确认。
+`packages/forge-brand` 已按本设计实现离线骨架（令牌校验、回退语义、随包资产字节一致性与 manifest 交叉校验，16 项单元用例）；可覆盖 token 清单与 Logo 双端解析路径仍待真实宿主实测，实测前宿主消费面按缺接缝降级处理（仅提供令牌，不影响装载）。
 
 ## 2. 目标与非目标
 
@@ -67,23 +67,34 @@
 
 ## 5. 接口与配置
 
-| 配置项 | 类型 | 默认值 | 必填 | 说明 |
-|---|---|---|---|---|
-| `brand.productName` | string | 上游默认 | 否 | 标题栏与关于页显示名 |
-| `brand.logoPath` | string | 空 | 否 | 本地资源路径，禁止外链 |
-| `brand.accent` | string | 空 | 否 | 主色，需通过对比度检查 |
-| `brand.theme` | `light` \| `dark` \| `system` | `system` | 否 | 默认主题 |
-| `brand.footerText` | string | 空 | 否 | 页脚补充说明 |
-| `brand.supportLink` | string | 空 | 否 | 支持入口，仅内网地址 |
+字段缺省即取包内品牌默认（缺省输入等价于完整「河洛 Forge 企业版」身份）；字段存在但非法时回退品牌默认并记录回执。
 
-```yaml title="品牌配置（示意）"
+| 配置项 | 类型 | 包内默认 | 必填 | 说明 |
+|---|---|---|---|---|
+| `brand.productName` | string | `河洛 Forge 企业版` | 否 | 标题栏与关于页显示名；超 32 字符截断加省略号 |
+| `brand.logoPath` | string | `./assets/wordmark-color.svg` | 否 | 包内相对路径；外链（含协议、协议相对 `//`）与越界 `..` 一律拒绝并回退上游 |
+| `brand.accent` | string | `#2563eb` | 否 | 主色；须在品牌浅底 `#FFFFFF` 与深底 `#070C16` 上同时保持 ≥3:1 非文本对比度，不足即回退默认 |
+| `brand.theme` | `light` \| `dark` \| `system` | `system` | 否 | 默认主题 |
+| `brand.footerText` | string | `企业内部使用` | 否 | 页脚补充说明 |
+| `brand.supportLink` | string | 空 | 否 | 支持入口，仅接受 `http(s)` URL；格式非法即丢弃（内网约束由企业配置侧保证） |
+
+```yaml title="品牌配置（缺省即本套默认，无需补丁层下发）"
 brand:
-  productName: 河洛
-  logoPath: ./assets/logo.svg
-  accent: '#1F6FEB'
+  productName: 河洛 Forge 企业版
+  logoPath: ./assets/wordmark-color.svg
+  accent: '#2563eb'
   theme: system
   footerText: 企业内部使用
 ```
+
+随包资产清单（与品牌源文件逐字节一致，经 `docs/assets/branding/cyber-long/manifest.json` SHA-256 交叉校验）：
+
+| 包内路径 | 品牌源 | 用途 |
+|---|---|---|
+| `icon.svg` | `primary/symbol-color.svg` | 插件列表图标 |
+| `assets/wordmark-color.svg` | `primary/wordmark-color.svg` | 应用内 Logo（`logoPath` 默认指向） |
+
+挂载接缝：`apply(ctx, config)` 归一后经 `ctx.provide('forge-brand')` 暴露 `{ brand, logoBytes }`；宿主无接缝时记录 `HOST_SEAM_UNAVAILABLE` 并保持装载。
 
 ## 6. 权限、凭据与数据
 
@@ -129,12 +140,12 @@ flowchart TD
 
 ## 10. 测试矩阵
 
-| 层级 | 覆盖 | 命令 |
-|---|---|---|
-| 单元 | 配置校验、对比度计算、缺失回退 | `node --test` |
-| 契约 | token 名称与上游一致 | 契约用例 |
-| 集成 | 深浅色两种模式下渲染 | 视觉抽查 |
-| 端到端 | 双端各完成一次启动与切换主题 | 手工 |
+| 层级 | 覆盖 | 命令 | 状态 |
+|---|---|---|---|
+| 单元 | 配置校验、对比度计算与回退、缺失回退、外链拒绝、装载接缝 | `node --test`（packages/forge-brand/test） | 16 项通过 |
+| 契约 | token 名称与上游一致 | 契约用例 | 待真实宿主 |
+| 集成 | 深浅色两种模式下渲染 | 视觉抽查 | 待真实宿主 |
+| 端到端 | 双端各完成一次启动与切换主题 | 手工 | 待真实宿主（GB） |
 
 ## 11. 打包、升级与回退
 
@@ -164,6 +175,12 @@ flowchart TD
 | 自定义字体文件 | 视觉一致 | 双端字体授权与体积成本 | 不采用 |
 
 以上五项均不影响主链路；若后续确认增益，再单独评估。
+
+## 实现与验证记录
+
+- `packages/forge-brand/` 已实现：六字段校验与归一（对比度双底 ≥3:1 门槛、产品名 32 字符截断、Logo 外链与路径逃逸拒绝、缺失回退品牌默认）、`apply(ctx, config)` 挂载接缝（`ctx.provide('forge-brand')`）与随包资产。离线证据：`packages/forge-brand/test` 16 项单元用例通过；`icon.svg` 与 `assets/wordmark-color.svg` 和品牌源文件逐字节一致，并经品牌 manifest SHA-256 交叉校验（package-shape 测试）。
+- 分发：`@heluo/forge-enterprise` 依赖闭包与补丁层中性行（不带 config）携带本包，品牌身份为包内默认值，公版保持配置中性。
+- 未验项：可覆盖 token 清单与 Logo 双端解析路径（§12）待真实宿主实测；宿主消费面与深浅色渲染覆盖属 GB 双端联调，缺接缝时按 `HOST_SEAM_UNAVAILABLE` 降级，不影响装载。
 
 ## 准入核对要点
 

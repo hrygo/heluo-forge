@@ -73,6 +73,7 @@ Delegra 侧的专家执行面横跨运行时镜像与 Kubernetes 沙箱，同属
 | `forge-policy` | [策略与审计实测边界](verification/forge-policy.md) |
 | `forge-experts` | [专家智能体实现与验证记录](verification/forge-experts.md) |
 | `forge-enterprise` | [企业账号与模型组合](plugins/forge-enterprise.md#实现与验证记录) |
+| `forge-brand` | [品牌与外观实现与验证记录](plugins/forge-brand.md#实现与验证记录) |
 | `forge-engineering` | [研发工具组合](plugins/forge-engineering.md#实现与验证记录) |
 | `forge-devops` | [DevOps 接入](plugins/forge-devops.md#实现与验证记录) |
 | `forge-gitee` | [Gitee 接入](plugins/forge-gitee.md#实现与验证记录) |
