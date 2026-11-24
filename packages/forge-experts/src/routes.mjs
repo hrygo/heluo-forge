@@ -8,6 +8,7 @@ export const REQUEST_HEADER = 'x-forge-experts-request';
 export const EDIT_TOKEN_HEADER = 'x-forge-experts-edit-token';
 const REQUEST_HEADER_VALUE = '1';
 const MAX_BODY_BYTES = 8 * 1024;
+const MAX_TASK_BODY_BYTES = 64 * 1024;
 
 function sendJson(res, status, body) {
   res.statusCode = status;
@@ -24,7 +25,7 @@ function methodNotAllowed(res, allow) {
   });
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let bytes = 0;
@@ -37,7 +38,7 @@ function readJsonBody(req) {
     req.on('data', (chunk) => {
       if (settled) return;
       bytes += chunk.length;
-      if (bytes > MAX_BODY_BYTES) {
+      if (bytes > maxBytes) {
         fail(new ExpertsError('EXPERT_REQUEST_TOO_LARGE', 'Request body exceeds limit'));
         req.resume?.();
         return;
@@ -67,6 +68,22 @@ function hasMutationHeader(req) {
   const fetchSite = headers['sec-fetch-site'];
   if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
   return true;
+}
+
+function decodePathSegment(rawSegment, label) {
+  if (!rawSegment || rawSegment.includes('/') || /%2f/i.test(rawSegment)) {
+    throw new ExpertsError('EXPERT_REQUEST_INVALID', `Invalid ${label}`);
+  }
+  let decoded;
+  try {
+    decoded = decodeURIComponent(rawSegment);
+  } catch {
+    throw new ExpertsError('EXPERT_REQUEST_INVALID', `Invalid ${label} encoding`);
+  }
+  if (!decoded || decoded.includes('/')) {
+    throw new ExpertsError('EXPERT_REQUEST_INVALID', `Invalid ${label}`);
+  }
+  return decoded;
 }
 
 function connectionRejection(req, getConnection) {
@@ -186,20 +203,121 @@ export function createExpertsRoutes(ports) {
         return true;
       }
 
+      if (url.pathname === `${API_PREFIX}/selections`) {
+        if (req.method !== 'POST') {
+          methodNotAllowed(res, 'POST');
+          return true;
+        }
+        if (!hasMutationHeader(req)) {
+          throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
+        }
+        if (typeof ports.prepareSelection !== 'function') {
+          throw new ExpertsError('EXPERT_DISPATCH_DISABLED', 'Expert dispatch is disabled');
+        }
+        const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
+        const prepared = await ports.prepareSelection(rawBody);
+        sendJson(res, 201, prepared);
+        return true;
+      }
+
+      if (url.pathname === `${API_PREFIX}/tasks`) {
+        if (req.method !== 'POST') {
+          methodNotAllowed(res, 'POST');
+          return true;
+        }
+        if (!hasMutationHeader(req)) {
+          throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
+        }
+        if (typeof ports.dispatchTask !== 'function') {
+          throw new ExpertsError('EXPERT_DISPATCH_DISABLED', 'Expert dispatch is disabled');
+        }
+        const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
+        const receipt = await ports.dispatchTask(rawBody);
+        sendJson(res, receipt?.idempotentReplay ? 200 : 201, receipt);
+        return true;
+      }
+
+      if (url.pathname.startsWith(`${API_PREFIX}/tasks/by-request/`)) {
+        if (req.method !== 'GET') {
+          methodNotAllowed(res, 'GET');
+          return true;
+        }
+        if (typeof ports.reconcileTaskByRequest !== 'function') {
+          throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task reconciliation is unavailable');
+        }
+        const requestId = decodePathSegment(url.pathname.slice(`${API_PREFIX}/tasks/by-request/`.length), 'requestId');
+        const task = await ports.reconcileTaskByRequest({ requestId });
+        sendJson(res, 200, task);
+        return true;
+      }
+
+      if (url.pathname.startsWith(`${API_PREFIX}/tasks/`)) {
+        const tail = url.pathname.slice(`${API_PREFIX}/tasks/`.length);
+        const parts = tail.split('/');
+        if (parts.length === 1) {
+          if (req.method !== 'GET') {
+            methodNotAllowed(res, 'GET');
+            return true;
+          }
+          if (typeof ports.getTask !== 'function') {
+            throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task lookup is unavailable');
+          }
+          const taskId = decodePathSegment(parts[0], 'taskId');
+          const task = await ports.getTask({ taskId });
+          sendJson(res, 200, task);
+          return true;
+        }
+        if (parts.length === 2 && parts[1] === 'result') {
+          if (req.method !== 'GET') {
+            methodNotAllowed(res, 'GET');
+            return true;
+          }
+          if (typeof ports.getTaskResult !== 'function') {
+            throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task result lookup is unavailable');
+          }
+          const taskId = decodePathSegment(parts[0], 'taskId');
+          const result = await ports.getTaskResult({ taskId });
+          sendJson(res, 200, result);
+          return true;
+        }
+        if (parts.length === 2 && parts[1] === 'followups') {
+          if (req.method !== 'POST') {
+            methodNotAllowed(res, 'POST');
+            return true;
+          }
+          if (!hasMutationHeader(req)) {
+            throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
+          }
+          if (typeof ports.followupTask !== 'function') {
+            throw new ExpertsError('EXPERT_DISPATCH_DISABLED', 'Expert dispatch is disabled');
+          }
+          const taskId = decodePathSegment(parts[0], 'taskId');
+          const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
+          const result = await ports.followupTask({ taskId, ...rawBody });
+          sendJson(res, 201, result);
+          return true;
+        }
+        if (parts.length === 2 && parts[1] === 'cancel') {
+          if (req.method !== 'POST') {
+            methodNotAllowed(res, 'POST');
+            return true;
+          }
+          if (!hasMutationHeader(req)) {
+            throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
+          }
+          if (typeof ports.cancelTask !== 'function') {
+            throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task cancellation is unavailable');
+          }
+          const taskId = decodePathSegment(parts[0], 'taskId');
+          const result = await ports.cancelTask({ taskId });
+          sendJson(res, 200, result);
+          return true;
+        }
+        throw new ExpertsError('EXPERT_NOT_FOUND', 'Unknown expert task route');
+      }
+
       if (url.pathname.startsWith(`${API_PREFIX}/preferences/`)) {
-        const rawId = url.pathname.slice(`${API_PREFIX}/preferences/`.length);
-        if (!rawId || rawId.includes('/') || /%2f/i.test(rawId)) {
-          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId');
-        }
-        let expertId;
-        try {
-          expertId = decodeURIComponent(rawId);
-        } catch {
-          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId encoding');
-        }
-        if (!expertId || expertId.includes('/')) {
-          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId');
-        }
+        const expertId = decodePathSegment(url.pathname.slice(`${API_PREFIX}/preferences/`.length), 'expertId');
         const scope = await ports.resolveScope();
         const known = ports.getKnownExpert(scope.scopeEpoch, expertId);
         if (!known || !known.access.readable) {

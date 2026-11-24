@@ -7,6 +7,9 @@ const scopeSrc = readFileSync(new URL('../src/scope.mjs', import.meta.url), 'utf
 const catalogSrc = readFileSync(new URL('../src/catalog.mjs', import.meta.url), 'utf8');
 const preferencesSrc = readFileSync(new URL('../src/preferences.mjs', import.meta.url), 'utf8');
 const mentionsSrc = readFileSync(new URL('../src/mentions.mjs', import.meta.url), 'utf8');
+const selectionSrc = readFileSync(new URL('../src/selection.mjs', import.meta.url), 'utf8');
+const dispatchSrc = readFileSync(new URL('../src/dispatch.mjs', import.meta.url), 'utf8');
+const delegraClientSrc = readFileSync(new URL('../src/delegra-client.mjs', import.meta.url), 'utf8');
 const routesSrc = readFileSync(new URL('../src/routes.mjs', import.meta.url), 'utf8');
 const clientSrc = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
@@ -72,13 +75,16 @@ test('host contracts: inject array, WebRoute registration, Domain.table storage 
   assertHostIntegrationContracts(indexSrc, preferencesSrc, clientSrc);
 });
 
-test('P2: src/index.mjs holds zero mutable business state and all five axes have zero cross-imports', () => {
+test('P2: src/index.mjs holds zero mutable business state and all business axes have zero cross-imports', () => {
   assertIndexPureAssembly(indexSrc);
   assertNoCrossAxisImports({
     scope: scopeSrc,
     catalog: catalogSrc,
     preferences: preferencesSrc,
     mentions: mentionsSrc,
+    selection: selectionSrc,
+    dispatch: dispatchSrc,
+    'delegra-client': delegraClientSrc,
     routes: routesSrc,
   });
 });
@@ -106,7 +112,7 @@ test('P9 mutation proofs: every structural guard fails when deliberately violate
   assert.throws(() => assertSingleErrorReaderInClient(`${clientSrc}\nconst dup = res.body?.error?.code;\n`));
   assert.throws(() => assertSingleErrorReaderInClient(`import './src/scope.mjs';\n${clientSrc}`));
   assert.throws(() => assertIsolatedMentionsGate(clientSrc.replace('if (options?.isolatedMentionsPreview === true)', 'if (true)')));
-  assert.throws(() => assertRoutesSecurityGuards(routesSrc.replace('if (!hasMutationHeader(req))', 'if (false)')));
+  assert.throws(() => assertRoutesSecurityGuards(routesSrc.replaceAll('if (!hasMutationHeader(req))', 'if (false)')));
 
   const groupedInject = indexSrc.replace("export const inject = ['webServer', 'connection', 'storageDomain', 'iam'];", "export const inject = { required: ['webServer'] };");
   assert.notEqual(groupedInject, indexSrc, 'mutation must rewrite the inject declaration');
