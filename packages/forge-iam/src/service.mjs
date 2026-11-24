@@ -36,6 +36,7 @@ import { createTokenExchangeService } from './service-token-exchange.mjs';
  *   now?: () => number,
  *   monotonic?: () => number,
  *   logRenewal?: (event: string, fields?: Record<string, unknown>) => void,
+ *   profileFields?: Record<string, string>, // test seam; takes precedence over config.profileFields when explicitly supplied
  * }} [options]
  */
 export function createIamService(rawConfig, options = {}) {

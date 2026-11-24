@@ -13,6 +13,11 @@ const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 // must not import the UserInfo client; a unit test keeps the two lists equal.
 export const PROFILE_FIELD_KEYS = Object.freeze(['workNo', 'name']);
 
+// Single source of truth for the default official host services that prove an
+// official login path is still mounted. exclusive.mjs imports and re-exports
+// this constant so config.mjs keeps its fixed validator closure.
+export const DEFAULT_EXCLUSIVE_SERVICES = Object.freeze(['deepseekAccount']);
+
 // Cordis 用 standard-schema 校验插件配置：Config['~standard'].validate(config)
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
 // 没有 DSH 运行时的环境下测试。
@@ -107,7 +112,7 @@ const DEFAULTS = {
   consumerTypeHeader: 'X-Consumer-Type',
   consumerType: 'personal',
   // Host services whose presence proves an official login path is still mounted.
-  exclusiveServices: ['deepseekAccount'],
+  exclusiveServices: [...DEFAULT_EXCLUSIVE_SERVICES],
   // UserInfo claim mapping. Empty keeps the profile absent instead of guessing.
   profileFields: null,
   defaultProvider: 'enterprise',
