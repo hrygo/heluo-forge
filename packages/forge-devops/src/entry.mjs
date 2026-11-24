@@ -13,6 +13,7 @@
  * 否则会出现"命令收得下、产物写不出"的分叉。
  */
 import { CHANGE_ID_PATTERN } from './artifacts.mjs';
+import { CLI_PAGE_HINT } from './cli-config.mjs';
 
 /** 入口名；与 `cordis.patch.yml`、文档和测试共用这一个字符串。 */
 export const ENTRY_NAME = 'devops-change';
@@ -44,7 +45,14 @@ export const ENTRY_REASONS = Object.freeze({
   POLICY_DENIED: 'POLICY_DENIED',
   COMMAND_NOT_WHITELISTED: 'COMMAND_NOT_WHITELISTED',
   INTERNAL: 'INTERNAL',
+  // 卡片未就绪：事实不全只阻断推进，卡片正文与缺失项仍要能看（issue #342）。
+  CONTEXT_BLOCKED: 'CONTEXT_BLOCKED',
+  // 响应没有卡片状态：无法确认是否读到匹配变更，按阻塞处理（fail closed）。
+  CONTEXT_EMPTY: 'CONTEXT_EMPTY',
 });
+
+/** 这些原因指向"入口配置"，恢复方向是改配置而不是原地重试。 */
+const CONFIG_REASONS = Object.freeze(['CONFIG_MISSING', 'CONFIG_INVALID', 'CLI_SPAWN_FAILED']);
 
 /**
  * 解析入口参数：唯一一个变更号，不允许多参数、空串或中文描述。
@@ -76,11 +84,61 @@ function errorText(parsed) {
   ].join('\n');
 }
 
+/** 缺失项只取 `(field, reason)` 唯一对：同因多项不重复刷屏，空原因不计。 */
+function unknownsOf(result) {
+  const list = Array.isArray(result?.unknowns)
+    ? result.unknowns
+    : Array.isArray(result?.context?.unknowns)
+      ? result.context.unknowns
+      : [];
+  const seen = new Set();
+  const items = [];
+  for (const entry of list) {
+    const reason = typeof entry?.reason === 'string' ? entry.reason.trim() : '';
+    if (reason === '') continue;
+    const field = typeof entry?.field === 'string' ? entry.field.trim() : '';
+    const key = `${field}\u0000${reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ field, reason });
+  }
+  return items;
+}
+
 /**
- * 注册入口。解析失败时**不调用** service（零下游调用），成功时输出卡 + 旁白。
+ * 阻塞输出：先给裁决与恢复方向，再附卡片正文——卡片与缺失项照常可读，只是不再假装成功。
+ * 恢复方向按原因分流：入口配置问题指到配置页，其余先确认 dop 可用再重跑。
+ */
+function blockedText(result, changeId) {
+  const status = typeof result?.status === 'string' ? result.status.trim() : '';
+  const items = unknownsOf(result);
+  const configIssue = items.some((item) => CONFIG_REASONS.includes(item.reason));
+  const chain = [ENTRY_NAME, changeId].join(' ');
+  const lines = [
+    `${ENTRY_NAME}：${status === '' ? ENTRY_REASONS.CONTEXT_EMPTY : ENTRY_REASONS.CONTEXT_BLOCKED}`,
+    status === ''
+      ? '阻塞：响应没有卡片状态，无法确认已取回匹配的变更事实。'
+      : `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`,
+    items.length === 0
+      ? '缺失项：无（卡片未列出未知项，按未就绪处理）。'
+      : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`,
+    configIssue
+      ? `下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`
+      : `下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`,
+    '本次不进入澄清/计划/实现步骤，也不改写会话绑定。',
+  ];
+  const body = String(result?.text ?? '').trimEnd();
+  return body === '' ? lines.join('\n') : `${lines.join('\n')}\n\n${body}`;
+}
+
+/**
+ * 注册入口。解析失败时**不调用** service（零下游调用）；就绪卡输出卡 + 旁白，未就绪输出阻塞与恢复方向。
  *
  * @param {{ get?: (key: string) => unknown }} ctx 宿主上下文
- * @param {{ startFromChange?: (changeId: string) => Promise<{ ok: boolean, text?: string, reason?: string, detail?: string }> }} service
+ * @param {{ startFromChange?: (changeId: string) => Promise<{
+ *   ok: boolean, status?: string, changeId?: string, text?: string, reason?: string, detail?: string,
+ *   unknowns?: Array<{ field?: string, reason?: string }>,
+ * }> }} service
  * @returns {() => void} 卸载函数（无命令面时是空函数）
  */
 export function registerEntry(ctx, service) {
@@ -106,6 +164,11 @@ export function registerEntry(ctx, service) {
       const reason = result?.reason ?? ENTRY_REASONS.INTERNAL;
       const detail = result?.detail ? `：${result.detail}` : '';
       return { kind: 'error', text: `${ENTRY_NAME}：${reason}${detail}\n\n${result?.text ?? ''}`.trimEnd() };
+    }
+    // 就绪与否只看卡片状态：`ok` 只表示"读面走完了"，不代表事实已取回（issue #342）。
+    const status = typeof result?.status === 'string' ? result.status.trim() : '';
+    if (status !== 'ready') {
+      return { kind: 'error', text: blockedText(result, parsed.changeId) };
     }
     const body = String(result.text ?? '').trimEnd();
     return { kind: 'success', text: `${body}\n\n${ENTRY_NEXT_STEPS}`.trim() };

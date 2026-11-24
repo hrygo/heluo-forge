@@ -410,6 +410,22 @@ export function apply(ctx, rawConfig = {}) {
   };
 
   /**
+   * 上下文卡是否真的就绪：`ok` 只说明读面走完，事实是否取回看 `status`（issue #342）。
+   * 卡片自报的变更号存在时必须等于请求号——就绪卡不能把别的变更绑进会话。
+   */
+  const readyCardFor = (card, changeId) => {
+    if (card === null || typeof card !== 'object') return false;
+    if (card.ok === false) return false;
+    if (card.status !== 'ready') return false;
+    const wanted = typeof changeId === 'string' ? changeId.trim() : '';
+    if (wanted === '') return false;
+    const reported = [card.changeId, card.context?.change?.changeId]
+      .filter((value) => typeof value === 'string' && value.trim() !== '')
+      .map((value) => value.trim());
+    return reported.every((value) => value === wanted);
+  };
+
+  /**
    * `change.read` 的归一投影（与上下文卡同一映射，不复制第二份）。
    *
    * 读成功但记录归一失败时**不抛**：`normalized=null`、`normalize_error=<原因码>`，
@@ -756,7 +772,7 @@ export function apply(ctx, rawConfig = {}) {
       return writeArtifact({ repoRoot, changeId: currentChangeId, kind, body, data, meta });
     },
     /**
-     * 入口：取回上下文卡并**只在成功时**绑定变更号（失败仍要能重试，不留下半绑定的状态）。
+     * 入口：取回上下文卡并**只在卡片就绪时**绑定变更号（阻塞、失败与空响应保留上一次绑定）。
      * 注入的协作者形状不完整时返回结构化拒绝，而不是让命令面显示 INTERNAL——原因必须可见。
      */
     startFromChange: async (changeId) => {
@@ -772,7 +788,7 @@ export function apply(ctx, rawConfig = {}) {
         };
       }
       const card = await flow.startFromChange({ changeId });
-      if (card?.ok !== false) bindChangeId(changeId);
+      if (readyCardFor(card, changeId)) bindChangeId(changeId);
       return card;
     },
     config,
