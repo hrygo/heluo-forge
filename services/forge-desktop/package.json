@@ -1,0 +1,18 @@
+{
+  "name": "@heluo/forge-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Heluo Forge Enterprise desktop shell: an Electron app whose window loads the local dsh --profile web",
+  "main": "src/main.mjs",
+  "engines": {
+    "dsh": ">=0.2.1-rc.3"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}
