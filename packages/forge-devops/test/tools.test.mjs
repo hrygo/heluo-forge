@@ -610,6 +610,12 @@ test('装配：上下文卡 ready 才绑定变更号，blocked 不绑定（入�
   });
   await mismatch.service.startFromChange('ARD123456');
   assert.equal(mismatch.service.changeId(), null, '就绪卡自报的变更号与请求不一致时不得绑定');
+
+  const unreported = mountIndex({
+    flow: { startFromChange: async () => ({ ok: true, status: 'ready', text: '卡' }) },
+  });
+  await unreported.service.startFromChange('ARD123456');
+  assert.equal(unreported.service.changeId(), null, '就绪卡未自报变更号时不可确认，不得绑定');
 });
 
 test('装配：artifact_write 的 data 经真实 service 落盘，body/data 互斥与机检失败由 artifacts 报出', async () => {

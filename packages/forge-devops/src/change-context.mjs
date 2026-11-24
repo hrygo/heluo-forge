@@ -69,6 +69,31 @@ export const CHANGE_SOURCE_TYPES = Object.freeze(['mock', 'enterprise']);
 /** 卡片状态是流程态（与平台动作的 done/failed/denied/unknown 不是一套词，渲染时不得混用）。 */
 export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
 
+/**
+ * 卡片是否"就绪且属于这次请求"：入口与装配层共用同一判据（issue #342），
+ * 避免出现"命令说成功、会话却没绑定"的分叉。
+ *
+ * - `ok === false` 一律不算就绪（读面本身失败）；
+ * - `status` 必须是 `ready`；
+ * - 卡片必须**自报**变更号且全部等于请求号：报不上来视为不可确认，不绑定（fail closed），
+ *   否则换一个不回填变更号的注入实现，就绪卡会把"别的变更"静默绑进会话。
+ *
+ * @param {unknown} card service 返回的上下文卡
+ * @param {string} changeId 请求的变更号
+ * @returns {boolean}
+ */
+export function cardReadyFor(card, changeId) {
+  if (card === null || typeof card !== 'object') return false;
+  if (card.ok === false) return false;
+  if (card.status !== 'ready') return false;
+  const wanted = typeof changeId === 'string' ? changeId.trim() : '';
+  if (wanted === '') return false;
+  const reported = [card.changeId, card.context?.change?.changeId]
+    .filter((value) => typeof value === 'string' && value.trim() !== '')
+    .map((value) => value.trim());
+  return reported.length > 0 && reported.every((value) => value === wanted);
+}
+
 /** `release_info` 的取值规则；写进卡片与报告，让人知道排期是怎么挑出来的。 */
 export const RELEASE_RULE = 'first-non-empty';
 

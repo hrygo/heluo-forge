@@ -32,7 +32,7 @@ import {
 } from './read.mjs';
 import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
-import { displayableChange, normalizeChangeRecord } from './change-context.mjs';
+import { cardReadyFor, displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
@@ -410,20 +410,9 @@ export function apply(ctx, rawConfig = {}) {
   };
 
   /**
-   * 上下文卡是否真的就绪：`ok` 只说明读面走完，事实是否取回看 `status`（issue #342）。
-   * 卡片自报的变更号存在时必须等于请求号——就绪卡不能把别的变更绑进会话。
+   * 绑定判据在 `change-context.mjs` 的 `cardReadyFor` 里，与命令入口共用同一份：
+   * `ok` 只说明读面走完，事实是否取回看 `status` 与自报变更号（issue #342）。
    */
-  const readyCardFor = (card, changeId) => {
-    if (card === null || typeof card !== 'object') return false;
-    if (card.ok === false) return false;
-    if (card.status !== 'ready') return false;
-    const wanted = typeof changeId === 'string' ? changeId.trim() : '';
-    if (wanted === '') return false;
-    const reported = [card.changeId, card.context?.change?.changeId]
-      .filter((value) => typeof value === 'string' && value.trim() !== '')
-      .map((value) => value.trim());
-    return reported.every((value) => value === wanted);
-  };
 
   /**
    * `change.read` 的归一投影（与上下文卡同一映射，不复制第二份）。
@@ -788,7 +777,7 @@ export function apply(ctx, rawConfig = {}) {
         };
       }
       const card = await flow.startFromChange({ changeId });
-      if (readyCardFor(card, changeId)) bindChangeId(changeId);
+      if (cardReadyFor(card, changeId)) bindChangeId(changeId);
       return card;
     },
     config,

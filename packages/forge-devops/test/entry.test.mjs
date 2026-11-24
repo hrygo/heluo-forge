@@ -163,6 +163,29 @@ test('空响应或无状态：命令报 CONTEXT_EMPTY，不伪装成功', async 
   assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
 });
 
+test('就绪卡自报变更号与请求不一致：CONTEXT_UNCONFIRMED，不报成功', async () => {
+  const { ctx, registered } = host();
+  registerEntry(
+    ctx,
+    spyService({ ok: true, status: 'ready', changeId: 'ARD999999', text: '## 上下文卡\n\n- 变更：ARD999999' }).service,
+  );
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /CONTEXT_UNCONFIRMED/u);
+  assert.match(result.text, /变更号与请求号不一致或未自报/u);
+  assert.match(result.text, /devops-change ARD123456/u);
+  assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
+});
+
+test('就绪卡未自报变更号：按不可确认处理，fail closed', async () => {
+  const { ctx, registered } = host();
+  registerEntry(ctx, spyService({ ok: true, status: 'ready', text: '## 上下文卡' }).service);
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /CONTEXT_UNCONFIRMED/u);
+  assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
+});
+
 test('service 拒绝与抛错都转成可见错误，不伪装成功', async () => {
   const { ctx, registered } = host();
   registerEntry(ctx, { startFromChange: async () => ({ ok: false, reason: 'CONFIG_MISSING', detail: 'FORGE_DEVOPS_DOP_BIN' }) });

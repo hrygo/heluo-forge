@@ -13,6 +13,7 @@
  * 否则会出现"命令收得下、产物写不出"的分叉。
  */
 import { CHANGE_ID_PATTERN } from './artifacts.mjs';
+import { cardReadyFor } from './change-context.mjs';
 import { CLI_PAGE_HINT } from './cli-config.mjs';
 
 /** 入口名；与 `cordis.patch.yml`、文档和测试共用这一个字符串。 */
@@ -49,10 +50,15 @@ export const ENTRY_REASONS = Object.freeze({
   CONTEXT_BLOCKED: 'CONTEXT_BLOCKED',
   // 响应没有卡片状态：无法确认是否读到匹配变更，按阻塞处理（fail closed）。
   CONTEXT_EMPTY: 'CONTEXT_EMPTY',
+  // 卡片自称就绪但自报变更号不符或缺省：不可确认属于本次请求，不成功也不绑定。
+  CONTEXT_UNCONFIRMED: 'CONTEXT_UNCONFIRMED',
 });
 
 /** 这些原因指向"入口配置"，恢复方向是改配置而不是原地重试。 */
 const CONFIG_REASONS = Object.freeze(['CONFIG_MISSING', 'CONFIG_INVALID', 'CLI_SPAWN_FAILED']);
+
+/** 去重 key 用 NUL 拼接：正常 `field` / `reason` 取值里不会出现它，不会拼出歧义键。 */
+const UNKNOWN_KEY_SEPARATOR = '\u0000';
 
 /**
  * 解析入口参数：唯一一个变更号，不允许多参数、空串或中文描述。
@@ -97,7 +103,7 @@ function unknownsOf(result) {
     const reason = typeof entry?.reason === 'string' ? entry.reason.trim() : '';
     if (reason === '') continue;
     const field = typeof entry?.field === 'string' ? entry.field.trim() : '';
-    const key = `${field}\u0000${reason}`;
+    const key = `${field}${UNKNOWN_KEY_SEPARATOR}${reason}`;
     if (seen.has(key)) continue;
     seen.add(key);
     items.push({ field, reason });
@@ -114,11 +120,21 @@ function blockedText(result, changeId) {
   const items = unknownsOf(result);
   const configIssue = items.some((item) => CONFIG_REASONS.includes(item.reason));
   const chain = [ENTRY_NAME, changeId].join(' ');
-  const lines = [
-    `${ENTRY_NAME}：${status === '' ? ENTRY_REASONS.CONTEXT_EMPTY : ENTRY_REASONS.CONTEXT_BLOCKED}`,
+  const reason =
+    status === ''
+      ? ENTRY_REASONS.CONTEXT_EMPTY
+      : status === 'ready'
+        ? ENTRY_REASONS.CONTEXT_UNCONFIRMED
+        : ENTRY_REASONS.CONTEXT_BLOCKED;
+  const headline =
     status === ''
       ? '阻塞：响应没有卡片状态，无法确认已取回匹配的变更事实。'
-      : `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`,
+      : status === 'ready'
+        ? '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。'
+        : `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`;
+  const lines = [
+    `${ENTRY_NAME}：${reason}`,
+    headline,
     items.length === 0
       ? '缺失项：无（卡片未列出未知项，按未就绪处理）。'
       : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`,
@@ -165,9 +181,8 @@ export function registerEntry(ctx, service) {
       const detail = result?.detail ? `：${result.detail}` : '';
       return { kind: 'error', text: `${ENTRY_NAME}：${reason}${detail}\n\n${result?.text ?? ''}`.trimEnd() };
     }
-    // 就绪与否只看卡片状态：`ok` 只表示"读面走完了"，不代表事实已取回（issue #342）。
-    const status = typeof result?.status === 'string' ? result.status.trim() : '';
-    if (status !== 'ready') {
+    // 就绪与否与装配层同一判据（`cardReadyFor`）：`ok` 只表示读面走完，不代表事实已取回（issue #342）。
+    if (!cardReadyFor(result, parsed.changeId)) {
       return { kind: 'error', text: blockedText(result, parsed.changeId) };
     }
     const body = String(result.text ?? '').trimEnd();
