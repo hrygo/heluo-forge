@@ -164,20 +164,33 @@ test('装配后的 pre 钩子拒绝读库与取票，工具体不执行', async 
   }
 });
 
-test('位置服务晚到、移除和替换时，策略跟随当前注入作用域', () => {
+test('位置服务晚到、移除和替换时，策略跟随当前注入作用域', async () => {
   const { base, directory, keyDirectory } = fixture();
   try {
-    withEnv(undefined, () => {
-      const { ctx, native } = host();
+    await withEnv(undefined, async () => {
+      const { ctx, native, hooks } = host();
       let notify;
       ctx.inject = (_names, callback) => { notify = callback; return () => {}; };
       installPolicy(ctx, {}, native);
       const service = ctx.get('policy');
+      const readDb = () => hooks.pre(
+        execOf('read', { file_path: join(directory, 'credentials.sqlite') }),
+        async () => ({ kind: 'allow' }),
+      );
       assert.deepEqual(service.storeDirectories(), []);
+      // 服务缺席：不判定、放行。
+      assert.equal((await readDb()).kind, 'allow');
+
       const first = notify({ get: () => ({ directory, keyDirectory, isDefault: true }) });
       assert.deepEqual(service.storeDirectories(), [directory, keyDirectory]);
+      assert.equal((await readDb()).kind, 'deny');
+
+      // 移除后回到未 arm：不判定。
       first();
       assert.deepEqual(service.storeDirectories(), []);
+      assert.equal((await readDb()).kind, 'allow');
+
+      // 以新目录重新提供：旧清理函数不得清空新快照。
       const replacement = join(base, 'replacement');
       const second = notify({ get: () => ({
         directory: replacement, keyDirectory: replacement + '.keys', isDefault: true,

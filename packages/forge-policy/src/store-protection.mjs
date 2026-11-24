@@ -124,19 +124,29 @@ export function parseCommandTargets(text, options = {}) {
   return collectCommandTargets(text, options.cwd);
 }
 
-function collectCommandTargets(text, workdir, depth = 0) {
+function collectCommandTargets(text, workdir, depth = 0, inheritedCwd = undefined) {
   if (typeof text !== 'string' || text.trim() === '' || depth > 4) return [];
   const targets = [];
-  const cwd = typeof workdir === 'string' && isAbsolute(workdir) ? workdir : undefined;
+  // 跟随命令文本里的 `cd`：`cd <存档目录> && sqlite3 credentials.sqlite` 的后半段
+  // 才是真正的路径来源。无法解析的目录（含变量拼装）一律回落到未定 cwd。
+  let cwd = typeof workdir === 'string' && isAbsolute(workdir) ? workdir : inheritedCwd;
   for (const segment of commandSegments(text)) {
     const { executable, args } = commandInvocation(segment.map(unquote));
     const script = shellScript(executable, args);
     if (script !== undefined) {
-      targets.push(...collectCommandTargets(script, cwd, depth + 1));
+      targets.push(...collectCommandTargets(script, cwd, depth + 1, cwd));
       continue;
     }
     const words = segment.map(expandVariables);
-    const fileCommand = FILE_COMMANDS.has(executable.split(/[\\/]/u).at(-1));
+    const name = executable.split(/[\\/]/u).at(-1);
+    if ((name === 'cd' || name === 'pushd') && words.length > 1) {
+      const next = words[1];
+      if (!next.startsWith('-') && next !== '') {
+        cwd = isAbsolute(next) ? next : (cwd === undefined ? undefined : cwd + sep + next);
+      }
+      continue;
+    }
+    const fileCommand = FILE_COMMANDS.has(name);
     for (const [index, token] of words.entries()) {
       if (token === '' || token.startsWith('-')) continue;
       const fingerprint = commandFingerprintHit(token);
@@ -148,6 +158,8 @@ function collectCommandTargets(text, workdir, depth = 0) {
         // Preserve parent components until the shared physical resolver evaluates them.
         targets.push(Object.freeze({ kind: 'path', text: cwd + sep + token }));
       } else if (fingerprint) {
+        // 裸文件名且 cwd 未定：只有位置服务缺席（或降级）时才靠文件名兜底，
+        // 位置已知时由 judgeStoreAccess 放弃判定，避免误伤仓库内同名夹具。
         targets.push(Object.freeze({ kind: 'command', text: token }));
       } else if (pathLike) {
         targets.push(Object.freeze({ kind: 'path', text: token }));
@@ -276,7 +288,9 @@ export function judgeStoreAccess(exec, roots = []) {
   const rootList = Array.isArray(roots) ? roots : [];
   for (const target of extractStoreTargets(exec)) {
     if (target.kind === 'command') {
-      if (commandFingerprintHit(target.text)) {
+      // 文件名指纹只用于「位置未知」：服务缺席或目录错配降级时，裸文件名仍然点名存档；
+      // 位置已知时裸文件名可能只是别处同名文件（仓库内的 keyring.json 夹具），放行。
+      if (rootList.length === 0 && commandFingerprintHit(target.text)) {
         return Object.freeze({ hit: true, artifact: STORE_ARTIFACT.STORE_DIR, reason: 'command', recursive: false });
       }
       continue;
@@ -342,10 +356,19 @@ export function tokenDeniedCopy(tool) {
 
 const NODE_PREFIXES = new Set(['node', 'nodejs', 'npx', 'env', 'sudo', 'command', 'exec']);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash']);
+// 这些命令只读取/转写参数，不会把参数当可执行文件运行：其中的 CLI 字样是数据。
+const DATA_COMMANDS = new Set([
+  'awk', 'basename', 'cat', 'cut', 'dirname', 'echo', 'grep', 'head', 'jq', 'less', 'logger',
+  'man', 'more', 'printf', 'rg', 'sed', 'sort', 'tail', 'tee', 'tr', 'uniq', 'wc',
+]);
 
 function isCliToken(token) {
   const base = token.split(/[\\/]/u).pop() ?? token;
   return CLI_NAMES.includes(base);
+}
+
+function isDataCommand(executable) {
+  return DATA_COMMANDS.has(executable.split(/[\\/]/u).at(-1));
 }
 
 function commandInvocation(tokens) {
@@ -378,6 +401,9 @@ function scanCommands(text, depth = 0) {
     if (script !== undefined) {
       const nested = scanCommands(script, depth + 1);
       if (nested.hit) return { ...nested, reason: 'shell' };
+    } else if (isDataCommand(executable)) {
+      // 只输出/转写参数的命令：`echo 'Usage: heluo-forge auth token'` 是文档内容，不是取票。
+      continue;
     } else if (isCliToken(executable)) {
       const [command, subcommand] = args.filter((word) => !word.startsWith('-'));
       if (command === 'auth' && subcommand === 'token') {

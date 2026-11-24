@@ -203,10 +203,13 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     if (typeof overrides.log === 'function') overrides.log(message);
     else if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(message);
   };
+  // 每次 arm 递增一个代号：位置服务被替换时新代号生效，旧作用域的清理回调
+  // 只回收自己那一次快照，不会把新目录清空（移除 → 替换的时序由调用方决定）。
+  let storeEpoch = 0;
   const armStore = (location) => {
-    if (location === undefined || location === null) return;
-    storeGuard.available = true;
-    storeGuard.roots = [];
+    if (location === undefined || location === null) return undefined;
+    const epoch = (storeEpoch += 1);
+    let roots = [];
     try {
       const declared = process.env[STORE_DIRECTORY_ENV];
       if (typeof declared === 'string' && declared.trim() !== '') {
@@ -222,10 +225,13 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
           'POLICY_STORE_DIRECTORY_CONFLICT',
         );
       }
-      storeGuard.roots = storeRootsFrom(location);
+      roots = storeRootsFrom(location);
     } catch (error) {
       warnStore(`the IAM store location cannot be armed (${error?.code ?? 'POLICY_STORE_LOCATION_INVALID'}); the gate falls back to store file/directory fingerprints`);
     }
+    storeGuard.available = true;
+    storeGuard.roots = roots;
+    return epoch;
   };
 
   const pipeline = buildPipeline(config.rules);
@@ -275,11 +281,11 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   const disposers = [];
   if (typeof ctx.inject === 'function') {
     // 服务就绪后 arm；服务始终缺席时守卫保持关闭（与 engineering 单装的验收口径一致）。
+    // 服务被移除时清理回到未 arm（不判定）；随后以新目录重新提供时按新代号重新 arm。
     const disposeArming = ctx.inject(['credentials-store-location'], (scoped) => {
-      armStore(scoped.get('credentials-store-location'));
-      const activeRoots = storeGuard.roots;
+      const epoch = armStore(scoped.get('credentials-store-location'));
       return () => {
-        if (storeGuard.roots !== activeRoots) return;
+        if (epoch === undefined || storeEpoch !== epoch) return;
         storeGuard.available = false;
         storeGuard.roots = [];
       };

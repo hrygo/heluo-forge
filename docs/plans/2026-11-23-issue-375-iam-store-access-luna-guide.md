@@ -110,7 +110,7 @@ db.close();
 | `packages/forge-policy/src/paths.mjs` | `resolveProtectedRoots(templates, env)`：`$VAR/**` 模板展开，未解析即抛 `POLICY_PROTECTED_ROOT_UNRESOLVED`（拒绝挂载）；`canonicalize(input, options)`：绝对化 → 逐段 `realpath` → `..` 回退已解析父目录 → darwin/win32 大小写折叠，ENOENT 保留字面；`matchProtected(candidate, roots)` 返回 `{protected, root, canonical}` | 直接用于存档根解析与命中判定，不重写归一逻辑 |
 | `packages/forge-policy/src/gate.mjs` | `deny(reason, code)`、`denyWithEvidence(fields, reason, code)`（`:288`，记录失败仍拒绝并标 `evidence:'unrecorded'`）；`agentKindOf`、`operationId`、`summarizeArguments` 已就绪 | 拒绝一律走 `denyWithEvidence`，保留「拒绝也留证据」语义 |
 | `packages/forge-policy/src/audit.mjs` | `ALLOWED_FIELDS` 白名单；`REDACT_SEGMENTS = 4` 只留路径尾 4 段；`FORBIDDEN_FIELDS` 含 `arguments`/`content`/`token`/`secret`/`credential` | 拒绝记录只写白名单字段，不落绝对路径与命令原文 |
-| `packages/forge-policy/src/config.mjs` | `RULE_KEYS`（7 条）、`IMPLEMENTED_RULES`（`origin/main` 已七键）、`DEFAULT_RULES` 全 false、`checkRules` 与 `checkUnwiredSurfaces` 装载期校验、`DEFAULTS` 结构 | 新增开关的唯一登记点（策略侧不设目录配置面） |
+| `packages/forge-policy/src/config.mjs` | `RULE_KEYS`（7 条）、`IMPLEMENTED_RULES`（`origin/main` 已七键）、`DEFAULT_RULES` 全 false、`checkRules` 与 `checkUnwiredSurfaces` 装载期校验、`DEFAULTS` 结构 | 已取消开关的拒绝登记点（策略侧不设目录配置面、不新增开关） |
 | `packages/forge-policy/src/pipeline.mjs` | `STAGE`、`STAGE_RULES`、`ORDER`、`buildPipeline(rules)`（只装配「已实现且置真」的规则） | 新增 `store-access` 阶段并置于 `resolve` 之前 |
 | `packages/forge-policy/src/installer.mjs`（`main` 行号） | `installPolicy(...)`：`env = templateEnv(config.env)`（`:175`）、`resolveProtectedRoots([...DEFAULT_PROTECTED_PATHS, ...configuredTemplates], env)`（`:181`）、`buildPipeline`（`:196`）、`createGate`（`:202`）、`native.pre`（`tools/pre-execute`）、服务 `protectedPaths`（`:288`）/`checkPath(candidate, workspaceRoot)`（`:294`）、fail-closed 风格（`POLICY_HOST_UNAVAILABLE`/`POLICY_SERVICE_CONFLICT`/`POLICY_AUDIT_NOT_DURABLE`） | 位置服务校验、存档根注入 `createGate`、服务投影、挂载期失败全部在此 |
 | `packages/forge-credentials-keychain/src/default-store-directory.mjs` | `selectDefaultStoreDirectory({platform, home, localAppData, xdgDataHome})`：darwin `home/Library/Application Support/HeluoForge`；win32 `localAppData/HeluoForge`（无效回 `home/AppData/Local`）；其余 `home/.local/share/HeluoForge`，linux 且 `XDG_DATA_HOME` 绝对时用 `xdgDataHome/HeluoForge` | 存档目录的**唯一实现**；策略侧不镜像布局，目录经 `credentials-store-location` 取得（§4.5） |
@@ -155,8 +155,8 @@ db.close();
 
 1. **路径类参数命中即拒**：任何参数被判定为路径（或含路径的字段，如 `workdir`/`cwd`/`savePath`）经 `canonicalize` 后落在存档根内（`credentials.sqlite` 全族文件、`<store>` 目录、`<store>.keys` 目录及其下一切），拒绝。
 2. **递归/删除类参数命中即可拒**：对会向下递归读取、打包、同步或删除的工具与命令，参数是存档根的**祖先**（如 `~/Library/Application Support`、`$HOME`）也拒绝，因为该操作必然读到或删掉存档。
-3. **命令/脚本文本指名存档即拒**：`bash`/`terminal_send`/`run_code` 的文本里出现存档文件名（`credentials.sqlite`、`-wal`、`-shm`、`.abandoned.*`、`keyring.json`）或存档目录名（`HeluoForge`、`HeluoForge.keys`）时拒绝。只做「存档指纹」匹配，不做 SQL 语义解析。
-4. **CLI 取票通道默认拒绝**（同一条守卫）：`bash`/`terminal_send`/`run_code` 等命令型参数中出现 `heluo-forge auth token` 调用即拒绝，探测点在 **CLI 启动之前**；`heluo-forge auth whoami --json` 不受影响。**不提供逐次确认放行**：一次确认无法约束令牌进入工具输出后的用途，授权必须以具体业务操作为单位——由受信组件取票后代 Agent 发起请求、只回传业务结果（§14）。
+3. **命令/脚本文本指名存档即拒**：`bash`/`terminal_send`/`run_code` 的文本里出现可以解析到存档根的路径、或存档文件名（`credentials.sqlite`、`-wal`、`-shm`、`.abandoned.*`、`keyring.json`）或存档目录名（`HeluoForge`、`HeluoForge.keys`）时拒绝。命令文本里的 `cd <dir>` 会被跟踪，后续 `sqlite3 credentials.sqlite` 按 `cd` 后的目录解析。**位置已知（服务已 arm）时**，无法解析目录的裸文件名不按指纹拒绝——它可能只是别处同名文件；文件名指纹只在位置未知（服务缺席或目录错配降级）时兜底。只做「存档指纹」匹配，不做 SQL 语义解析。
+4. **CLI 取票通道默认拒绝**（同一条守卫）：`bash`/`terminal_send`/`run_code` 等命令型参数中，**处于可执行位置**的 `heluo-forge auth token` 调用即拒绝（段首，含 `node`/`npx`/`env`/`sudo` 包装与 `sh -c` 递归），探测点在 **CLI 启动之前**；`echo`/`printf`/`cat`/`grep`/`sed` 这类只输出或转写参数的命令里出现的 CLI 字样是数据，放行（例如 `echo 'Usage: heluo-forge auth token'`）。`heluo-forge auth whoami --json` 不受影响。**不提供逐次确认放行**：一次确认无法约束令牌进入工具输出后的用途，授权必须以具体业务操作为单位——由受信组件取票后代 Agent 发起请求、只回传业务结果（§14）。
 5. **其余调用不受影响**：未命中即放行，走既有路径（含 out-of-scope 直接放行）；不新增身份查询、不为放行写审计、不改变其它开关语义。守卫只在位置服务出现后判定：服务始终缺席（如 engineering 单装没有内置凭据后端）时，两条判定都不执行，行为与今日一致。
 
 **能保证与不能保证**（必须原样写进 README 与设计文档）：能保证「参数里写出来的存档路径、或命令文本里点名的存档」被拒绝，以及「命令文本可判定的 `auth token` 调用在启动前被拒」；不能保证「脚本运行时自行解析出存档路径或自行拼装取票命令」被拒绝——后者只能靠执行环境隔离（§8.2 探针判定，未通过前本方案只作**显式路径防误触 + 取票入口收敛**）。取票规则的拒绝只约束**经工具分发的调用**；已由他人导出、或脚本内自行 spawn CLI 得到的令牌不在覆盖面内。
@@ -180,11 +180,15 @@ db.close();
 | `<store>` 的 `-wal`/`-shm`/`abandoned.*`、未来新增文件（`credentials-v2.sqlite`、`store-index.json`） | 拒绝（按目录判定） |
 | 同库**新表**（`sqlite3 <store>/credentials.sqlite 'select * from future_table'`） | 拒绝（文本指名存档文件） |
 | 命令里出现 `credentials.sqlite` 但目标是别处同名文件（`read /tmp/backup/credentials.sqlite`） | 按路径判定处理：`/tmp/backup/...` 不在根内 → 放行（不按文件名全局拒绝，避免误伤） |
+| 位置已知时单写裸文件名（`cat keyring.json`、`sqlite3 credentials.sqlite`，无 `workdir`/`cd`） | 放行：无法解析到具体路径，不做指纹判定（仅位置未知时兜底），避免阻断仓库内同名夹具 |
+| `cd <store> && sqlite3 credentials.sqlite 'select 1'` | 拒绝（跟踪命令文本里的 `cd`，按 `cd` 后的目录解析） |
+| `echo 'Usage: heluo-forge auth token'`、`printf`/`grep`/`sed` 参数里的 CLI 字样 | 放行（只输出/转写参数，不属于可执行位置） |
 | `heluo-forge auth whoami --json` | 放行 |
 | `heluo-forge auth token`、`node <repo>/packages/forge-iam/bin/heluo-forge.mjs auth token`、`bash -c '… auth token'` | 拒绝（探测点在 CLI 启动前，见 §3.1 第 4 条） |
 | `H=$(which heluo-forge); "$H" auth token`、脚本内自行拼装取票命令 | **不覆盖**：参数里没有可判定的 CLI 调用文本（与运行期自算路径同类缺口） |
 | `grep({pattern:'credentials.sqlite', path:'<repo>'})` | 放行（`pattern` 是正则而非路径，不参与路径判定） |
 | 位置服务缺席（engineering 单装） | 全部调用与今日一致：守卫不判定，`store-access` 阶段仍在流水线首位但空转 |
+| 位置服务被移除或替换 | 移除后回到未 arm（不判定）；替换后按新目录重建两根，旧作用域的清理函数不得清空新快照 |
 
 ---
 
@@ -315,11 +319,11 @@ tools/pre-execute (waterfall)
 
 | 编号 | 判据 | 不满足时 |
 |---|---|---|
-| P1-A | 企业实际装配（真实 keychain + policy + iam）下开关生效：`read`/`bash sqlite3` 被拒且工具体未执行 | **不得默认启用**；规则保持默认关闭，只交付实现 |
-| P1-B | 位置服务与冲突码按 §4.5 生效：错配拒绝挂载、「变量缺席 + 自定义目录」拒绝挂载、装对时放行 | 修 §5 步骤 3 后重跑 |
-| P1-C | Policy 装载失败（语法/装配错误）、位置服务缺席、目录错配三种失败态下，企业装配**能否阻断**相关 Agent 工具（`read`/`bash` 指向真实合成库） | 装载失败必须被当作「没有门禁」写入 §9 并如实披露；位置服务缺席与错配已实测（不判定 / 指纹兜底）；无法阻断时不得宣称守卫生效 |
-| P1-E | 企业装配下 `heluo-forge auth token` 经 `bash`/`terminal_send` 被拒，且**取证显示 CLI 未启动**（哨兵进程/包装脚本未被调用）；`auth whoami` 仍放行 | 无法证明「拒绝在 CLI 启动前」则 §8.4 的 Agent 授权项保持待验收；若连拒绝都不生效，规则不默认启用 |
-| P1-D | 三种装配的启用范围符合 §5 步骤 6：企业单装**启用**、engineering 单装**关闭**、双顺序叠装（enterprise→engineering 与反向）**两个方向都启用** | **任一方向规则被关闭即视为未通过**（叠装不得靠装载顺序丢规则），修 patch 后重跑 |
+| P1-A | 企业实际装配（真实 keychain + policy + iam）下守卫生效：`read`/`bash sqlite3` 被拒且工具体未执行 | **不得宣称守卫生效**；只交付实现并记录缺口 |
+| P1-B | 位置服务与冲突码按 §4.5 生效：错配与「变量缺席 + 自定义目录」降级为指纹兜底（不拒绝挂载）、装对时 arm 精确根 | 修 §5 步骤 3 后重跑 |
+| P1-C | Policy 装载失败（语法/装配错误）、位置服务缺席、目录错配三种失败态下，企业装配**能否阻断**相关 Agent 工具（`read`/`bash` 指向真实合成库） | 装载失败必须被当作「没有门禁」写入 §9 并如实披露；位置服务缺席=不判定、错配=指纹兜底（已实测）；无法阻断时不得宣称守卫生效 |
+| P1-E | 企业装配下 `heluo-forge auth token` 经 `bash`/`terminal_send` 被拒，且**取证显示 CLI 未启动**（哨兵进程/包装脚本未被调用）；`auth whoami` 仍放行 | 无法证明「拒绝在 CLI 启动前」则 §8.4 的 Agent 授权项保持待验收；若连拒绝都不生效，不得宣称守卫生效 |
+| P1-D | 守卫随位置服务自动生效（裁决 C，无开关）：企业单装**生效**、engineering 单装**不判定**、双顺序叠装（enterprise→engineering 与反向）**两个方向都生效** | **任一方向守卫不生效即视为未通过**（叠装不得靠装载顺序丢服务或配置），修 patch 后重跑 |
 
 **三道门禁（互不替代）**：
 
@@ -344,7 +348,7 @@ tools/pre-execute (waterfall)
 | 未覆盖 | `run_code`（profile 无该工具）、真实默认存档路径、Windows/Linux 沙箱、P1-A…E、模型自决调用 |
 | 证据 | [IAM 存档访问 P0 探针记录](../design/verification/iam-store-access-p0.md) |
 
-**P1 执行记录（2026-11-24，企业装配面）**：
+**P1 执行记录（2026-11-24，企业装配面）**：下表是裁决 C 生效后的**当前证据**；变更前旧开关方案的记录（位置服务缺席即装载失败、反向叠装 2/13）属历史证据，保留在 V0.1.7 修订说明与验证记录的历史小节，不复验、不作为当前判据。
 
 | 项 | 内容 |
 |---|---|
@@ -817,6 +821,8 @@ tools/pre-execute (waterfall)
 | 规则与 `protectPaths` 语义重叠 | 同一写入被两条规则判定 | 取严：存档规则先行且更严，`protectPaths` 维持原语义、不把存档根塞进它的配置面；D90 记明 |
 | 取票规则误判正常命令 | 把「文档里出现 auth token 字样」当成调用 | 只认可执行文件 token 命中 CLI 名（或 `node`/`npx`/`env` 前缀后紧跟 CLI 路径）且参数序列出现 `auth`→`token`；`cat`/`grep`/`read` 不受影响（用例覆盖） |
 | 取票规则被运行期拼装绕过 | 脚本自取令牌 | 与运行期自算路径同类：明确不覆盖，只有隔离证据能补；#434 判据③ 不勾选（§8.3） |
+| 位置已知时的裸文件名放行 | `sqlite3 credentials.sqlite` 未带 `workdir`/`cd` 时判不出目录，按设计放行；若进程恰在存档目录内则漏拦 | 命令文本里的 `cd` 会被跟踪；`workdir`/绝对路径照常判定；漏拦面写入 §3.3 与 README 边界，不宣称全覆盖 |
+| 只输出命令跳过取票扫描 | `echo`/`printf`/`cat` 等参数里的 CLI 字样不判定（避免误伤文档与示例） | 这些参数不会被执行；`sh -c`、包装前缀与可执行位置照常判定（§3.1 第 4 条） |
 | 会话内其它并行改动 | 冲突 | 开工 `git status --short`；同一文件不由两个执行者写 |
 
 **已裁决（2026-11-24，用户）**：
@@ -913,3 +919,16 @@ tools/pre-execute (waterfall)
 | 装载失败不再等于安全 | 删除 `POLICY_STORE_LOCATION_UNAVAILABLE` 拒绝挂载；目录错配只降级为文件名/目录名指纹兜底 | §4.5 第 3、5 条 |
 | P1-D 叠装问题 | 补丁层不再写 `rules`，两个叠装顺序都不丢守卫；`tests/plugin-patch-layers.test.mjs` 反向断言保持 | §5 步骤 6 |
 | P1 实测 | 企业单装 13/13、两方向叠装各 13/13、engineering 单装 4/4（closed）、目录错配 4/4（fingerprint） | [验证记录](../design/verification/iam-store-access-p1.md) |
+
+---
+
+## 16. PR #457 评审处置（V0.1.9）
+
+| 评审项 | 处置 | 落点 |
+|---|---|---|
+| [P2] 位置服务更新后未刷新目录状态 | `armStore` 每次 arm 递增代号并整体替换根快照；注入作用域的清理只回收自己那一次快照，移除 → 替换的时序不会清空新目录。服务移除后回到未 arm（不判定）。回归：`test/installer-store.test.mjs` 覆盖缺席、出现、移除、替换，并断言 pre 钩子在每种状态下的放行/拒绝 | §5 步骤 3、`packages/forge-policy/src/installer.mjs` |
+| [P2] 已知位置时同名文件被文件名指纹拒绝 | 命令词法跟踪 `cd`；位置已知时裸文件名不按指纹判定，能解析到路径的按已知根核对；文件名指纹只在位置未知（服务缺席或错配降级）时兜底。回归：`test/store-protection.test.mjs` 增加 `cat keyring.json` 放行、`cd <store> && sqlite3 credentials.sqlite` 拒绝、位置未知时仍按指纹拒绝 | §3.1 第 3 条、§3.3、`packages/forge-policy/src/store-protection.mjs` |
+| [P2] 仅输出取票命令示例被拒 | 取票判定只在可执行位置识别 CLI（段首，含 `node`/`npx`/`env`/`sudo` 包装与 `sh -c` 递归）；`echo`/`printf`/`cat`/`grep`/`sed` 等只输出或转写参数的命令跳过。回归：`echo 'Usage: heluo-forge auth token'`、`printf`、`grep`、heredoc 放行，`/usr/local/bin/heluo-forge auth token`、`env … heluo-forge auth token`、`bash -lc` 拒绝 | §3.1 第 4 条、§3.3、`judgeTokenInvocation` |
+| [P3] 旧装配结果未标注历史 | P1 判据表按裁决 C 改写（不再要求开关与缺席拒装）；P1 执行记录标明为当前证据，旧开关方案的 2/13 归入 V0.1.7 历史；§10 执行项改为「拒绝已取消开关」 | §5 步骤 0、§10、§15 |
+
+**复验**：修复后在 darwin-arm64、DSH `0.2.1-rc.5`、Node `v24.13.0` 上以隔离 profile 与合成数据复跑 P1——企业单装 13/13、`engineering→enterprise` 13/13、`enterprise→engineering` 13/13、engineering 单装 4/4（closed）、目录错配 4/4（fingerprint），全部退出码 0；`node --test packages/forge-policy/test/*.test.mjs` 459/459。真实企业 IAM、Windows/Linux 宿主与执行环境隔离仍待验收。

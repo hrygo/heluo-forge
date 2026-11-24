@@ -95,4 +95,14 @@ DSH_HOST_PROBE_EXPECT=fingerprint node scripts/probe/run-store-access-p1-probe.m
 
 ## 评审修复复验
 
-PR #457 评审修复版在 darwin-arm64、DSH `0.2.1-rc.5`、Node `24.21.0` 上以隔离 profile 和合成数据复跑 P1。企业单装、engineering → enterprise、enterprise → engineering 三组各 13/13 通过。位置服务装载失败、移除与替换通过模拟宿主测试验证。真实企业 IAM、Windows/Linux 宿主和执行环境隔离仍待验收。
+PR #457 评审修复版在 darwin-arm64、DSH `0.2.1-rc.5`、Node `v24.13.0` 上以隔离 profile 和合成数据复跑 P1，全部退出码 0：
+
+| 场景 | 命令 | 结果 |
+|---|---|---|
+| 企业单装 | `node scripts/probe/run-store-access-p1-probe.mjs --label enterprise` | 13/13 |
+| engineering → enterprise | 同上加 `--patch packages/forge-engineering/cordis.patch.yml --patch packages/forge-enterprise/cordis.patch.yml` | 13/13 |
+| enterprise → engineering | 同上，两个 `--patch` 顺序对调 | 13/13 |
+| engineering 单装 | `DSH_HOST_PROBE_EXPECT=closed … --label engineering-only --patch packages/forge-engineering/cordis.patch.yml` | 4/4（不判定） |
+| 目录错配 | `DSH_HOST_PROBE_EXPECT=fingerprint … --label mismatch --keychain-default` | 4/4（指纹兜底） |
+
+修复项的离线回归：位置服务缺席/出现/移除/替换（`test/installer-store.test.mjs`，含 pre 钩子在每种状态下的放行与拒绝断言）、命令文本 `cd` 跟踪与同名文件放行（`test/store-protection.test.mjs`）、只输出命令里的取票字样放行。`node --test packages/forge-policy/test/*.test.mjs` 459/459。真实企业 IAM、Windows/Linux 宿主和执行环境隔离仍待验收。

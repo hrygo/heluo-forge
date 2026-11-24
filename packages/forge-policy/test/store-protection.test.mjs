@@ -86,9 +86,14 @@ test('命令文本点名存档：sqlite3 查询、搬运与未来表同样命中
     assert.equal(judgeStoreAccess(bash(`sqlite3 ${join(storeDir, 'credentials.sqlite')} "select * from records"`), roots).hit, true);
     assert.equal(judgeStoreAccess(bash(`sqlite3 ${join(storeDir, 'credentials.sqlite')} "select * from future_table"`), roots).hit, true);
     assert.equal(judgeStoreAccess(bash(`cp ${join(storeDir, 'credentials.sqlite')} ${join(outside, 'copy.db')}`), roots).hit, true);
-    // 不带目录、只有文件名的命令也按指纹拒绝（cwd 未知时保守处理）。
-    assert.equal(judgeStoreAccess(bash('sqlite3 credentials.sqlite "select 1"'), roots).hit, true);
-    assert.equal(judgeStoreAccess(bash('cat keyring.json'), roots).hit, true);
+    // 位置已知时裸文件名不按指纹拒绝：可能只是别处同名文件；跟随命令里的 cd。
+    assert.equal(judgeStoreAccess(bash('sqlite3 credentials.sqlite "select 1"'), roots).hit, false);
+    assert.equal(judgeStoreAccess(bash('cat keyring.json'), roots).hit, false);
+    assert.equal(judgeStoreAccess(bash(`cd ${storeDir} && sqlite3 credentials.sqlite "select 1"`), roots).hit, true);
+    assert.equal(judgeStoreAccess(bash(`cd ${join(outside)} && sqlite3 credentials.sqlite "select 1"`), roots).hit, false);
+    // 位置未知（服务缺席或错配降级）时，裸文件名仍按指纹兜底。
+    assert.equal(judgeStoreAccess(bash('sqlite3 credentials.sqlite "select 1"'), []).hit, true);
+    assert.equal(judgeStoreAccess(bash('cat keyring.json'), []).hit, true);
     assert.equal(judgeStoreAccess(bash(`cat ${join(outside, 'notes.txt')}`), roots).hit, false);
   } finally {
     rmSync(base, { recursive: true, force: true });
@@ -114,6 +119,9 @@ test('取票通道：CLI、node、npx、shell -c 都命中；whoami 与运行期
     'node bin/heluo-forge.mjs auth token',
     'npx heluo-forge auth token',
     'sh -c "heluo-forge auth token"',
+    '/usr/local/bin/heluo-forge auth token',
+    'env HELUO=1 heluo-forge auth token',
+    'bash -lc "heluo-forge auth token"',
   ]) {
     assert.equal(judgeTokenInvocation(bash(command)).hit, true, command);
   }
@@ -124,6 +132,10 @@ test('取票通道：CLI、node、npx、shell -c 都命中；whoami 与运行期
     "echo 'Usage: heluo-forge auth token'",
     "echo 'See the manual; heluo-forge auth token'",
     `sh -c "echo 'heluo-forge auth token'"`,
+    'printf \'%s\\n\' "heluo-forge auth token"',
+    'grep -rn "heluo-forge auth token" docs/',
+    "cat <<'EOF'\nUsage: heluo-forge auth token\nEOF",
+    'sed -n 1p docs/plan.md # heluo-forge auth token',
   ]) {
     assert.equal(judgeTokenInvocation(bash(command)).hit, false, command);
   }
@@ -140,7 +152,8 @@ test('shell paths use the supplied workdir and compare known paths before file n
     assert.equal(judgeStoreAccess(bash('cat credentials.sqlite', outside), roots).hit, false);
     assert.equal(judgeStoreAccess(bash('cat "' + join(outside, 'space name', 'keyring.json') + '"'), roots).hit, false);
     assert.equal(judgeStoreAccess(bash('cat "' + join(storeDir, 'space name', 'keyring.json') + '"'), roots).hit, true);
-    assert.equal(judgeStoreAccess(bash('cat credentials.sqlite'), roots).hit, true);
+    // 位置已知、cwd 未定：裸文件名不再按指纹拒绝（评审 #457 P2-2）。
+    assert.equal(judgeStoreAccess(bash('cat credentials.sqlite'), roots).hit, false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
