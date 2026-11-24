@@ -89,10 +89,19 @@ export const GITEE_ENV_MAP = Object.freeze({
   HELUO_GITEE_PERSISTENT_TOKEN: 'persistentToken',
 });
 
+export const NACOS_ENV_MAP = Object.freeze({
+  HELUO_NACOS_SERVER_URL: 'serverUrl',
+  HELUO_NACOS_NAMESPACE_ID: 'namespaceId',
+  HELUO_NACOS_USERNAME_ENV: 'usernameEnv',
+  HELUO_NACOS_PASSWORD_ENV: 'passwordEnv',
+  HELUO_NACOS_TIMEOUT_MS: 'timeoutMs',
+  HELUO_NACOS_ALLOW_INSECURE_HTTP: 'allowInsecureHttp',
+});
+
 /** Secret-bearing names are recognized so the maker can refuse them explicitly. */
 export const SECRET_ENV_KEYS = Object.freeze(['HELUO_IAM_CLIENT_SECRET', 'HELUO_IAM_CLIENT_SECRET_FILE']);
 
-const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...SECRET_ENV_KEYS]);
+const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...Object.keys(NACOS_ENV_MAP), ...SECRET_ENV_KEYS]);
 const INTEGER_KEYS = new Set(['HELUO_IAM_CALLBACK_PORT', 'HELUO_GITEE_TIMEOUT_MS']);
 const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
 const validatedConfigs = new WeakSet();
@@ -302,7 +311,7 @@ function redirectPathProblem(value) {
 }
 
 /**
- * Convert parsed entries into the two patch config objects, applying the same
+ * Convert parsed entries into plugin config objects, applying the same
  * constraints the plugins apply at load time. The maker validates *before*
  * writing, so an invalid private bundle never reaches a delivery directory.
  */
@@ -316,6 +325,7 @@ export function buildConfig(entries) {
   let clientSecret;
   const iam = {};
   const gitee = {};
+  const nacos = {};
   const problems = [];
   const put = (target, key, value) => {
     if (value !== undefined && value !== '') target[key] = value;
@@ -428,6 +438,25 @@ export function buildConfig(entries) {
     put(gitee, field, raw);
   }
 
+  for (const [envKey, field] of Object.entries(NACOS_ENV_MAP)) {
+    const raw = byKey.get(envKey);
+    if (raw === undefined) continue;
+    if (field === 'timeoutMs') {
+      if (!/^\d+$/u.test(raw) || Number(raw) < 100 || Number(raw) > 120000) problems.push(`${envKey} must be an integer between 100 and 120000`);
+      else nacos[field] = Number(raw);
+    } else if (field === 'allowInsecureHttp') {
+      if (raw !== 'true' && raw !== 'false') problems.push(`${envKey} must be true or false`);
+      else nacos[field] = raw === 'true';
+    } else {
+      nacos[field] = raw;
+      if (field === 'namespaceId' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(raw)) problems.push(`${envKey} must be a valid namespace ID of 1 to 128 characters`);
+      if ((field === 'usernameEnv' || field === 'passwordEnv') && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(raw)) problems.push(`${envKey} must be an environment variable name`);
+    }
+  }
+  if (Object.keys(NACOS_ENV_MAP).some((key) => byKey.has(key))
+    && !isHttpUrl(nacos.serverUrl, { allowInsecureHttp: nacos.allowInsecureHttp === true })) {
+    problems.push('HELUO_NACOS_SERVER_URL is required and must be an https URL (or http with HELUO_NACOS_ALLOW_INSECURE_HTTP=true) without userinfo/query/hash');
+  }
   if (secretKeys.length > 1) {
     problems.push('set only one of HELUO_IAM_CLIENT_SECRET and HELUO_IAM_CLIENT_SECRET_FILE');
   } else if (secretKeys.length === 1) {
@@ -507,9 +536,11 @@ export function buildConfig(entries) {
   const config = freezeConfig({
     iam,
     gitee,
+    nacos,
     keys: [
       ...Object.keys(iam).map((key) => `iam.${key}`),
       ...Object.keys(gitee).map((key) => `gitee.${key}`),
+      ...Object.keys(nacos).map((key) => `nacos.${key}`),
     ].sort(),
     // Kept out of `keys` on purpose: every redacted summary prints that list.
     ...(clientSecret === undefined ? {} : { secret: { clientSecret } }),
@@ -678,7 +709,7 @@ export function assertNeutralPatch(input, { required = ['heluo-iam'] } = {}) {
     .filter((text) => typeof text === 'string' && text.length > 0);
   const problems = [];
   const requiredSet = new Set(required);
-  const neutralChecked = new Set(['heluo-credentials-keychain', 'heluo-iam', 'forge-devops', 'heluo-gitee', ...requiredSet]);
+  const neutralChecked = new Set(['heluo-credentials-keychain', 'heluo-iam', 'forge-devops', 'heluo-gitee', 'heluo-skills-manager', ...requiredSet]);
   const seen = new Set();
   const ownerOfId = new Map();
   for (const [index, text] of texts.entries()) {
@@ -695,6 +726,9 @@ export function assertNeutralPatch(input, { required = ['heluo-iam'] } = {}) {
       if (!ids.has(id)) continue;
       const lines = text.split('\n');
       const rowIndex = lines.findIndex((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line));
+      if (lines.filter((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line)).length > 1) {
+        problems.push(`insert id "${id}" is declared more than once in a patch layer`);
+      }
       const baseIndent = lines[rowIndex].length - lines[rowIndex].trimStart().length;
       for (let cursor = rowIndex + 1; cursor < lines.length; cursor += 1) {
         const line = lines[cursor];
@@ -819,7 +853,12 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));
   const iamOwner = ownerOf('heluo-iam');
   const giteeOwner = ownerOf('heluo-gitee');
+  const skillsOwner = ownerOf('heluo-skills-manager');
   const hasGiteeConfig = Object.keys(config.gitee ?? {}).length > 0;
+  const hasNacosConfig = Object.keys(config.nacos ?? {}).length > 0;
+  if (hasNacosConfig && skillsOwner === undefined) {
+    fail('PUBLIC_TARBALL_INVALID', 'public tarball does not declare the Skill Manager insert row required by Nacos configuration');
+  }
   if (iamOwner === undefined || (hasGiteeConfig && giteeOwner === undefined)) {
     fail(
       'PUBLIC_TARBALL_INVALID',
@@ -836,6 +875,9 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     if (entry === iamOwner) patch = injectPatchConfig(patch, 'heluo-iam', runtimeIam);
     if (giteeOwner !== undefined && entry === giteeOwner && hasGiteeConfig) {
       patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
+    }
+    if (skillsOwner !== undefined && entry === skillsOwner && hasNacosConfig) {
+      patch = injectPatchConfig(patch, 'heluo-skills-manager', { nacos: config.nacos });
     }
     injectedPatches.set(entry.path, patch);
     // 只有真的被改写的层才进产物与 change 元数据：没改的层重写一遍只会让审计噪声变大。

@@ -34,6 +34,31 @@
 
 ## 配置与替换
 
+企业交付通过私版制作器将连接配置预置在 bundle 内声明 `heluo-skills-manager` 的补丁层，员工 profile 无需填写 Nacos 配置。DSH「打开配置文件」显示当前 profile 的补丁，技能管理不提供 Nacos 配置表单；包内预置字段仍可从安装目录或解包查看。页面中的技能命名空间信息保留。
+
+在打包人员的专用、未跟踪且受 Git 忽略的配置文件中，除已有 IAM 必填配置外，可加入：
+
+```dotenv
+HELUO_NACOS_SERVER_URL=https://nacos.corp.example/nacos
+HELUO_NACOS_NAMESPACE_ID=public
+HELUO_NACOS_USERNAME_ENV=FORGE_NACOS_USERNAME
+HELUO_NACOS_PASSWORD_ENV=FORGE_NACOS_PASSWORD
+HELUO_NACOS_TIMEOUT_MS=15000
+HELUO_NACOS_ALLOW_INSECURE_HTTP=false
+```
+
+只有 `HELUO_NACOS_SERVER_URL` 为启用预置时必填；其余字段可省略，沿用插件默认值。超时为 100–120000 毫秒；HTTP 必须单独设置 `HELUO_NACOS_ALLOW_INSECURE_HTTP=true`，不继承 IAM 的 HTTP 开关。`USERNAME_ENV`、`PASSWORD_ENV` 是变量名，不是账号密码。制作器拒绝未知字段，不能把实际用户名、密码或 token 放入该文件。
+
+使用配套 Node 和仓库现有私版制作流程，配置文件权限须为 `600`，输出在仓库外，版本须与公版不同：
+
+```sh
+node scripts/make-private-bundle.mjs --public <public.tgz> --public-sha256 <trusted-sha256> --config <enterprise.env> --version <private-version> --output <private-output-dir>
+```
+
+先核对脱敏预览，再按工具回显的摘要确认；完整交付方式见[企业集成方案](../../docs/architecture/public-enterprise-bundle.md#4-公版构建与本地二次制作)。只改变部署字段无需重编译 TypeScript 或内联库。已有 profile 中的 Nacos 覆盖项须在备份后移除，否则「打开配置文件」仍能看到旧值，且旧值可能覆盖包内配置。更新包内连接字段后重启 DSH。
+
+独立安装或本地开发调试可在 profile 中配置下列内容；该方式会让这些字段在「打开配置文件」中可见，不用于上述企业交付：
+
 ```yaml
 - id: heluo-skills-manager
   config:
@@ -82,6 +107,121 @@ node scripts/verify-enterprise-bundle.mjs <tarball.tgz> --manifest <bundle-manif
 打包器校验实际包体闭包及执行位，不代替源码构建和测试。Windows 工作区的企业组合打包当前可能被 IAM `bin/heluo-forge.mjs` 执行位检查拒绝；这与本插件 TypeScript 构建不同，不能将拒绝视为打包成功或关闭公共规则。标准企业交付使用符合包体要求的构建环境；本机已运行的预览重组制品及其核验边界见设计索引，不作为通用 Windows 发布命令已通过的证据。
 
 完整检查入口为 `pnpm check`，具体检查职责见[贡献指南](../../CONTRIBUTING.md#7-检查命令)。全量检查在本机仍有上述 Windows IAM 执行位限制，本插件单独通过不表示全库通过。
+
+### 企业测试包与正式环境包交付
+
+交接顺序为：源码编译与检查 → 中性企业公版构建与核验 → 准备环境配置 → 私版预检与摘要确认 → 交付 → 注入运行凭据并验收。这里的「正式环境包」指写入正式环境部署配置的私版包，不代表当前预览插件已获生产准入。企业联调、正式凭据方案与目标平台验收仍按[设计 §6](../../docs/design/plugins/forge-skills-manager.md#6-实施与验收)收口。
+
+制包命令从仓库根执行，以下使用 macOS 的 Bash 环境与系统 `zip`。Windows 的源码编译和本地调试与标准企业制包分开：除了上述执行位限制，私版制作器还要求配置文件具备 POSIX `600` 权限；不能以本机预览重组结果替代标准流程通过的证据。完整 macOS 交付与真实企业环境须另行验证。
+
+#### 1. 准备中性企业公版
+
+先执行本节前面的依赖安装、源码 `build`、`verify` 和相关检查，再构建企业组合包：
+
+```sh
+node scripts/build-enterprise-bundle.mjs ../releases/public
+node scripts/verify-enterprise-bundle.mjs ../releases/public/heluo-forge-enterprise-0.1.0.tgz --manifest ../releases/public/bundle-manifest.json --json
+```
+
+`../releases/public` 是仓库外的新目录，文件名中的 `0.1.0` 须与实际公版版本一致。公版保持配置中性，不含企业地址、账号密码或个人状态。保留源提交、工作区是否有未提交修改、构建记录与摘要；读取他人提供的公版时，从可信发布记录核对 SHA-256，不只信任同目录的校验文件。工具链须与公版配套，IAM 校验模块不匹配时停止，不跳过校验。
+
+私版制作器仅接受 `@heluo/forge-enterprise` 的公版 `.tgz`，不接受 Skill Manager 独立包，也不以已配置的企业私版包再次作为公版输入。只需要独立插件开发调试时，使用前文单包命令和[本地人工调试](#本地人工调试)。
+
+#### 2. 准备测试与正式环境配置
+
+打包人员手工维护 `.env.test`、`.env.production`，不覆盖已有文件；确认文件被 Git 忽略且未被跟踪。两者都只供制作器读取，不随包交付。下列 `.env.test` 示例包含企业 IAM、模型网关及 Nacos 连接字段，全部值均为占位示例，须按提供方实际配置替换：
+
+```dotenv
+HELUO_IAM_AUTH_MODE=public
+HELUO_IAM_ISSUER=https://iam-test.corp.example
+HELUO_IAM_DISCOVERY_URL=https://iam-test.corp.example/.well-known/openid-configuration
+HELUO_IAM_CLIENT_ID=forge-console
+HELUO_IAM_SCOPES=openid profile offline_access
+HELUO_IAM_CALLBACK_PORT=0
+HELUO_IAM_REVOCATION_ENDPOINT=https://iam-test.corp.example/revoke
+HELUO_IAM_MANAGED_MODELS_BASE_URL=https://gateway-test.corp.example/v1
+HELUO_IAM_DEFAULT_PROVIDER=enterprise
+HELUO_NACOS_SERVER_URL=https://nacos-test.corp.example/nacos
+HELUO_NACOS_NAMESPACE_ID=public
+HELUO_NACOS_USERNAME_ENV=FORGE_NACOS_USERNAME
+HELUO_NACOS_PASSWORD_ENV=FORGE_NACOS_PASSWORD
+HELUO_NACOS_TIMEOUT_MS=15000
+HELUO_NACOS_ALLOW_INSECURE_HTTP=false
+```
+
+`issuer` 是信任锚，必须与 Discovery 文档及令牌中的值精确一致；Discovery、撤销端点、client ID 和网关 provider 取实际值，不能按示例猜测地址或路由标识。默认退出路径的撤销协议须另行联调。使用 HTTP 时分别显式配置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`、`HELUO_NACOS_ALLOW_INSECURE_HTTP=true`，仅设置所需的开关；两者不互相授权。
+
+| 项目 | 测试环境包 | 正式环境包 |
+|---|---|---|
+| 制包配置文件 | `.env.test` | `.env.production` |
+| IAM、网关及 Nacos | 实际测试服务；本地模拟须明确标记 | 企业正式服务与经核验的端点 |
+| Nacos 命名空间及只读权限 | 测试命名空间与测试账号 | 正式命名空间与专用只读账号 |
+| 私版版本示例 | `0.1.0-corp.test.1` | `0.1.0-corp.1` |
+| 输出目录示例 | `../releases/corp-test-1` | `../releases/corp-1` |
+| 验证边界 | 测试服务或 mock，不替代企业联调 | 企业登录、网关、Nacos 服务端拒写及目标平台实测 |
+
+两个环境可复用同一份已核验的中性公版，但配置、私版版本、输出目录及测试数据必须区分。私版版本须与公版不同；配置或内容改变时使用新的私版版本，不覆盖已有交付物。profile 名称不是构建参数，不打入用户 profile、技能目录、凭据库或会话数据。仅改变部署配置时无需重新编译 TypeScript 或内联库。
+
+#### 3. 预检、确认并生成交付物
+
+确认 `.env.test` 是本次专用配置文件后设置权限，并填写下列参数。`bundle_sha` 使用前一步核验的公版摘要；输入文件、配置、版本或输出位置改变后，重新预检：
+
+```bash
+chmod 600 .env.test
+bundle_public='../releases/public/heluo-forge-enterprise-0.1.0.tgz'
+bundle_sha='<替换为已核验的公版SHA-256>'
+bundle_config='.env.test'
+bundle_version='0.1.0-corp.test.1'
+bundle_output='../releases/corp-test-1'
+node scripts/release-delivery.mjs \
+  --public "$bundle_public" --public-sha256 "$bundle_sha" \
+  --config "$bundle_config" --version "$bundle_version" \
+  --output "$bundle_output" --dry-run
+```
+
+预检不写产物。核对 `configKeys` 包含所需的 `nacos.*` 键、`loginReady: true`、`gatewayConfigured: true`；使用 Discovery 时核对 `discovery.checked: true`。配置了撤销端点不表示其协议已联调。预检与错误不回显配置值；本地路径仍须在对外分享前脱敏。不要把 `--skip-discovery-check` 当成解决配置错误的方法；必要的离线制作须单列未验证项。
+
+审核预检结果后，使用其 `planDigest` 的前至少 8 位确认，同一终端内执行：
+
+```bash
+read -r -p '输入本次预检 planDigest 的前至少 8 位: ' bundle_confirm
+node scripts/release-delivery.mjs \
+  --public "$bundle_public" --public-sha256 "$bundle_sha" \
+  --config "$bundle_config" --version "$bundle_version" \
+  --output "$bundle_output" --confirm "$bundle_confirm"
+```
+
+正式环境包先对 `.env.production` 设置 `600` 权限，再把 `bundle_config`、`bundle_version`、`bundle_output` 分别换成表中正式环境参数，重新执行预检及确认，不沿用测试包摘要。目录须在仓库外且不存在或为空，相邻的同名 `.zip` 也不得已存在。命令失败时保留错误证据，不手工补清单把失败产物当成功交付。
+
+成功时输出目录及其相邻的 `<输出目录名>.zip` 包含：
+
+| 位置 | 内容及用途 |
+|---|---|
+| `enterprise-plugin/` | 配置预置后的企业 `.tgz`、`bundle-manifest.json`、`private-release.json` 和插件校验和 |
+| `installer/` | 初始化脚本及 macOS、Windows、Linux 安装启动器 |
+| `INSTALL.md` | 员工安装、profile 边界及故障说明 |
+| `SHA256SUMS` | 交付目录内文件校验和；外层 zip 摘要另由命令回显 |
+
+员工接收经授权的内部交付 zip；保留制包回执和 zip 摘要。只有需要私版插件 `.tgz`、不需要员工安装材料时，可使用[配置与替换](#配置与替换)中的 `make-private-bundle.mjs`，输入字段和运行凭据边界相同。
+
+#### 4. 注入运行凭据并安装验收
+
+制包配置中的 `HELUO_NACOS_USERNAME_ENV`、`HELUO_NACOS_PASSWORD_ENV` 只保存变量名。实际账号密码由部署人员通过启动环境提供，例如本例使用 `FORGE_NACOS_USERNAME`、`FORGE_NACOS_PASSWORD`；具体隐藏输入方法见[配置与启动](#3-配置与启动)。私版制作器不读取这些变量的实际值，不把秘密写入 bundle，也不从 IAM 登录自动换取 Nacos 凭据。
+
+安装启动器负责准备宿主和安装插件，**不负责读取私有运行期 `.env` 或注入 Nacos 账号密码**。若使用运行期 `.env`，须另由部署方启动脚本按数据加载并注入，不能与制包配置混用或随包交付；插件不会自行读取该文件。通过同一环境启动 DSH，外部环境变更后重启；Desktop 应用也必须从能够继承该环境的启动方式运行，不能假定终端中设置的变量会自动传给已运行的应用。统一凭据启动器与正式凭据方案仍待实现和核验，交接时须明确部署负责人。
+
+按产物内 `INSTALL.md` 安装；默认员工启动器安装到 web profile，Desktop 是独立 profile，按其应用内安装流程操作。安装后从注入凭据的终端运行 `dsh web`；使用自定义 profile 的开发人员按[本地人工调试](#本地人工调试)启动同一 profile，不依赖历史的测试 profile 名称。
+
+| 验收项 | 预期 |
+|---|---|
+| 安装与装配 | 本次版本及摘要正确，企业 bundle 挂载一次，不同时挂载独立 Skill Manager |
+| 配置展示 | 备份后移除既有 profile 中旧的 Nacos 覆盖项；「打开配置文件」不显示这些字段，包内预置内容仍可解包读取 |
+| 本地管理 | 全局、已登记项目、其他 Agent 来源与既有用户数据正常，企业库不可达不影响本地管理 |
+| 企业库已配置且凭据正确 | 可以读取列表、查看详情和下载；下载默认禁用，再次进入显示已下载状态 |
+| 凭据缺失或服务停止 | 凭据缺失按契约拒绝；已配置但服务不可达时显示不可用，不应显示未配置或下载成功 |
+| 企业依赖 | 实际登录、网关模型及 Nacos 服务端只读权限分别验证；本地 mock 不算企业证据 |
+
+记录制品版本、源提交及工作区状态、摘要、宿主版本、profile、命令结果及未验证项，不记录密码、令牌或 Cookie。完整本地检查、测试环境可用、企业联调通过和正式上线准入是不同事实。
 
 ## 自动化验证
 
@@ -168,7 +308,11 @@ npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false
 
 ### 3. 配置与启动
 
-在该 profile 的 `cordis.patch.yml` 合并本文「配置与替换」中的 `heluo-skills-manager` 行，保留其他配置；只有本机 Nacos 演示才将 `serverUrl` 改为 `http://127.0.0.1:8848/nacos` 并显式增加 `allowInsecureHttp: true`。没有 Nacos 时省略连接配置，预期发现页显示未配置。账号密码由私有启动器或当前终端注入，不写进 YAML；`.env` 必须先由启动器加载。替换现有 profile 前先备份，不覆盖原配置；最终合并结果中 `heluo-skills-manager` 只能出现一次。
+安装独立包或中性企业公版作开发调试时，在该 profile 的 `cordis.patch.yml` 合并本文「配置与替换」中的 `heluo-skills-manager` 行，保留其他配置；只有本机 Nacos 演示才将 `serverUrl` 改为 `http://127.0.0.1:8848/nacos` 并显式增加 `allowInsecureHttp: true`。没有 Nacos 时省略连接配置，预期发现页显示未配置。
+
+安装已预置连接配置的企业私版时，直接使用包内配置，不在 profile 中新增 Nacos 行；若有旧覆盖项，先备份再移除。已有 profile 不可整份覆盖；最终有效装配中 `heluo-skills-manager` 只挂载一次。配置文件入口不显示 Nacos 字段的验收使用这种安装方式。
+
+两种方式都需要由部署方启动脚本或当前终端注入账号密码，不写进 YAML；私有运行期 `.env` 须先由该脚本加载，交付物中的安装启动器不会自动完成此步骤。
 
 需要手动注入时，在启动 DSH 的同一终端输入只读测试账号；密码采用隐藏输入，避免将明文直接写入命令历史。
 
