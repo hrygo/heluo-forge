@@ -49,7 +49,7 @@ test('开启路径规则后配置可解析，流水线按顺序装配路径阶�
   assert.equal(config.rules.protectPaths, true);
   assert.deepEqual(
     buildPipeline(config.rules).map((stage) => stage.stage),
-    ['resolve', 'identity', 'protected-paths', 'audit', 'receipt'],
+    ['store-access', 'resolve', 'identity', 'protected-paths', 'audit', 'receipt'],
   );
 });
 

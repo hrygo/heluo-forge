@@ -3,17 +3,17 @@ import test from 'node:test';
 
 import { STAGE, activeRules, buildPipeline, isObserveOnly } from '../src/pipeline.mjs';
 
-test('the stage table keeps the full 0–9 order', () => {
+test('the stage table keeps the full store-first order', () => {
   assert.deepEqual(Object.keys(STAGE), [
-    'RESOLVE', 'IDENTITY', 'UNKNOWN_ACTION', 'HUMAN_RECORD',
+    'STORE', 'RESOLVE', 'IDENTITY', 'UNKNOWN_ACTION', 'HUMAN_RECORD',
     'PROTECTED_PATHS', 'PROCESS_RULES', 'CONTENT_GATE', 'CONFIRMATION', 'AUDIT', 'RECEIPT',
   ]);
   assert.equal(Object.isFrozen(STAGE), true);
 });
 
-test('all-off assembles only the four always-on stages', () => {
+test('all-off assembles the always-on stages, store-access first', () => {
   const pipeline = buildPipeline();
-  assert.deepEqual(pipeline.map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
+  assert.deepEqual(pipeline.map((stage) => stage.stage), ['store-access', 'resolve', 'identity', 'audit', 'receipt']);
   for (const stage of pipeline) {
     assert.equal(stage.rule, null);
     assert.equal(Object.isFrozen(stage), true);
@@ -26,7 +26,7 @@ test('all-off assembles only the four always-on stages', () => {
 test('a switch the pipeline does not implement never generates a stage', () => {
   // 七个开关都已实现；流水线是纯函数，仍不能因为入参里出现陌生键就多出阶段。
   for (const rules of [{ unknownRule: true }, { denyDelegatedWrites: true }]) {
-    assert.deepEqual(buildPipeline(rules).map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
+    assert.deepEqual(buildPipeline(rules).map((stage) => stage.stage), ['store-access', 'resolve', 'identity', 'audit', 'receipt']);
     assert.deepEqual(activeRules(rules), []);
     assert.equal(isObserveOnly(rules), true);
   }
@@ -34,36 +34,36 @@ test('a switch the pipeline does not implement never generates a stage', () => {
 
 test('the seven implemented switches assemble their stage in order', () => {
   assert.deepEqual(buildPipeline({ denyUnknownAction: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'unknown-action', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'unknown-action', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ denyHumanRecord: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'human-record', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'human-record', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ protectPaths: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'protected-paths', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'protected-paths', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ enforceProcessRules: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'process-rules', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'process-rules', 'audit', 'receipt',
   ]);
   const everything = buildPipeline({
     contentGate: true, confirmPush: true, enforceProcessRules: true,
     denyUnknownAction: true, denyHumanRecord: true, protectPaths: true,
   });
   assert.deepEqual(everything.map((stage) => stage.stage), [
-    'resolve', 'identity', 'human-record', 'unknown-action', 'protected-paths', 'process-rules',
+    'store-access', 'resolve', 'identity', 'human-record', 'unknown-action', 'protected-paths', 'process-rules',
     'content-gate', 'confirmation', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ confirmPush: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'confirmation', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'confirmation', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ confirmDopWrite: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'confirmation', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'confirmation', 'audit', 'receipt',
   ]);
   assert.deepEqual(buildPipeline({ contentGate: true }).map((stage) => stage.stage), [
-    'resolve', 'identity', 'content-gate', 'audit', 'receipt',
+    'store-access', 'resolve', 'identity', 'content-gate', 'audit', 'receipt',
   ]);
   const all = buildPipeline({ contentGate: true, confirmPush: true, confirmDopWrite: true });
-  assert.deepEqual(all.map((stage) => stage.stage), ['resolve', 'identity', 'content-gate', 'confirmation', 'audit', 'receipt']);
+  assert.deepEqual(all.map((stage) => stage.stage), ['store-access', 'resolve', 'identity', 'content-gate', 'confirmation', 'audit', 'receipt']);
   assert.deepEqual(activeRules({ confirmPush: true, confirmDopWrite: true }), [
     'confirmPush',
   ], 'the confirmation stage is assembled once, by the first enabled rule');
@@ -80,5 +80,5 @@ test('the seven implemented switches assemble their stage in order', () => {
 
 test('unknown or non-boolean switches are ignored by the pipeline', () => {
   assert.deepEqual(activeRules({ confirmPush: 'yes', nope: true }), []);
-  assert.deepEqual(buildPipeline({ confirmPush: 'yes' }).map((stage) => stage.stage), ['resolve', 'identity', 'audit', 'receipt']);
+  assert.deepEqual(buildPipeline({ confirmPush: 'yes' }).map((stage) => stage.stage), ['store-access', 'resolve', 'identity', 'audit', 'receipt']);
 });

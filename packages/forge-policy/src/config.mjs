@@ -38,10 +38,12 @@ export const RULE_KEYS = Object.freeze([
  */
 export const REMOVED_RULE_KEYS = Object.freeze({
   denyDelegatedWrites: '该开关已删除：子代理发起受控写恒拒，需要确认的写由主会话代问；请从配置中移除',
+  denyIamStoreAccess: '该开关已取消：IAM 存档守卫随 credentials-store-location 服务自动生效，不再由规则开关控制；请从配置中移除',
+  denyIamTokenAccess: '该开关已取消：IAM 取票守卫随 credentials-store-location 服务自动生效，不再由规则开关控制；请从配置中移除',
 });
 
 /**
- * 已实现七键：内容闸、两条逐次确认、流程闸，以及三个语义开关。
+ * 已实现七键：内容闸、两条逐次确认、流程闸与三个语义开关。
  */
 export const IMPLEMENTED_RULES = Object.freeze([
   'contentGate',
