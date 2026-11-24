@@ -54,7 +54,9 @@ export function createIamService(rawConfig, options = {}) {
   const logRenewal = typeof options.logRenewal === 'function' ? (event, fields) => {
     try { options.logRenewal(event, fields); } catch { /* diagnostics cannot change the session */ }
   } : undefined;
-  // Empty by default: IAM has not confirmed field names, so no name is shown.
+  // Empty by default: the confirmed claim names (employeeNumber/displayName,
+  // 2026-11-24) ship through plugin config or the private .env, never as a
+  // hardcoded default, so an unconfigured deployment still shows nothing.
   // `options.profileFields` is the caller seam used by isolated tests; apply
   // never supplies it, so the plugin config is the production source and the
   // private template writes the same keys through it.

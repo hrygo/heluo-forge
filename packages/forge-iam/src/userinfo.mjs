@@ -1,6 +1,8 @@
 // UserInfo 只在登录成功后取一次，失败只丢弃画像，不影响登录。
 // 内部键固定为 workNo/name（issue #160）；映射到哪个企业 IAM 声明由配置
-// profileFields 给出，未配置则不取 UserInfo、不投影。字段口径待 IAM 确认
+// profileFields 给出，未配置则不取 UserInfo、不投影。口径已由 IAM 确认
+// （2026-11-24）：employeeNumber=工号、displayName=姓名、giveName=OA 账号
+// （暂无投影槽位），见 deploy/private-bundle.env.example。
 // （#433 第 3 项），因此不写死任何候选声明名，也不维护猜测性回退链。
 import { IamError } from './errors.mjs';
 

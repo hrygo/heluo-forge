@@ -91,8 +91,9 @@ export async function startMockOidc({
         const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : (queryToken ?? '');
         if (!accessTokens.has(token)) { res.writeHead(401); res.end(); return; }
         const { subject } = accessTokens.get(token);
-        // 两套候选口径的真实响应形态（issue #160）：口径待 IAM 确认
-        // （#433 第 3 项），因此两套都保留，测试各自按对应映射取值。
+        // 真实响应形态（issue #160）：默认形态即 IAM 已确认口径
+        // （2026-11-24，employeeNumber/displayName/giveName）；workNoPinyin*
+        // 为已作废口径的形态，保留供映射机制回归。测试各自按对应映射取值。
         // sub/authTime 必须被严格投影丢弃。全部为占位值，不含真实个人数据。
         const workNoPinyin = control.userInfoMode.startsWith('workNoPinyin');
         const body = workNoPinyin

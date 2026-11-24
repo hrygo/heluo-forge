@@ -9,10 +9,11 @@ import { startMockOidc } from './support/mock-oidc.mjs';
 import { normalizeProfileFields, projectUserInfo, fetchUserInfo } from '../src/userinfo.mjs';
 import { IamError } from '../src/errors.mjs';
 
-// 两套候选口径（issue #160）。口径待 IAM 确认（#433 第 3 项），因此
-// 内部键固定为 workNo/name，映射到哪组声明由配置给出，两套都要有用例。
-const CANDIDATE_EMPLOYEE_NUMBER = Object.freeze({ workNo: 'employeeNumber', name: 'displayName' });
-const CANDIDATE_WORK_NO_PINYIN = Object.freeze({ workNo: 'work_no', name: 'pinyin' });
+// 字段口径已由 IAM 确认（2026-11-24，FB-IAM-06 闭环）：工号=employeeNumber、
+// 姓名=displayName、OA 账号=giveName（当前无投影槽位，不接入）。内部键固定为
+// workNo/name，映射由配置给出；作废的 work_no/pinyin 保留一组用例作机制回归。
+const CONFIRMED_FIELDS = Object.freeze({ workNo: 'employeeNumber', name: 'displayName' });
+const LEGACY_WORK_NO_PINYIN = Object.freeze({ workNo: 'work_no', name: 'pinyin' });
 
 function configFor(mock, overrides = {}) {
   return validateConfig({
@@ -36,12 +37,12 @@ async function signIn(service) {
 
 test('projection takes only mapped string fields and drops the rest', () => {
   const raw = { employeeNumber: '10001234', displayName: ' Zhang San ', giveName: 'zhangsan', sub: 'S1', authTime: 1794363364, nested: { name: 'x' } };
-  assert.deepEqual(projectUserInfo(raw, CANDIDATE_EMPLOYEE_NUMBER), {
+  assert.deepEqual(projectUserInfo(raw, CONFIRMED_FIELDS), {
     workNo: '10001234', name: 'Zhang San',
   });
   assert.deepEqual(projectUserInfo(raw, { workNo: 'employeeNumber' }), { workNo: '10001234' });
   assert.equal(projectUserInfo(raw, { workNo: 'missing' }), undefined);
-  assert.equal(projectUserInfo({ employeeNumber: 42, displayName: '   ' }, CANDIDATE_EMPLOYEE_NUMBER), undefined);
+  assert.equal(projectUserInfo({ employeeNumber: 42, displayName: '   ' }, CONFIRMED_FIELDS), undefined);
   assert.equal(projectUserInfo(raw, {}), undefined);
   assert.equal(projectUserInfo(null, { workNo: 'employeeNumber' }), undefined);
 });
@@ -89,13 +90,13 @@ test('explicit empty profileFields keeps the opt-out: no UserInfo request', asyn
   assert.equal(mock.counts.userInfo, 0);
 });
 
-// 候选口径 A：employeeNumber/displayName。配置给出映射后才取 UserInfo。
-test('candidate mapping employeeNumber/displayName projects workNo and name', async (t) => {
+// 已确认口径：employeeNumber/displayName。配置给出映射后才取 UserInfo。
+test('confirmed mapping employeeNumber/displayName projects workNo and name', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const service = createIamService(configFor(mock), {
     credentials: new MemoryCredentials(),
-    profileFields: CANDIDATE_EMPLOYEE_NUMBER,
+    profileFields: CONFIRMED_FIELDS,
   });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
@@ -104,14 +105,15 @@ test('candidate mapping employeeNumber/displayName projects workNo and name', as
   assert.match(mock.lastUserInfo.authorization, /^Bearer \S+$/);
 });
 
-// 候选口径 B：work_no/pinyin。同一套内部键映射到另一组声明。
-test('candidate mapping work_no/pinyin projects workNo and name', async (t) => {
+// 作废口径（2026-10-28 答复的 work_no/pinyin）：同一套内部键映射到另一组声明，
+// 保留一组用例证明映射机制对 claim 名不敏感，不构成契约。
+test('legacy mapping work_no/pinyin projects workNo and name', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'workNoPinyin';
   const service = createIamService(configFor(mock), {
     credentials: new MemoryCredentials(),
-    profileFields: CANDIDATE_WORK_NO_PINYIN,
+    profileFields: LEGACY_WORK_NO_PINYIN,
   });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
@@ -119,14 +121,14 @@ test('candidate mapping work_no/pinyin projects workNo and name', async (t) => {
   assert.equal(mock.counts.userInfo, 1);
 });
 
-// 候选口径 A 的字段缺失形态：后管删除姓名后其余字段照常返回。
+// 已确认口径的字段缺失形态：后管删除姓名后其余字段照常返回。
 test('missing name degrades to the remaining fields without failing login', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'missingName';
   const service = createIamService(configFor(mock), {
     credentials: new MemoryCredentials(),
-    profileFields: CANDIDATE_EMPLOYEE_NUMBER,
+    profileFields: CONFIRMED_FIELDS,
   });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
@@ -141,7 +143,7 @@ test('missing pinyin degrades to the remaining fields without failing login', as
   mock.control.userInfoMode = 'workNoPinyinMissingName';
   const service = createIamService(configFor(mock), {
     credentials: new MemoryCredentials(),
-    profileFields: CANDIDATE_WORK_NO_PINYIN,
+    profileFields: LEGACY_WORK_NO_PINYIN,
   });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
@@ -228,7 +230,7 @@ test('UserInfo failure degrades without failing login', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'http500';
-  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CANDIDATE_EMPLOYEE_NUMBER });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CONFIRMED_FIELDS });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
@@ -238,7 +240,7 @@ test('UserInfo 401 follows the enterprise contract and degrades', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'unauthorized';
-  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CANDIDATE_EMPLOYEE_NUMBER });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CONFIRMED_FIELDS });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
@@ -248,7 +250,7 @@ test('malformed UserInfo JSON degrades and sign-out clears the profile', async (
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'malformed';
-  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CANDIDATE_EMPLOYEE_NUMBER });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CONFIRMED_FIELDS });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
@@ -261,7 +263,7 @@ test('profile never outlives the grant that produced it', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), { credentials, profileFields: CANDIDATE_EMPLOYEE_NUMBER });
+  const service = createIamService(configFor(mock), { credentials, profileFields: CONFIRMED_FIELDS });
   t.after(() => service.dispose());
   await signIn(service);
   assert.deepEqual(service.getIdentityProfile(), { workNo: '10001234', name: 'Zhang San' });
@@ -280,7 +282,7 @@ test('identity persists across token refresh for both view and session read path
   // 巨大的 skew 让 resolveToken 立即走刷新路径。
   const service = createIamService(configFor(mock, { refreshSkewSeconds: 999999 }), {
     credentials,
-    profileFields: CANDIDATE_EMPLOYEE_NUMBER,
+    profileFields: CONFIRMED_FIELDS,
   });
   t.after(() => service.dispose());
   await signIn(service);
@@ -299,7 +301,7 @@ test('query token transport sends access_token as a URL parameter', async (t) =>
   t.after(() => mock.close());
   const service = createIamService(configFor(mock, { userInfoTokenTransport: 'query' }), {
     credentials: new MemoryCredentials(),
-    profileFields: CANDIDATE_EMPLOYEE_NUMBER,
+    profileFields: CONFIRMED_FIELDS,
   });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
@@ -312,7 +314,7 @@ test('query token transport sends access_token as a URL parameter', async (t) =>
 test('view and session expose the projected identity only, never raw UserInfo', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
-  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CANDIDATE_EMPLOYEE_NUMBER });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: CONFIRMED_FIELDS });
   t.after(() => service.dispose());
   await signIn(service);
 
