@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { embeddedExec, runCommand } from '../src/process.mjs';
+import { embeddedExec, MAX_CAPTURE, runCommand } from '../src/process.mjs';
 
 /** A stand-in for child_process.spawn: the test decides what each child does. */
 function fakeSpawn(script = () => {}) {
@@ -122,4 +122,21 @@ test('the embedded executor runs only the embedded runtime, as Node, with the ds
   const forced = await exec('/apps/electron', [], { env: { ELECTRON_RUN_AS_NODE: '0' }, spawn });
   assert.equal(forced.code, 0);
   assert.equal(calls[1].options.env.ELECTRON_RUN_AS_NODE, '1');
+});
+
+test('what a command prints is kept up to a limit, the end first', async () => {
+  const { spawn } = fakeSpawn((child) => {
+    child.stdout.emit('data', 'BEGINNING' + '0'.repeat(400_000));
+    child.stdout.emit('data', '1'.repeat(400_000));
+    child.stdout.emit('data', '2'.repeat(400_000));
+    child.stderr.emit('data', 'z'.repeat(MAX_CAPTURE + 10));
+    child.emit('close', 0);
+  });
+  const result = await runCommand('/bin/chatty', [], { spawn });
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.length, MAX_CAPTURE);
+  // More than the limit was printed: its beginning is gone, its end is kept.
+  assert.equal(result.stdout.includes('BEGINNING'), false);
+  assert.equal(result.stdout.endsWith('2'), true);
+  assert.equal(result.stderr.length, MAX_CAPTURE);
 });

@@ -8,7 +8,7 @@
  * really provides.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -16,8 +16,10 @@ import test from 'node:test';
 import { EMPLOYEE_MANIFEST_FILE, EMPLOYEE_PACKAGE_SCHEMA as BUILT_SCHEMA, buildEmployeePackage } from '../scripts/build-employee-package.mjs';
 import { parseArgs as installerArgs, resolveDshLaunch, runInit } from '../scripts/init-enterprise-plugin.mjs';
 import {
+  CLIENT_SECRET_PATH,
   EMPLOYEE_PACKAGE_SCHEMA as SHELL_SCHEMA,
   firstRunNeeded,
+  identifyEmployeePackage,
   inspectEmployeePackage,
   INSTALLER_PATH,
   manifestDigestOf,
@@ -61,15 +63,34 @@ test('the shell accepts what the build produces, and no longer needs it once the
     assert.deepEqual(readFileSync(inspected.installerPath), readFileSync(join(TOOL_ROOT, 'scripts', 'init-enterprise-plugin.mjs')));
     assert.equal(inspected.pluginDirectory, join(built.output, 'enterprise-plugin'));
 
-    // The installer removes the client secret file once it is in the credential
-    // store. The package is then no longer whole, which is why a completed first
-    // run is recorded against the manifest and the package is not inspected again.
+    // The secret file sits where the shell expects it, by the name the build gives it.
+    assert.equal(existsSync(join(built.output, CLIENT_SECRET_PATH)), true);
+
+    // The installer removes the client secret file once the secret is in the
+    // credential store, and treats its absence as done. The shell lets that
+    // one listed file go for the same reason: a first run that completed but
+    // was not recorded can then be run again, instead of blocking every start.
     const markerPath = join(temp(t, 'forge-contract-state-'), 'first-run.json');
-    rmSync(join(built.output, 'enterprise-plugin', 'iam-client-secret.txt'));
-    assert.equal(inspectEmployeePackage(built.output).ok, false);
+    rmSync(join(built.output, CLIENT_SECRET_PATH));
+    assert.equal(inspectEmployeePackage(built.output).ok, true);
     assert.equal(manifestDigestOf(built.output), inspected.manifestDigest);
+    // What the shell identifies as the package is what it just verified.
+    assert.deepEqual(identifyEmployeePackage({ candidates: [built.output] }), { directory: built.output, manifestDigest: inspected.manifestDigest });
+    assert.equal(firstRunNeeded({ markerPath, manifestDigest: manifestDigestOf(built.output), profile: 'web' }), true);
     writeFirstRunMarker(markerPath, { manifestDigest: inspected.manifestDigest, profile: 'web' });
     assert.equal(firstRunNeeded({ markerPath, manifestDigest: manifestDigestOf(built.output), profile: 'web' }), false);
+
+    // A link where a file of the package should be is refused, even one that
+    // leads to the very same bytes.
+    const kept = join(temp(t, 'forge-contract-kept-'), 'kept.mjs');
+    writeFileSync(kept, readFileSync(inspected.installerPath));
+    rmSync(inspected.installerPath);
+    try {
+      symlinkSync(kept, inspected.installerPath);
+      assert.equal(inspectEmployeePackage(built.output).ok, false);
+    } catch (error) {
+      if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error;
+    }
   }
 });
 

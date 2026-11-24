@@ -1,22 +1,41 @@
 import { fail } from './errors.mjs';
-import { firstRunNeeded, initializeProfile, locateEnterpriseAssets, manifestDigestOf, writeFirstRunMarker } from './first-run.mjs';
+import {
+  firstRunNeeded,
+  identifyEmployeePackage,
+  initializeProfile,
+  locateEnterpriseAssets,
+  writeFirstRunMarker,
+} from './first-run.mjs';
 import { closeAction, quitConfirmation } from './lifecycle.mjs';
 import { assertBindHost } from './loopback.mjs';
 import { classifyTarget, permissionAllowed } from './navigation.mjs';
 
 const TITLE = '河洛 Forge 企业版';
 
-// What the user can do about each failure. The code is always shown with it.
+// What the user can do about each failure. The code is always shown with it,
+// and every code the modules can raise has an entry (asserted by the tests).
 const GUIDANCE = Object.freeze({
-  ASSETS_NOT_FOUND: '未找到完整的企业资产包。请确认员工包已随应用放置，或指定它的位置后重新启动。',
+  ASSETS_NOT_FOUND: '未找到企业资产包。请确认员工包已随应用放置，或指定它的位置后重新启动。',
+  ASSETS_INVALID: '企业资产包不完整或已被改动。请重新放置完整的员工包后重新启动。',
   FIRST_RUN_FAILED: '企业插件初始化失败。重新启动会再试一次；仍然失败时请联系管理员并提供错误码。',
+  FIRST_RUN_MARKER: '无法记录初始化结果。请检查应用数据目录是否可写后重新启动。',
+  BAD_ARGUMENT: '应用的启动参数不完整。请重新安装应用。',
+  BIND_HOST_REJECTED: '配置的监听地址不被允许。',
   SPAWN_FAILED: '无法启动内嵌运行时。请重新安装应用。',
   START_TIMEOUT: '本机服务没有在限定时间内就绪。请重新启动应用。',
   PORT_CONFLICT: '本机服务需要的端口被占用。关闭占用该端口的程序后重新启动。',
   EXITED_BEFORE_READY: '本机服务在就绪前退出。请重新启动应用。',
   EXITED: '本机服务已经退出。重新启动应用可以再次进入工作区。',
-  BIND_HOST_REJECTED: '配置的监听地址不被允许。',
+  LAUNCH_URL_INVALID: '本机服务宣告的地址无法识别。请重新安装应用。',
+  LAUNCH_URL_REJECTED: '本机服务宣告的地址不在允许的范围内。请重新安装应用。',
+  STOPPED: '本机服务在就绪前被停止。请重新启动应用。',
+  STOPPING: '本机服务正在停止。请等它结束后重新启动应用。',
 });
+
+/** The guidance shown for a failure code; null when there is none. */
+export function guidanceFor(code) {
+  return GUIDANCE[code] ?? null;
+}
 
 /**
  * Assemble the shell on an Electron interface: first run, then the web profile,
@@ -55,10 +74,13 @@ export function startShell(electron, options) {
 
   async function boot() {
     assertBindHost(bindHost);
-    // A package whose first run is done is not touched again: the installer
+    // One package, one identity: the first candidate that carries a manifest.
+    // Its digest decides whether the first run is done and is what the record
+    // of the first run carries, so the two can never disagree.
+    const current = identifyEmployeePackage({ candidates: assetsCandidates });
+    // A package whose first run is done is not inspected again: the installer
     // consumed part of it. Any other package is verified whole, then installed.
-    const identified = assetsCandidates.map((candidate) => ({ candidate, manifestDigest: manifestDigestOf(candidate) })).find(({ manifestDigest }) => manifestDigest !== null);
-    if (firstRunNeeded({ markerPath, manifestDigest: identified?.manifestDigest ?? null, profile })) {
+    if (firstRunNeeded({ markerPath, manifestDigest: current?.manifestDigest ?? null, profile })) {
       const assets = locateEnterpriseAssets({ candidates: assetsCandidates });
       await initializeProfile({ assets, runInit: loadInstaller(assets.installerPath), env, exec, profile, dsh: embeddedCommand });
       if (writeFirstRunMarker(markerPath, { manifestDigest: assets.manifestDigest, profile }) === null) {
@@ -95,7 +117,8 @@ export function startShell(electron, options) {
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true },
     });
     context.window = window;
-    // Only the local web profile loads here. Any other http(s) address goes to the
+    // Only the local web profile loads here. A link or a script that navigates
+    // elsewhere, or asks for a new window, hands an http(s) address to the
     // system browser; everything else is stopped before a loader sees it.
     const guard = (target) => {
       const action = classifyTarget(target, { origin: launch.origin });
@@ -106,7 +129,11 @@ export function startShell(electron, options) {
       if (guard(url) !== 'load') event.preventDefault();
     };
     window.webContents.on('will-navigate', refuse);
-    window.webContents.on('will-redirect', refuse);
+    // A redirect comes from a server, not from something done on the user's
+    // behalf: it is stopped, and nothing is opened in its place.
+    window.webContents.on('will-redirect', (event, url) => {
+      if (classifyTarget(url, { origin: launch.origin }) !== 'load') event.preventDefault();
+    });
     window.webContents.setWindowOpenHandler(({ url }) => {
       guard(url);
       return { action: 'deny' };

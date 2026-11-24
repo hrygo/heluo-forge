@@ -4,13 +4,17 @@ import { spawn as nodeSpawn } from 'node:child_process';
  * Run one command to completion and report what happened: `{ code, stdout,
  * stderr }`. A command that cannot start, or that exceeds `timeout`, resolves
  * with a non-zero code rather than throwing, so callers branch on one shape.
- * The command is never run through a shell.
+ * The command is never run through a shell. What a command prints is kept up
+ * to `MAX_CAPTURE` per stream, the end first: an error is at the end, and a
+ * command that talks too much must not take the shell's memory with it.
  *
  * @param {string} command
  * @param {string[]} args
  * @param {{timeout?: number, env?: object, input?: string, cwd?: string, spawn?: Function}} [options]
  *   `spawn` is an injection point for tests.
  */
+export const MAX_CAPTURE = 1024 * 1024;
+
 export function runCommand(command, args, { timeout, env, input, cwd, spawn: spawnImpl = nodeSpawn } = {}) {
   return new Promise((settle) => {
     let timer;
@@ -30,27 +34,29 @@ export function runCommand(command, args, { timeout, env, input, cwd, spawn: spa
     }
     if (timeout !== undefined) {
       timer = setTimeout(() => {
-        stderr += `the command did not finish within ${timeout} ms and was killed`;
+        stderr = keepEnd(`${stderr}the command did not finish within ${timeout} ms and was killed`);
         child.kill('SIGKILL');
       }, timeout);
     }
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
-      stdout += chunk;
+      stdout = keepEnd(stdout + chunk);
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => {
-      stderr += chunk;
+      stderr = keepEnd(stderr + chunk);
     });
     child.stdin.on('error', () => {});
     child.stdin.end(input);
     child.on('error', (error) => {
-      stderr += error?.message ?? '';
+      stderr = keepEnd(stderr + (error?.message ?? ''));
       finish(1);
     });
     child.on('close', finish);
   });
 }
+
+const keepEnd = (text) => (text.length > MAX_CAPTURE ? text.slice(-MAX_CAPTURE) : text);
 
 /**
  * The `exec` handed to the installer when it must use the embedded runtime:

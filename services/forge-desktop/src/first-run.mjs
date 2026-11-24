@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { fail } from './errors.mjs';
@@ -11,6 +11,8 @@ export const EMPLOYEE_PACKAGE_SCHEMA = 'heluo-employee-package/1';
 export const MANIFEST_FILE = 'employee-manifest.json';
 export const SUMS_FILE = 'SHA256SUMS';
 export const INSTALLER_PATH = 'installer/init-enterprise-plugin.mjs';
+/** The one file of the package that may be gone: the installer removes it once the secret is in the store. */
+export const CLIENT_SECRET_PATH = 'enterprise-plugin/iam-client-secret.txt';
 const RELEASE_SIDECAR = 'enterprise-plugin/private-release.json';
 const MARKER_SCHEMA = 'heluo-first-run/1';
 
@@ -20,19 +22,50 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const WITHIN_PACKAGE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\/\/)[^\0\r\n]+$/u;
 
 const digestOf = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const isFile = (path) => {
+
+/** True when nothing, not even a link, sits at `path`. */
+function absent(path) {
   try {
-    return statSync(path).isFile();
-  } catch {
+    lstatSync(path);
     return false;
+  } catch {
+    return true;
   }
-};
+}
+
+/**
+ * Whether `relative` names a regular file reached without following a link.
+ * Every component inside the package is checked: a listed path that is, or
+ * passes through, a symbolic link would be read, verified and then used from
+ * wherever the link points, outside the package.
+ */
+function regularFileWithin(root, relative) {
+  let info;
+  let current = root;
+  for (const segment of relative.split('/')) {
+    current = join(current, segment);
+    try {
+      info = lstatSync(current);
+    } catch {
+      return false;
+    }
+    if (info.isSymbolicLink()) return false;
+  }
+  return info.isFile();
+}
 
 /**
  * Read an employee package and prove it is intact: the manifest names the
  * enterprise plugin, the digest list covers every file the shell will rely on,
- * and every listed file is present with its digest. Any doubt is reported; the
- * caller refuses the directory.
+ * and every listed file is a regular file of the package with its digest. Any
+ * doubt is reported; the caller refuses the directory.
+ *
+ * Trust model: the digests prove the package is as it was written, nothing
+ * more. The manifest and the digest list carry no signature, so whoever can
+ * rewrite the package can rewrite both; the shell's own code sits in the same
+ * install directory and relies on the same protection. Integrity here is
+ * guarded by the distribution channel and the install location, not by this
+ * check (design §6).
  *
  * @returns {{ok: true, manifest: object, manifestDigest: string, installerPath: string,
  *   pluginDirectory: string} | {ok: false, problems: string[]}}
@@ -42,7 +75,7 @@ export function inspectEmployeePackage(directory) {
   const problems = [];
   const required = [MANIFEST_FILE, SUMS_FILE, INSTALLER_PATH, RELEASE_SIDECAR];
   for (const relative of required) {
-    if (!isFile(join(root, relative))) problems.push(`${relative} is missing`);
+    if (!regularFileWithin(root, relative)) problems.push(`${relative} is missing or not a regular file of the package`);
   }
   if (problems.length > 0) return { ok: false, problems };
 
@@ -78,9 +111,13 @@ export function inspectEmployeePackage(directory) {
     if (relative !== SUMS_FILE && !listed.has(relative)) problems.push(`${relative} is not covered by ${SUMS_FILE}`);
   }
   for (const [relative, digest] of listed) {
-    const path = join(root, relative);
-    if (!isFile(path)) problems.push(`${relative} is missing`);
-    else if (digestOf(readFileSync(path)) !== digest) problems.push(`${relative} does not match its digest`);
+    if (!regularFileWithin(root, relative)) {
+      // The client secret is gone once the installer has stored it. Anything
+      // else must be a regular file of the package: missing is not accepted,
+      // and neither is a link that leads out of it.
+      if (relative === CLIENT_SECRET_PATH && absent(join(root, relative))) continue;
+      problems.push(`${relative} is missing, or reached through a symbolic link`);
+    } else if (digestOf(readFileSync(join(root, relative))) !== digest) problems.push(`${relative} does not match its digest`);
   }
   if (problems.length > 0) return { ok: false, problems };
   return {
@@ -107,18 +144,35 @@ export function manifestDigestOf(directory) {
 }
 
 /**
- * The first candidate that is an intact employee package. Without one the
- * shell has nothing to initialize the profile from and does not start.
+ * The package the shell works from: the first candidate that carries an
+ * employee package manifest, with the digest of that manifest. Identification
+ * only; it proves nothing about the rest of the package.
+ *
+ * One candidate, one identity. The digest returned here is the one the record
+ * of the first run is compared with and written from, so a package that is
+ * identified and then found broken is reported as such and never swapped for
+ * a later candidate.
  */
-export function locateEnterpriseAssets({ candidates = [] } = {}) {
-  const reasons = [];
+export function identifyEmployeePackage({ candidates = [] } = {}) {
   for (const candidate of candidates) {
     if (typeof candidate !== 'string' || candidate === '') continue;
-    const inspected = inspectEmployeePackage(candidate);
-    if (inspected.ok) return { directory: resolve(candidate), ...inspected };
-    reasons.push(`${candidate}: ${inspected.problems[0]}`);
+    const manifestDigest = manifestDigestOf(candidate);
+    if (manifestDigest !== null) return { directory: resolve(candidate), manifestDigest };
   }
-  fail('ASSETS_NOT_FOUND', 'no intact employee package was found', { reasons });
+  return null;
+}
+
+/**
+ * The identified package, verified whole. Without a package there is nothing
+ * to initialize the profile from (`ASSETS_NOT_FOUND`); a package that is not
+ * intact is refused (`ASSETS_INVALID`).
+ */
+export function locateEnterpriseAssets({ candidates = [] } = {}) {
+  const identified = identifyEmployeePackage({ candidates });
+  if (identified === null) fail('ASSETS_NOT_FOUND', 'no employee package was found');
+  const inspected = inspectEmployeePackage(identified.directory);
+  if (!inspected.ok) fail('ASSETS_INVALID', 'the employee package is not intact', { problems: inspected.problems });
+  return { ...identified, ...inspected };
 }
 
 /** The record of a completed first run, or null when there is none that can be trusted. */
