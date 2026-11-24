@@ -1,7 +1,7 @@
 /**
  * Pure Cordis assembly point for @heluo/forge-experts (P2 / P3 / P8).
  * Holds zero mutable business state; connects scope, catalog, preferences,
- * mentions, selection, dispatch, delegra-client, and routes via explicit ports.
+ * mentions, selection, dispatch, tool, delegra-client, and routes via explicit ports.
  */
 import { createScopeManager } from './scope.mjs';
 import { createCatalogService } from './catalog.mjs';
@@ -9,6 +9,7 @@ import { createPreferencesStore, PreferencePutBodySchema } from './preferences.m
 import { createMentionsService } from './mentions.mjs';
 import { createSelectionService } from './selection.mjs';
 import { createDispatchService } from './dispatch.mjs';
+import { createExpertToolBridge } from './tool.mjs';
 import { API_PREFIX, createExpertsRoutes } from './routes.mjs';
 import { createDelegraClient } from './delegra-client.mjs';
 import { ExpertsError } from './errors.mjs';
@@ -177,6 +178,16 @@ export function createExpertsHost(ports) {
   });
   routesRef = routes;
 
+  const tools = createExpertToolBridge({
+    isDispatchEnabled: () => dispatchEnabled,
+    dispatchTask: (body) => dispatch.dispatchTask(body),
+    reconcileByRequest: (params) => dispatch.reconcileByRequest(params),
+    getTask: (params) => dispatch.getTask(params),
+    getTaskResult: (params) => dispatch.getTaskResult(params),
+    followupTask: (params) => dispatch.followupTask(params),
+    cancelTask: (params) => dispatch.cancelTask(params),
+  });
+
   return Object.freeze({
     managementEnabled,
     isolatedMentionsPreviewEnabled,
@@ -199,6 +210,7 @@ export function createExpertsHost(ports) {
     mentions,
     selection,
     dispatch,
+    tools,
     routes,
     delegraClient: ports.delegraClient ?? null,
   });
@@ -337,11 +349,19 @@ export async function apply(ctx, config = {}) {
     ctx.logger.warn('[forge-experts] webServer route registration unavailable');
   }
 
+  const toolRegistry = readService(ctx, 'tools');
+  const unregisterTools = host.dispatchEnabled && toolRegistry && typeof toolRegistry.register === 'function'
+    ? host.tools.getToolDefinitions()
+      .map((definition) => toolRegistry.register(definition))
+      .filter((dispose) => typeof dispose === 'function')
+    : [];
+
   ctx.provide?.('forgeExperts', host);
   // Cordis runs a plain function plugin with `new` and never emits a `dispose`
   // event, so cleanup must be registered as an effect or the route, the SSE
-  // streams and the domain handle leak for the life of the Host.
+  // streams, tool registrations and the domain handle leak for the life of the Host.
   ctx.effect?.(() => async () => {
+    for (const dispose of unregisterTools) dispose();
     if (typeof unregisterRoute === 'function') unregisterRoute();
     await host.close();
   });

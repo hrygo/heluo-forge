@@ -9,6 +9,7 @@ const preferencesSrc = readFileSync(new URL('../src/preferences.mjs', import.met
 const mentionsSrc = readFileSync(new URL('../src/mentions.mjs', import.meta.url), 'utf8');
 const selectionSrc = readFileSync(new URL('../src/selection.mjs', import.meta.url), 'utf8');
 const dispatchSrc = readFileSync(new URL('../src/dispatch.mjs', import.meta.url), 'utf8');
+const toolSrc = readFileSync(new URL('../src/tool.mjs', import.meta.url), 'utf8');
 const delegraClientSrc = readFileSync(new URL('../src/delegra-client.mjs', import.meta.url), 'utf8');
 const routesSrc = readFileSync(new URL('../src/routes.mjs', import.meta.url), 'utf8');
 const clientSrc = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
@@ -84,6 +85,7 @@ test('P2: src/index.mjs holds zero mutable business state and all business axes 
     mentions: mentionsSrc,
     selection: selectionSrc,
     dispatch: dispatchSrc,
+    tool: toolSrc,
     'delegra-client': delegraClientSrc,
     routes: routesSrc,
   });
