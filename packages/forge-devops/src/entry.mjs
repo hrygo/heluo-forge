@@ -158,8 +158,11 @@ function unknownsOf(result) {
 /**
  * 阻塞裁决：原因码与首行文案成对决定，避免"改了原因码漏改文案"或两条分支各写一套规则。
  *
- * 判据顺序与 `cardReadyFor` 一致：先看读面是否失败，再看卡片状态——同一份响应不会出现
- * "装配层判读面失败、入口说变更号不符"的分叉。
+ * 结论与 `cardReadyFor` 同源（不通过与否一致），但归因顺序有意微调：显式 `ok === false`
+ * （读面失败）最先，其次是卡片状态语义（卡片自称未就绪比"ok 没自报"更准确，恢复方向也不同），
+ * 最后才是 `ok` 缺失与自报号不可确认。因此 `status='blocked'` 且未回填 `ok` 时，入口报
+ * `CONTEXT_BLOCKED`、装配层按 `ok !== true` 拒绝绑定——两者都不通过，只是入口的裁决语更贴近
+ * 卡片的说法。顺序只能按这一处改：改完要同步下面各分支注释与用例。
  *
  * @param {unknown} card service 返回的原始响应（未经 ok 过滤）
  * @returns {{ reason: string, headline: string }}
