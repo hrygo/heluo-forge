@@ -32,7 +32,7 @@ import {
 } from './read.mjs';
 import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
-import { cardReadyFor, displayableChange, normalizeChangeRecord } from './change-context.mjs';
+import { CONTEXT_REASONS, cardReadyFor, displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
@@ -691,12 +691,24 @@ export function apply(ctx, rawConfig = {}) {
       }
       const result = action === 'change.read' ? normalizeChangeFacts(admitted, requestedTarget) : admitted;
       // 只在读成功（envelope status=succeeded）时绑定：失败仍要能重试，不留下半绑定状态。
-      if (action === 'change.read' && result?.status === 'succeeded') bindChangeId(requestedTarget);
+      // 读回记录自报的号与请求号不符时（归一阶段判 `CONTEXT_REASONS.ID_MISMATCH`）同样不绑：绑定代表"会话读到的就是这条"，
+      // 信封说成功但记录是别的变更，绑上去等于把别人的变更当成本次目标。
+      if (
+        action === 'change.read' &&
+        result?.status === 'succeeded' &&
+        result?.facts?.normalize_error !== CONTEXT_REASONS.ID_MISMATCH
+      ) {
+        bindChangeId(requestedTarget);
+      }
       return result;
     },
     /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；就绪且自报号匹配才绑定变更号。 */
     context: async (input = {}) => {
-      const requestedTarget = typeof input?.target === 'string' ? input.target.trim() : '';
+      // 与 flow 同源解析目标号：flow 按 `target || changeId` 取号，这里也必须同口径，
+      // 否则只传 `changeId` 的调用方会"读到了却没绑定"。
+      const rawTarget =
+        typeof input?.target === 'string' && input.target.trim() !== '' ? input.target : input?.changeId;
+      const requestedTarget = typeof rawTarget === 'string' ? rawTarget.trim() : '';
       const result = await callFlow('change.context', 'context', input);
       if (cardReadyFor(result, requestedTarget)) bindChangeId(requestedTarget);
       return result;

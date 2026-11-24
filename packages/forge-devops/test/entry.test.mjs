@@ -197,6 +197,7 @@ test('读面失败但卡片自称 ready：仍按读面失败报原因，不误�
   const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
   assert.equal(result.kind, 'error');
   assert.match(result.text, /NO_READER/u, 'ok=false 的原因是读面失败，必须原样透出');
+  assert.match(result.text, /上下文读取失败/u, '裁决顺序与装配层一致：先判读面失败，再看状态');
   assert.ok(!result.text.includes('CONTEXT_UNCONFIRMED'), '读面失败不得被说成变更号不符');
 });
 

@@ -618,13 +618,13 @@ test('装配：上下文卡 ready 才绑定变更号，blocked 不绑定（入�
   assert.equal(unreported.service.changeId(), null, '就绪卡未自报变更号时不可确认，不得绑定');
 
   const contextMismatch = mountIndex({
-    flow: { context: async () => ({ ok: true, status: 'ready', changeId: 'ARD999999', text: '卡' }) },
+    flow: { context: async () => ({ ok: true, status: 'ready', changeId: 'ARD999999', text: '卡' }), startFromChange: async () => null },
   });
   await contextMismatch.service.context({ target: 'ARD123456' });
   assert.equal(contextMismatch.service.changeId(), null, '聚合读与入口同一判据：自报号不符不得绑定');
 
   const contextUnreported = mountIndex({
-    flow: { context: async () => ({ ok: true, status: 'ready', text: '卡' }) },
+    flow: { context: async () => ({ ok: true, status: 'ready', text: '卡' }), startFromChange: async () => null },
   });
   await contextUnreported.service.context({ target: 'ARD123456' });
   assert.equal(contextUnreported.service.changeId(), null, '聚合读与入口同一判据：未自报号不得绑定');
@@ -632,10 +632,23 @@ test('装配：上下文卡 ready 才绑定变更号，blocked 不绑定（入�
   // `forge_devops_change_context` 的 target 是必填（schema required）；直调 service 不传 target 时
   // 没有"这次请求的是哪个变更"，绑上卡片自报号等于替调用方猜目标，故 fail closed。
   const contextNoTarget = mountIndex({
-    flow: { context: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '卡' }) },
+    flow: {
+      context: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '卡' }),
+      startFromChange: async () => null,
+    },
   });
   await contextNoTarget.service.context({});
   assert.equal(contextNoTarget.service.changeId(), null, '未指定请求号时不绑定');
+
+  // flow 按 `target || changeId` 取号，装配层必须同口径：只传 changeId 的调用方也要能绑定。
+  const contextByChangeId = mountIndex({
+    flow: {
+      context: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '卡' }),
+      startFromChange: async () => null,
+    },
+  });
+  await contextByChangeId.service.context({ changeId: 'ARD123456' });
+  assert.equal(contextByChangeId.service.changeId(), 'ARD123456', '只传 changeId 时按同一目标号绑定');
 });
 
 test('装配：artifact_write 的 data 经真实 service 落盘，body/data 互斥与机检失败由 artifacts 报出', async () => {
@@ -844,6 +857,33 @@ test('装配：change.read 归一失败不抛错，raw 照常返回并写 normal
   assert.equal(result.facts.normalize_error, 'CONTEXT_RECORD_INVALID');
   assert.deepEqual(result.facts.raw, { id: 'ARD123456' }, 'raw 仍然返回');
   assert.equal(service.changeId(), 'ARD123456', '归一失败不影响绑定（读成功即绑定）');
+});
+
+test('装配：change.read 读回的记录号与请求号不符时不绑定', async () => {
+  const reader = {
+    read: async ({ target }) => ({
+      status: 'succeeded',
+      target_ref: target,
+      source_revision: 'dop:swapped',
+      raw: {
+        id: 'ARD999999',
+        title: '积分商城改造',
+        status: 'in_progress',
+        type: 'requirement',
+        owner: 'hosea',
+        description: '积分商城支持兑换券',
+        acceptance_criteria: ['兑换券可抵扣'],
+        created_at: '2026-10-20T00:00:00Z',
+        sub_systems: [{ code: 'points-mall', name: '积分商城' }],
+        user_stories: [],
+      },
+    }),
+  };
+  const { service } = mountIndex({ reader });
+  const result = await service.read({ action: 'change.read', target: 'ARD123456' });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.facts.normalize_error, 'CONTEXT_ID_MISMATCH');
+  assert.equal(service.changeId(), null, '信封成功但记录是别的变更号，不得绑定');
 });
 
 

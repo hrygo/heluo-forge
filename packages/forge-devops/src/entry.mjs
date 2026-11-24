@@ -119,13 +119,19 @@ function unknownsOf(result) {
 /**
  * 阻塞裁决：原因码与首行文案成对决定，避免"改了原因码漏改文案"或两条分支各写一套规则。
  *
- * 前置条件：调用方已过 `ok` 检查。`ok === false`（读面本身失败）在 `registerEntry` 里先行返回，
- * 不会进入本函数——所以这里只按状态分流，不重复判读面失败。
+ * 判据顺序与 `cardReadyFor` 一致：先看读面是否失败，再看卡片状态——同一份响应不会出现
+ * "装配层判读面失败、入口说变更号不符"的分叉。
  *
- * @param {string} status 归一化后的卡片状态；空串表示响应没有状态
+ * @param {unknown} card service 返回的原始响应（未经 ok 过滤）
  * @returns {{ reason: string, headline: string }}
  */
-function blockedOutcomeOf(status) {
+function blockedOutcomeOf(card) {
+  if (card?.ok === false) {
+    const reason =
+      typeof card.reason === 'string' && card.reason.trim() !== '' ? card.reason.trim() : ENTRY_REASONS.CONTEXT_BLOCKED;
+    return { reason, headline: '阻塞：上下文读取失败，未取回可推进的变更事实。' };
+  }
+  const status = cardStatusOf(card);
   if (status === '') {
     return {
       reason: ENTRY_REASONS.CONTEXT_EMPTY,
@@ -149,14 +155,16 @@ function blockedOutcomeOf(status) {
  * 恢复方向按原因分流：入口配置问题指到配置页，其余先确认 dop 可用再重跑。
  */
 function blockedText(result, changeId) {
-  const status = cardStatusOf(result);
   const items = unknownsOf(result);
   const chain = [ENTRY_NAME, changeId].join(' ');
-  const { reason, headline } = blockedOutcomeOf(status);
+  const { reason, headline } = blockedOutcomeOf(result);
+  // 读面失败的 `detail` 是"为什么没读到"的第一手说明，保留在首行，不塞进卡片正文。
+  const detail =
+    result?.ok === false && typeof result?.detail === 'string' && result.detail !== '' ? `：${result.detail}` : '';
   // 恢复方向按原因并列：配置问题指配置页，变更号不可确认时提示核对号与读面回填；
   // 两条同时成立就都给（配置没通也可能伴随号对不上），都不成立才退到通用重试方向。
   const next = [];
-  if (items.some((item) => CONFIG_REASONS.includes(item.reason))) {
+  if (CONFIG_REASONS.includes(reason) || items.some((item) => CONFIG_REASONS.includes(item.reason))) {
     next.push(`下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`);
   }
   if (reason === ENTRY_REASONS.CONTEXT_UNCONFIRMED) {
@@ -166,7 +174,7 @@ function blockedText(result, changeId) {
     next.push(`下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`);
   }
   const lines = [
-    `${ENTRY_NAME}：${reason}`,
+    `${ENTRY_NAME}：${reason}${detail}`,
     headline,
     items.length === 0
       ? '缺失项：无（卡片未列出未知项，按未就绪处理）。'
@@ -207,12 +215,8 @@ export function registerEntry(ctx, service) {
         text: `${ENTRY_NAME}：${ENTRY_REASONS.INTERNAL}：${String(error?.message ?? error)}`,
       };
     }
-    if (!result?.ok) {
-      const reason = result?.reason ?? ENTRY_REASONS.INTERNAL;
-      const detail = result?.detail ? `：${result.detail}` : '';
-      return { kind: 'error', text: `${ENTRY_NAME}：${reason}${detail}\n\n${result?.text ?? ''}`.trimEnd() };
-    }
     // 就绪与否与装配层同一判据（`cardReadyFor`）：`ok` 只表示读面走完，不代表事实已取回（issue #342）。
+    // 读面失败、卡片未就绪、自报号对不上走同一处阻塞裁决，避免两处分流各说一套。
     if (!cardReadyFor(result, parsed.changeId)) {
       return { kind: 'error', text: blockedText(result, parsed.changeId) };
     }
