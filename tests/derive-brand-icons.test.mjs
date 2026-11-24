@@ -219,3 +219,46 @@ test('CLI 端到端：夹具目录成功退出 0；缺尺寸 + none 退出 4', (
   assert.equal(failed.status, 4);
   assert.match(failed.stderr, /MISSING_RASTERIZER/);
 });
+
+// ---- real brand suite closure -------------------------------------------------
+
+const BRAND_DIR = join(REPO_ROOT, 'docs/assets/branding/cyber-long');
+
+test('真实品牌套件：8 档 app-icon 切图全部入库，重建免栅格化器', (t) => {
+  const root = tempRoot(t);
+  const output = join(root, 'out');
+  const derivation = deriveAll({ brandDir: BRAND_DIR, outputDir: output, rasterizer: 'none' });
+  assert.equal(derivation.rasterizer, 'none-needed');
+  assert.deepEqual(
+    derivation.outputs.filter((entry) => entry.origin === 'committed').map((entry) => entry.path).sort(),
+    [16, 32, 48, 64, 128, 256, 512, 1024].map((size) => `sizes/app-icon-${size}.png`).sort(),
+  );
+});
+
+test('真实品牌套件：入库的派生产物（小图/ico/icns）均登记 manifest 且摘要一致', () => {
+  const { byPath } = readManifest(BRAND_DIR);
+  for (const relPath of [
+    'sizes/app-icon-16.png',
+    'sizes/app-icon-32.png',
+    'sizes/app-icon-48.png',
+    'sizes/app-icon-64.png',
+    'icons/app-icon.ico',
+    'icons/app-icon.icns',
+  ]) {
+    verifyAsset(BRAND_DIR, byPath, relPath);
+  }
+});
+
+test('真实品牌套件：纯 Node 重建的 ico/icns 与入库副本逐字节一致', (t) => {
+  const root = tempRoot(t);
+  const output = join(root, 'out');
+  deriveAll({ brandDir: BRAND_DIR, outputDir: output, rasterizer: 'none' });
+  assert.equal(Buffer.compare(readFileSync(join(output, 'app-icon.ico')), readFileSync(join(BRAND_DIR, 'icons/app-icon.ico'))), 0);
+  assert.equal(Buffer.compare(readFileSync(join(output, 'app-icon.icns')), readFileSync(join(BRAND_DIR, 'icons/app-icon.icns'))), 0);
+});
+
+test('真实品牌套件反向：任一档源切图变动即使重建偏离入库 ico（判据会失败）', () => {
+  const committed = ICO_SIZES.map((size) => ({ size, png: readFileSync(join(BRAND_DIR, `sizes/app-icon-${size}.png`)) }));
+  const mutated = committed.map((entry) => (entry.size === 32 ? { size: 32, png: makePng(32) } : entry));
+  assert.notEqual(Buffer.compare(buildIco(mutated), readFileSync(join(BRAND_DIR, 'icons/app-icon.ico'))), 0);
+});
