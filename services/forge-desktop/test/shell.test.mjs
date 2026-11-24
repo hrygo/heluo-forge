@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { ShellError } from '../src/errors.mjs';
 import { EMPLOYEE_PACKAGE_SCHEMA } from '../src/first-run.mjs';
 import { createRuntime } from '../src/runtime.mjs';
 import { guidanceFor, startShell } from '../src/shell.mjs';
@@ -66,7 +67,7 @@ function employeePackage(directory, { version = '1.2.3' } = {}) {
 }
 
 /** A stand-in for the Electron interface that records what the shell does with it. */
-function fakeElectron({ lock = true, tray = true } = {}) {
+function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails = false } = {}) {
   const log = [];
   const handlers = {};
   const windows = [];
@@ -97,7 +98,7 @@ function fakeElectron({ lock = true, tray = true } = {}) {
     }
     loadURL(url) {
       this.loads.push(url);
-      return Promise.resolve();
+      return loadFails ? Promise.reject(new Error('ERR_CONNECTION_REFUSED')) : Promise.resolve();
     }
     show() {
       this.visible = true;
@@ -177,6 +178,8 @@ function fakeElectron({ lock = true, tray = true } = {}) {
     dialog: {
       showMessageBox: async (...args) => {
         messages.push(args.at(-1));
+        // No display, or a dialog that fails: what the shell must survive.
+        if (dialogFails) throw new Error('showMessageBox failed');
         return { response: answers.length === 0 ? 1 : answers.shift() };
       },
     },
@@ -212,7 +215,7 @@ function webProfile() {
 }
 
 /** A whole shell world: package, marker, installer, web profile and the Electron stand-in. */
-function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates } = {}) {
+function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs } = {}) {
   const fx = fakeElectron(electron);
   const root = temp(t);
   // `assets` reuses a package that already exists (typically one a first run consumed).
@@ -242,6 +245,8 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
     }),
     runtimeOptions: { startTimeoutMs: 60_000, stopGraceMs: 5_000 },
     trayIcon: '/apps/tray.png',
+    ...(preflight === undefined ? {} : { preflight }),
+    failureStopWaitMs,
   });
   return { ...fx, root, pkg, processes, installs, exec, shell };
 }
@@ -384,6 +389,50 @@ test('a lost record of the first run costs one more installer run, not a start t
   const settled = world(t, { assets: pkg.directory, candidates: [pkg.directory], markerPath });
   assert.equal((await settled.shell.outcome).started, true);
   assert.equal(settled.installs.length, 0);
+});
+
+test('a missing embedded runtime is said before anything is touched', async (t) => {
+  const fx = world(t, {
+    preflight: () => {
+      throw new ShellError('EMBEDDED_RUNTIME_MISSING', 'the embedded runtime entry is missing');
+    },
+  });
+  // Nothing that needs the runtime is attempted: not the installer, not the service.
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'EMBEDDED_RUNTIME_MISSING' });
+  assert.equal(fx.installs.length, 0);
+  assert.equal(fx.processes.length, 0);
+  assert.match(fx.messages[0].message, /找不到内嵌运行时/);
+});
+
+test('a failure whose code has no guidance is still shown, and the app still leaves', async (t) => {
+  const fx = world(t, {
+    preflight: () => {
+      throw Object.assign(new Error('something not anticipated'), { code: 'SOMETHING_UNEXPECTED' });
+    },
+  });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'SOMETHING_UNEXPECTED' });
+  assert.match(fx.messages[0].message, /应用无法启动/);
+  assert.match(fx.messages[0].message, /SOMETHING_UNEXPECTED/);
+  assert.equal(fx.log.at(-1), 'quit');
+});
+
+test('a service that will not stop does not keep a failure from being shown', async (t) => {
+  const fx = world(t, { electron: { loadFails: true }, failureStopWaitMs: 10 });
+  assert.equal((await fx.shell.outcome).started, true);
+  // The page could not be loaded: a failure of the service, reported like one.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(fx.messages.length, 1);
+  assert.match(fx.messages[0].message, /EXITED/);
+  // The service was asked to leave, never answered, and was not waited for beyond the limit.
+  assert.deepEqual(fx.processes[0].kills, ['SIGTERM']);
+  assert.equal(fx.log.at(-1), 'quit');
+});
+
+test('a dialog that cannot be shown does not stop the app from leaving', async (t) => {
+  const fx = world(t, { electron: { dialogFails: true }, bindHost: '0.0.0.0' });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'BIND_HOST_REJECTED' });
+  assert.equal(fx.messages.length, 1, 'the message was tried');
+  assert.equal(fx.log.at(-1), 'quit');
 });
 
 test('every failure the modules can raise has guidance for the user', () => {

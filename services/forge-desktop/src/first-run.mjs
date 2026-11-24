@@ -38,6 +38,11 @@ function absent(path) {
  * Every component inside the package is checked: a listed path that is, or
  * passes through, a symbolic link would be read, verified and then used from
  * wherever the link points, outside the package.
+ *
+ * This holds at the time of the check. The file is read afterwards by path,
+ * so someone writing into the package directory during the check could still
+ * swap a component. That is not a boundary this check closes: whoever can
+ * write there can rewrite the package whole (design §6).
  */
 function regularFileWithin(root, relative) {
   let info;

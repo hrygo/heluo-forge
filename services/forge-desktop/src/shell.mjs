@@ -30,6 +30,8 @@ const GUIDANCE = Object.freeze({
   LAUNCH_URL_REJECTED: '本机服务宣告的地址不在允许的范围内。请重新安装应用。',
   STOPPED: '本机服务在就绪前被停止。请重新启动应用。',
   STOPPING: '本机服务正在停止。请等它结束后重新启动应用。',
+  EMBEDDED_RUNTIME_MISSING: '找不到内嵌运行时。请重新安装应用。',
+  UNKNOWN: '应用无法启动。请重新启动应用；仍然失败时请联系管理员并提供错误码。',
 });
 
 /** The guidance shown for a failure code; null when there is none. */
@@ -48,7 +50,10 @@ export function guidanceFor(code) {
  *   session: object, shell: object, dialog: object}} electron
  * @param {{platform: string, assetsCandidates: string[], markerPath: string, profile: string, bindHost: string,
  *   embeddedCommand: string, env: object, exec: Function, loadInstaller: Function,
- *   createRuntime: Function, spawnProfile: Function, runtimeOptions?: object, trayIcon?: string}} options
+ *   createRuntime: Function, spawnProfile: Function, runtimeOptions?: object, trayIcon?: string,
+ *   preflight?: Function, failureStopWaitMs?: number}} options
+ *   `preflight` runs before anything else and fails the start by throwing; `failureStopWaitMs`
+ *   bounds how long a failure report waits for the service to stop.
  * @returns {{outcome: Promise<{started: boolean, origin?: string, code?: string}>}}
  */
 export function startShell(electron, options) {
@@ -73,6 +78,8 @@ export function startShell(electron, options) {
   });
 
   async function boot() {
+    // What the app needs in order to exist at all, before anything is touched.
+    options.preflight?.();
     assertBindHost(bindHost);
     // One package, one identity: the first candidate that carries a manifest.
     // Its digest decides whether the first run is done and is what the record
@@ -97,12 +104,26 @@ export function startShell(electron, options) {
   async function report(error) {
     const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
     context.quitting = true;
-    if (context.runtime !== null) await context.runtime.stop();
-    await electron.dialog.showMessageBox({
-      type: 'error',
-      title: TITLE,
-      message: `${GUIDANCE[code] ?? '应用无法启动。'}\n错误码：${code}`,
-    });
+    // The service was asked to leave already, or it has left. The user is not
+    // kept waiting on it: after `failureStopWaitMs` the failure is shown anyway.
+    if (context.runtime !== null) {
+      let timer;
+      const wait = new Promise((resolve) => {
+        timer = setTimeout(resolve, options.failureStopWaitMs ?? 5_000);
+        timer.unref?.();
+      });
+      await Promise.race([context.runtime.stop(), wait]);
+      clearTimeout(timer);
+    }
+    try {
+      await electron.dialog.showMessageBox({
+        type: 'error',
+        title: TITLE,
+        message: `${guidanceFor(code) ?? guidanceFor('UNKNOWN')}\n错误码：${code}`,
+      });
+    } catch {
+      // Nothing can be shown (no display, a dialog that fails): the app still leaves.
+    }
     app.quit();
     return { started: false, code };
   }
