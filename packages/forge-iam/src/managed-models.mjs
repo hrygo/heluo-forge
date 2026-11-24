@@ -382,7 +382,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // An enabled manual route this snapshot cannot see (a pending refresh) is
       // not a catalogue decision: keep it callable. Anything else without a
       // catalogue read is a gateway-side failure, not "never offered".
-      if (enabled(model) && manualModels.some(item => item.id === model)) return null;
+      // Only while the directory is still loading: once it has failed, the
+      // failure is what both entries must report, manual route or not.
+      if (!catalogError && enabled(model) && manualModels.some(item => item.id === model)) return null;
       if (!catalogueRead) {
         const code = catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
         return { code, message: MESSAGES[code] ?? MESSAGES.ENTERPRISE_MODELS_UNAVAILABLE };
@@ -586,7 +588,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (denied) return plain(denied);
     if (captured !== undefined && captured !== version) return plain('IAM_MODEL_CONTEXT_CHANGED');
     if (credentialRevoked()) return plain('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
-    if (!backend) return plain(adapterError ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
+    // A failed directory read must reach the person with the same cause as the
+    // preparation entry, not as a generic "models unavailable".
+    // Without an adapter the directory failure is the only explanation we have;
+    // reporting a generic "models unavailable" here would describe a different
+    // cause than the preparation entry for the same request (issue #380).
+    // Adapter-initialization failure is the immediate reason nothing answers;
+    // otherwise the directory failure explains it. Either way the person sees
+    // the same cause the preparation entry reports (issue #380).
+    if (!backend) return plain(adapterError ?? catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     const model = enabledModel(request.provider, request.model);
     if (!model) return denialFor(request.provider, request.model, { guard: true });
     if (!installed(model)) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
@@ -1284,6 +1294,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         }
         const mine = version;
         const subject = iam.getView()?.principal;
+        // A directory that already failed is a gateway-side cause the direct
+        // entry must report too, or the two entries describe different problems
+        // for the same request (issue #380).
+        if (!backend && catalogError) {
+          const cause = error(catalogError);
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
         // Even a saved selection after logout reaches an actionable sign-in error.
         if (!permit(iam.getView()) && !allowed(route, model)) {
           // `permit()` may be the real blocker (signed out, revoked); keep its
