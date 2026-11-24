@@ -12,6 +12,8 @@
  *     what a re-run on the same tag needs.
  *   - Assets are read back after the upload and compared by name and size
  *     (`ASSET_MISMATCH`): a missing, renamed or truncated asset fails the run.
+ *   - Assets are uploaded buffered, never streamed: the upload API rejects a
+ *     request whose Content-Length it cannot know up front.
  *   - The token is read from GH_TOKEN only. It is never a parameter, and it
  *     appears in no error message, receipt or log line.
  *
@@ -19,9 +21,8 @@
  *   GH_TOKEN=<token> node scripts/upload-draft-release.mjs --tag <v-semver> \
  *     --directory <dir> [--repo <owner/name>] [--name <title>] [--notes <file>] [--json]
  */
-import { createReadStream, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 export const GITHUB_API = 'https://api.github.com';
@@ -200,8 +201,11 @@ function githubClient({ token, fetchImpl, apiBase, repo }) {
       const removed = await call('DELETE', api(`/releases/assets/${stale.id}`));
       expect(removed, 204, 'ASSET_REPLACE_FAILED', `replacing ${asset.name}`);
     }
+    // The upload endpoint answers "400 Bad Content-Length" unless the request
+    // carries a concrete length, which fetch only generates for a buffered
+    // body; a stream would go out chunked with no length at all.
     const uploaded = await call('POST', uploadUrl(release.upload_url, asset.name), {
-      body: Readable.toWeb(createReadStream(asset.path)),
+      body: readFileSync(asset.path),
       headers: { 'content-type': 'application/octet-stream' },
     });
     expect(uploaded, 201, 'ASSET_UPLOAD_FAILED', `uploading ${asset.name}`);
