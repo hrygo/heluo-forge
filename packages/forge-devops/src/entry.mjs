@@ -15,6 +15,7 @@
 import { CHANGE_ID_PATTERN } from './artifacts.mjs';
 import { cardReadyFor } from './change-context.mjs';
 import { CLI_PAGE_HINT } from './cli-config.mjs';
+import { READ_REASONS } from './read.mjs';
 
 /** 入口名；与 `cordis.patch.yml`、文档和测试共用这一个字符串。 */
 export const ENTRY_NAME = 'devops-change';
@@ -54,8 +55,15 @@ export const ENTRY_REASONS = Object.freeze({
   CONTEXT_UNCONFIRMED: 'CONTEXT_UNCONFIRMED',
 });
 
-/** 这些原因指向"入口配置"，恢复方向是改配置而不是原地重试。 */
-const CONFIG_REASONS = Object.freeze(['CONFIG_MISSING', 'CONFIG_INVALID', 'CLI_SPAWN_FAILED']);
+/**
+ * 这些原因指向"入口配置"，恢复方向是改配置而不是原地重试。
+ *
+ * 取值与产生处保持同源：`CONFIG_MISSING` / `CONFIG_INVALID` 由 flow 在"运行时没配置"时写进未知项
+ * （同 flow.mjs 的 FLOW_REASONS），`NO_READER` 来自只读面未配置 reader（read.mjs 的 READ_REASONS）。
+ * 刻意不收 `CLI_SPAWN_FAILED`：适配器把未启动的失败归并成 `COMMAND_FAILED` 再进未知项，
+ * 其恢复方向同样是"确认 dop 可用"，与重试句式的提示一致。
+ */
+const CONFIG_REASONS = Object.freeze(['CONFIG_MISSING', 'CONFIG_INVALID', READ_REASONS.NO_READER]);
 
 /** 去重 key 用 NUL 拼接：正常 `field` / `reason` 取值里不会出现它，不会拼出歧义键。 */
 const UNKNOWN_KEY_SEPARATOR = '\u0000';
@@ -92,11 +100,9 @@ function errorText(parsed) {
 
 /** 缺失项只取 `(field, reason)` 唯一对：同因多项不重复刷屏，空原因不计。 */
 function unknownsOf(result) {
-  const list = Array.isArray(result?.unknowns)
-    ? result.unknowns
-    : Array.isArray(result?.context?.unknowns)
-      ? result.context.unknowns
-      : [];
+  let list = [];
+  if (Array.isArray(result?.unknowns)) list = result.unknowns;
+  else if (Array.isArray(result?.context?.unknowns)) list = result.context.unknowns;
   const seen = new Set();
   const items = [];
   for (const entry of list) {
@@ -112,6 +118,31 @@ function unknownsOf(result) {
 }
 
 /**
+ * 阻塞裁决：原因码与首行文案成对决定，避免"改了原因码漏改文案"或两条分支各写一套规则。
+ *
+ * @param {string} status 卡片状态；空串表示响应没有状态
+ * @returns {{ reason: string, headline: string }}
+ */
+function blockedOutcomeOf(status) {
+  if (status === '') {
+    return {
+      reason: ENTRY_REASONS.CONTEXT_EMPTY,
+      headline: '阻塞：响应没有卡片状态，无法确认已取回匹配的变更事实。',
+    };
+  }
+  if (status === 'ready') {
+    return {
+      reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
+      headline: '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。',
+    };
+  }
+  return {
+    reason: ENTRY_REASONS.CONTEXT_BLOCKED,
+    headline: `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`,
+  };
+}
+
+/**
  * 阻塞输出：先给裁决与恢复方向，再附卡片正文——卡片与缺失项照常可读，只是不再假装成功。
  * 恢复方向按原因分流：入口配置问题指到配置页，其余先确认 dop 可用再重跑。
  */
@@ -120,18 +151,7 @@ function blockedText(result, changeId) {
   const items = unknownsOf(result);
   const configIssue = items.some((item) => CONFIG_REASONS.includes(item.reason));
   const chain = [ENTRY_NAME, changeId].join(' ');
-  const reason =
-    status === ''
-      ? ENTRY_REASONS.CONTEXT_EMPTY
-      : status === 'ready'
-        ? ENTRY_REASONS.CONTEXT_UNCONFIRMED
-        : ENTRY_REASONS.CONTEXT_BLOCKED;
-  const headline =
-    status === ''
-      ? '阻塞：响应没有卡片状态，无法确认已取回匹配的变更事实。'
-      : status === 'ready'
-        ? '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。'
-        : `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`;
+  const { reason, headline } = blockedOutcomeOf(status);
   const lines = [
     `${ENTRY_NAME}：${reason}`,
     headline,

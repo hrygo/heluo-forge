@@ -694,10 +694,11 @@ export function apply(ctx, rawConfig = {}) {
       if (action === 'change.read' && result?.status === 'succeeded') bindChangeId(requestedTarget);
       return result;
     },
-    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；卡片 ready 即绑定变更号。 */
+    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；就绪且自报号匹配才绑定变更号。 */
     context: async (input = {}) => {
+      const requestedTarget = typeof input?.target === 'string' ? input.target.trim() : '';
       const result = await callFlow('change.context', 'context', input);
-      if (result?.status === 'ready') bindChangeId(result?.changeId);
+      if (cardReadyFor(result, requestedTarget)) bindChangeId(requestedTarget);
       return result;
     },
     /**
