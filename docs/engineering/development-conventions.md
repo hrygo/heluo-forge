@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.9.7 |
+| 版本 | V0.9.8 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -106,6 +106,7 @@
 - `SQLite and IAM (linux-x64, ubuntu-26.04)` 与 `SQLite and IAM (win32-x64, windows-2025)` 非必需作业执行相同的 SQLite 和 IAM 平台检查，用于观察后续镜像兼容性；结果不替代目标系统验收。
 - `sensitive scan and IAM callback (win32-x64)` 在 Windows Server 2022 的非必需作业中以同一次 `node --test` 运行敏感扫描、补丁层及 IAM 回调端口测试；POSIX 分支已由 `verify (ubuntu-x64)` 覆盖。路径测试覆盖 `icase` pathspec、反斜杠归一化及补丁层包名识别；卷不提供不同的 8.3 短别名时，真实别名用例跳过，运行时应检查该项是通过还是跳过。回调测试检查平台 socket 行为。
 - `pull_request_target` 的窄例外是 `.github/workflows/sensitive-attestation.yml`：从 PR 基线加载受信任的 Issue 校验和验签脚本及单一团队公钥，checkout 基线、只 fetch PR 的 Git 对象并校验事件 head，不 checkout、不执行 PR 代码，不读取 secrets，权限为 `contents: read`、`issues: read`、`pull-requests: read`。正文编辑时重新读取并校验当前 PR，Issue 不存在、引用 PR 或 API 失败时拒绝；普通 PR 工作流中的校验仅供提前反馈。工作流始终验签，基线缺少或无效公钥时失败；新门禁合入目标基线后生效，并须实测正反例。该上下文名保持不变：`pull_request_target` 工作流由基线加载，改名要先合并再同步切换必需检查，不能一步完成。团队 v2 签名绑定实际扫描的 HEAD tree，远端要求唯一父提交 tree 与签名基线一致并拒绝 v1；基线 tree 改变的 rebase 和普通 amend 须重新扫描签名。旧 `sensitive:scan` / `sensitive:install` 是不同规则格式和路径的 legacy v1，不能满足 v2。Git 仓库内容正常推送，私钥、真实规则与扫描结果不上远端；签名不证明规则有效，也不能防止扫描竞态或恶意持钥人伪造声明。共享 Git common dir 安装、引导与限制见[敏感扫描说明](../../scripts/sensitive-scan/README.md)；工作流合入、远端实测及分支保护配置均须分别取证。
+- `contents: write` 的窄例外是 `.github/workflows/release-bundle.yml`（统一构建，[CORP-DSH-PLAN-026](../plans/2026-11-19-desktop-bundle-packaging.md) §4.0）。检查器只在该工作流同时满足以下条件时放行：触发仅推 `v*` tag 与手动触发；顶层 `permissions` 仅 `contents: write` 一项，且不得声明作业级 `permissions`；每个 `actions/checkout` 写 `persist-credentials: false`，令牌只经环境变量 `GH_TOKEN` 提供给上传步骤。`secrets` 引用只允许环境变量映射形式，即 `env:` 之下整行为 `NAME: ${{ secrets.NAME }}`，键名限定为[统一构建配置清单](../../scripts/lib/release-config.mjs)与 `GITHUB_TOKEN`；展开进脚本、`run:` 块内形似映射的文本、`with:` 输入、清单之外的键，以及其他任何工作流出现 `contents: write`，均使 `check:repo` 失败。企业配置存为 `release-bundle` 环境的 Environment Secrets，不存仓库级 Secrets：只有进入该环境的作业能读取，进入须审批。必需评审人与部署分支限制属于仓库设置，检查器不校验，以远端实测为准。
 - `verify` 执行离线检查；平台作业不配置 npm 包缓存或使用系统钥匙串，离线安装使用 runner 工作区内的独立前缀，冒烟存储位于系统临时目录并使用合成数据。托管 runner 的结果不等于 Windows 10、UOS、银河麒麟、目标 DSH/Electron、Windows NTFS ACL 或企业 IAM 的实测；这些环境及企业联调分别取证。CI 不接触企业系统、不注入生产密钥、不自动发布。
 
 ## 7. 版本与发布
@@ -116,6 +117,8 @@
 - [ADR-11/13](<../architecture/plugin-registry-source-decision.md>)确定企业私有 npm 为唯一 npm 制品源：公网包由仓库同步，内部定制包从固定 Gitee group 源码构建后发布；企业私版也可经授权的内部文件交付。AIHUB 维护并托管 format-1 索引，只列发布前策展的精确稳定版；本项目只校验索引契约，不生成索引、不保存逐版本证据；内部 scope 不回落公网。
 - [ADR-12](<../architecture/plugin-registry-source-decision.md>)限定首版自包含双端稳定包，不允许终端另解运行时 npm 依赖、自动补 peer 或现场编译；devDependencies/普通build脚本属于上游CI，不据键名误拒。源码workspace依赖如需进入首版，须在构建产物内闭合，不能带workspace/runtime引用发布。统一索引取双端交集，同一profile只用一个规范企业registry；展示资源仅获准内网或省略。
 - 同名同版本不可变；上传/发布权限与包名准入分开，无逐版审批。原生索引只承载目录：索引可读即可安装，没有写前授权/租约/当前许可；不要把它描述成强门禁。更版按原生能力，没有通用 upgrade 时卸载后安装；不私改 profile、不承诺原子升级或自动回滚。实际通道与角色覆盖由 G1/G2 验证，不足只读且不算准入通过。
+- 统一构建由 `release-bundle` 工作流执行，入口是 `scripts/build-employee-package.mjs` 与 `scripts/upload-draft-release.mjs`：一个 `v*` tag 对应一套员工包，从 tag 的干净检出构建企业插件包、按配置清单注入配置、组装员工包，并作为该 tag 草稿 Release 的资产交付。包内私版插件版本为 `<tag 版本>-corp.1`，不与中性公版制品共用版本。产物不入库、不公开、不上传 workflow artifact，工作流不发布 Release；同一 tag 重跑覆盖同名资产，已发布的 Release 拒绝写入。员工包清单记录源提交、插件包摘要与配置键名，不记录配置值；客户端密钥随包以 0600 明文文件携带，不进入补丁层。构建不做 Discovery 预检，回执记为未核验。该链路目前只有离线用例与本机冒烟证据，环境审批、Secrets 读取与草稿可见性待首次推 tag 实测。
+- 公版发布与私版制作的两段式流程（`build-public-release`、`make-private-bundle`、`release-delivery`）不再参与统一构建，过渡期保留作路线 B 的回退路径；其中的公版构建步骤仍被统一构建复用为插件包构建与中性校验。
 - 根工程永不发布；未通过门禁的包不得出现在市场目录。
 
 ### 7.1 DSH 版本的单一真源

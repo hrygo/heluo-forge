@@ -1,6 +1,6 @@
 ---
 name: heluo-forge-release-bundle
-description: 供打包人员规划和制作企业 DSH 私版。GitHub Actions 私版流程使用本机未跟踪的 .env、私有发布仓库的 Actions Secrets、现有制包脚本及终端 SQLite 凭据预置。
+description: 供打包人员规划和制作企业 DSH 私版与员工包。公开仓 release-bundle 统一构建由 v* tag 产出员工包并挂草稿 Release（经 release-bundle 环境审批，配置取自该环境的 Secrets）；回退路径的两段式流程使用本机未跟踪的 .env、现有制包脚本及终端 SQLite 凭据预置。
 ---
 # 企业 DSH 交付包制作
 
@@ -8,7 +8,9 @@ description: 供打包人员规划和制作企业 DSH 私版。GitHub Actions �
 
 打包人员要求在 GitHub 制作企业 DSH 私版时，读取 [GitHub Actions 私版制作方案](references/sop.md#9-github-actions-私版制作方案)。方案接通后，从指定的私有发布仓库触发制包，使用已核验的公版插件制品和配套工具链。
 
-现有 `release-delivery` 脚本负责预览、配置注入、校验和组装员工 zip。下文的本机步骤用于当前可执行的私版制作及排查。公开源码仓库的 `release-bundle` 工作流提供公版构建输入，企业私版在指定的私有发布仓库或企业制品库交付。
+现有 `release-delivery` 脚本负责预览、配置注入、校验和组装员工 zip。下文的本机步骤用于两段式私版制作（已核验的公版制品加本机 `.env`）及排查，是统一构建的回退路径。
+
+公开源码仓库的 `release-bundle` 工作流执行统一构建：推 `v*` tag 或在该 tag 上手动触发后，经 `release-bundle` 环境审批，从源码构建企业插件、注入配置、组装员工包，并挂到该 tag 的草稿 Release。产物不入库、不公开，工作流不发布 Release。打包人员的准备是把配置清单逐键存为该环境的 Environment Secrets（键名与注入位置见 [CORP-DSH-PLAN-026](../../../docs/plans/2026-11-19-desktop-bundle-packaging.md) §4.0），并设置仓库变量 `HELUO_PUBLIC_LICENSE` 与 `HELUO_WITH_ENGINEERING`。该链路尚未远端实测，首次推 tag 时取证。
 
 ## 角色
 
@@ -25,7 +27,7 @@ description: 供打包人员规划和制作企业 DSH 私版。GitHub Actions �
 - 公版摘要必须来自发布页或另一条可信渠道，不信任制品旁边的 `SHA256SUMS`。
 - 制作器核对工具链与公版中的 IAM 配置校验模块；不一致时使用该公版配套的工具链，不能跳过检查。
 - 禁止全局文本替换；只允许工具声明的配置注入位置。
-- 密钥、令牌、`client_secret` 不属于本交付；发现即停止。原始 `HELUO_IAM_CLIENT_SECRET` 和 `HELUO_IAM_CLIENT_SECRET_FILE` 键会报 `BUNDLE_SECRET_EMBED_UNSUPPORTED`，未知键会被拒绝。
+- 令牌不属于本交付；`client_secret` 默认也不属于。未显式要求内嵌时，原始 `HELUO_IAM_CLIENT_SECRET` 和 `HELUO_IAM_CLIENT_SECRET_FILE` 键会报 `BUNDLE_SECRET_EMBED_UNSUPPORTED`，未知键会被拒绝。仅 `release-delivery --embed-client-secret` 与统一构建会把客户端密钥写进交付目录（`iam-client-secret.txt`，权限 0600），安装后写入目标机凭据库并删除该文件；能取得该交付包的人都能读到密钥，轮换密钥需重新制作并分发。
 - 输出目录必须在仓库外；缺字段、摘要不符、目录已存在或用户取消时安全失败，不覆盖、不留半成品。
 - 官方 DSH 宿主原样使用：交付包不重签、不公证、不修改官方载荷，只安装企业插件。
 - 企业地址默认只接受 HTTPS。确需内网 HTTP 时，先说明客户端密钥、令牌与个人 Key 的明文传输风险，取得打包人员明确确认后才写 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
