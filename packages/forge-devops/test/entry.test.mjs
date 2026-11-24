@@ -227,6 +227,19 @@ test('状态带空白：入口与装配层同一归一化口径，按就绪处�
   assert.ok(result.text.includes(ENTRY_NEXT_STEPS));
 });
 
+test('状态里带控制字符：压成单行再嵌入，不打断多行阻塞文案', async () => {
+  const { ctx, registered } = host();
+  registerEntry(
+    ctx,
+    spyService({ ok: true, status: 'ready\nblocked', changeId: 'ARD123456', text: '## 上下文卡' }).service,
+  );
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /状态 ready blocked/u, '控制字符折成空格后仍可读');
+  assert.ok(!result.text.includes('ready\nblocked'), '不得把原始换行拼进文案');
+  assert.match(result.text, /缺失项：/u, '后续行结构没有被挤掉');
+});
+
 test('service 拒绝与抛错都转成可见错误，不伪装成功', async () => {
   const { ctx, registered } = host();
   registerEntry(ctx, { startFromChange: async () => ({ ok: false, reason: 'CONFIG_MISSING', detail: 'FORGE_DEVOPS_DOP_BIN' }) });

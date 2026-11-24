@@ -98,6 +98,19 @@ function errorText(parsed) {
   ].join('\n');
 }
 
+/**
+ * 上游字符串压成单行：换行、制表与其他控制字符折成空格，连续空白归一。
+ *
+ * 阻塞文案是多行结构（裁决 / 缺失项 / 下一步），状态、原因码、字段名都来自上游，
+ * 一旦带控制字符就会把后面的行挤乱，所以嵌入前统一单行化。
+ */
+function singleLine(value) {
+  return String(value)
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 /** 缺失项只取 `(field, reason)` 唯一对：同因多项不重复刷屏，空原因不计。 */
 function unknownsOf(result) {
   // 契约形状是 `payloadOf` 的顶层 `unknowns`；卡片内的副本不是第二真源，不再猜第二条路径。
@@ -105,9 +118,9 @@ function unknownsOf(result) {
   const seen = new Set();
   const items = [];
   for (const entry of list) {
-    const reason = typeof entry?.reason === 'string' ? entry.reason.trim() : '';
+    const reason = typeof entry?.reason === 'string' ? singleLine(entry.reason) : '';
     if (reason === '') continue;
-    const field = typeof entry?.field === 'string' ? entry.field.trim() : '';
+    const field = typeof entry?.field === 'string' ? singleLine(entry.field) : '';
     const key = `${field}${UNKNOWN_KEY_SEPARATOR}${reason}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -128,10 +141,12 @@ function unknownsOf(result) {
 function blockedOutcomeOf(card) {
   if (card?.ok === false) {
     const reason =
-      typeof card.reason === 'string' && card.reason.trim() !== '' ? card.reason.trim() : ENTRY_REASONS.CONTEXT_BLOCKED;
+      typeof card.reason === 'string' && singleLine(card.reason) !== ''
+        ? singleLine(card.reason)
+        : ENTRY_REASONS.CONTEXT_BLOCKED;
     return { reason, headline: '阻塞：上下文读取失败，未取回可推进的变更事实。' };
   }
-  const status = cardStatusOf(card);
+  const status = singleLine(cardStatusOf(card));
   if (status === '') {
     return {
       reason: ENTRY_REASONS.CONTEXT_EMPTY,
@@ -160,7 +175,9 @@ function blockedText(result, changeId) {
   const { reason, headline } = blockedOutcomeOf(result);
   // 读面失败的 `detail` 是"为什么没读到"的第一手说明，保留在首行，不塞进卡片正文。
   const detail =
-    result?.ok === false && typeof result?.detail === 'string' && result.detail !== '' ? `：${result.detail}` : '';
+    result?.ok === false && typeof result?.detail === 'string' && singleLine(result.detail) !== ''
+      ? `：${singleLine(result.detail)}`
+      : '';
   // 恢复方向按原因并列：配置问题指配置页，变更号不可确认时提示核对号与读面回填；
   // 两条同时成立就都给（配置没通也可能伴随号对不上），都不成立才退到通用重试方向。
   const next = [];

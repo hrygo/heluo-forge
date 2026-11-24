@@ -34,7 +34,7 @@ import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
 import { CONTEXT_REASONS, cardReadyFor, displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
-import { createDevopsFlow } from './flow.mjs';
+import { createDevopsFlow, requestedTargetOf } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
 import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS, deriveSourceType } from './cli-config.mjs';
 import { DEFAULT_ENTRY_ID, createCliAccess } from './cli-access.mjs';
@@ -704,11 +704,8 @@ export function apply(ctx, rawConfig = {}) {
     },
     /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；就绪且自报号匹配才绑定变更号。 */
     context: async (input = {}) => {
-      // 与 flow 同源解析目标号：flow 按 `target || changeId` 取号，这里也必须同口径，
-      // 否则只传 `changeId` 的调用方会"读到了却没绑定"。
-      const rawTarget =
-        typeof input?.target === 'string' && input.target.trim() !== '' ? input.target : input?.changeId;
-      const requestedTarget = typeof rawTarget === 'string' ? rawTarget.trim() : '';
+      // 目标号与 flow 共用同一实现（`requestedTargetOf`），不在这里再写一份取号规则。
+      const requestedTarget = requestedTargetOf(input);
       const result = await callFlow('change.context', 'context', input);
       if (cardReadyFor(result, requestedTarget)) bindChangeId(requestedTarget);
       return result;
