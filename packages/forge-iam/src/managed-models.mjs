@@ -596,7 +596,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     // Adapter-initialization failure is the immediate reason nothing answers;
     // otherwise the directory failure explains it. Either way the person sees
     // the same cause the preparation entry reports (issue #380).
-    if (!backend) return plain(adapterError ?? catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
+    if (!backend) return plain(missingBackendCode() ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     const model = enabledModel(request.provider, request.model);
     if (!model) return denialFor(request.provider, request.model, { guard: true });
     if (!installed(model)) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
@@ -1297,8 +1297,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         // A directory that already failed is a gateway-side cause the direct
         // entry must report too, or the two entries describe different problems
         // for the same request (issue #380).
-        if (!backend && catalogError) {
-          const cause = error(catalogError);
+        if (!backend && missingBackendCode()) {
+          const cause = error(missingBackendCode());
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
         }
@@ -1350,6 +1350,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
         }
+        // Same refusal as prepareCall and the stream guard: a resolver that
+        // answers with a placeholder would tell the caller the route is fine.
+        if (!backend && missingBackendCode()) {
+          const cause = error(missingBackendCode());
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
         try {
           const entry = enabledModel(route, model);
           return entry && installed(entry) ? await backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
@@ -1389,6 +1396,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ...prepareHeaders === undefined ? {} : { prepareHeaders },
     });
   }
+  /**
+   * Why nothing can serve a call right now. Adapter-initialization failure is the
+   * immediate reason, the directory failure is the next; every entry point and
+   * the stream guard resolve this the same way so one request is never described
+   * with two different causes (issue #380).
+   */
+  const missingBackendCode = () => adapterError ?? catalogError;
+
   function installAdapter(resolved, entries) {
     backend = resolved;
     installedModels = new Map(entries.map(model => [model.id, model]));

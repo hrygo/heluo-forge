@@ -2005,3 +2005,25 @@ test('only a directory that was actually read can say the model is not offered (
   assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
   assert.match(streamed[0].reason.failure.message, /企业目录未提供该模型/u);
 });
+
+test('adapter-init failure plus a directory 403 reports one reason on every entry (issue #380 review)', async t => {
+  let dispatch = 0;
+  const f = fixture({
+    selection: { models: { 'manual-enabled': {} }, manual: [{ id: 'manual-enabled' }] },
+    fetch: async () => new Response('{"data":[]}', { status: 403 }),
+    async createAdapter() { throw new TypeError('synthetic adapter failure'); },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready.catch(() => { });
+  await assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_FORBIDDEN' });
+  // The directory cause stays visible in the view.
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_FORBIDDEN');
+  const request = { ...options, model: 'manual-enabled' };
+  const prepared = await f.adapter.prepareCall('enterprise', 'manual-enabled').then(() => null, error => error);
+  const resolved = await f.adapter.resolveModel('enterprise', 'manual-enabled').then(() => null, error => error);
+  const streamed = await chunks(f.guard(request, async function* () { dispatch += 1; yield { type: 'text', text: 'leak' }; }));
+  const codes = [prepared?.code, resolved?.code, streamed.at(-1)?.reason?.failure?.code];
+  // Nothing can serve the call, so all three entries must name the same cause.
+  assert.deepEqual([...new Set(codes)], ['ENTERPRISE_MODELS_UNAVAILABLE'], `entries disagreed: ${codes.join(' / ')}`);
+  assert.equal(dispatch, 0, 'a refused call must not reach the transport');
+});
