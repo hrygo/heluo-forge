@@ -173,6 +173,8 @@ test('就绪卡自报变更号与请求不一致：CONTEXT_UNCONFIRMED，不报�
   assert.equal(result.kind, 'error');
   assert.match(result.text, /CONTEXT_UNCONFIRMED/u);
   assert.match(result.text, /变更号与请求号不一致或未自报/u);
+  assert.match(result.text, /核对请求的变更号 ARD123456/u, '恢复方向是核对变更号，不是原地重试');
+  assert.ok(!result.text.includes('确认 dop 可用后重跑'), '号不符与 dop 可用性无关，不得误导重试');
   assert.match(result.text, /devops-change ARD123456/u);
   assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
 });
@@ -184,6 +186,14 @@ test('就绪卡未自报变更号：按不可确认处理，fail closed', async 
   assert.equal(result.kind, 'error');
   assert.match(result.text, /CONTEXT_UNCONFIRMED/u);
   assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
+});
+
+test('状态带空白：入口与装配层同一归一化口径，按就绪处理而不是报变更号不符', async () => {
+  const { ctx, registered } = host();
+  registerEntry(ctx, spyService({ ok: true, status: ' ready ', changeId: 'ARD123456', text: '## 上下文卡' }).service);
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'success', '去空白后是 ready，两处判据必须给同一结论');
+  assert.ok(result.text.includes(ENTRY_NEXT_STEPS));
 });
 
 test('service 拒绝与抛错都转成可见错误，不伪装成功', async () => {

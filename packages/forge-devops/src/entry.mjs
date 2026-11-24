@@ -13,7 +13,7 @@
  * 否则会出现"命令收得下、产物写不出"的分叉。
  */
 import { CHANGE_ID_PATTERN } from './artifacts.mjs';
-import { cardReadyFor } from './change-context.mjs';
+import { cardReadyFor, cardStatusOf } from './change-context.mjs';
 import { CLI_PAGE_HINT } from './cli-config.mjs';
 import { READ_REASONS } from './read.mjs';
 
@@ -100,9 +100,8 @@ function errorText(parsed) {
 
 /** 缺失项只取 `(field, reason)` 唯一对：同因多项不重复刷屏，空原因不计。 */
 function unknownsOf(result) {
-  let list = [];
-  if (Array.isArray(result?.unknowns)) list = result.unknowns;
-  else if (Array.isArray(result?.context?.unknowns)) list = result.context.unknowns;
+  // 契约形状是 `payloadOf` 的顶层 `unknowns`；卡片内的副本不是第二真源，不再猜第二条路径。
+  const list = Array.isArray(result?.unknowns) ? result.unknowns : [];
   const seen = new Set();
   const items = [];
   for (const entry of list) {
@@ -147,20 +146,24 @@ function blockedOutcomeOf(status) {
  * 恢复方向按原因分流：入口配置问题指到配置页，其余先确认 dop 可用再重跑。
  */
 function blockedText(result, changeId) {
-  const status = typeof result?.status === 'string' ? result.status.trim() : '';
+  const status = cardStatusOf(result);
   const items = unknownsOf(result);
-  const configIssue = items.some((item) => CONFIG_REASONS.includes(item.reason));
   const chain = [ENTRY_NAME, changeId].join(' ');
   const { reason, headline } = blockedOutcomeOf(status);
+  // 恢复方向按原因分流：配置问题指配置页；变更号不可确认时原地重跑无用，要先核对号与读面回填。
+  let next = `下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`;
+  if (items.some((item) => CONFIG_REASONS.includes(item.reason))) {
+    next = `下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`;
+  } else if (reason === ENTRY_REASONS.CONTEXT_UNCONFIRMED) {
+    next = `下一步：核对请求的变更号 ${changeId} 是否确为本次目标；号无误时检查读面为何未回填该号，再重跑 ${chain}。`;
+  }
   const lines = [
     `${ENTRY_NAME}：${reason}`,
     headline,
     items.length === 0
       ? '缺失项：无（卡片未列出未知项，按未就绪处理）。'
       : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`,
-    configIssue
-      ? `下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`
-      : `下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`,
+    next,
     '本次不进入澄清/计划/实现步骤，也不改写会话绑定。',
   ];
   const body = String(result?.text ?? '').trimEnd();
