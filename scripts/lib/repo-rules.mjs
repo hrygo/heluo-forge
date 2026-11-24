@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname, sep } from 'node:path';
 
 import { checkBundleClosure } from './bundle-rules.mjs';
+import { isReleaseSecret } from './release-config.mjs';
 import { HOST_PATH, SECRETS } from './sensitive-patterns.mjs';
 
 const REQUIRED = [
@@ -151,9 +152,132 @@ export function checkRootSurface(root, tracked, errors) {
 function workflowFiles(root) {
   const dir = join(root, '.github/workflows');
   if (!existsSync(dir)) return [];
-  return readdirSync(dir)
+    return readdirSync(dir)
     .filter((name) => /\.ya?ml$/.test(name))
     .map((name) => join(dir, name));
+}
+
+// The unified build is the one workflow that writes to the repository: it
+// creates the draft Release and uploads assets (CORP-DSH-PLAN-026 §4.0). Every
+// other workflow stays read-only. The write grant is admitted only under the
+// conditions below, each of which removes one way the grant could be misused.
+export const RELEASE_BUNDLE_WORKFLOW = '.github/workflows/release-bundle.yml';
+const RELEASE_TRIGGERS = ['push:', "tags: ['v*']", 'workflow_dispatch:'];
+const SECRET_REFERENCE = /\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}/gu;
+// A whole line that is one `NAME: ${{ secrets.NAME }}` mapping and nothing else.
+const SECRET_MAPPING = /^\s*[A-Za-z_][A-Za-z0-9_]*:\s*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}\s*$/u;
+
+const indentOf = (line) => line.length - line.trimStart().length;
+const isComment = (line) => line.trim().startsWith('#');
+const keyOf = (text) => /^([A-Za-z_][A-Za-z0-9_-]*):/u.exec(text)?.[1] ?? text;
+
+/** Non-comment lines that belong to the block opened at `index`: every following line indented deeper than it. */
+function nestedLines(lines, index) {
+  const base = indentOf(lines[index]);
+  const nested = [];
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const line = lines[cursor];
+    if (line.trim() === '' || isComment(line)) continue;
+    if (indentOf(line) <= base) break;
+    nested.push(line);
+  }
+  return nested;
+}
+
+/** The keys of the step that owns `index`, up to a `run:` block: script text is not configuration. */
+function stepKeys(lines, index) {
+  const start = indentOf(lines[index]);
+  let open = index;
+  if (!/^\s*-/u.test(lines[index])) {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (lines[cursor].trim() !== '' && indentOf(lines[cursor]) < start) {
+        open = cursor;
+        break;
+      }
+    }
+  }
+  const base = indentOf(lines[open]);
+  const keys = [];
+  for (let cursor = open + 1; cursor < lines.length; cursor += 1) {
+    const line = lines[cursor];
+    if (line.trim() === '' || isComment(line)) continue;
+    if (indentOf(line) <= base) break;
+    keys.push(line.trim());
+    if (/^run:/u.test(line.trim())) break;
+  }
+  return keys;
+}
+
+/** Keys enclosing the line at `index`, nearest first, each the last line above that is indented less. */
+function ancestorsOf(lines, index) {
+  const keys = [];
+  let base = indentOf(lines[index]);
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const line = lines[cursor];
+    if (line.trim() === '' || isComment(line) || indentOf(line) >= base) continue;
+    keys.push(keyOf(line.trim().replace(/^-\s*/u, '')));
+    base = indentOf(line);
+  }
+  return keys;
+}
+
+export function checkReleaseBundleWorkflow(lines) {
+  const problems = [];
+  const label = RELEASE_BUNDLE_WORKFLOW.slice(RELEASE_BUNDLE_WORKFLOW.lastIndexOf('/') + 1);
+
+  // Only a pushed v* tag or a human dispatch may start a write-privileged run:
+  // a PR or branch trigger would let any pushed commit reach the grant.
+  const triggerBlock = lines.findIndex((line) => /^on:\s*$/u.test(line));
+  if (triggerBlock === -1) {
+    problems.push(`${label} must declare an on: trigger block`);
+  } else if (nestedLines(lines, triggerBlock).map((line) => line.trim()).join(' ') !== RELEASE_TRIGGERS.join(' ')) {
+    problems.push(`${label} may only trigger on push of v* tags and workflow_dispatch`);
+  }
+
+  // The grant is the single top-level entry. A job-level block would re-scope
+  // it per job, and one more entry would widen what the token can write.
+  if (lines.some((line) => /^\s+permissions:\s*$/u.test(line))) {
+    problems.push(`${label} must not declare job-level permissions; the top-level contents: write is its only grant`);
+  }
+  const permissionBlock = lines.findIndex((line) => /^permissions:\s*$/u.test(line));
+  if (permissionBlock === -1) {
+    problems.push(`${label} must declare top-level permissions`);
+  } else {
+    const entries = nestedLines(lines, permissionBlock).map((line) => line.trim());
+    if (entries.length !== 1 || entries[0] !== 'contents: write') {
+      problems.push(`${label} top-level permissions must be exactly one entry: contents: write`);
+    }
+  }
+
+  // A checkout that keeps the token in the git config hands the write grant to
+  // every later step, including the ones that only build.
+  for (const [index, line] of lines.entries()) {
+    if (!/^\s*(?:-\s*)?uses:\s*actions\/checkout@/u.test(line)) continue;
+    if (!stepKeys(lines, index).includes('persist-credentials: false')) {
+      problems.push(`${label} checkout at line ${index + 1} must set persist-credentials: false`);
+    }
+  }
+
+  // Configuration reaches a step as an environment variable under `env:`, in
+  // the configuration list, and nothing more: an expression expanded anywhere
+  // else lands in the script text, the command line or the logs.
+  for (const [index, line] of lines.entries()) {
+    const names = [...line.matchAll(SECRET_REFERENCE)];
+    if (names.length === 0) continue;
+    if (SECRET_MAPPING.test(line) === false) {
+      problems.push(`${label} line ${index + 1} expands a secret inline; map it through an env: entry instead`);
+      continue;
+    }
+    if (names.some((match) => !isReleaseSecret(match[1]))) {
+      problems.push(`${label} line ${index + 1} references a secret outside the configuration list`);
+      continue;
+    }
+    const ancestors = ancestorsOf(lines, index);
+    if (ancestors[0] !== 'env' || ancestors.includes('run') || ancestors.includes('with')) {
+      problems.push(`${label} line ${index + 1} must map secrets through an env: block`);
+    }
+  }
+  return problems;
 }
 
 export function checkRepo(root) {
@@ -264,8 +388,15 @@ export function checkRepo(root) {
       }
       if (/secrets\./.test(text)) errors.push(`repo: ${name} must not read secrets`);
     }
-    if (!/^permissions:\s*$/m.test(text) || !/^\s+contents:\s*read\s*$/m.test(text)) {
-      errors.push(`repo: ${name} must declare permissions with contents: read`);
+    if (name === RELEASE_BUNDLE_WORKFLOW) {
+      errors.push(...checkReleaseBundleWorkflow(text.replace(/\r$/gm, '').split('\n')));
+    } else {
+      if (!/^permissions:\s*$/m.test(text) || !/^\s+contents:\s*read\s*$/m.test(text)) {
+        errors.push(`repo: ${name} must declare permissions with contents: read`);
+      }
+      if (/^\s+contents:\s*write\s*$/m.test(text)) {
+        errors.push(`repo: ${name} must not declare contents: write; only ${RELEASE_BUNDLE_WORKFLOW} may`);
+      }
     }
     for (const match of text.matchAll(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*([^\r\n]*)$/gm)) {
       const reference = match[1].replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');

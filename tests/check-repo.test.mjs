@@ -306,6 +306,102 @@ test('workflow without read-only permissions is rejected', () => {
   }
 });
 
+// The unified build is the one workflow that may write to the repository. The
+// fixture is its admitted shape; every case below changes exactly one thing.
+const RELEASE_BUNDLE = `name: release-bundle
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release-bundle-\${{ github.ref }}
+jobs:
+  employee:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the employee package
+        env:
+          HELUO_IAM_CLIENT_ID: \${{ secrets.HELUO_IAM_CLIENT_ID }}
+          HELUO_IAM_CLIENT_SECRET: \${{ secrets.HELUO_IAM_CLIENT_SECRET }}
+        run: node scripts/build-employee-package.mjs
+      - name: Attach to the draft Release
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: node scripts/upload-draft-release.mjs
+`;
+
+test('release-bundle is admitted under its narrow conditions and nothing else', () => {
+  const root = fixture();
+  const path = '.github/workflows/release-bundle.yml';
+  const rejected = (text, expected) => {
+    write(root, path, text);
+    const { errors } = checkRepo(root);
+    assert.ok(errors.length > 0, 'the changed workflow must be rejected');
+    assert.match(errors.join('\n'), expected);
+    return errors.join('\n');
+  };
+  try {
+    write(root, path, RELEASE_BUNDLE);
+    const accepted = checkRepo(root);
+    assert.deepEqual(accepted.errors, []);
+    assert.equal(accepted.counts.workflows, 2);
+    // The runner token is the one admitted secret that is not configuration.
+    write(root, path, RELEASE_BUNDLE.replace('GH_TOKEN: ${{ github.token }}', 'GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}'));
+    assert.deepEqual(checkRepo(root).errors, []);
+
+    // One more entry widens what the token can write.
+    rejected(RELEASE_BUNDLE.replace('  contents: write\n', '  contents: write\n  id-token: write\n'), /permissions must be exactly one entry/);
+    // A job-level block re-scopes the grant per job.
+    rejected(RELEASE_BUNDLE.replace('    runs-on: ubuntu-24.04\n', '    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n'), /must not declare job-level permissions/);
+    rejected(RELEASE_BUNDLE.replace('permissions:\n  contents: write\n', 'permissions:\n  contents: read\n'), /permissions must be exactly one entry/);
+    // A PR or branch trigger lets any pushed commit reach the write grant.
+    rejected(RELEASE_BUNDLE.replace('  workflow_dispatch:\n', '  workflow_dispatch:\n  pull_request:\n'), /may only trigger/);
+    rejected(RELEASE_BUNDLE.replace("    tags: ['v*']\n", '    branches: [main]\n'), /may only trigger/);
+    // A checkout that keeps the token in the git config exposes it to every later step.
+    rejected(RELEASE_BUNDLE.replace('          persist-credentials: false\n', ''), /persist-credentials: false/);
+    // Secrets reach a step as an environment variable, never expanded into script text.
+    const inline = RELEASE_BUNDLE.replace(
+      '        run: node scripts/build-employee-package.mjs',
+      '        run: echo ${{ secrets.HELUO_IAM_CLIENT_SECRET }} | node scripts/build-employee-package.mjs',
+    );
+    rejected(inline, /expands a secret inline/);
+    // Script text that merely looks like an env block is still script text.
+    const script = RELEASE_BUNDLE.replace(
+      '        run: node scripts/upload-draft-release.mjs',
+      '        run: |\n          env:\n            HELUO_IAM_CLIENT_ID: ${{ secrets.HELUO_IAM_CLIENT_ID }}\n          node scripts/upload-draft-release.mjs',
+    );
+    rejected(script, /through an env: block/);
+    // `with:` inputs are expression expansion, not environment variables.
+    rejected(RELEASE_BUNDLE.replace('        env:\n          HELUO_IAM_CLIENT_ID', '        with:\n          HELUO_IAM_CLIENT_ID'), /through an env: block/);
+    // A secret outside the configuration list has no documented injection target.
+    rejected(RELEASE_BUNDLE.replace('secrets.HELUO_IAM_CLIENT_SECRET }}', 'secrets.HELUO_GITEE_HOST }}'), /outside the configuration list/);
+    // The exception is bound to the one file: the same text under another name is not admitted.
+    rmSync(join(root, path));
+    write(root, '.github/workflows/other-release.yml', RELEASE_BUNDLE);
+    const elsewhere = checkRepo(root).errors.join('\n');
+    assert.match(elsewhere, /must not declare contents: write/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('any other workflow that declares contents: write is rejected', () => {
+  const root = fixture();
+  try {
+    write(root, '.github/workflows/check.yml', WORKFLOW.replace('    runs-on: ubuntu-24.04\n', '    runs-on: ubuntu-24.04\n    permissions:\n      contents: write\n'));
+    const { errors } = checkRepo(root);
+    assert.ok(errors.some((error) => error.includes('must not declare contents: write')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('package claimed usable without a manifest is rejected', () => {
   const root = fixture();
   try {
