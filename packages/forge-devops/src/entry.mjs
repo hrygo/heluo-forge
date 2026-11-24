@@ -132,7 +132,9 @@ function singleLine(value) {
 /** 单行化后再截断：超长上游串不把裁决语撑爆，末尾加省略号表示被截过。 */
 function clamp(value, max) {
   const text = singleLine(value);
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  // 按码点截断：`String#slice` 按 UTF-16 code unit 切，遇到 emoji 会把代理对从中间切开，输出乱码。
+  const points = Array.from(text);
+  return points.length <= max ? text : `${points.slice(0, max - 1).join('')}…`;
 }
 
 /** 缺失项只取 `(field, reason)` 唯一对：同因多项不重复刷屏，空原因不计。 */
@@ -166,8 +168,9 @@ function blockedOutcomeOf(card) {
   if (card?.ok === false) {
     const raw = typeof card.reason === 'string' ? singleLine(card.reason) : '';
     // 只有已知原因码才进分流：自定义码按 CONTEXT_BLOCKED 处理，原码仍写进裁决语便于诊断。
-    const reason = KNOWN_REASONS.includes(raw) ? raw : ENTRY_REASONS.CONTEXT_BLOCKED;
-    const unknown = raw !== '' && !KNOWN_REASONS.includes(raw);
+    const isKnown = KNOWN_REASONS.includes(raw);
+    const reason = isKnown ? raw : ENTRY_REASONS.CONTEXT_BLOCKED;
+    const unknown = raw !== '' && !isKnown;
     // 入参错误根本没发起读取：别用"读取失败"描述它，否则恢复方向会往 dop 上带偏。
     let headline = '阻塞：上下文读取失败，未取回可推进的变更事实。';
     if (reason === ENTRY_REASONS.MISSING_OR_INVALID) {

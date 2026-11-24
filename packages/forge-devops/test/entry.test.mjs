@@ -271,6 +271,15 @@ test('未知原因码与超长状态：归并成 CONTEXT_BLOCKED 并截断，原
   assert.match(failed.text, /…/u, '超长 detail 被截断');
   assert.ok(!/x{200,}/u.test(failed.text), '不得把 400 字符原样塞进首行');
 
+  // 代理对不能被从中间切开：截断点上放 emoji，输出里不得出现孤立代理。
+  const { ctx: ctx3, registered: reg3 } = host();
+  const emojiDetail = `${'x'.repeat(118)}😀${'y'.repeat(10)}`;
+  registerEntry(ctx3, spyService({ ok: false, reason: 'COMMAND_FAILED', detail: emojiDetail }).service);
+  const emoji = await reg3.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.match(emoji.text, /…/u, '超长 detail 被截断');
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u.test(emoji.text), '不得留下孤立高位代理');
+  assert.ok(!/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(emoji.text), '不得留下孤立低位代理');
+
   const { ctx: ctx2, registered: reg2 } = host();
   registerEntry(ctx2, spyService({ ok: true, status: 'bl'.repeat(60), changeId: 'ARD123456' }).service);
   const long = await reg2.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
