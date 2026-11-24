@@ -127,6 +127,9 @@
   - 已安装的 `post-rewrite` 钩子在 `git commit --amend`、`git rebase` 后按真实父树自动重扫重签，整条链签名完成后才移动分支；`git reset` 不触发重签，`git cherry-pick` 不触发任何钩子，两者仍需人工确认或补救；
   - 严禁在另一个并行会话中改写当前分支的父提交。并行改写会让自动重签基于过期父链，PR 远端验签出现 `parent-tree does not match` 致命红灯；
   - 网页 squash / merge 生成的服务端提交不被签名，其内容凭据仅为 tree 与已验证 PR head 一致，提交信息格式须按仓库约定维护。
+- **PR Review 与 Bot 审查处理**：
+  - 处理 PR review 时，对 bot 提交的 review 信息先甄别其真实性与价值，确认有效后执行修复；
+  - 修复完成后在 PR 上进行修复总结并回复相关反馈；对于正式的 review comment，须逐条 resolve。
 
 ---
 
