@@ -13,6 +13,7 @@ export const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token'
 export const MAX_EXCHANGED_TTL_SECONDS = 300;
 export const MAX_ACTIVE_HANDLES = 256;
 const MIN_REMAINING_MS = 1000;
+const SAFE_INIT_KEYS = Object.freeze(['method', 'body', 'signal', 'duplex', 'cache', 'mode', 'referrerPolicy']);
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -200,7 +201,7 @@ export function createTokenExchangeService(ports) {
       // injected Bearer credential.
       const safeInit = { headers, redirect: 'manual' };
       if (init && typeof init === 'object') {
-        for (const key of ['method', 'body', 'signal', 'duplex', 'cache', 'mode', 'referrerPolicy']) {
+        for (const key of SAFE_INIT_KEYS) {
           if (init[key] !== undefined) safeInit[key] = init[key];
         }
       }
