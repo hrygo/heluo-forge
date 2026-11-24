@@ -10,7 +10,7 @@ export function parseHttpUrl(value) {
   }
 }
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
  * Parse an absolute HTTPS URL, permitting plaintext HTTP only on loopback hosts

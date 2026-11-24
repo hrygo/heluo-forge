@@ -598,3 +598,78 @@ test('activeHandles enforces MAX_ACTIVE_HANDLES cap and recovers after dispose',
   svc.revokeAll();
   assert.equal(svc.activeHandleCount(), 0);
 });
+
+test('hardening: handle.fetch strips transport hooks (dispatcher/agent), re-encodes %3F/%23 in path check, and validates scope', async () => {
+  const capturedInits = [];
+  let seq = 0;
+  const svc = createTokenExchangeService({
+    targets: {
+      delegra: {
+        endpoint: 'https://iam.corp.example/oauth/token',
+        audience: 'delegra-prod-01',
+        resource: 'https://delegra.corp.example/api/v1/employee',
+        maxTtlSeconds: 300,
+      },
+    },
+    getSessionRef: () => ({
+      issuer: 'https://iam.corp.example',
+      subject: 'emp-1001',
+      accessExpiresAt: Date.now() + 600_000,
+      epoch: '1:1:sess-1',
+    }),
+    resolveSubjectToken: async () => 'iam-subject-token',
+    fetchImpl: async (url, init) => {
+      if (String(url).includes('/oauth/token')) {
+        seq += 1;
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              access_token: `exchanged-hardened-${seq}`,
+              token_type: 'Bearer',
+              expires_in: 120,
+              issued_token_type: ACCESS_TOKEN_TYPE,
+            };
+          },
+        };
+      }
+      capturedInits.push({ url: String(url), init });
+      return { ok: true, status: 200, async json() { return { ok: true }; } };
+    },
+  });
+
+  // 1. Valid space-separated scope succeeds; overlong or illegal-char scope is rejected.
+  await assert.rejects(
+    () => svc.exchange({ target: 'delegra', scope: 'a'.repeat(1025) }),
+    (err) => err.code === 'IAM_TOKEN_EXCHANGE_INVALID',
+  );
+  await assert.rejects(
+    () => svc.exchange({ target: 'delegra', scope: 'experts:read\r\nX-Inject: 1' }),
+    (err) => err.code === 'IAM_TOKEN_EXCHANGE_INVALID',
+  );
+
+  const handle = await svc.exchange({ target: 'delegra', scope: 'experts:read tasks:write' });
+  const controller = new AbortController();
+  await handle.fetch('/experts', {
+    method: 'POST',
+    body: JSON.stringify({ q: 'fin' }),
+    signal: controller.signal,
+    dispatcher: { intercept: () => {} },
+    agent: { steal: () => {} },
+  });
+  assert.equal(capturedInits.length, 1);
+  assert.equal(capturedInits[0].init.method, 'POST');
+  assert.equal(capturedInits[0].init.signal, controller.signal);
+  assert.equal('dispatcher' in capturedInits[0].init, false);
+  assert.equal('agent' in capturedInits[0].init, false);
+  assert.equal(capturedInits[0].init.redirect, 'manual');
+
+  // 2. Percent-encoded ? or # BEFORE %2e%2e cannot truncate decoded dot-segment normalization.
+  const handle2 = await svc.exchange({ target: 'delegra' });
+  await assert.rejects(
+    () => handle2.fetch('https://delegra.corp.example/api/v1/employee/x%3F/%2e%2e/%2e%2e/%2e%2e/admin'),
+    (err) => err.code === 'IAM_TOKEN_EXCHANGE_INVALID',
+  );
+  handle2.dispose();
+});

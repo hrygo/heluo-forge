@@ -13,6 +13,7 @@ export const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token'
 export const MAX_EXCHANGED_TTL_SECONDS = 300;
 export const MAX_ACTIVE_HANDLES = 256;
 const MIN_REMAINING_MS = 1000;
+const SAFE_INIT_KEYS = Object.freeze(['method', 'body', 'signal', 'duplex', 'cache', 'mode', 'referrerPolicy']);
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -58,7 +59,11 @@ function resolveScopedUrl(resourceRoot, pathOrUrl) {
   }
   // Re-normalize after decoding so percent-encoded dot segments (%2e%2e) cannot
   // bypass the resource root prefix check when decoded by an upstream server.
-  const normalizedPath = new URL(decodedPath.replace(/\\+/gu, '/'), resourceRoot.origin).pathname;
+  // Re-encode decoded '?' and '#' so %3F/%23 cannot truncate the normalized pathname.
+  const reEncoded = decodedPath
+    .replace(/\\+/gu, '/')
+    .replace(/[?#]/gu, (ch) => encodeURIComponent(ch));
+  const normalizedPath = new URL(reEncoded, resourceRoot.origin).pathname;
 
   if (resourceRoot.basePath) {
     const rawOk = resolved.pathname === resourceRoot.basePath
@@ -191,11 +196,17 @@ export function createTokenExchangeService(ports) {
       headers.delete('proxy-authorization');
       headers.set('authorization', `Bearer ${token}`);
 
-      return fetchImpl(targetUrl, {
-        ...init,
-        headers,
-        redirect: 'manual',
-      });
+      // Allowlist only standard Fetch request fields so caller-supplied transport
+      // hooks (e.g. undici `dispatcher` or Node `agent`) cannot intercept the
+      // injected Bearer credential.
+      const safeInit = { headers, redirect: 'manual' };
+      if (init && typeof init === 'object') {
+        for (const key of SAFE_INIT_KEYS) {
+          if (init[key] !== undefined) safeInit[key] = init[key];
+        }
+      }
+
+      return fetchImpl(targetUrl, safeInit);
     };
 
     return Object.freeze({
@@ -226,8 +237,11 @@ export function createTokenExchangeService(ports) {
     if (!spec) {
       throw new IamError('IAM_TOKEN_EXCHANGE_UNCONFIGURED', `Token exchange target "${targetId}" is not configured`);
     }
-    if (scope !== undefined && !isNonEmptyString(scope)) {
-      throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'scope must be a non-empty string when provided');
+    if (scope !== undefined) {
+      const trimmedScope = typeof scope === 'string' ? scope.trim() : '';
+      if (!trimmedScope || trimmedScope.length > 1024 || !/^[\x21\x23-\x5B\x5D-\x7E]+(?: +[\x21\x23-\x5B\x5D-\x7E]+)*$/u.test(trimmedScope)) {
+        throw new IamError('IAM_TOKEN_EXCHANGE_INVALID', 'scope must be valid RFC 6749 scope tokens within 1024 characters');
+      }
     }
     if (typeof fetchImpl !== 'function') {
       throw new IamError('IAM_TOKEN_EXCHANGE_FAILED', 'HTTP transport is unavailable for token exchange');
