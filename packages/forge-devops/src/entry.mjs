@@ -161,6 +161,13 @@ function blockedOutcomeOf(card) {
       headline: '阻塞：响应没有卡片状态，无法确认已取回匹配的变更事实。',
     };
   }
+  // 卡片自己说未就绪时以卡片的说法为准：这是状态语义，比"ok 没自报"更准确，恢复方向也不同。
+  if (status !== READY_STATUS) {
+    return {
+      reason: ENTRY_REASONS.CONTEXT_BLOCKED,
+      headline: `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`,
+    };
+  }
   // `ok` 缺失同样不可确认：注入实现不回填 `ok` 时不能只靠 status 放行（与 cardReadyFor 同一个 fail-closed 口径）。
   if (card?.ok !== true) {
     return {
@@ -168,15 +175,9 @@ function blockedOutcomeOf(card) {
       headline: '阻塞：上下文卡未自报成功（缺少 ok=true），按未确认处理，未取回可推进的变更事实。',
     };
   }
-  if (status === READY_STATUS) {
-    return {
-      reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
-      headline: '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。',
-    };
-  }
   return {
-    reason: ENTRY_REASONS.CONTEXT_BLOCKED,
-    headline: `阻塞：上下文卡未就绪（状态 ${status}），未取回可推进的变更事实。`,
+    reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
+    headline: '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。',
   };
 }
 

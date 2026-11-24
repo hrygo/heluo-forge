@@ -245,6 +245,7 @@ test('阻塞归因按固定顺序归口：读面失败 / 空状态 / 未自报�
     { card: { ok: true }, expect: 'CONTEXT_EMPTY', why: 'ok:true 但缺状态' },
     { card: { ok: true, status: 'blocked', changeId: 'ARD123456' }, expect: 'CONTEXT_BLOCKED', why: '未就绪' },
     { card: { status: 'ready', changeId: 'ARD123456' }, expect: 'CONTEXT_UNCONFIRMED', why: 'ok 缺失按不可确认' },
+    { card: { status: 'blocked', changeId: 'ARD123456' }, expect: 'CONTEXT_BLOCKED', why: '卡片自报未就绪优先于 ok 缺失' },
     { card: { ok: true, status: 'ready', changeId: 'ARD999999' }, expect: 'CONTEXT_UNCONFIRMED', why: '号不符' },
   ];
   for (const item of cases) {

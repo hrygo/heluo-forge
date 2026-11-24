@@ -94,6 +94,8 @@ export function cardStatusOf(card) {
  * - `status` 必须是 `ready`；
  * - 卡片必须**自报**变更号且全部等于请求号：报不上来视为不可确认，不绑定（fail closed），
  *   否则换一个不回填变更号的注入实现，就绪卡会把"别的变更"静默绑进会话。
+ *   号按字面比较、不折叠大小写：变更号是平台侧不透明标识，`CHANGE_ID_PATTERN` 允许混合大小写，
+ *   而"平台回显是否改写大小写"尚无取证——凭猜测折叠，等于把两个不同的号当成同一个。
  *
  * @param {unknown} card service 返回的上下文卡
  * @param {string} changeId 请求的变更号
