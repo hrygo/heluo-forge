@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Heluo Brand Appearance",
+    "description": "Provides the Heluo Forge Enterprise brand tokens — product name, logo, accent colour and default theme — with upstream fallbacks for invalid values.",
+    "detail": "docs/DETAIL.md"
+  }
+}

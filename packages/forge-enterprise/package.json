@@ -12,11 +12,13 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@heluo/forge-brand": "workspace:*",
     "@heluo/forge-credentials-keychain": "workspace:*",
     "@heluo/forge-iam": "workspace:*",
     "@heluo/forge-policy": "workspace:*"
   },
   "bundledDependencies": [
+    "@heluo/forge-brand",
     "@heluo/forge-credentials-keychain",
     "@heluo/forge-iam",
     "@heluo/forge-policy"

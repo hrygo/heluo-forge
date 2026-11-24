@@ -54,7 +54,7 @@ test('the local credentials row is disabled rather than removed or re-enabled', 
   assert.doesNotMatch(text, /^ {4}- id: credentials$/mu, '不得把官方 local 行复制进 insert 段');
 });
 
-test('the base bundle mounts only universal account, keychain, and policy rows with zero R&D surface', async () => {
+test('the base bundle mounts only universal account, keychain, policy and brand rows with zero R&D surface', async () => {
   const text = await read(BASE_PATCH);
   assert.deepEqual(
     insertedRows(text),
@@ -62,8 +62,9 @@ test('the base bundle mounts only universal account, keychain, and policy rows w
       ['heluo-credentials-keychain', '@heluo/forge-credentials-keychain'],
       ['heluo-policy', '@heluo/forge-policy'],
       ['heluo-iam', '@heluo/forge-iam'],
+      ['heluo-brand', '@heluo/forge-brand'],
     ],
-    '通用底座只装凭据、策略与 IAM，不含任何研发行',
+    '通用底座只装凭据、策略、IAM 与品牌令牌，不含任何研发行',
   );
   assert.doesNotMatch(text, /forge-devops|heluo-gitee|issue-delivery-skill|heluo-engineering-ui/u);
   assert.doesNotMatch(text, /^\s*name: '@heluo\/forge-(devops|gitee|engineering)'$/mu);
@@ -79,7 +80,7 @@ test('the base manifest declares only universal dependencies and no R&D exports 
   assert.equal(manifest.dsh.client, undefined);
   assert.deepEqual(
     Object.keys(manifest.dependencies ?? {}).sort(),
-    ['@heluo/forge-credentials-keychain', '@heluo/forge-iam', '@heluo/forge-policy'],
+    ['@heluo/forge-brand', '@heluo/forge-credentials-keychain', '@heluo/forge-iam', '@heluo/forge-policy'],
   );
   assert.equal(manifest.exports['./client'], undefined);
   assert.equal(manifest.exports['./skills'], undefined);
@@ -93,7 +94,7 @@ test('the base manifest declares only universal dependencies and no R&D exports 
 test('every inserted package exists, is private, and has a manifest', async () => {
   const text = await read(BASE_PATCH);
   const names = [...text.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);
-  assert.equal(names.length, 3);
+  assert.equal(names.length, 4);
   for (const name of names) {
     const segments = name.split('/');
     const packageName = segments.slice(0, 2).join('/');

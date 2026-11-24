@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "河洛品牌外观",
+    "description": "提供「河洛 Forge 企业版」的产品名称、Logo、主色与默认主题等品牌外观令牌，配置异常时回退上游默认。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
