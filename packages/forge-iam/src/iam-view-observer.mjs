@@ -14,7 +14,7 @@ const VIEW_KEYS = Object.freeze(['state', 'configured', 'signedIn', 'canSignOut'
   'error', 'exclusive', 'principal', 'identity', 'accessExpiresAt', 'gatewayCredential', 'gatewayConsoleUrl']);
 const CREDENTIAL_KEYS = Object.freeze(['state', 'ownerSubject', 'deviceLabel', 'enteredAt', 'suggestedExpiry',
   'storage', 'matchesAccount']);
-// 只读显示投影（issue #160）：仅三个定稿字段，未知键一律拒绝。
+// 只读显示投影（issue #160）：仅 workNo/name 两个候选键，未知键一律拒绝。
 const IDENTITY_KEYS = Object.freeze(['workNo', 'name']);
 
 export class IamViewError extends Error {
