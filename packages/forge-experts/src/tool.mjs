@@ -5,8 +5,9 @@
  * Independent axis (P2): zero cross-axis imports. Enforces verified single-use
  * selectionToken presence before delegation (blocking hallucinated LLM calls with
  * zero outbound tasks), separates acceptance from completion (`completed: false`),
- * projects attributed expert results with collapsed raw payloads and read-only
- * `waiting_user` notices, and marks cancellations with `externalActionsNotReverted: true`.
+ * projects attributed expert results with collapsed raw payloads, fail-closed
+ * authorized-only sources/artifacts filtering, and read-only `waiting_user` notices,
+ * and marks cancellations with `externalActionsNotReverted: true`.
  */
 import { ExpertsError } from './errors.mjs';
 
@@ -22,6 +23,51 @@ export const EXPERT_TOOL_NAMES = Object.freeze({
 export const DEFAULT_WAITING_USER_NOTICE =
   'Expert task is waiting for additional user input. This notice is read-only; send an explicit follow-up to continue.';
 
+const DELEGATE_INPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: Object.freeze(['selectionToken', 'sessionId', 'taskText']),
+  properties: Object.freeze({
+    selectionToken: Object.freeze({ type: 'string', minLength: 1 }),
+    sessionId: Object.freeze({ type: 'string', minLength: 1 }),
+    taskText: Object.freeze({ type: 'string', minLength: 1 }),
+    draftVersion: Object.freeze({ type: 'integer', minimum: 0 }),
+    reuseRefs: Object.freeze({ type: 'array', items: Object.freeze({ type: 'string', minLength: 1 }) }),
+    confirmationToken: Object.freeze({ type: 'string', minLength: 1 }),
+  }),
+});
+
+const FOLLOWUP_INPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: Object.freeze(['taskId', 'taskText']),
+  properties: Object.freeze({
+    taskId: Object.freeze({ type: 'string', minLength: 1 }),
+    taskText: Object.freeze({ type: 'string', minLength: 1 }),
+    reuseRefs: Object.freeze({ type: 'array', items: Object.freeze({ type: 'string', minLength: 1 }) }),
+    requestId: Object.freeze({ type: 'string', minLength: 1 }),
+    confirmationToken: Object.freeze({ type: 'string', minLength: 1 }),
+  }),
+});
+
+const TASK_ID_INPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: Object.freeze(['taskId']),
+  properties: Object.freeze({
+    taskId: Object.freeze({ type: 'string', minLength: 1 }),
+  }),
+});
+
+const REQUEST_ID_INPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: Object.freeze(['requestId']),
+  properties: Object.freeze({
+    requestId: Object.freeze({ type: 'string', minLength: 1 }),
+  }),
+});
+
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -34,19 +80,19 @@ function normalizeOptionalInteger(value) {
   return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+/**
+ * Fail-closed projection filter for `sources` and `artifacts` (#247):
+ * only plain objects explicitly marked `authorized === true` are exposed to the
+ * main assistant. Untagged objects, non-boolean flags, and bare strings are dropped
+ * so unauthorized references cannot leak when an upstream projector omits the flag.
+ */
 function filterAuthorizedItems(items) {
   if (!Array.isArray(items)) return Object.freeze([]);
   const out = [];
   for (const item of items) {
-    if (item === null || item === undefined) continue;
-    if (typeof item === 'string') {
-      if (item.trim().length > 0) out.push(item.trim());
-      continue;
-    }
-    if (isPlainObject(item)) {
-      if (item.authorized === false) continue;
-      out.push(Object.freeze({ ...item }));
-    }
+    if (!isPlainObject(item)) continue;
+    if (item.authorized !== true) continue;
+    out.push(Object.freeze({ ...item }));
   }
   return Object.freeze(out);
 }
@@ -54,12 +100,16 @@ function filterAuthorizedItems(items) {
 /**
  * Projects a Delegra expert task result into a #247 synthesis envelope that
  * strictly separates expert attribution from main-assistant judgment, keeps
- * raw output collapsed by default, filters out unauthorized sources/artifacts,
- * and attaches a read-only notice on `waiting_user`.
+ * raw output collapsed by default, filters out unauthorized sources/artifacts
+ * (fail-closed, requiring explicit `authorized === true`), and attaches a
+ * read-only notice on `waiting_user`.
  *
  * @param {Record<string, unknown>} rawResult
  */
 export function projectExpertResultEnvelope(rawResult) {
+  if (rawResult === null || rawResult === undefined) {
+    throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Expert task result not found');
+  }
   if (!isPlainObject(rawResult)) {
     throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Expert task result payload must be a plain object');
   }
@@ -157,6 +207,12 @@ export function createExpertToolBridge(ports) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'taskId is required');
     }
     const task = await ports.getTask({ taskId: rawInput.taskId.trim() });
+    if (task === null || task === undefined) {
+      throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Expert task not found');
+    }
+    if (!isPlainObject(task)) {
+      throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Expert task status payload must be a plain object');
+    }
     return Object.freeze({ ...task });
   }
 
@@ -165,6 +221,9 @@ export function createExpertToolBridge(ports) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'taskId is required');
     }
     const raw = await ports.getTaskResult({ taskId: rawInput.taskId.trim() });
+    if (raw === null || raw === undefined) {
+      throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Expert task result not found');
+    }
     return projectExpertResultEnvelope(raw);
   }
 
@@ -173,6 +232,12 @@ export function createExpertToolBridge(ports) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'requestId is required');
     }
     const reconciled = await ports.reconcileByRequest({ requestId: rawInput.requestId.trim() });
+    if (reconciled === null || reconciled === undefined) {
+      throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Expert task correlation not found');
+    }
+    if (!isPlainObject(reconciled)) {
+      throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Expert task reconciliation payload must be a plain object');
+    }
     return Object.freeze({ ...reconciled });
   }
 
@@ -198,6 +263,12 @@ export function createExpertToolBridge(ports) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'taskId is required');
     }
     const result = await ports.cancelTask({ taskId: rawInput.taskId.trim() });
+    if (result === null || result === undefined) {
+      throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Expert task not found');
+    }
+    if (!isPlainObject(result)) {
+      throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Expert task cancel payload must be a plain object');
+    }
     return Object.freeze({
       ...result,
       // Never claim that external side effects performed by the expert were reverted (#247).
@@ -211,24 +282,28 @@ export function createExpertToolBridge(ports) {
         name: EXPERT_TOOL_NAMES.STATUS,
         description: 'Fetch authoritative status for a delegated expert task.',
         readOnly: true,
+        inputSchema: TASK_ID_INPUT_SCHEMA,
         handler: getStatus,
       }),
       Object.freeze({
         name: EXPERT_TOOL_NAMES.RESULT,
         description: 'Fetch attributed expert task result with collapsed raw output and authorized sources/artifacts.',
         readOnly: true,
+        inputSchema: TASK_ID_INPUT_SCHEMA,
         handler: getResult,
       }),
       Object.freeze({
         name: EXPERT_TOOL_NAMES.RECONCILE,
         description: 'Reconcile an uncertain expert dispatch by requestId against Delegra.',
         readOnly: true,
+        inputSchema: REQUEST_ID_INPUT_SCHEMA,
         handler: reconcile,
       }),
       Object.freeze({
         name: EXPERT_TOOL_NAMES.CANCEL,
         description: 'Request cancellation of an expert task (does not revert completed external actions).',
         readOnly: false,
+        inputSchema: TASK_ID_INPUT_SCHEMA,
         handler: cancel,
       }),
     ];
@@ -242,12 +317,14 @@ export function createExpertToolBridge(ports) {
         name: EXPERT_TOOL_NAMES.DELEGATE,
         description: 'Delegate a user-selected @-mention task to a verified enterprise expert using a single-use selectionToken.',
         readOnly: false,
+        inputSchema: DELEGATE_INPUT_SCHEMA,
         handler: delegate,
       }),
       Object.freeze({
         name: EXPERT_TOOL_NAMES.FOLLOWUP,
         description: 'Send a follow-up instruction to an existing delegated expert task.',
         readOnly: false,
+        inputSchema: FOLLOWUP_INPUT_SCHEMA,
         handler: followup,
       }),
       ...readAndCancelDefs,

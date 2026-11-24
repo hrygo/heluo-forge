@@ -47,10 +47,15 @@ function makeBridge({ dispatchEnabled = true, overrides = {} } = {}) {
         sources: [
           { title: 'Authorized Doc', uri: 'https://docs.example.test/a', authorized: true },
           { title: 'Restricted Doc', uri: 'https://docs.example.test/secret', authorized: false },
+          { title: 'Untagged Doc', uri: 'https://docs.example.test/untagged' },
+          { title: 'Truthy String Flag', uri: 'https://docs.example.test/truthy', authorized: 'true' },
+          'https://docs.example.test/bare-string',
         ],
         artifacts: [
           { name: 'report.md', authorized: true },
           { name: 'internal-dump.json', authorized: false },
+          { name: 'untagged-artifact.txt' },
+          'bare-artifact.txt',
         ],
       };
     },
@@ -125,16 +130,20 @@ test('dispatchEnabled: false fails closed on delegate/followup while keeping sta
   assert.equal(reconciled.taskId, 'task-101');
   assert.equal(cancelled.externalActionsNotReverted, true);
 
-  const names = bridge.getToolDefinitions().map((d) => d.name);
-  assert.deepEqual(names, [
+  const defs = bridge.getToolDefinitions();
+  assert.deepEqual(defs.map((d) => d.name), [
     EXPERT_TOOL_NAMES.STATUS,
     EXPERT_TOOL_NAMES.RESULT,
     EXPERT_TOOL_NAMES.RECONCILE,
     EXPERT_TOOL_NAMES.CANCEL,
   ]);
+  for (const def of defs) {
+    assert.equal(def.inputSchema?.type, 'object');
+    assert.ok(Array.isArray(def.inputSchema?.required) && def.inputSchema.required.length > 0);
+  }
 });
 
-test('getResult projects #247 synthesis envelope: attribution, collapsed raw output, authorized filtering, and waiting_user read-only notice', async () => {
+test('getResult projects #247 synthesis envelope with fail-closed authorized filtering and waiting_user read-only notice', async () => {
   const { bridge } = makeBridge({ dispatchEnabled: true });
   const envelope = await bridge.getResult({ taskId: 'task-101' });
 
@@ -149,6 +158,8 @@ test('getResult projects #247 synthesis envelope: attribution, collapsed raw out
     resultVersion: 3,
     status: 'succeeded',
   });
+  // Fail-closed: only entries with explicit `authorized === true` survive;
+  // untagged objects, non-boolean truthy flags, and bare strings are dropped.
   assert.equal(envelope.sources.length, 1);
   assert.equal(envelope.sources[0].title, 'Authorized Doc');
   assert.equal(envelope.artifacts.length, 1);
@@ -177,6 +188,46 @@ test('getResult projects #247 synthesis envelope: attribution, collapsed raw out
     readOnly: true,
     message: DEFAULT_WAITING_USER_NOTICE,
   });
+});
+
+test('null/undefined downstream responses map to EXPERT_TASK_NOT_FOUND (404) while malformed non-object payloads remain EXPERT_INTERNAL_ERROR (500)', async () => {
+  const { bridge: nullBridge } = makeBridge({
+    dispatchEnabled: true,
+    overrides: {
+      getTask: async () => null,
+      getTaskResult: async () => null,
+      reconcileByRequest: async () => undefined,
+      cancelTask: async () => null,
+    },
+  });
+
+  await assert.rejects(
+    () => nullBridge.getStatus({ taskId: 'task-missing' }),
+    (err) => err instanceof ExpertsError && err.code === 'EXPERT_TASK_NOT_FOUND' && err.status === 404,
+  );
+  await assert.rejects(
+    () => nullBridge.getResult({ taskId: 'task-missing' }),
+    (err) => err instanceof ExpertsError && err.code === 'EXPERT_TASK_NOT_FOUND' && err.status === 404,
+  );
+  await assert.rejects(
+    () => nullBridge.reconcile({ requestId: 'req-missing' }),
+    (err) => err instanceof ExpertsError && err.code === 'EXPERT_TASK_NOT_FOUND' && err.status === 404,
+  );
+  await assert.rejects(
+    () => nullBridge.cancel({ taskId: 'task-missing' }),
+    (err) => err instanceof ExpertsError && err.code === 'EXPERT_TASK_NOT_FOUND' && err.status === 404,
+  );
+
+  const { bridge: corruptBridge } = makeBridge({
+    dispatchEnabled: true,
+    overrides: {
+      getTaskResult: async () => 'not-an-object',
+    },
+  });
+  await assert.rejects(
+    () => corruptBridge.getResult({ taskId: 'task-corrupt' }),
+    (err) => err instanceof ExpertsError && err.code === 'EXPERT_INTERNAL_ERROR' && err.status === 500,
+  );
 });
 
 test('cancel explicitly reports externalActionsNotReverted: true', async () => {
@@ -243,6 +294,57 @@ test('apply() registers restricted expert tools when dispatchEnabled is true and
   assert.ok(registered.has(EXPERT_TOOL_NAMES.CANCEL));
 
   await effectCleanup();
+  assert.equal(registered.size, 0);
+  assert.equal(routeDisposed, true);
+});
+
+test('apply() logs warn when tool registry is unavailable and rolls back partial registrations on throw', async () => {
+  const warnings = [];
+  const ctxMissingRegistry = {
+    get(serviceName) {
+      if (serviceName === 'webServer') return { register: () => () => {} };
+      return undefined;
+    },
+    provide() {},
+    effect() {},
+    logger: { warn(msg) { warnings.push(msg); } },
+  };
+  await apply(ctxMissingRegistry, { managementEnabled: true, dispatchEnabled: true });
+  assert.ok(warnings.some((m) => m.includes('tool registry unavailable')));
+
+  const registered = new Set();
+  let routeDisposed = false;
+  let count = 0;
+  const ctxThrowingRegistry = {
+    get(serviceName) {
+      if (serviceName === 'webServer') {
+        return {
+          register() {
+            return () => { routeDisposed = true; };
+          },
+        };
+      }
+      if (serviceName === 'tools') {
+        return {
+          register(def) {
+            count += 1;
+            if (count === 3) throw new Error('registry full');
+            registered.add(def.name);
+            return () => { registered.delete(def.name); };
+          },
+        };
+      }
+      return undefined;
+    },
+    provide() {},
+    effect() {},
+    logger: { warn() {} },
+  };
+
+  await assert.rejects(
+    () => apply(ctxThrowingRegistry, { managementEnabled: true, dispatchEnabled: true }),
+    /registry full/u,
+  );
   assert.equal(registered.size, 0);
   assert.equal(routeDisposed, true);
 });
