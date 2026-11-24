@@ -44,6 +44,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
+import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 import {
   inspectPublicTarball,
   isLoginConfigured,
@@ -207,9 +208,56 @@ function installerSource(toolRoot) {
   return path;
 }
 
+const BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
+
+/** 外层品牌材料：交付包内文件名 → 品牌套件相对路径，全部经 manifest 校验后复制。 */
+const BRAND_FILES = [
+  ['app-icon.ico', 'icons/app-icon.ico'],
+  ['app-icon.icns', 'icons/app-icon.icns'],
+  ...[16, 32, 48, 64, 128, 256, 512, 1024].map((size) => [`app-icon-${size}.png`, `sizes/app-icon-${size}.png`]),
+  ['wordmark-color.svg', 'primary/wordmark-color.svg'],
+];
+
+/** 桌面壳 §1.1 应用标识：外层快捷方式、deb 元数据与安装包统一以此为准（首个安装包发布后不可更改）。 */
+export const APP_IDENTITY = Object.freeze({
+  appId: 'com.heluo.forge.enterprise',
+  upgradeGuid: '3fa730a8-e95c-45dc-9724-c525f3654136',
+  productName: 'Heluo Forge Enterprise',
+  executableName: 'heluo-forge-enterprise',
+  displayName: '河洛 Forge 企业版',
+});
+
+/**
+ * Write the outer brand materials of the employee package: verified icon set,
+ * the wordmark and the app identity record. The whole suite missing from the
+ * toolchain degrades to no branding directory (the GB rule: outer materials
+ * fall back, the plugin-level branding is never blocked); a present but
+ * tampered suite fails closed through the manifest ledger.
+ */
+export function writeBrandingAssets(content, toolRoot, version) {
+  const brandDir = join(toolRoot, BRAND_DIR);
+  if (!existsSync(join(brandDir, 'manifest.json'))) return null;
+  const { manifest, byPath } = readManifest(brandDir);
+  const brandingDir = join(content, 'branding');
+  mkdirSync(brandingDir, { recursive: true });
+  const files = [];
+  for (const [name, source] of BRAND_FILES) {
+    const { bytes } = verifyAsset(brandDir, byPath, source);
+    writeFileSync(join(brandingDir, name), bytes);
+    files.push(`branding/${name}`);
+  }
+  writeFileSync(join(brandingDir, 'app-identity.json'), `${JSON.stringify(
+    { schema: 'heluo-app-identity/1', ...APP_IDENTITY, version, brandManifest: manifest.version ?? null },
+    null,
+    2,
+  )}\n`);
+  files.push('branding/app-identity.json');
+  return { manifestVersion: manifest.version ?? null, identity: { ...APP_IDENTITY }, files };
+}
+
 const LAUNCHERS = {
   'install-macos.command': `#!/bin/sh
-# 双击运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
+# 河洛 Forge 企业版 · 双击运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
 # HASH 是同一交付包内 tgz 的自算摘要：只能发现制品损坏，不构成独立来源。
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -222,7 +270,7 @@ HASH=$(/usr/bin/shasum -a 256 "$ROOT/enterprise-plugin"/*.tgz | cut -d' ' -f1)
 exec /usr/bin/env node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile "\${HELUO_PROFILE:-auto}" --install-host --sha256 "$HASH" "$@"
 `,
   'install-linux.sh': `#!/bin/sh
-# 终端运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
+# 河洛 Forge 企业版 · 终端运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
 # HASH 是同一交付包内 tgz 的自算摘要：只能发现制品损坏，不构成独立来源。
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -246,7 +294,7 @@ for %%I in ("%HERE%..") do set "ROOT=%%~fI"
 set "LOG=%TEMP%\\heluo-enterprise-install.log"
 if not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh"
 if not defined HELUO_PROFILE set "HELUO_PROFILE=auto"
-echo [heluo] Enterprise plugin installer
+echo [heluo] Heluo Forge Enterprise - employee plugin installer
 echo [heluo] DSH_HOME=%DSH_HOME%
 where node >nul 2>nul
 if errorlevel 1 if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"
@@ -285,9 +333,9 @@ pause
 `,
 };
 
-const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
+const EMPLOYEE_GUIDE = `# 河洛 Forge 企业版 · 安装说明
 
-整个目录是一个交付包，不需要再向管理员索取配置。
+整个目录是「河洛 Forge 企业版」交付包，不需要再向管理员索取配置。
 
 ## 安装前
 
@@ -559,6 +607,7 @@ export function buildDelivery(input) {
       writeFileSync(path, body);
       chmodSync(path, 0o755);
     }
+    const branding = writeBrandingAssets(content, toolRoot, input.version);
     const guide = clientSecretFile === null
       ? EMPLOYEE_GUIDE
       : `${EMPLOYEE_GUIDE
@@ -618,6 +667,7 @@ export function buildDelivery(input) {
       configKeys: made.configKeys,
       clientSecretEmbedded: made.secretEmbedded,
       verified: verified.ok,
+      branding,
     };
   } finally {
     rmSync(staging, { recursive: true, force: true });

@@ -171,7 +171,7 @@ test('the package is complete, self-verifying and carries the configuration wher
   assert.deepEqual(filesUnder(output).filter((file) => !file.includes('/')), ['INSTALL.md', 'SHA256SUMS', EMPLOYEE_MANIFEST_FILE].sort());
   assert.deepEqual(
     readdirSync(output).sort(),
-    ['INSTALL.md', 'SHA256SUMS', EMPLOYEE_MANIFEST_FILE, 'engineering-plugin', 'enterprise-plugin', 'installer'],
+    ['INSTALL.md', 'SHA256SUMS', 'branding', EMPLOYEE_MANIFEST_FILE, 'engineering-plugin', 'enterprise-plugin', 'installer'],
   );
   assert.equal(existsSync(join(output, 'installer', 'init-enterprise-plugin.mjs')), true);
   assert.equal(existsSync(`${output}.zip`), true);
@@ -202,6 +202,30 @@ test('the package is complete, self-verifying and carries the configuration wher
         sha256: result.packages[1].sha256,
       },
     ],
+    branding: {
+      manifestVersion: 'V2.1.5',
+      identity: {
+        appId: 'com.heluo.forge.enterprise',
+        upgradeGuid: '3fa730a8-e95c-45dc-9724-c525f3654136',
+        productName: 'Heluo Forge Enterprise',
+        executableName: 'heluo-forge-enterprise',
+        displayName: '河洛 Forge 企业版',
+      },
+      files: [
+        'branding/app-icon.ico',
+        'branding/app-icon.icns',
+        'branding/app-icon-16.png',
+        'branding/app-icon-32.png',
+        'branding/app-icon-48.png',
+        'branding/app-icon-64.png',
+        'branding/app-icon-128.png',
+        'branding/app-icon-256.png',
+        'branding/app-icon-512.png',
+        'branding/app-icon-1024.png',
+        'branding/wordmark-color.svg',
+        'branding/app-identity.json',
+      ],
+    },
     configKeys: manifest.configKeys,
     clientSecretEmbedded: true,
     discovery: { checked: false, reason: 'not-run: the runner cannot reach the enterprise IAM' },
@@ -270,7 +294,7 @@ test('without the engineering extension the package holds the enterprise plugin 
   });
   assert.deepEqual(
     readdirSync(result.output).sort(),
-    ['INSTALL.md', 'SHA256SUMS', EMPLOYEE_MANIFEST_FILE, 'enterprise-plugin', 'installer'],
+    ['INSTALL.md', 'SHA256SUMS', 'branding', EMPLOYEE_MANIFEST_FILE, 'enterprise-plugin', 'installer'],
   );
   assert.deepEqual(
     calls.map((call) => call.entry ?? ENTRY),

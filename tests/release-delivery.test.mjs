@@ -12,11 +12,11 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { buildDelivery, parseArguments } from '../scripts/release-delivery.mjs';
+import { APP_IDENTITY, buildDelivery, parseArguments, writeBrandingAssets } from '../scripts/release-delivery.mjs';
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { buildConfig, parseEnvConfig, PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
@@ -364,6 +364,11 @@ test('builder writes the employee package and a zip', (t) => {
     'installer/install-macos.command',
     'installer/install-linux.sh',
     'installer/install-windows.cmd',
+    'branding/app-icon.ico',
+    'branding/app-icon.icns',
+    ...[16, 32, 48, 64, 128, 256, 512, 1024].map((size) => `branding/app-icon-${size}.png`),
+    'branding/wordmark-color.svg',
+    'branding/app-identity.json',
     'INSTALL.md',
     'SHA256SUMS',
   ]) {
@@ -371,6 +376,7 @@ test('builder writes the employee package and a zip', (t) => {
   }
   assert.equal(existsSync(`${output}.zip`), true);
   const guide = readFileSync(join(output, 'INSTALL.md'), 'utf8');
+  assert.match(guide, /^# 河洛 Forge 企业版 · 安装说明$/mu);
   assert.match(guide, /install-macos\.command/u);
   assert.match(guide, /mounted=unknown/u);
   assert.match(guide, /有旧版本时先执行\s*$/mu, '安装流程必须说明异版本先卸载再安装');
@@ -824,4 +830,63 @@ test('--previous-issuer 把历史绑定写进 client-secret.json，供安装器�
   const binding = JSON.parse(readFileSync(join(output, 'enterprise-plugin', 'client-secret.json'), 'utf8'));
   assert.deepEqual(binding.previousIssuers, ['https://old.corp.example/oidc']);
   assert.equal(JSON.stringify(binding).includes('corp-secret-value-abcdef'), false, '绑定文件不含密钥原文');
+});
+
+// ---- outer brand materials -----------------------------------------------------
+
+const BRAND_SOURCES = [
+  'icons/app-icon.ico',
+  'icons/app-icon.icns',
+  ...[16, 32, 48, 64, 128, 256, 512, 1024].map((size) => `sizes/app-icon-${size}.png`),
+  'primary/wordmark-color.svg',
+];
+
+test('外层品牌：材料与品牌套件逐字节一致，身份五元组写入 app-identity.json', (t) => {
+  const root = temp(t, 'forge-brand-out-');
+  const content = join(root, 'content');
+  const result = writeBrandingAssets(content, TOOL_ROOT, '0.1.0-corp.1');
+  assert.equal(result.files.length, BRAND_SOURCES.length + 1);
+  for (const source of BRAND_SOURCES) {
+    const name = basename(source);
+    assert.equal(
+      readFileSync(join(content, 'branding', name)).equals(readFileSync(join(TOOL_ROOT, 'docs/assets/branding/cyber-long', source))),
+      true,
+      `${name} 必须与品牌源逐字节一致`,
+    );
+  }
+  const identity = JSON.parse(readFileSync(join(content, 'branding', 'app-identity.json'), 'utf8'));
+  assert.deepEqual(
+    { ...identity, version: null, brandManifest: null },
+    { schema: 'heluo-app-identity/1', ...APP_IDENTITY, version: null, brandManifest: null },
+  );
+  assert.equal(identity.version, '0.1.0-corp.1');
+  assert.equal(typeof identity.brandManifest, 'string');
+});
+
+test('外层品牌降级：工具链缺品牌套件时返回 null 不建目录（不阻塞插件级品牌化）', (t) => {
+  const root = temp(t, 'forge-brand-missing-');
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  writeFileSync(join(root, 'scripts', 'init-enterprise-plugin.mjs'), 'void 0;\n');
+  const result = writeBrandingAssets(join(root, 'content'), root, '0.1.0-corp.1');
+  assert.equal(result, null);
+  assert.equal(existsSync(join(root, 'content', 'branding')), false);
+});
+
+test('外层品牌反向：套件存在但登记表被篡改时拒绝复制（fail-closed）', (t) => {
+  const root = temp(t, 'forge-brand-tamper-');
+  const brandDir = join(root, 'docs/assets/branding/cyber-long');
+  const sourceDir = join(TOOL_ROOT, 'docs/assets/branding/cyber-long');
+  const manifest = JSON.parse(readFileSync(join(sourceDir, 'manifest.json'), 'utf8'));
+  manifest.assets = manifest.assets.filter((asset) => BRAND_SOURCES.includes(asset.path));
+  const tampered = manifest.assets.find((asset) => asset.path === 'icons/app-icon.ico');
+  tampered.sha256 = '0'.repeat(64);
+  for (const dir of ['icons', 'sizes', 'primary']) mkdirSync(join(brandDir, dir), { recursive: true });
+  for (const asset of manifest.assets) {
+    writeFileSync(join(brandDir, asset.path), readFileSync(join(sourceDir, asset.path)));
+  }
+  writeFileSync(join(brandDir, 'manifest.json'), `${JSON.stringify(manifest)}\n`);
+  assert.throws(
+    () => writeBrandingAssets(join(root, 'content'), root, '0.1.0-corp.1'),
+    (error) => error.code === 'SOURCE_MISMATCH',
+  );
 });
