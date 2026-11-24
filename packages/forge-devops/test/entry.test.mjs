@@ -188,6 +188,36 @@ test('就绪卡未自报变更号：按不可确认处理，fail closed', async 
   assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
 });
 
+test('读面失败但卡片自称 ready：仍按读面失败报原因，不误报变更号不符', async () => {
+  const { ctx, registered } = host();
+  registerEntry(
+    ctx,
+    spyService({ ok: false, reason: 'NO_READER', status: 'ready', changeId: 'ARD123456', text: '## 上下文卡' }).service,
+  );
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /NO_READER/u, 'ok=false 的原因是读面失败，必须原样透出');
+  assert.ok(!result.text.includes('CONTEXT_UNCONFIRMED'), '读面失败不得被说成变更号不符');
+});
+
+test('配置类原因与变更号不可确认同时成立：两条恢复方向并列给出', async () => {
+  const { ctx, registered } = host();
+  registerEntry(
+    ctx,
+    spyService({
+      ok: true,
+      status: 'ready',
+      changeId: 'ARD999999',
+      unknowns: [{ field: 'dop.change.view', reason: 'CONFIG_MISSING' }],
+      text: '## 上下文卡',
+    }).service,
+  );
+  const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /设置 → 企业 DevOps/u);
+  assert.match(result.text, /核对请求的变更号 ARD123456/u, '两条恢复方向不得互相截断');
+});
+
 test('状态带空白：入口与装配层同一归一化口径，按就绪处理而不是报变更号不符', async () => {
   const { ctx, registered } = host();
   registerEntry(ctx, spyService({ ok: true, status: ' ready ', changeId: 'ARD123456', text: '## 上下文卡' }).service);

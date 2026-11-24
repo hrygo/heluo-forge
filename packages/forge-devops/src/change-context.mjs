@@ -70,6 +70,20 @@ export const CHANGE_SOURCE_TYPES = Object.freeze(['mock', 'enterprise']);
 export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
 
 /**
+ * 卡片状态的归一化读法（issue #342）：`ready` / `blocked` 字面量以外的形状一律归空串。
+ *
+ * 入口的堵塞分流与装配层的绑定判据都必须走这一处，否则同一次响应会出现
+ * "判不就绪"与"说变更号不符"两种说法。
+ *
+ * @param {unknown} card service 返回的上下文卡
+ * @returns {string} 去掉空白的状态；非字符串或缺失时为 `''`
+ */
+export function cardStatusOf(card) {
+  // 归一化只做去空白：非字符串（含缺失）归空串，让"没状态"与"状态不可用"走同一条裁决。
+  return typeof card?.status === 'string' ? card.status.trim() : '';
+}
+
+/**
  * 卡片是否"就绪且属于这次请求"：入口与装配层共用同一判据（issue #342），
  * 避免出现"命令说成功、会话却没绑定"的分叉。
  *
@@ -82,21 +96,6 @@ export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
  * @param {string} changeId 请求的变更号
  * @returns {boolean}
  */
-/**
- * 卡片状态的归一化读法（issue #342）：`ready` / `blocked` 字面量以外的形状一律归空串。
- *
- * 入口的堵塞分流与装配层的绑定判据都必须走这一处，否则同一次响应会出现
- * "判不就绪"与"说变更号不符"两种说法。
- *
- * @param {unknown} card service 返回的上下文卡
- * @returns {string} 去掉空白的状态；非字符串或缺失时为 `''`
- */
-export function cardStatusOf(card) {
-  // 归一化只做去空白：非字符串（含缺失）归空串，让"没状态"与"状态不可用"走同一条裁决。
-  // 让入口的文案分流与装配层的绑定判据对同一字段同口径，避免"判不就绪却说是变更号不符"。
-  return typeof card?.status === 'string' ? card.status.trim() : '';
-}
-
 export function cardReadyFor(card, changeId) {
   if (card === null || typeof card !== 'object') return false;
   if (card.ok === false) return false;

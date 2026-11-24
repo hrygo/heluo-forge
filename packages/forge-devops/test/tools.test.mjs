@@ -628,6 +628,14 @@ test('装配：上下文卡 ready 才绑定变更号，blocked 不绑定（入�
   });
   await contextUnreported.service.context({ target: 'ARD123456' });
   assert.equal(contextUnreported.service.changeId(), null, '聚合读与入口同一判据：未自报号不得绑定');
+
+  // `forge_devops_change_context` 的 target 是必填（schema required）；直调 service 不传 target 时
+  // 没有"这次请求的是哪个变更"，绑上卡片自报号等于替调用方猜目标，故 fail closed。
+  const contextNoTarget = mountIndex({
+    flow: { context: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '卡' }) },
+  });
+  await contextNoTarget.service.context({});
+  assert.equal(contextNoTarget.service.changeId(), null, '未指定请求号时不绑定');
 });
 
 test('装配：artifact_write 的 data 经真实 service 落盘，body/data 互斥与机检失败由 artifacts 报出', async () => {

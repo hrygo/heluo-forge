@@ -119,7 +119,10 @@ function unknownsOf(result) {
 /**
  * 阻塞裁决：原因码与首行文案成对决定，避免"改了原因码漏改文案"或两条分支各写一套规则。
  *
- * @param {string} status 卡片状态；空串表示响应没有状态
+ * 前置条件：调用方已过 `ok` 检查。`ok === false`（读面本身失败）在 `registerEntry` 里先行返回，
+ * 不会进入本函数——所以这里只按状态分流，不重复判读面失败。
+ *
+ * @param {string} status 归一化后的卡片状态；空串表示响应没有状态
  * @returns {{ reason: string, headline: string }}
  */
 function blockedOutcomeOf(status) {
@@ -150,12 +153,17 @@ function blockedText(result, changeId) {
   const items = unknownsOf(result);
   const chain = [ENTRY_NAME, changeId].join(' ');
   const { reason, headline } = blockedOutcomeOf(status);
-  // 恢复方向按原因分流：配置问题指配置页；变更号不可确认时原地重跑无用，要先核对号与读面回填。
-  let next = `下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`;
+  // 恢复方向按原因并列：配置问题指配置页，变更号不可确认时提示核对号与读面回填；
+  // 两条同时成立就都给（配置没通也可能伴随号对不上），都不成立才退到通用重试方向。
+  const next = [];
   if (items.some((item) => CONFIG_REASONS.includes(item.reason))) {
-    next = `下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`;
-  } else if (reason === ENTRY_REASONS.CONTEXT_UNCONFIRMED) {
-    next = `下一步：核对请求的变更号 ${changeId} 是否确为本次目标；号无误时检查读面为何未回填该号，再重跑 ${chain}。`;
+    next.push(`下一步：先到「${CLI_PAGE_HINT}」配置 dop 入口，再重跑 ${chain}。`);
+  }
+  if (reason === ENTRY_REASONS.CONTEXT_UNCONFIRMED) {
+    next.push(`下一步：核对请求的变更号 ${changeId} 是否确为本次目标；号无误时检查读面为何未回填该号，再重跑 ${chain}。`);
+  }
+  if (next.length === 0) {
+    next.push(`下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`);
   }
   const lines = [
     `${ENTRY_NAME}：${reason}`,
@@ -163,7 +171,7 @@ function blockedText(result, changeId) {
     items.length === 0
       ? '缺失项：无（卡片未列出未知项，按未就绪处理）。'
       : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`,
-    next,
+    ...next,
     '本次不进入澄清/计划/实现步骤，也不改写会话绑定。',
   ];
   const body = String(result?.text ?? '').trimEnd();
