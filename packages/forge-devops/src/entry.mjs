@@ -175,6 +175,8 @@ function blockedOutcomeOf(card) {
       headline: '阻塞：上下文卡未自报成功（缺少 ok=true），按未确认处理，未取回可推进的变更事实。',
     };
   }
+  // 走到这里只剩一种形状：`ok === true`、`status === ready`，但自报号与请求号不符或缺省
+  // （与 `cardReadyFor` 末项判据对应）。前面新增分支时要同步它，否则新形状会静默落到这里。
   return {
     reason: ENTRY_REASONS.CONTEXT_UNCONFIRMED,
     headline: '阻塞：卡片自报的变更号与请求号不一致或未自报，无法确认该卡属于本次请求。',
@@ -183,7 +185,10 @@ function blockedOutcomeOf(card) {
 
 /**
  * 阻塞输出：先给裁决与恢复方向，再附卡片正文——卡片与缺失项照常可读，只是不再假装成功。
- * 恢复方向按原因分流：入口配置问题指到配置页，其余先确认 dop 可用再重跑。
+ *
+ * `next` 的各分支按 `reason` 互斥：入口配置问题指到配置页，入参错误只要求改参数，
+ * 自报号不可确认时提示核对号，其余先确认 dop 可用再重跑。新增原因码时，
+ * 须同步检查上方配置分流里的排除项是否仍然适用，别让新原因落进不相干的方向。
  */
 function blockedText(result, changeId) {
   const items = unknownsOf(result);

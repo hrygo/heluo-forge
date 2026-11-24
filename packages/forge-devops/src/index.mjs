@@ -691,8 +691,9 @@ export function apply(ctx, rawConfig = {}) {
       //
       // 这里的判据与 `context` / `startFromChange` 的 `cardReadyFor` **不同，且是有意为之**：
       // 那两处拿到的是上下文卡，卡自带"就绪 + 自报号"可供 fail-closed 判定；`change.read` 是信封投影，
-      // 没有卡片状态可比，设计约定"读成功即绑定"（docs/design/plugins/forge-devops.md §5.1），
-      // 只在能确认读到的是别人的变更时收回绑定。
+      // 没有卡片状态可比，设计约定"读成功即绑定"（docs/design/plugins/forge-devops.md §5.1）。
+      // 因此：`normalize_error` 为其他原因码（如记录缺必填字段）时**仍然绑定**——解读不了不等于读到的是别的变更，
+      // 而绑定对象是已过 CHANGE_ID_PATTERN 的请求号；只有能确认记录自报号不同（ID_MISMATCH）时才收回。
       if (
         action === 'change.read' &&
         result?.status === 'succeeded' &&
