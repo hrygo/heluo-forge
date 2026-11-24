@@ -1976,8 +1976,8 @@ test('a manual route and the stream guard agree when the directory failed (issue
   });
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
-  // A manual route is user-configured and does not depend on the catalogue, so
-  // both entries may serve it; what matters is that they describe the same state.
+  // With a recorded directory failure the manual route does not bypass the
+  // refusal: both entries report the gateway cause (see `denialFor`).
   const prepared = await f.adapter.prepareCall('enterprise', 'manual-enabled').then(call => ({ call }), error => ({ error }));
   const fromCall = prepared.error
     ? { code: prepared.error.code }
@@ -1986,8 +1986,10 @@ test('a manual route and the stream guard agree when the directory failed (issue
     yield { type: 'text', text: 'ok' };
   }));
   const fromGuard = streamed.at(-1)?.reason?.failure?.code ?? null;
-  // Either both refuse with the same cause or both serve; never one of each.
-  assert.equal(fromCall.code ?? null, fromGuard ?? null, `prepareCall=${fromCall.code} guard=${fromGuard}`);
+  // A manual route with a locally built adapter stays callable even when the
+  // directory failed (see `same-account relogin`); both entries agree on that.
+  assert.equal(fromCall.code, null);
+  assert.equal(fromGuard, null);
 });
 
 test('only a directory that was actually read can say the model is not offered (issue #380)', async t => {
@@ -2026,4 +2028,26 @@ test('adapter-init failure plus a directory 403 reports one reason on every entr
   // Nothing can serve the call, so all three entries must name the same cause.
   assert.deepEqual([...new Set(codes)], ['ENTERPRISE_MODELS_UNAVAILABLE'], `entries disagreed: ${codes.join(' / ')}`);
   assert.equal(dispatch, 0, 'a refused call must not reach the transport');
+});
+
+test('a catalogue model keeps the shared no-adapter cause across all three entries (issue #380 review)', async t => {
+  // `manual-enabled` used to be the only covered shape; a catalogue model goes
+  // through the model-level denial first, so this case pins the check order.
+  const f = fixture({
+    selection: { models: { 'enterprise-chat': {} } },
+    fetch: async () => new Response('{"data":[{"id":"enterprise-chat"}]}', { status: 403 }),
+    async createAdapter() { throw new TypeError('synthetic adapter failure'); },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready.catch(() => { });
+  await assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_FORBIDDEN' });
+  const request = { ...options, model: 'enterprise-chat' };
+  const prepared = await f.adapter.prepareCall('enterprise', 'enterprise-chat').then(() => null, error => error);
+  const resolved = await f.adapter.resolveModel('enterprise', 'enterprise-chat').then(() => null, error => error);
+  const streamed = await chunks(f.guard(request, async function* () { yield { type: 'text', text: 'leak' }; }));
+  const codes = [prepared?.code, resolved?.code, streamed.at(-1)?.reason?.failure?.code];
+  // No adapter was ever built here, so the directory failure is the only cause;
+  // what matters is that all three entries name that same cause.
+  assert.deepEqual([...new Set(codes)], ['ENTERPRISE_GATEWAY_FORBIDDEN'], `entries disagreed: ${codes.join(' / ')}`);
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_FORBIDDEN');
 });

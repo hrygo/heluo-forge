@@ -588,14 +588,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (denied) return plain(denied);
     if (captured !== undefined && captured !== version) return plain('IAM_MODEL_CONTEXT_CHANGED');
     if (credentialRevoked()) return plain('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
-    // A failed directory read must reach the person with the same cause as the
-    // preparation entry, not as a generic "models unavailable".
-    // Without an adapter the directory failure is the only explanation we have;
-    // reporting a generic "models unavailable" here would describe a different
-    // cause than the preparation entry for the same request (issue #380).
-    // Adapter-initialization failure is the immediate reason nothing answers;
-    // otherwise the directory failure explains it. Either way the person sees
-    // the same cause the preparation entry reports (issue #380).
+    // Without an adapter, name the failure every entry sees: adapter
+    // initialization first, directory failure second (issue #380). A route that
+    // still has a locally built adapter keeps serving (manual routes are
+    // independent of the catalogue, see the same-account relogin case).
     if (!backend) return plain(missingBackendCode() ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     const model = enabledModel(request.provider, request.model);
     if (!model) return denialFor(request.provider, request.model, { guard: true });
@@ -1294,10 +1290,16 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         }
         const mine = version;
         const subject = iam.getView()?.principal;
-        // A directory that already failed is a gateway-side cause the direct
-        // entry must report too, or the two entries describe different problems
-        // for the same request (issue #380).
-        if (!backend && missingBackendCode()) {
+        if (disposed) {
+          const cause = error('ENTERPRISE_MODELS_UNAVAILABLE');
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
+        // A directory or adapter failure is the gateway-side cause the direct
+        // entry must report too — but only for this provider, and only while the
+        // session itself is still usable; sign-in and revocation stay first.
+        const signInBlocked = permit(iam.getView());
+        if (route === provider && !signInBlocked && !backend && missingBackendCode()) {
           const cause = error(missingBackendCode());
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
@@ -1340,6 +1342,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         };
       };
       if (key === 'resolveModel') return async (route, model, signal) => {
+        if (disposed) {
+          const cause = error('ENTERPRISE_MODELS_UNAVAILABLE');
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
+        // Same precedence as prepareCall and the stream guard: the shared
+        // no-adapter cause wins over the model-level denial, otherwise a
+        // directory model would report a different code than the other entries
+        // (issue #380 review).
+        const signInBlocked = permit(sample());
+        if (route === provider && !signInBlocked && !catalogueRead && missingBackendCode()) {
+          const cause = error(missingBackendCode());
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
         if (!permit(sample()) && !allowed(route, model)) {
           // `permit()` may be the real blocker (signed out, revoked); keep its
           // outcome when the model itself is fine, so nothing pretends the
@@ -1347,13 +1364,6 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           const denial = denialFor(route, model)
             ?? { code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: MESSAGES.ENTERPRISE_MODEL_NOT_ALLOWED };
           const cause = new IamError(denial.code, denial.message);
-          failed({ provider: route, model }, cause, cause.code, 'local');
-          throw cause;
-        }
-        // Same refusal as prepareCall and the stream guard: a resolver that
-        // answers with a placeholder would tell the caller the route is fine.
-        if (!backend && missingBackendCode()) {
-          const cause = error(missingBackendCode());
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
         }
@@ -1693,6 +1703,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (disposed) return;
       disposed = true; clearTimeout(timer); stopRotationCheck(); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
       await observation; catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined; installedModels.clear();
+      // A closed runtime has no current failure: stale codes must not outlive it
+      // and make another entry report a different cause (issue #380 review).
+      catalogError = null; adapterError = null;
     }
   };
 }
