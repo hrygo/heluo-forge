@@ -42,6 +42,9 @@ function neutralPatch() {
     '    - id: heluo-gitee',
     "      name: '@heluo/forge-gitee'",
     '      config: {}',
+    '    - id: heluo-skills-manager',
+    "      name: '@heluo/forge-skills-manager'",
+    '      config: {}',
     '    - id: forge-devops',
     "      name: '@heluo/forge-devops'",
     '      config: {}',
@@ -57,6 +60,8 @@ function publicTarball() {
     },
     { path: 'cordis.patch.yml', body: neutralPatch() },
     { path: 'README.md', body: '# fixture\n' },
+    { path: 'node_modules/@heluo/forge-skills-manager/lib/nacos.js',
+      body: readFileSync(new URL('../packages/forge-skills-manager/lib/nacos.js', import.meta.url)) },
     ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].map((name) => ({
       path: `node_modules/@heluo/forge-iam/src/${name}`,
       body: readFileSync(new URL(`../packages/forge-iam/src/${name}`, import.meta.url)),
@@ -80,6 +85,10 @@ function fixture(t) {
       'HELUO_IAM_CALLBACK_PORT=17321',
       'HELUO_IAM_MANAGED_MODELS_BASE_URL=https://gateway.corp.example/v1',
       'HELUO_IAM_DEFAULT_PROVIDER=route-1',
+      'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+      'HELUO_NACOS_NAMESPACE_ID=public',
+      'HELUO_NACOS_USERNAME=svc-ci',
+      'HELUO_NACOS_PASSWORD=synthetic-password',
       '',
     ].join('\n'),
   );
@@ -116,9 +125,12 @@ test('dry-run prints the redacted plan and writes nothing', (t) => {
   assert.equal(result.plan.configKeys.includes('iam.discoveryUrl'), true);
   assert.equal(result.plan.configKeys.includes('iam.issuer'), false);
   assert.equal(result.plan.loginReady, true);
+  assert.equal(result.plan.nacosConfigured, true);
+  assert.deepEqual(result.plan.embeddedSecrets, ['nacos.password']);
   assert.equal(result.plan.gatewayConfigured, true);
   assert.equal(result.plan.revocationConfigured, false);
   assert.equal(JSON.stringify(result.plan).includes('iam.corp.example'), false);
+  assert.doesNotMatch(JSON.stringify(result.plan), /svc-ci|synthetic-password|nacos\.corp\.example/);
   assert.equal(existsSync(output), false);
   assert.equal(existsSync(`${output}.zip`), false);
   assert.match(result.digest, /^[0-9a-f]{64}$/u);
@@ -145,9 +157,9 @@ test('a login-only plan reports that gateway and revocation are not configured',
   assert.equal(result.plan.revocationConfigured, false);
 });
 
-function runCli(script, args) {
+function runCli(script, args, nodeArgs = []) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [join(TOOL_ROOT, 'scripts', script), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...nodeArgs, join(TOOL_ROOT, 'scripts', script), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
@@ -156,6 +168,51 @@ function runCli(script, args) {
     child.once('close', (code) => resolve({ code, stdout, stderr }));
   });
 }
+
+test('Nacos preflight runs before confirmation in both packaging CLIs', async t => {
+  const { root, publicPath, configPath } = fixture(t);
+  const fullConfig = readFileSync(configPath, 'utf8');
+  const sourceEntries = readBundleEntries(publicTarball(), { withContent: true });
+  // Windows cannot represent POSIX 600. Simulate only this synthetic file's mode
+  // in these child processes; this test covers preflight, not permission checks.
+  const nodeArgs = process.platform === 'win32' ? ['--import', `data:text/javascript,${encodeURIComponent(`
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = fs.statSync;
+    fs.statSync = function(path, ...args) {
+      const stat = original.call(this, path, ...args);
+      if (String(path) === ${JSON.stringify(configPath)}) stat.mode = (stat.mode & ~0o777) | 0o600;
+      return stat;
+    };
+    syncBuiltinESMExports();
+  `)}`] : [];
+  for (const scenario of ['configured', 'old-runtime', 'missing-runtime', 'missing-config', 'without-plugin']) {
+    let entries = sourceEntries;
+    if (scenario === 'old-runtime') entries = entries.map(entry => entry.path.endsWith('/lib/nacos.js') ? { ...entry, content: Buffer.from('// old runtime\n') } : entry);
+    if (scenario === 'missing-runtime') entries = entries.filter(entry => !entry.path.endsWith('/lib/nacos.js'));
+    if (scenario === 'without-plugin') entries = entries.filter(entry => !entry.path.includes('@heluo/forge-skills-manager/')).map(entry => entry.path === 'cordis.patch.yml'
+      ? { ...entry, content: Buffer.from(neutralPatch().replace(/    - id: heluo-skills-manager\n      name: '@heluo\/forge-skills-manager'\n      config: \{\}\n/u, '')) } : entry);
+    const bytes = writeBundleTarball(entries.map(entry => ({ path: entry.path, body: entry.content })));
+    writeFileSync(publicPath, bytes);
+    writeFileSync(configPath, ['missing-config', 'without-plugin'].includes(scenario)
+      ? fullConfig.split('\n').filter(line => !line.startsWith('HELUO_NACOS_')).join('\n') : fullConfig);
+    for (const script of ['release-delivery.mjs', 'make-private-bundle.mjs']) {
+      const output = join(root, `${scenario}-${script}`);
+      const result = await runCli(script, ['--public', publicPath, '--public-sha256', sha256Of(bytes), '--config', configPath,
+        '--version', '0.1.0-corp.1', '--output', output, '--skip-discovery-check', ...(script === 'release-delivery.mjs' ? ['--dry-run'] : [])], nodeArgs);
+      const code = scenario.endsWith('runtime') ? 'NACOS_RUNTIME_MISMATCH' : scenario === 'missing-config' ? 'CONFIG_INVALID' : 'CONFIRM_REQUIRED';
+      assert.equal(result.code, 1, `${script} ${scenario}: ${result.stderr}`);
+      assert.ok(result.stderr.includes(code), `${script} ${scenario}: ${result.stderr}`);
+      if (code === 'CONFIRM_REQUIRED') {
+        assert.match(result.stderr, new RegExp(`"nacosConfigured": ${scenario === 'configured'}`));
+        assert.match(result.stderr, /"planDigest"/u);
+      } else assert.doesNotMatch(result.stderr, /"planDigest"/u);
+      assert.doesNotMatch(result.stdout + result.stderr, /synthetic-password|svc-ci|nacos\.corp\.example/u);
+      assert.equal(existsSync(output), false);
+      assert.equal(existsSync(`${output}.zip`), false);
+    }
+  }
+});
 
 test('both packaging CLIs accept a git-ignored in-repository .env', async (t) => {
   const { root, publicPath, configPath, sha256 } = fixture(t);
@@ -214,6 +271,7 @@ test('both packaging CLIs redact discovery on success and failure', async (t) =>
     `HELUO_IAM_MANAGED_MODELS_BASE_URL=${base}/private-gateway-marker`,
     'HELUO_IAM_DEFAULT_PROVIDER=route-1',
     'HELUO_IAM_ALLOW_INSECURE_HTTP=true',
+    ...readFileSync(configPath, 'utf8').split('\n').filter(line => line.startsWith('HELUO_NACOS_')),
     '',
   ].join('\n'));
   const common = ['--public', publicPath, '--public-sha256', sha256, '--config', configPath, '--version', '0.1.0-corp.1'];

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
 import {
+  preflightNacosRelease,
   inspectPublicTarball,
   isLoginConfigured,
   makePrivateBundle,
@@ -26,6 +27,7 @@ import {
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
+import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { assertOutsideDirectory } from './lib/release-support.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -108,6 +110,7 @@ async function main() {
     throw new PrivateBundleError('PUBLIC_UNSAFE', `public input failed preflight:\n- ${publicInfo.problems.join('\n- ')}`);
   }
   const config = resolveBundleConfig({ configPath: options.configPath });
+  const nacosRelease = preflightNacosRelease(readBundleEntries(publicPath, { withContent: true }), config);
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }
     : await verifyDiscovery(config.iam);
@@ -129,6 +132,8 @@ async function main() {
     output,
     configKeys: config.keys,
     configValues: 'redacted',
+    nacosConfigured: nacosRelease.nacosConfigured,
+    embeddedSecrets: nacosRelease.embeddedSecrets,
     loginReady: isLoginConfigured(config.iam),
     discovery,
     discoveryCheck: discoveryState,
@@ -163,6 +168,7 @@ async function main() {
         base: result.base,
         changed: result.changed,
         configKeys: result.configKeys,
+        embeddedSecrets: nacosRelease.embeddedSecrets,
         manifest: result.manifest,
         release: result.release,
         verified: result.verified,

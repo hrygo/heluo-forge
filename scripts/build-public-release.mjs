@@ -22,7 +22,8 @@ import { buildBundle, writeBundleArtifacts } from './build-enterprise-bundle.mjs
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
-import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf, patchLayerProblems, requiredRowsForEntry } from './lib/private-bundle.mjs';
+import { IAM_VALIDATOR_MODULES, NACOS_RUNTIME_FILE, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf, patchLayerProblems, requiredRowsForEntry } from './lib/private-bundle.mjs';
+import { NACOS_PACKAGING_GUIDE } from './lib/nacos-release.mjs';
 import { baseNameOf, scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
@@ -116,6 +117,9 @@ const RELEASE_TOOL_FILES = Object.freeze([
   'scripts/make-private-bundle.mjs',
   'scripts/init-enterprise-plugin.mjs',
   'scripts/release-delivery.mjs',
+  NACOS_RUNTIME_FILE,
+  NACOS_PACKAGING_GUIDE,
+  'scripts/lib/nacos-release.mjs',
 ]);
 const TOOL_SKILL_DIRECTORY = '.agents/skills/heluo-forge-release-bundle';
 const TOOL_SKILL_ENTRY = `${TOOL_SKILL_DIRECTORY}/SKILL.md`;
@@ -140,7 +144,7 @@ export function releaseToolFiles(root) {
   }
   const libraries = listFiles(root, 'scripts/lib', (path) => path.endsWith('.mjs'));
   if (libraries.length === 0) fail('TOOLS_INCOMPLETE', 'release toolchain has no scripts/lib modules');
-  return [...RELEASE_TOOL_FILES, ...RELEASE_IAM_FILES, ...libraries, ...listFiles(root, TOOL_SKILL_DIRECTORY)].sort();
+  return [...new Set([...RELEASE_TOOL_FILES, ...RELEASE_IAM_FILES, ...libraries, ...listFiles(root, TOOL_SKILL_DIRECTORY)])].sort();
 }
 
 function sourceGate(root, tracked) {
@@ -283,7 +287,8 @@ export function buildPublicRelease(input) {
               '',
               '离线发布工具链。解压后按 `toolchain/.agents/skills/heluo-forge-release-bundle/SKILL.md` 的步骤执行；',
               '企业配置从不提交的 `.env` 读取；放在仓库内时须受 Git 忽略规则保护。',
-              '任何密钥都不得写入 `.env`、日志、报告或 argv。',
+              '包含技能管理器时，同时阅读 [技能管理器打包说明](packages/forge-skills-manager/docs/packaging.md)，补齐 Nacos 四项配置后再预检。',
+              '说明包含配置字段、命令、预检和凭据边界；公共 Skill 及 SOP 保持原样。IAM client secret、个人 Key 和令牌仍禁止交付。',
               '',
               `source commit: ${gitState.commit ?? 'not-a-git-checkout'}`,
               `plugin tarball: ${tarballName}`,

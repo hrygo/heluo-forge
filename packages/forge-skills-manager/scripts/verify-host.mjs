@@ -26,7 +26,6 @@ Object.assign(environment, {
   DSH_HOME: home, DSH_AGENTS_HOME: join(directory, 'agents'), DSH_TELEMETRY_DISABLED: '1', CI: '1',
   npm_config_cache: join(directory, 'npm-cache'), npm_config_userconfig: join(directory, 'empty-npmrc'),
   npm_config_registry: 'http://127.0.0.1:9',
-  FORGE_NACOS_USERNAME: 'svc-ci', FORGE_NACOS_PASSWORD: 'synthetic-password',
 });
 await fs.mkdir(workspace, { recursive: true });
 await fs.mkdir(user, { recursive: true });
@@ -76,7 +75,7 @@ const nacos = createServer(async (req, res) => {
 });
 await new Promise(accept => nacos.listen(0, '127.0.0.1', accept));
 const config = { nacos: { serverUrl: `http://127.0.0.1:${nacos.address().port}/nacos`, namespaceId: 'public',
-  usernameEnv: 'FORGE_NACOS_USERNAME', passwordEnv: 'FORGE_NACOS_PASSWORD', allowInsecureHttp: true } };
+  username: 'svc-ci', password: 'synthetic-password' } };
 const patch = join(profile, 'cordis.patch.yml');
 const writePatch = disabled => fs.writeFile(patch, `- id: heluo-skills-manager\n  disabled: ${disabled}\n  config: ${JSON.stringify(config)}\n`);
 

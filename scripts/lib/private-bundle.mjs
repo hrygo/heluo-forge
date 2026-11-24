@@ -22,6 +22,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { isConfigured, validateConfig } from '../../packages/forge-iam/src/config.mjs';
 
 import { verifyBundle } from '../verify-enterprise-bundle.mjs';
+import { NACOS_ENV_MAP, parseNacosConfig, checkNacosRelease, assertNacosReleaseConfig as assertNacosConfig } from './nacos-release.mjs';
 import { readBundleEntries } from './bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './bundle-manifest.mjs';
 import { writeBundleTarball } from './bundle-write.mjs';
@@ -33,6 +34,7 @@ export const TOOL_NAME = 'heluo-forge-release-tools';
 export const TOOL_VERSION = '1.0.0';
 export const SUPPORTED_PLATFORMS = Object.freeze(['windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64']);
 export const IAM_VALIDATOR_MODULES = Object.freeze(['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']);
+export { NACOS_ENV_MAP, NACOS_RUNTIME_FILE } from './nacos-release.mjs';
 
 export class PrivateBundleError extends Error {
   constructor(code, message, details = undefined) {
@@ -87,15 +89,6 @@ export const GITEE_ENV_MAP = Object.freeze({
   HELUO_GITEE_TIMEOUT_MS: 'timeoutMs',
   HELUO_GITEE_AUTH_ENV: 'authEnv',
   HELUO_GITEE_PERSISTENT_TOKEN: 'persistentToken',
-});
-
-export const NACOS_ENV_MAP = Object.freeze({
-  HELUO_NACOS_SERVER_URL: 'serverUrl',
-  HELUO_NACOS_NAMESPACE_ID: 'namespaceId',
-  HELUO_NACOS_USERNAME_ENV: 'usernameEnv',
-  HELUO_NACOS_PASSWORD_ENV: 'passwordEnv',
-  HELUO_NACOS_TIMEOUT_MS: 'timeoutMs',
-  HELUO_NACOS_ALLOW_INSECURE_HTTP: 'allowInsecureHttp',
 });
 
 /** Secret-bearing names are recognized so the maker can refuse them explicitly. */
@@ -438,25 +431,7 @@ export function buildConfig(entries) {
     put(gitee, field, raw);
   }
 
-  for (const [envKey, field] of Object.entries(NACOS_ENV_MAP)) {
-    const raw = byKey.get(envKey);
-    if (raw === undefined) continue;
-    if (field === 'timeoutMs') {
-      if (!/^\d+$/u.test(raw) || Number(raw) < 100 || Number(raw) > 120000) problems.push(`${envKey} must be an integer between 100 and 120000`);
-      else nacos[field] = Number(raw);
-    } else if (field === 'allowInsecureHttp') {
-      if (raw !== 'true' && raw !== 'false') problems.push(`${envKey} must be true or false`);
-      else nacos[field] = raw === 'true';
-    } else {
-      nacos[field] = raw;
-      if (field === 'namespaceId' && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(raw)) problems.push(`${envKey} must be a valid namespace ID of 1 to 128 characters`);
-      if ((field === 'usernameEnv' || field === 'passwordEnv') && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(raw)) problems.push(`${envKey} must be an environment variable name`);
-    }
-  }
-  if (Object.keys(NACOS_ENV_MAP).some((key) => byKey.has(key))
-    && !isHttpUrl(nacos.serverUrl, { allowInsecureHttp: nacos.allowInsecureHttp === true })) {
-    problems.push('HELUO_NACOS_SERVER_URL is required and must be an https URL (or http with HELUO_NACOS_ALLOW_INSECURE_HTTP=true) without userinfo/query/hash');
-  }
+  Object.assign(nacos, parseNacosConfig(byKey, problems));
   if (secretKeys.length > 1) {
     problems.push('set only one of HELUO_IAM_CLIENT_SECRET and HELUO_IAM_CLIENT_SECRET_FILE');
   } else if (secretKeys.length === 1) {
@@ -565,6 +540,17 @@ function requireValidatedConfig(config) {
 export function resolveBundleConfig({ config, configPath, allowSecret = false }) {
   if (config !== undefined) return requireValidatedConfig(config);
   return buildConfig(parseEnvConfig(readConfigFile(resolve(configPath)), { allowSecret }));
+}
+
+/** Explicit field check retained for callers validating deployment input alone. */
+export function assertNacosReleaseConfig(config) {
+  assertNacosConfig(config, fail);
+}
+
+/** Same plugin-specific gate for previews, CLI confirmation and final writes. */
+export function preflightNacosRelease(entries, config, options = {}) {
+  const installed = patchEntriesOf(entries).some(entry => insertedIds(entry.content.toString('utf8')).has('heluo-skills-manager'));
+  return checkNacosRelease(entries, config, { ...options, installed, fail });
 }
 
 /** Only double-quoted JSON strings are emitted; JSON escapes are valid YAML scalars. */
@@ -856,9 +842,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const skillsOwner = ownerOf('heluo-skills-manager');
   const hasGiteeConfig = Object.keys(config.gitee ?? {}).length > 0;
   const hasNacosConfig = Object.keys(config.nacos ?? {}).length > 0;
-  if (hasNacosConfig && skillsOwner === undefined) {
-    fail('PUBLIC_TARBALL_INVALID', 'public tarball does not declare the Skill Manager insert row required by Nacos configuration');
-  }
+  const nacosRelease = preflightNacosRelease(entries, config);
   if (iamOwner === undefined || (hasGiteeConfig && giteeOwner === undefined)) {
     fail(
       'PUBLIC_TARBALL_INVALID',
@@ -895,7 +879,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     entry: { name: root.name, version },
     base: { version: root.version, tarballSha256: baseSha256 },
     tool: { name: TOOL_NAME, version: TOOL_VERSION },
-    config: { keys: config.keys, secretEmbedded: config.secret !== undefined },
+    config: { keys: config.keys, secretEmbedded: nacosRelease.secretEmbedded || config.secret !== undefined, clientSecretEmbedded: config.secret !== undefined, embeddedSecrets: nacosRelease.embeddedSecrets },
   };
 
   const replaced = new Map([

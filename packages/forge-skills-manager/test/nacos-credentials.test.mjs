@@ -165,3 +165,44 @@ test('real Cordis keeps local management available and reads environment credent
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+
+test('explicit package credentials work over HTTP without environment injection and preserve bytes', async () => {
+  for (const key of ['TEST_NACOS_USER', 'TEST_NACOS_PASSWORD', 'FORGE_NACOS_USERNAME', 'FORGE_NACOS_PASSWORD']) delete process.env[key];
+  const fixture = fakeNacos('http://nacos.corp.example');
+  const config = { serverUrl: 'http://nacos.corp.example/nacos', namespaceId: 'public', username: ' svc-ci ', password: ' synthetic-password ' };
+  const client = createNacosClient(config, fixture.fetcher);
+  await client.list();
+  await client.detail(selected);
+  await client.load(selected);
+  assert.equal(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).length, 1);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(fixture.calls[0].options.body)), { username: config.username, password: config.password });
+  assert.ok(fixture.calls.every(call => call.url.protocol === 'http:'));
+});
+
+test('partial, blank and invalid explicit credentials never fall back to existing environment values', async () => {
+  for (const fields of [{ username: 'svc-ci' }, { password: 'synthetic-password' }, { username: '', password: 'synthetic-password' },
+    { username: 'svc-ci', password: '   ' }, { username: 'svc-ci', password: 42 }, { username: null, password: 'synthetic-password' }]) {
+    const fixture = fakeNacos();
+    const client = createNacosClient({ ...nacosConfig, ...fields }, fixture.fetcher);
+    await denied(client.list());
+    await denied(client.detail(selected));
+    await denied(client.load(selected));
+    assert.equal(fixture.calls.length, 0);
+  }
+});
+
+test('explicit credential removal invalidates cached tokens; rotation requires login', async () => {
+  const fixture = fakeNacos();
+  const config = { ...nacosConfig, username: 'svc-ci', password: 'synthetic-password' };
+  const client = createNacosClient(config, fixture.fetcher);
+  await client.list();
+  const count = fixture.calls.length;
+  config.password = '';
+  await denied(client.list());
+  assert.equal(fixture.calls.length, count);
+  config.password = 'synthetic-rotated-password';
+  await client.list();
+  assert.equal(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).length, 2);
+  assert.equal(new URLSearchParams(fixture.calls.at(-2).options.body).get('password'), config.password);
+});

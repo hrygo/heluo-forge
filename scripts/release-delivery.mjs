@@ -42,9 +42,11 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 import {
+  preflightNacosRelease,
   inspectPublicTarball,
   isLoginConfigured,
   makePrivateBundle,
@@ -378,6 +380,8 @@ node installer/init-enterprise-plugin.mjs --release enterprise-plugin --profile 
    若安装时访问不到企业 IAM，脚本会报 IAM_DISCOVERY_FAILED 并**保留**该文件，
    恢复网络后重跑安装即可重新预置。按企业身份登录后录入**你个人**的网关 Key。
 
+如果本包包含企业技能库，其连接和只读账号已由管理员预置，无需设置 Nacos 环境变量；如不可用请联系管理员。
+
 **不要用「打开 Desktop」代替第 1 步**：Desktop 使用自己的 desktop profile，看不到本次
 装进 web profile 的插件。河洛 Forge 企业版桌面应用同理：它使用 heluo-desktop profile，
 与 web profile 各自安装、各自升级，在本启动器装好插件后仍需单独打开应用完成它自己的安装。
@@ -497,6 +501,7 @@ export function buildDelivery(input) {
     configPath: input.configPath,
     allowSecret: input.embedClientSecret === true,
   });
+  const nacosRelease = preflightNacosRelease(readBundleEntries(publicPath, { withContent: true }), config);
   const digest = planDigest({
     publicSha256: publicInfo.sha256,
     version: input.version,
@@ -521,6 +526,8 @@ export function buildDelivery(input) {
     clientSecretEmbedded: config.secret !== undefined,
     loginReady: isLoginConfigured(config.iam),
     gatewayConfigured: Boolean(config.iam.managedModels && config.iam.defaultProvider),
+    nacosConfigured: nacosRelease.nacosConfigured,
+    embeddedSecrets: nacosRelease.embeddedSecrets,
     revocationConfigured: Boolean(config.iam.revocationEndpoint),
     discovery: input.discovery ?? { checked: false, reason: 'not-run' },
     platforms: [...SUPPORTED_PLATFORMS],
@@ -688,6 +695,7 @@ export function buildDelivery(input) {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const { config } = readDeliveryConfig(options.configPath, { allowSecret: options.embedClientSecret });
+  preflightNacosRelease(readBundleEntries(resolve(options.publicPath), { withContent: true }), config);
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }
     : await verifyDiscovery(config.iam);
@@ -728,6 +736,8 @@ async function main() {
     clientSecretEmbedded: result.clientSecretEmbedded,
     loginReady: result.plan.loginReady,
     gatewayConfigured: result.plan.gatewayConfigured,
+    nacosConfigured: result.plan.nacosConfigured,
+    embeddedSecrets: result.plan.embeddedSecrets,
     revocationConfigured: result.plan.revocationConfigured,
     discovery: result.plan.discovery,
     planDigest: result.digest,

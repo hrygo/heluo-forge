@@ -80,7 +80,7 @@ test("拒绝不安全的服务端配置，未读密码不发送请求", async ()
   const withCredentials = new URL("https://nacos.corp.example");
   withCredentials.username = "svc-ci";
   withCredentials.password = "synthetic-password";
-  for (const serverUrl of ["http://nacos.corp.example/nacos", withCredentials.href, "https://nacos.corp.example/?accessToken=x"]) {
+  for (const serverUrl of ["ftp://nacos.corp.example/nacos", withCredentials.href, "https://nacos.corp.example/?accessToken=x"]) {
     await rejects(createNacosClient({ ...nacosConfig, serverUrl }, () => { throw 0; }).list(), "config");
   }
   delete process.env.TEST_NACOS_PASSWORD;

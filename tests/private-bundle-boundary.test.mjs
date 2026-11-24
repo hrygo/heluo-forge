@@ -60,6 +60,10 @@ const ENV = [
   'HELUO_IAM_CALLBACK_ADDRESS=127.0.0.1',
   'HELUO_GITEE_HOST=gitee.corp.example',
   'HELUO_GITEE_TIMEOUT_MS=15000',
+  'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+  'HELUO_NACOS_NAMESPACE_ID=public',
+  'HELUO_NACOS_USERNAME=svc-ci',
+  'HELUO_NACOS_PASSWORD=synthetic-password',
 ];
 
 function temp(t, prefix = 'forge-private-boundary-') {
@@ -88,6 +92,9 @@ function patchText() {
     '    - id: heluo-gitee',
     "      name: '@heluo/forge-gitee'",
     '      config: {}',
+    '    - id: heluo-skills-manager',
+    "      name: '@heluo/forge-skills-manager'",
+    '      config: {}',
     '    - id: forge-devops',
     "      name: '@heluo/forge-devops'",
     '      config: {}',
@@ -106,6 +113,8 @@ function publicTarball({ extraFiles = [] } = {}) {
     { path: 'src/index.mjs', body: 'export const fixture = true;\n' },
     // The maker refuses a public bundle whose bundled IAM validator differs from
     // the toolchain it is paired with, so the fixture ships the real modules.
+    { path: 'node_modules/@heluo/forge-skills-manager/lib/nacos.js',
+      body: readFileSync(new URL('../packages/forge-skills-manager/lib/nacos.js', import.meta.url)) },
     ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].map((name) => ({
       path: `node_modules/@heluo/forge-iam/src/${name}`,
       body: readFileSync(join(repo, 'packages', 'forge-iam', 'src', name)),
@@ -529,6 +538,7 @@ test('--json records a discovery check that actually ran', async (t) => {
     'HELUO_IAM_SCOPES=openid profile',
     'HELUO_IAM_CALLBACK_PORT=53682',
     'HELUO_IAM_CALLBACK_ADDRESS=127.0.0.1',
+    ...ENV.filter(line => line.startsWith('HELUO_NACOS_')),
   ]);
   const output = join(input.root, 'private');
   const args = cliArgs(input, configPath, output);

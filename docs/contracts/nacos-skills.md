@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-SKILLS-001 |
 | 文档名称 | Nacos 公共技能库契约 |
-| 版本 | V0.6.0 |
+| 版本 | V1.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-19 |
+| 最后更新 | 2026-11-24 |
 | 门禁 | 本地合成与独立实例验证；企业环境未验 |
 
 > 编制依据：来源插件的只读 Nacos 客户端、合成用例与本机历史实验；企业部署尚未联调。
@@ -21,22 +21,45 @@
 
 ## 1. 连接
 
-Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理员账号，不映射 DSH 个人身份。HTTPS 为默认要求；本机演示 HTTP 必须显式允许。服务根示例为 `https://nacos.corp.example/nacos`。密码与令牌不进入 URL、客户端快照、日志或错误体。
+Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理员账号，不映射 DSH 个人身份。服务根接受 HTTP 和 HTTPS，不设置 HTTP 开关；当前企业服务使用 HTTP，服务根示例为 `http://nacos.corp.example/nacos`。密码与令牌不进入 URL、客户端快照、日志或错误体。
 
 | 配置 | 类型 | 默认 |
 |---|---|---|
 | `nacos.serverUrl` | string | 无；未配置时发现页显示未配置 |
-| `nacos.namespaceId` | string | `public`，由维护者配置 |
+| `nacos.namespaceId` | string | 开发默认 `public`；正式制包必须显式提供 |
+| `nacos.username` | string | 无；正式制包必填，只读账号 |
+| `nacos.password` | string | 无；正式制包必填，保留非空原值 |
 | `nacos.usernameEnv` | string | `FORGE_NACOS_USERNAME`，Host 进程环境变量名 |
 | `nacos.passwordEnv` | string | `FORGE_NACOS_PASSWORD`，Host 进程环境变量名 |
 | `nacos.timeoutMs` | integer | 15000 |
-| `nacos.allowInsecureHttp` | boolean | false |
 
-预览版从 Host 进程环境读取账号和密码，配置仅保存变量名，不接入宿主凭据库或 IAM 换票。变量名须匹配 `[A-Za-z_][A-Za-z0-9_]*`；变量缺失、为空或全空白时返回 `error.nacos.config`（503），不发送远端请求，也不复用已缓存的令牌。本地管理不依赖企业库凭据。非空凭据按原值发送，不裁剪密码中的首尾空白。
+### 1.1 正式制包输入
 
-每次企业库操作重新读取当前进程环境；凭据变化使旧令牌失效并重新登录，令牌仅在内存缓存。外部终端或配置文件的修改不会自动更新运行中的 Host 环境，部署方须在重启 Host 前加载新值；插件不自行读取 `.env`。构建、打包和安装均不嵌入账号密码，补丁及页面不保存原值。
+`make-private-bundle.mjs` 与 `release-delivery.mjs` 对装配 `heluo-skills-manager` 的企业公版要求下列四项配置；测试环境私版与正式环境私版采用同一判据。未装配技能管理器的企业包无需提供 Nacos 字段，回执声明未内嵌秘密；向该类包提供 Nacos 字段时拒绝，不静默丢弃。中性企业公版的源码构建不要求部署值。
 
-环境变量接入仅适用于预览版本，是[高阶规范 P8](../engineering/dsh-plugin-conventions.md#38-p8-安全边界不因可禁用而放宽)中受信凭据存储要求的临时例外，不代表正式版合规；秘密仍不得进入日志、视图、错误体、仓库或交付物。正式版凭据接入须另行核验。
+| 专用配置文件字段 | 写入运行字段 | 校验与默认 |
+|---|---|---|
+| `HELUO_NACOS_SERVER_URL` | `nacos.serverUrl` | 必填；HTTP/HTTPS 绝对 URL，不含 userinfo、query、fragment；不设置 HTTP 开关 |
+| `HELUO_NACOS_NAMESPACE_ID` | `nacos.namespaceId` | 必填；1–128 位字母数字、点、下划线或连字符，首位为字母数字；不默认补 `public` |
+| `HELUO_NACOS_USERNAME` | `nacos.username` | 必填；非空且非全空白的专用只读账号 |
+| `HELUO_NACOS_PASSWORD` | `nacos.password` | 必填；非空且非全空白；带首尾空格时用引号保留原值 |
+| `HELUO_NACOS_TIMEOUT_MS` | `nacos.timeoutMs` | 可选；100–120000 的整数，单位毫秒；未填时运行默认 15000 |
+
+专用文件按 `KEY=VALUE` 数据解析，不接受 `export`、重复键、未知键及命令/展开语法；引号仅用于包裹值，不执行 shell 或转义求值。旧制包字段 `HELUO_NACOS_USERNAME_ENV`、`HELUO_NACOS_PASSWORD_ENV`、`HELUO_NACOS_ALLOW_INSECURE_HTTP` 不在白名单中，报 `CONFIG_UNKNOWN_KEY`。缺少四项必填值或校验失败报 `CONFIG_INVALID`，不回显原值。
+
+正式制包从未跟踪、受 Git 忽略的专用配置读取上述字段，写入 bundle 内声明 `heluo-skills-manager` 的补丁层。代码及中性公版不包含部署值。员工不再注入环境变量；完整配置文件不进入交付物，预检和回执只列字段名，明确标记已内嵌 Nacos 密码。
+
+Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `scripts/lib/nacos-release.mjs`；两个制包入口及库调用共用此模块。预检在输出计划和请求摘要确认前检查公版中的 Nacos 运行文件与配套工具一致，仅允许 LF/CRLF 差异；缺失或不匹配报 `NACOS_RUNTIME_MISMATCH`，不输出已配置成功计划。正式写包前重复核验，不信任之前的预检状态。独立工具链附带 `packages/forge-skills-manager/docs/packaging.md`，不要求制包人员取得源码或修改公共 Skill。
+
+### 1.2 开发配置与生效方式
+
+开发联调使用完整企业组合包，在隔离 profile 的 `cordis.patch.yml` 修改 `nacos` 字段并重启 Host，无需重新编译或打包。旧开发环境可继续使用 `usernameEnv`、`passwordEnv`；只要显式提供了 `username` 或 `password` 任一字段，就必须提供完整账号密码，不回落环境变量。缺失、空白或类型不符时返回 `error.nacos.config`（503），不发送远端请求，也不复用缓存令牌。本地管理仍可使用。凭据变化后重新登录，令牌仅缓存于内存。插件不自行加载 `.env`，也不实现 IAM 换票。
+
+正式包更新连接或账号密码时，修改专用配置并使用新的私版版本重新预检、确认、安装和重启，无需重编译源码。旧 profile 覆盖项须备份后移除，避免覆盖包内预置。员工不提供 Nacos 环境变量，安装器不读取或注入制包 `.env`；只有开发兼容路径可在未配置显式账号密码时读取运行环境。完整命令见[随包打包说明](../../packages/forge-skills-manager/docs/packaging.md)。
+
+### 1.3 凭据与交付边界
+
+项目负责人于 2026-11-24 确认 Nacos 账号密码随内部正式交付包预置、四项制包必填及移除 Nacos HTTP 开关，适用范围仅为此专用只读账号；这是当前用户明确指定的限定要求，与[高阶规范 P8](../engineering/dsh-plugin-conventions.md#38-p8-安全边界不因可禁用而放宽)及[公共打包 Skill](../../.agents/skills/heluo-forge-release-bundle/SKILL.md#不可让步的边界)的通用凭据边界存在差异；公共 Skill 及配套 SOP 保持原样，不将本项描述为公共规约已有的许可。该要求不扩展到 IAM client secret、个人 Key 或访问令牌。包内配置可被解包读取，不提供加密保密；HTTP 传输不提供 TLS 保护。凭据及含凭据的制品不提交源码仓库或公开发布；真实服务端只读权限及企业联调仍须实测。
 
 ## 2. 只读服务端交互
 

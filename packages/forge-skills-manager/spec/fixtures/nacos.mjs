@@ -11,12 +11,12 @@ export function useNacosEnvironment(context, overrides = {}) {
   assign(values);
 }
 export const skillDocument = name => `---\nname: ${name}\ndescription: 合成测试技能\n---\nTest instructions.\n`;
-export function fakeNacos() {
+export function fakeNacos(origin = "https://nacos.corp.example") {
   const calls = [];
   const state = { name: "example-skill", version: "1.0.0", enable: true, token: "synthetic-read-token", status: 200, bytes: null, listData: null, hold: null };
   const fetcher = async (url, options = {}) => {
     const u = new URL(url); calls.push({ url: u, options });
-    if (u.origin !== "https://nacos.corp.example") throw new Error("Unexpected external network");
+    if (u.origin !== origin) throw new Error("Unexpected external network");
     if (state.status !== 200) return new Response("synthetic-server-secret", { status: state.status });
     if (u.pathname.endsWith("/auth/user/login")) return Response.json({ accessToken: state.token, tokenTtl: 18000 });
     if (u.pathname.endsWith("/skills/list")) return Response.json(state.listData ?? { code: 0, data: { totalCount: 1, pageNumber: 1, pagesAvailable: 1, pageItems: [{ name: state.name, description: "合成测试技能", labels: { latest: state.version }, enable: state.enable }] } });

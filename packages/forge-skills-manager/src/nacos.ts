@@ -7,10 +7,11 @@ import { createPortablePathSet,isPortableFileSegment } from "./filesystem-paths.
 export interface NacosConfig {
   serverUrl: string;
   namespaceId?: string;
+  username?: string;
+  password?: string;
   usernameEnv?: string;
   passwordEnv?: string;
   timeoutMs?: number;
-  allowInsecureHttp?: boolean;
 }
 export interface NacosSkill { name: string; description: string; version: string; namespaceId?: string; downloadCount?: number; installations?: CatalogInstallation[] }
 export interface NacosPage { configured: boolean; items: NacosSkill[]; page: number; total: number; pageSize: number }
@@ -46,7 +47,6 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
     try {
       const url = new URL(config.serverUrl);
       if (url.username || url.password || url.search || url.hash || !["https:", "http:"].includes(url.protocol)) throw 0;
-      if (url.protocol === "http:" && !config.allowInsecureHttp) throw 0;
       const namespace = config.namespaceId ?? "public";
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespace)) throw 0;
       const usernameEnv = config.usernameEnv ?? "FORGE_NACOS_USERNAME";
@@ -62,9 +62,10 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
   }
   function credentials() {
     const cfg = settings();
-    const username = process.env[cfg.usernameEnv];
-    const password = process.env[cfg.passwordEnv];
-    if (!username?.trim() || !password?.trim()) {
+    const explicit = config?.username !== undefined || config?.password !== undefined;
+    const username = explicit ? config?.username : process.env[cfg.usernameEnv];
+    const password = explicit ? config?.password : process.env[cfg.passwordEnv];
+    if (typeof username !== "string" || typeof password !== "string" || !username.trim() || !password.trim()) {
       token = undefined;
       throw error("config", "企业技能库凭据未配置，请联系维护人员", 503);
     }

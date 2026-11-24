@@ -26,56 +26,61 @@
 
 ## 版本与后续验收
 
-当前插件制品版本为 `0.1.0`，处于预览阶段；版本号未带预发布后缀不表示生产准入。`engines.dsh` 的 `>=0.2.1-rc.2` 是声明下限，SDK 与严格兼容验收的精确版本以仓库 `.dsh-version` 为准，不表示范围内每个宿主均已验证。设计文档的 `V0.x` 是独立文档版本。
+当前插件制品版本为 `0.1.0`，处于预览阶段；版本号未带预发布后缀不表示生产准入。`engines.dsh` 的 `>=0.2.1-rc.2` 是声明下限，SDK 与严格兼容验收的精确版本以仓库 `.dsh-version` 为准，不表示范围内每个宿主均已验证。设计文档版本独立于插件制品版本，不表示生产准入。
 
 同版本重打包须记录源提交及是否含未提交修改，并用制品 SHA-256、`bundle-manifest.json` 和 `SHA256SUMS` 区分；只比较文件名或 `0.1.0` 不足以确认内容。最新测试、安装和宿主版本证据统一见[设计索引 §2.2](../../docs/design/README.md#22-实现与验证入口)。
 
-后续按[设计 §6](../../docs/design/plugins/forge-skills-manager.md#6-实施与验收)收口预览回归、精确宿主基线兼容、正式凭据接入、企业只读权限与目标平台验收。正式凭据来源和 IAM 换票接口仍待确认；当前未承诺正式版发布日期或新增产品范围。
+后续按[设计 §6](../../docs/design/plugins/forge-skills-manager.md#6-实施与验收)收口预览回归、精确宿主基线兼容、正式凭据接入、企业只读权限与目标平台验收。Nacos 凭据采用包内专用只读账号；个人 IAM 换票未实现；当前未承诺正式版发布日期或新增产品范围。
+
+## 打包方式选择
+
+企业 IAM 联调与员工交付均使用包含 IAM 和技能管理器的 `@heluo/forge-enterprise`，按配置放置位置选择以下两种方式：
+
+| 要求 | 开发联调包 | 正式交付包 |
+|---|---|---|
+| 用途 | 开发人员联调企业 IAM、网关和技能库 | 员工安装使用，统一企业连接配置 |
+| 制品入口 | `build-enterprise-bundle.mjs` 默认企业入口 | 同一中性企业公版，经 `release-delivery.mjs` 制作私版 |
+| 企业配置位置 | 隔离 profile 的 `cordis.patch.yml` | 打包人员的专用 `.env` → 私版 bundle 补丁层 |
+| Nacos 四项配置 | 访问企业库前在 profile 中配齐；可先不配，验证本地管理 | 制包时地址、命名空间、账号、密码均必填，缺项拒绝 |
+| 修改 Nacos 配置 | 修改 profile 后重启该 profile，无需重新打包 | 修改制包配置，以新私版版本重新预检、确认、安装并重启 |
+| 员工侧配置 | 由开发人员维护测试 profile | 无需填写 Nacos 配置或注入账号密码环境变量 |
+| 操作入口 | [开发联调包](#开发联调包)、[本地人工调试](#本地人工调试) | [企业测试包与正式环境包交付](#企业测试包与正式环境包交付) |
+
+中性企业公版是可复用的构建基线，不含企业部署值；安装后配置开发 profile 即用于联调，注入企业配置后生成私版即用于交付。独立 Skill Manager 包用于仅调试本插件，不包含企业 IAM。当前脚本没有 `--mode dev/release` 参数，两种方式由上述命令流程区分。
+
+测试环境与正式环境是正式交付方式的两套配置实例，均须预置 Nacos 四项配置；`.env.test` 生成的私版也不等于可随时修改配置的开发联调包。正式交付方式不表示当前预览插件已完成生产验收。
 
 ## 配置与替换
 
-企业交付通过私版制作器将连接配置预置在 bundle 内声明 `heluo-skills-manager` 的补丁层，员工 profile 无需填写 Nacos 配置。DSH「打开配置文件」显示当前 profile 的补丁，技能管理不提供 Nacos 配置表单；包内预置字段仍可从安装目录或解包查看。页面中的技能命名空间信息保留。
+### 正式制包配置
 
-在打包人员的专用、未跟踪且受 Git 忽略的配置文件中，除已有 IAM 必填配置外，可加入：
+装配本插件的企业私版必须在制包时提供 Nacos 地址、命名空间、只读账号和密码，写入包内配置；员工无需环境注入。未装配本插件的包无需填写 Nacos，误填则拒绝。Nacos 无需 HTTP 开关，IAM 与网关仍遵循公共流程。
 
-```dotenv
-HELUO_NACOS_SERVER_URL=https://nacos.corp.example/nacos
-HELUO_NACOS_NAMESPACE_ID=public
-HELUO_NACOS_USERNAME_ENV=FORGE_NACOS_USERNAME
-HELUO_NACOS_PASSWORD_ENV=FORGE_NACOS_PASSWORD
-HELUO_NACOS_TIMEOUT_MS=15000
-HELUO_NACOS_ALLOW_INSECURE_HTTP=false
-```
+完整字段、文件权限、命令、预检与凭据边界集中在[技能管理器打包说明](docs/packaging.md)，该说明随独立工具链交付；规范定义见[Nacos 契约 §1](../../docs/contracts/nacos-skills.md#1-连接)。公共打包 Skill 与 SOP 保持原样，限定的 Nacos 凭据要求不扩展到其他秘密。
 
-只有 `HELUO_NACOS_SERVER_URL` 为启用预置时必填；其余字段可省略，沿用插件默认值。超时为 100–120000 毫秒；HTTP 必须单独设置 `HELUO_NACOS_ALLOW_INSECURE_HTTP=true`，不继承 IAM 的 HTTP 开关。`USERNAME_ENV`、`PASSWORD_ENV` 是变量名，不是账号密码。制作器拒绝未知字段，不能把实际用户名、密码或 token 放入该文件。
+### 开发 profile 配置
 
-使用配套 Node 和仓库现有私版制作流程，配置文件权限须为 `600`，输出在仓库外，版本须与公版不同：
-
-```sh
-node scripts/make-private-bundle.mjs --public <public.tgz> --public-sha256 <trusted-sha256> --config <enterprise.env> --version <private-version> --output <private-output-dir>
-```
-
-先核对脱敏预览，再按工具回显的摘要确认；完整交付方式见[企业集成方案](../../docs/architecture/public-enterprise-bundle.md#4-公版构建与本地二次制作)。只改变部署字段无需重编译 TypeScript 或内联库。已有 profile 中的 Nacos 覆盖项须在备份后移除，否则「打开配置文件」仍能看到旧值，且旧值可能覆盖包内配置。更新包内连接字段后重启 DSH。
-
-独立安装或本地开发调试可在 profile 中配置下列内容；该方式会让这些字段在「打开配置文件」中可见，不用于上述企业交付：
+开发联调在隔离 profile 的现有 `cordis.patch.yml` 合并以下内容；真实账号密码只放本机私有配置，不提交仓库：
 
 ```yaml
 - id: heluo-skills-manager
   config:
     nacos:
-      serverUrl: https://nacos.corp.example/nacos
+      serverUrl: http://nacos.corp.example/nacos
       namespaceId: public
-      usernameEnv: FORGE_NACOS_USERNAME
-      passwordEnv: FORGE_NACOS_PASSWORD
+      username: svc-ci
+      password: '<只读账号密码>'
 ```
 
-预览版在启动 DSH 的进程环境中设置 `FORGE_NACOS_USERNAME`、`FORGE_NACOS_PASSWORD`，上述配置只写变量名。也可使用自定义变量名；省略这两个配置字段时使用上述默认名称。账号密码不需在构建或安装时设置、不打进插件包，也不需录入宿主凭据库。若使用本机私有 `.env`，须由启动脚本加载并注入 Host 环境，插件不自动读取该文件；秘密文件不得提交或放入交付物。修改外部环境或 `.env` 后须重启 DSH。
+修改上述字段后重启同一 profile 的 DSH，无需重新制包。IAM 配置按 [IAM 说明](../forge-iam/README.md)维护；同包安装不等于 Nacos 使用个人 IAM 权限，当前仍使用独立只读账号，不实现 IAM 换票。旧开发环境变量方式保留兼容；显式提供任一账号密码字段后必须两项完整，不回落环境变量。
 
-缺少或空白凭据时，企业库拒绝访问且不复用缓存令牌，本地管理仍可使用。进程内凭据变化会触发重新登录；令牌仅缓存于内存。Nacos 账号必须由服务端赋予读取权限；客户端不使用管理员、不提供上传接口。共享账号不是个人 IAM 身份映射；只读账号的服务端拒写须另行验证。环境变量方式是仅限预览版的 P8 受信存储临时例外，正式版接入仍须核验，详见[设计](../../docs/design/plugins/forge-skills-manager.md#3-配置与数据)。
+### 正式包生效与旧版替换
 
-本地操作响应丢失时显示待确认，通过「核对操作结果」读取 Host 回执，确认前不重复提交。确认后重新读取当前状态；刷新失败会明确提示视图尚未更新。插件卸载停止排队任务和远端读取，已开始的本地事务与下一实例串行衔接。
+正式包安装前备份并移除既有 profile 的 Nacos 覆盖项，避免旧值覆盖包内预置。DSH「打开配置文件」只显示 profile 补丁；插件不提供 Nacos 配置表单，不向浏览器返回账号密码。更新包内配置需重新制包、安装并重启 DSH。
 
-替换旧版时先备份 profile 配置，再停用并移除旧 `@michengai/dsh-skills-manager` 挂载（其行 id 为 `skills-manager`），安装新包并检查旧 `skills-manager` 行已消失、`heluo-skills-manager` 行只出现一次；两个行 id 并存会让两个管理器同时挂载。保留原 `$DSH_HOME/skills-manager` 数据、宿主全局与项目技能；不同时运行两个管理器。卸载本包不删除这些数据。本包在创建、导入与自身 provider 中拒绝 `enterprise-*` 个人候选；宿主原生 provider 的同名候选选择仍遵循宿主规则。
+缺少凭据时拒绝企业库访问且不复用缓存令牌，本地管理仍可用；Nacos 服务端必须限制账号只读。真实权限及目标平台验收分别记录。
+
+本地操作响应丢失时显示待确认，通过「核对操作结果」读取 Host 回执，确认前不重复提交。插件卸载停止排队任务与远端读取，保留技能和管理数据。替换旧版时先备份 profile，再移除旧 `@michengai/dsh-skills-manager` 的 `skills-manager` 行；新 `heluo-skills-manager` 只挂载一次，不同时运行两个管理器。
 
 ## 构建与打包
 
@@ -108,120 +113,29 @@ node scripts/verify-enterprise-bundle.mjs <tarball.tgz> --manifest <bundle-manif
 
 完整检查入口为 `pnpm check`，具体检查职责见[贡献指南](../../CONTRIBUTING.md#7-检查命令)。全量检查在本机仍有上述 Windows IAM 执行位限制，本插件单独通过不表示全库通过。
 
+### 开发联调包
+
+1. 用上面的默认企业入口构建并核验中性 `.tgz`，不向源码或公版补丁写入企业配置。
+2. 按[本地人工调试](#本地人工调试)安装到隔离 profile，登记 `@heluo/forge-enterprise` 一次。
+3. 在该 profile 配置 [IAM](../forge-iam/docs/developer-guide.md) 与网关；按[开发 profile 配置](#开发-profile-配置)合并 Nacos 地址、命名空间、账号和密码。
+4. 重启同一 profile，分别核验 IAM 登录、网关及 Nacos 读取。仅调整 Nacos 配置时重复第 3、4 步；修改插件源码时重新构建、打包并安装。
+
+这条路径不调用私版制作器，构建时不要求提供 Nacos 四项部署值。未配置 Nacos 时可验证本地技能管理，发现页显示未配置。同包安装不代表 Nacos 继承个人 IAM 权限；当前 Nacos 仍使用独立只读账号，不实现 IAM 换票。
+
 ### 企业测试包与正式环境包交付
 
-交接顺序为：源码编译与检查 → 中性企业公版构建与核验 → 准备环境配置 → 私版预检与摘要确认 → 交付 → 注入运行凭据并验收。这里的「正式环境包」指写入正式环境部署配置的私版包，不代表当前预览插件已获生产准入。企业联调、正式凭据方案与目标平台验收仍按[设计 §6](../../docs/design/plugins/forge-skills-manager.md#6-实施与验收)收口。
-
-制包命令从仓库根执行，以下使用 macOS 的 Bash 环境与系统 `zip`。Windows 的源码编译和本地调试与标准企业制包分开：除了上述执行位限制，私版制作器还要求配置文件具备 POSIX `600` 权限；不能以本机预览重组结果替代标准流程通过的证据。完整 macOS 交付与真实企业环境须另行验证。
-
-#### 1. 准备中性企业公版
-
-先执行本节前面的依赖安装、源码 `build`、`verify` 和相关检查，再构建企业组合包：
+先执行前文的源码编译和验证，再构建并独立核验中性企业公版：
 
 ```sh
 node scripts/build-enterprise-bundle.mjs ../releases/public
 node scripts/verify-enterprise-bundle.mjs ../releases/public/heluo-forge-enterprise-0.1.0.tgz --manifest ../releases/public/bundle-manifest.json --json
 ```
 
-`../releases/public` 是仓库外的新目录，文件名中的 `0.1.0` 须与实际公版版本一致。公版保持配置中性，不含企业地址、账号密码或个人状态。保留源提交、工作区是否有未提交修改、构建记录与摘要；读取他人提供的公版时，从可信发布记录核对 SHA-256，不只信任同目录的校验文件。工具链须与公版配套，IAM 校验模块不匹配时停止，不跳过校验。
+输出使用仓库外的新目录，文件名版本须与实际公版一致。保留源提交、工作区状态、构建记录和摘要；使用他人提供的公版时，从可信发布记录取得 SHA-256。制作器只接受企业公版，不接受 Skill Manager 独立包或已配置的私版。
 
-私版制作器仅接受 `@heluo/forge-enterprise` 的公版 `.tgz`，不接受 Skill Manager 独立包，也不以已配置的企业私版包再次作为公版输入。只需要独立插件开发调试时，使用前文单包命令和[本地人工调试](#本地人工调试)。
+随后按[随工具链交付的专项说明](docs/packaging.md#预检与生成)准备配置、预检、确认并生成。测试与正式环境可复用同一中性公版，分别维护未跟踪且受忽略的配置文件、私版版本与输出目录；两者均需预置 Nacos 四项。仅修改部署值无需重新编译源码，修改后使用新私版版本重新生成。
 
-#### 2. 准备测试与正式环境配置
-
-打包人员手工维护 `.env.test`、`.env.production`，不覆盖已有文件；确认文件被 Git 忽略且未被跟踪。两者都只供制作器读取，不随包交付。下列 `.env.test` 示例包含企业 IAM、模型网关及 Nacos 连接字段，全部值均为占位示例，须按提供方实际配置替换：
-
-```dotenv
-HELUO_IAM_AUTH_MODE=public
-HELUO_IAM_ISSUER=https://iam-test.corp.example
-HELUO_IAM_DISCOVERY_URL=https://iam-test.corp.example/.well-known/openid-configuration
-HELUO_IAM_CLIENT_ID=forge-console
-HELUO_IAM_SCOPES=openid profile offline_access
-HELUO_IAM_CALLBACK_PORT=0
-HELUO_IAM_REVOCATION_ENDPOINT=https://iam-test.corp.example/revoke
-HELUO_IAM_MANAGED_MODELS_BASE_URL=https://gateway-test.corp.example/v1
-HELUO_IAM_DEFAULT_PROVIDER=enterprise
-HELUO_NACOS_SERVER_URL=https://nacos-test.corp.example/nacos
-HELUO_NACOS_NAMESPACE_ID=public
-HELUO_NACOS_USERNAME_ENV=FORGE_NACOS_USERNAME
-HELUO_NACOS_PASSWORD_ENV=FORGE_NACOS_PASSWORD
-HELUO_NACOS_TIMEOUT_MS=15000
-HELUO_NACOS_ALLOW_INSECURE_HTTP=false
-```
-
-`issuer` 是信任锚，必须与 Discovery 文档及令牌中的值精确一致；Discovery、撤销端点、client ID 和网关 provider 取实际值，不能按示例猜测地址或路由标识。默认退出路径的撤销协议须另行联调。使用 HTTP 时分别显式配置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`、`HELUO_NACOS_ALLOW_INSECURE_HTTP=true`，仅设置所需的开关；两者不互相授权。
-
-| 项目 | 测试环境包 | 正式环境包 |
-|---|---|---|
-| 制包配置文件 | `.env.test` | `.env.production` |
-| IAM、网关及 Nacos | 实际测试服务；本地模拟须明确标记 | 企业正式服务与经核验的端点 |
-| Nacos 命名空间及只读权限 | 测试命名空间与测试账号 | 正式命名空间与专用只读账号 |
-| 私版版本示例 | `0.1.0-corp.test.1` | `0.1.0-corp.1` |
-| 输出目录示例 | `../releases/corp-test-1` | `../releases/corp-1` |
-| 验证边界 | 测试服务或 mock，不替代企业联调 | 企业登录、网关、Nacos 服务端拒写及目标平台实测 |
-
-两个环境可复用同一份已核验的中性公版，但配置、私版版本、输出目录及测试数据必须区分。私版版本须与公版不同；配置或内容改变时使用新的私版版本，不覆盖已有交付物。profile 名称不是构建参数，不打入用户 profile、技能目录、凭据库或会话数据。仅改变部署配置时无需重新编译 TypeScript 或内联库。
-
-#### 3. 预检、确认并生成交付物
-
-确认 `.env.test` 是本次专用配置文件后设置权限，并填写下列参数。`bundle_sha` 使用前一步核验的公版摘要；输入文件、配置、版本或输出位置改变后，重新预检：
-
-```bash
-chmod 600 .env.test
-bundle_public='../releases/public/heluo-forge-enterprise-0.1.0.tgz'
-bundle_sha='<替换为已核验的公版SHA-256>'
-bundle_config='.env.test'
-bundle_version='0.1.0-corp.test.1'
-bundle_output='../releases/corp-test-1'
-node scripts/release-delivery.mjs \
-  --public "$bundle_public" --public-sha256 "$bundle_sha" \
-  --config "$bundle_config" --version "$bundle_version" \
-  --output "$bundle_output" --dry-run
-```
-
-预检不写产物。核对 `configKeys` 包含所需的 `nacos.*` 键、`loginReady: true`、`gatewayConfigured: true`；使用 Discovery 时核对 `discovery.checked: true`。配置了撤销端点不表示其协议已联调。预检与错误不回显配置值；本地路径仍须在对外分享前脱敏。不要把 `--skip-discovery-check` 当成解决配置错误的方法；必要的离线制作须单列未验证项。
-
-审核预检结果后，使用其 `planDigest` 的前至少 8 位确认，同一终端内执行：
-
-```bash
-read -r -p '输入本次预检 planDigest 的前至少 8 位: ' bundle_confirm
-node scripts/release-delivery.mjs \
-  --public "$bundle_public" --public-sha256 "$bundle_sha" \
-  --config "$bundle_config" --version "$bundle_version" \
-  --output "$bundle_output" --confirm "$bundle_confirm"
-```
-
-正式环境包先对 `.env.production` 设置 `600` 权限，再把 `bundle_config`、`bundle_version`、`bundle_output` 分别换成表中正式环境参数，重新执行预检及确认，不沿用测试包摘要。目录须在仓库外且不存在或为空，相邻的同名 `.zip` 也不得已存在。命令失败时保留错误证据，不手工补清单把失败产物当成功交付。
-
-成功时输出目录及其相邻的 `<输出目录名>.zip` 包含：
-
-| 位置 | 内容及用途 |
-|---|---|
-| `enterprise-plugin/` | 配置预置后的企业 `.tgz`、`bundle-manifest.json`、`private-release.json` 和插件校验和 |
-| `installer/` | 初始化脚本及 macOS、Windows、Linux 安装启动器 |
-| `INSTALL.md` | 员工安装、profile 边界及故障说明 |
-| `SHA256SUMS` | 交付目录内文件校验和；外层 zip 摘要另由命令回显 |
-
-员工接收经授权的内部交付 zip；保留制包回执和 zip 摘要。只有需要私版插件 `.tgz`、不需要员工安装材料时，可使用[配置与替换](#配置与替换)中的 `make-private-bundle.mjs`，输入字段和运行凭据边界相同。
-
-#### 4. 注入运行凭据并安装验收
-
-制包配置中的 `HELUO_NACOS_USERNAME_ENV`、`HELUO_NACOS_PASSWORD_ENV` 只保存变量名。实际账号密码由部署人员通过启动环境提供，例如本例使用 `FORGE_NACOS_USERNAME`、`FORGE_NACOS_PASSWORD`；具体隐藏输入方法见[配置与启动](#3-配置与启动)。私版制作器不读取这些变量的实际值，不把秘密写入 bundle，也不从 IAM 登录自动换取 Nacos 凭据。
-
-安装启动器负责准备宿主和安装插件，**不负责读取私有运行期 `.env` 或注入 Nacos 账号密码**。若使用运行期 `.env`，须另由部署方启动脚本按数据加载并注入，不能与制包配置混用或随包交付；插件不会自行读取该文件。通过同一环境启动 DSH，外部环境变更后重启；Desktop 应用也必须从能够继承该环境的启动方式运行，不能假定终端中设置的变量会自动传给已运行的应用。统一凭据启动器与正式凭据方案仍待实现和核验，交接时须明确部署负责人。
-
-按产物内 `INSTALL.md` 安装；默认员工启动器安装到 web profile，Desktop 是独立 profile，按其应用内安装流程操作。安装后从注入凭据的终端运行 `dsh web`；使用自定义 profile 的开发人员按[本地人工调试](#本地人工调试)启动同一 profile，不依赖历史的测试 profile 名称。
-
-| 验收项 | 预期 |
-|---|---|
-| 安装与装配 | 本次版本及摘要正确，企业 bundle 挂载一次，不同时挂载独立 Skill Manager |
-| 配置展示 | 备份后移除既有 profile 中旧的 Nacos 覆盖项；「打开配置文件」不显示这些字段，包内预置内容仍可解包读取 |
-| 本地管理 | 全局、已登记项目、其他 Agent 来源与既有用户数据正常，企业库不可达不影响本地管理 |
-| 企业库已配置且凭据正确 | 可以读取列表、查看详情和下载；下载默认禁用，再次进入显示已下载状态 |
-| 凭据缺失或服务停止 | 凭据缺失按契约拒绝；已配置但服务不可达时显示不可用，不应显示未配置或下载成功 |
-| 企业依赖 | 实际登录、网关模型及 Nacos 服务端只读权限分别验证；本地 mock 不算企业证据 |
-
-记录制品版本、源提交及工作区状态、摘要、宿主版本、profile、命令结果及未验证项，不记录密码、令牌或 Cookie。完整本地检查、测试环境可用、企业联调通过和正式上线准入是不同事实。
+标准制包环境为 macOS、Node 和系统 `zip`；Windows 源码调试不代表标准企业制包通过，POSIX 配置权限及 IAM 执行位限制仍需目标环境验证。员工按产物 `INSTALL.md` 安装，安装后分别核验实际 IAM、网关、Nacos 只读权限与目标平台；预检不证明企业联调或生产准入完成。
 
 ## 自动化验证
 
@@ -308,31 +222,11 @@ npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false
 
 ### 3. 配置与启动
 
-安装独立包或中性企业公版作开发调试时，在该 profile 的 `cordis.patch.yml` 合并本文「配置与替换」中的 `heluo-skills-manager` 行，保留其他配置；只有本机 Nacos 演示才将 `serverUrl` 改为 `http://127.0.0.1:8848/nacos` 并显式增加 `allowInsecureHttp: true`。没有 Nacos 时省略连接配置，预期发现页显示未配置。
+安装独立包或中性企业公版作开发调试时，在该 profile 的 `cordis.patch.yml` 合并本文「配置与替换」中的 `heluo-skills-manager` 行，保留其他配置；只有本机 Nacos 演示才将 `serverUrl` 改为 `http://127.0.0.1:8848/nacos`。没有 Nacos 时省略连接配置，预期发现页显示未配置。
 
 安装已预置连接配置的企业私版时，直接使用包内配置，不在 profile 中新增 Nacos 行；若有旧覆盖项，先备份再移除。已有 profile 不可整份覆盖；最终有效装配中 `heluo-skills-manager` 只挂载一次。配置文件入口不显示 Nacos 字段的验收使用这种安装方式。
 
-两种方式都需要由部署方启动脚本或当前终端注入账号密码，不写进 YAML；私有运行期 `.env` 须先由该脚本加载，交付物中的安装启动器不会自动完成此步骤。
-
-需要手动注入时，在启动 DSH 的同一终端输入只读测试账号；密码采用隐藏输入，避免将明文直接写入命令历史。
-
-PowerShell：
-
-```powershell
-$env:FORGE_NACOS_USERNAME = Read-Host 'Nacos 只读测试账号'
-$nacosPassword = Read-Host 'Nacos 测试密码' -AsSecureString
-$env:FORGE_NACOS_PASSWORD = [System.Net.NetworkCredential]::new('', $nacosPassword).Password
-Remove-Variable nacosPassword
-```
-
-Bash：
-
-```bash
-read -r -p 'Nacos 只读测试账号: ' FORGE_NACOS_USERNAME
-read -r -s -p 'Nacos 测试密码: ' FORGE_NACOS_PASSWORD
-printf '\n'
-export FORGE_NACOS_USERNAME FORGE_NACOS_PASSWORD
-```
+开发联调在私有 profile 配置账号密码；正式包直接使用包内预置，无需运行环境变量。
 
 从测试 workspace 运行：
 

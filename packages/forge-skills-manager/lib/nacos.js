@@ -34,7 +34,6 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
     try {
       const url = new URL(config.serverUrl);
       if (url.username || url.password || url.search || url.hash || !["https:", "http:"].includes(url.protocol)) throw 0;
-      if (url.protocol === "http:" && !config.allowInsecureHttp) throw 0;
       const namespace = config.namespaceId ?? "public";
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespace)) throw 0;
       const usernameEnv = config.usernameEnv ?? "FORGE_NACOS_USERNAME";
@@ -50,9 +49,10 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
   }
   function credentials() {
     const cfg = settings();
-    const username = process.env[cfg.usernameEnv];
-    const password = process.env[cfg.passwordEnv];
-    if (!username?.trim() || !password?.trim()) {
+    const explicit = config?.username !== void 0 || config?.password !== void 0;
+    const username = explicit ? config?.username : process.env[cfg.usernameEnv];
+    const password = explicit ? config?.password : process.env[cfg.passwordEnv];
+    if (typeof username !== "string" || typeof password !== "string" || !username.trim() || !password.trim()) {
       token = void 0;
       throw error("config", "\u4F01\u4E1A\u6280\u80FD\u5E93\u51ED\u636E\u672A\u914D\u7F6E\uFF0C\u8BF7\u8054\u7CFB\u7EF4\u62A4\u4EBA\u5458", 503);
     }
