@@ -627,3 +627,64 @@ test('followupTask re-verifies preference boundary and aborts before delivery wh
     await h.host.close();
   }
 });
+
+test('followupTask fails closed (404 EXPERT_TASK_NOT_FOUND) when task context is missing after restart without persisting placeholders', async () => {
+  const sharedStorage = createMemoryStorage();
+  const sharedBackend = { tasksByRequest: new Map(), tasksById: new Map() };
+  let followupCalls = 0;
+  const h1 = makeHarness({ dispatchEnabled: true, storage: sharedStorage, backend: sharedBackend });
+  await h1.host.open();
+  try {
+    await h1.enableExpert();
+    const sel = await invokeRoute(h1.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Before restart' },
+    });
+    const dispatched = await invokeRoute(h1.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-1', taskText: 'Before restart' },
+    });
+    assert.equal(dispatched.status, 201);
+  } finally {
+    await h1.host.close();
+  }
+
+  // Fresh host after restart has empty in-memory taskContextById.
+  const h2 = makeHarness({ dispatchEnabled: true, storage: sharedStorage, backend: sharedBackend });
+  await h2.host.open();
+  try {
+    const beforeReconcile = await invokeRoute(h2.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/task-1/followups`,
+      headers: mutationHeaders(),
+      body: { taskText: 'Followup without context' },
+    });
+    assert.equal(beforeReconcile.status, 404);
+    assert.equal(beforeReconcile.body.error.code, 'EXPERT_TASK_NOT_FOUND');
+
+    // Verify no placeholder `task:task-1` correlation record was written.
+    const corrTable = sharedStorage.domains.get('forge_experts_requests').get('correlations');
+    const records = [...corrTable.values()];
+    assert.equal(records.length, 1);
+    assert.equal(records.some((r) => r.expertId.startsWith('task:')), false);
+
+    // After reconciling via by-request, task context is restored and followup succeeds.
+    const reconciled = await invokeRoute(h2.host, { path: `${API_PREFIX}/tasks/by-request/req-0001` });
+    assert.equal(reconciled.status, 200);
+
+    const afterReconcile = await invokeRoute(h2.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/task-1/followups`,
+      headers: mutationHeaders(),
+      body: { taskText: 'Followup after reconcile' },
+    });
+    assert.equal(afterReconcile.status, 201);
+    assert.equal(followupCalls, 0);
+  } finally {
+    await h2.host.close();
+  }
+});

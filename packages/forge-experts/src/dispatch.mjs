@@ -382,7 +382,6 @@ export function createDispatchService(ports) {
         {
           details: {
             ...(verdict?.confirmationScope ? { confirmationScope: verdict.confirmationScope } : {}),
-            ...(verdict?.reason ? { reason: verdict.reason } : {}),
           },
         },
       );
@@ -400,7 +399,9 @@ export function createDispatchService(ports) {
 
     return runBoundary(async () => {
       ports.assertScopeCurrent(startEpoch, scope);
-      if (!expertId || !delegationScope) return { scopeVerified: true };
+      if (!isNonEmptyString(expertId) || !isNonEmptyString(delegationScope)) {
+        throw new ExpertsError('EXPERT_SCOPE_UNVERIFIED', 'Missing expert or delegation scope context; verification cannot be skipped');
+      }
       if (ports.isPreferencePending?.({ scope, expertId })) {
         throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert preference update is pending; re-confirm before sending');
       }
@@ -662,6 +663,12 @@ export function createDispatchService(ports) {
       confirmationToken: input.confirmationToken,
     });
 
+    // Fail closed if task context is absent (e.g. after restart before by-request reconciliation):
+    // never persist placeholder identities or bypass preference/scope verification.
+    if (!knownContext || !isNonEmptyString(knownContext.expertId) || !isNonEmptyString(knownContext.delegationScope)) {
+      throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task context is unavailable; reconcile the task before sending follow-ups');
+    }
+
     // 2. Persist minimal #247 request correlation BEFORE outbound followup delivery.
     const createdAt = new Date(now()).toISOString();
     const baseRecord = {
@@ -671,9 +678,9 @@ export function createDispatchService(ports) {
       orgId: scope.orgId,
       issuer: scope.issuer,
       subject: scope.subject,
-      originSessionRef: knownContext?.originSessionRef ?? `task:${cleanTaskId}`,
-      expertId: knownContext?.expertId ?? `task:${cleanTaskId}`,
-      delegationScope: knownContext?.delegationScope ?? `task:${cleanTaskId}`,
+      originSessionRef: knownContext.originSessionRef,
+      expertId: knownContext.expertId,
+      delegationScope: knownContext.delegationScope,
       payloadDigest,
       taskId: cleanTaskId,
       status: 'pending_delivery',
@@ -687,8 +694,8 @@ export function createDispatchService(ports) {
       await verifyInPreferenceBoundary({
         scope,
         startEpoch,
-        expertId: knownContext?.expertId ?? null,
-        delegationScope: knownContext?.delegationScope ?? null,
+        expertId: knownContext.expertId,
+        delegationScope: knownContext.delegationScope,
       });
     } catch (error) {
       await persistCorrelationBestEffort(scope, {
