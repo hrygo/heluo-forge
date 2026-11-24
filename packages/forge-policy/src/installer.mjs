@@ -9,7 +9,8 @@ import { createGate } from './gate.mjs';
 import { createDecisionCache } from './reuse.mjs';
 import { createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
 import { loadOrgPolicy } from './org-policy.mjs';
-import { judgeProtectedPath, matchProtected, resolveProtectedRoots, templateEnv } from './paths.mjs';
+import { canonicalize, judgeProtectedPath, matchProtected, resolveProtectedRoots, templateEnv } from './paths.mjs';
+import { storeRootsFrom } from './store-protection.mjs';
 import { buildPipeline, isObserveOnly } from './pipeline.mjs';
 import { Config, PolicyConfigError, collectPathTemplates, resolveConfig, validateConfig } from './config.mjs';
 import { registerAuditCommand } from './audit-command.mjs';
@@ -22,7 +23,7 @@ const OBSERVATION_SINK_KEY = 'observationSink';
 // 流程事实（变更状态、计划确认）由宿主既有服务提供；缺席时判为"未判定"。
 const PROCESS_FACTS_KEY = 'processFacts';
 
-const OBSERVE_ONLY_NOTICE = '[forge-policy] 7 项策略开关均为关闭，当前为 observe-only：只记录受控执行的凭据，不拦截内容、路径、流程或确认。';
+const OBSERVE_ONLY_NOTICE = '[forge-policy] 7 项策略开关均为关闭，当前为 observe-only：只记录受控执行的凭据，不拦截内容、路径、流程或确认；IAM 存档/取票守卫不受开关控制，仍随 credentials-store-location 服务生效。';
 
 // 逐次确认需要宿主的 userQuestions 服务；缺席时装载照常成功，每次需要卡片的写都会拒绝。
 const CONFIRMATION_UNAVAILABLE_NOTICE = '[forge-policy] 已启用 confirmPush/confirmDopWrite，但宿主没有可用的 userQuestions 服务：需要人工确认的受控写会一律以 POLICY_CONFIRM_UNAVAILABLE 拒绝（不降级为直接放行）。';
@@ -193,6 +194,43 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     timeoutMs: config.audit.timeoutMs,
   });
 
+  // IAM 存档/取票守卫不绑定规则开关：内置凭据后端提供 `credentials-store-location` 即生效。
+  // Cordis 的服务只在声明 inject 的作用域可见，且条目按并行 fiber 装配，因此这里无条件
+  // 注册注入回调，服务出现即 arm；服务始终缺席（例如 engineering 单装、没有内置凭据后端）
+  // 时守卫不生效，等价于关闭。arm 失败（目录与环境变量不一致）只降级为指纹兜底。
+  const storeGuard = { available: false, roots: [] };
+  let storeArmed = false;
+  const warnStore = (message) => {
+    if (typeof overrides.log === 'function') overrides.log(message);
+    else if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(message);
+  };
+  const armStore = (location) => {
+    if (location === undefined || location === null) return;
+    storeGuard.available = true;
+    if (storeArmed) return;
+    try {
+      const declared = process.env.HELUO_FORGE_STORE_DIRECTORY;
+      if (typeof declared === 'string' && declared.trim() !== '') {
+        if (canonicalize(declared) !== canonicalize(String(location.directory))) {
+          throw new PolicyCatalogError(
+            'HELUO_FORGE_STORE_DIRECTORY disagrees with the keychain store location',
+            'POLICY_STORE_DIRECTORY_CONFLICT',
+          );
+        }
+      } else if (location.isDefault !== true) {
+        throw new PolicyCatalogError(
+          'the keychain store directory is custom while HELUO_FORGE_STORE_DIRECTORY is unset; the CLI would open the platform default directory',
+          'POLICY_STORE_DIRECTORY_CONFLICT',
+        );
+      }
+      storeGuard.roots.push(...storeRootsFrom(location));
+      storeArmed = true;
+    } catch (error) {
+      warnStore(`the IAM store location cannot be armed (${error?.code ?? 'POLICY_STORE_LOCATION_INVALID'}); the gate falls back to store file/directory fingerprints`);
+    }
+  };
+  if (typeof ctx.get === 'function') armStore(ctx.get('credentials-store-location'));
+
   const pipeline = buildPipeline(config.rules);
   const getActor = overrides.getActor ?? (() => readActor(ctx));
   const confirmations = overrides.confirmations ?? createConfirmationGateway({ timeoutMs: config.confirmation.timeoutMs });
@@ -213,6 +251,7 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     timeoutMs: config.confirmation.timeoutMs,
     maxContentBytes: config.content.maxBytes,
     protectedRoots,
+    storeGuard,
   });
 
   // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。
@@ -237,6 +276,14 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
   // 只读命令：没有 commands 服务时是空操作，不阻断挂载；disposer 跟随卸载顺序回收。
   const disposeAuditCommand = registerAuditCommand(ctx, { audit });
   const disposers = [];
+  if (typeof ctx.inject === 'function') {
+    // 服务就绪后 arm；服务始终缺席时守卫保持关闭（与 engineering 单装的验收口径一致）。
+    const disposeArming = ctx.inject(['credentials-store-location'], (scoped) => {
+      armStore(typeof scoped.get === 'function' ? scoped.get('credentials-store-location') : undefined);
+      return () => {};
+    });
+    if (typeof disposeArming === 'function') disposers.push(disposeArming);
+  }
   if (typeof disposeAuditCommand === 'function') disposers.push(disposeAuditCommand);
   disposers.push(native.guard((exec) => (owned ? owned.guard(gate, exec) : gate.guard(exec))));
   if (typeof ctx.on === 'function') {
@@ -286,6 +333,10 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     authorize: (toolName, request) => gate.check(toolName, request),
     /** 配置追加的模板（展开前原文）；九类名称在代码里恒开，不出现在这里。 */
     protectedPaths: () => configuredTemplates,
+    /** IAM 存档受保护根（库目录与密钥目录）；未启用时为空。 */
+    storeDirectories: () => storeGuard.roots.map((entry) => entry.raw),
+    /** 存档判定查询（布尔面）：`true` 表示已判定且落在存档根内。 */
+    checkStore: (candidate) => matchProtected(candidate, storeGuard.roots).protected === true,
     /**
      * 路径判定查询（布尔面，沿用既有契约）：`true` 表示"已判定且受保护"。
      * 判定不了的路径（工作区外、形状不合法）返回 `false`——查询方拿不到保护依据时

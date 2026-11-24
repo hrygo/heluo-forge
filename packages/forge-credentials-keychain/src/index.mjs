@@ -260,7 +260,8 @@ export function apply(ctx, rawConfig = {}) {
   if (!builtinBackend && result.value.allowEphemeral !== true) {
     throw new KeychainProviderError('KEYCHAIN_EPHEMERAL_REFUSED', 'an injected test backend requires allowEphemeral=true');
   }
-  const registered = builtinBackend ? createDefaultBackend({ directory: storeDirectory(result.value.storeDirectory) }) : undefined;
+  const resolvedDirectory = builtinBackend ? storeDirectory(result.value.storeDirectory) : undefined;
+  const registered = builtinBackend ? createDefaultBackend({ directory: resolvedDirectory }) : undefined;
   const backend = registered?.backend ?? result.value.backend;
   if (backend.available === false) {
     throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', backend.reason ?? 'keychain backend is unavailable');
@@ -318,6 +319,7 @@ export function apply(ctx, rawConfig = {}) {
   let disposeProvide;
   let disposeTrust;
   let disposeClientSecret;
+  let disposeLocation;
   const teardown = async () => {
     if (closed) return;
     closed = true;
@@ -328,9 +330,23 @@ export function apply(ctx, rawConfig = {}) {
       // points at a half-closed backend behind is worse than the close error.
       disposeClientSecret?.();
       disposeTrust?.();
+      disposeLocation?.();
       disposeProvide?.();
     }
   };
+  // 存档位置的单一真源：策略包的 IAM 存档判定只认这个服务，不复制平台目录布局。
+  // 注入的测试后端没有稳定目录，因此不提供该服务（策略侧会拒绝挂载，不降级）。
+  // 位置服务必须在 `apply` 内同步提供：后挂载的策略包在装载期就要读到它，
+  // 放进 effect 会晚一步，导致策略包因"位置服务缺席"拒绝挂载。
+  if (resolvedDirectory !== undefined) {
+    const isDefault = (result.value.storeDirectory ?? '') === '';
+    disposeLocation = ctx.provide('credentials-store-location', Object.freeze({
+      directory: resolvedDirectory,
+      keyDirectory: `${resolvedDirectory}.keys`,
+      isDefault,
+      source: isDefault ? 'platform-default' : 'config',
+    }));
+  }
   ctx.effect(() => {
     disposeProvide = ctx.provide('credentials', provider);
     if (trust) disposeTrust = ctx.provide(JOINT_STORE_SERVICE, trust);
