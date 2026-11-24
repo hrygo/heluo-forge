@@ -104,6 +104,22 @@ function connectionRejection(req, getConnection) {
   }
 }
 
+function requireRoutePort(req, res, { method, mutation = false, portFn, disabledCode, disabledMessage }) {
+  if (req.method !== method) {
+    methodNotAllowed(res, method);
+    return null;
+  }
+  if (mutation) {
+    if (!hasMutationHeader(req)) {
+      throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
+    }
+  }
+  if (typeof portFn !== 'function') {
+    throw new ExpertsError(disabledCode, disabledMessage);
+  }
+  return portFn;
+}
+
 export function createExpertsRoutes(ports) {
   const sseClients = new Set();
 
@@ -205,50 +221,44 @@ export function createExpertsRoutes(ports) {
       }
 
       if (url.pathname === `${API_PREFIX}/selections`) {
-        if (req.method !== 'POST') {
-          methodNotAllowed(res, 'POST');
-          return true;
-        }
-        if (!hasMutationHeader(req)) {
-          throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
-        }
-        if (typeof ports.prepareSelection !== 'function') {
-          throw new ExpertsError('EXPERT_DISPATCH_DISABLED', 'Expert dispatch is disabled');
-        }
+        const prepareSelection = requireRoutePort(req, res, {
+          method: 'POST',
+          mutation: true,
+          portFn: ports.prepareSelection,
+          disabledCode: 'EXPERT_DISPATCH_DISABLED',
+          disabledMessage: 'Expert dispatch is disabled',
+        });
+        if (!prepareSelection) return true;
         const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
-        const prepared = await ports.prepareSelection(rawBody);
-        sendJson(res, 201, prepared);
+        sendJson(res, 201, await prepareSelection(rawBody));
         return true;
       }
 
       if (url.pathname === `${API_PREFIX}/tasks`) {
-        if (req.method !== 'POST') {
-          methodNotAllowed(res, 'POST');
-          return true;
-        }
-        if (!hasMutationHeader(req)) {
-          throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
-        }
-        if (typeof ports.dispatchTask !== 'function') {
-          throw new ExpertsError('EXPERT_DISPATCH_DISABLED', 'Expert dispatch is disabled');
-        }
+        const dispatchTask = requireRoutePort(req, res, {
+          method: 'POST',
+          mutation: true,
+          portFn: ports.dispatchTask,
+          disabledCode: 'EXPERT_DISPATCH_DISABLED',
+          disabledMessage: 'Expert dispatch is disabled',
+        });
+        if (!dispatchTask) return true;
         const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
-        const receipt = await ports.dispatchTask(rawBody);
+        const receipt = await dispatchTask(rawBody);
         sendJson(res, receipt?.idempotentReplay ? 200 : 201, receipt);
         return true;
       }
 
       if (url.pathname.startsWith(`${API_PREFIX}/tasks/by-request/`)) {
-        if (req.method !== 'GET') {
-          methodNotAllowed(res, 'GET');
-          return true;
-        }
-        if (typeof ports.reconcileTaskByRequest !== 'function') {
-          throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task reconciliation is unavailable');
-        }
+        const reconcileTaskByRequest = requireRoutePort(req, res, {
+          method: 'GET',
+          portFn: ports.reconcileTaskByRequest,
+          disabledCode: 'EXPERT_TASK_NOT_FOUND',
+          disabledMessage: 'Task reconciliation is unavailable',
+        });
+        if (!reconcileTaskByRequest) return true;
         const requestId = decodePathSegment(url.pathname.slice(`${API_PREFIX}/tasks/by-request/`.length), 'requestId');
-        const task = await ports.reconcileTaskByRequest({ requestId });
-        sendJson(res, 200, task);
+        sendJson(res, 200, await reconcileTaskByRequest({ requestId }));
         return true;
       }
 
@@ -256,62 +266,51 @@ export function createExpertsRoutes(ports) {
         const tail = url.pathname.slice(`${API_PREFIX}/tasks/`.length);
         const parts = tail.split('/');
         if (parts.length === 1) {
-          if (req.method !== 'GET') {
-            methodNotAllowed(res, 'GET');
-            return true;
-          }
-          if (typeof ports.getTask !== 'function') {
-            throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task lookup is unavailable');
-          }
-          const taskId = decodePathSegment(parts[0], 'taskId');
-          const task = await ports.getTask({ taskId });
-          sendJson(res, 200, task);
+          const getTask = requireRoutePort(req, res, {
+            method: 'GET',
+            portFn: ports.getTask,
+            disabledCode: 'EXPERT_TASK_NOT_FOUND',
+            disabledMessage: 'Task lookup is unavailable',
+          });
+          if (!getTask) return true;
+          sendJson(res, 200, await getTask({ taskId: decodePathSegment(parts[0], 'taskId') }));
           return true;
         }
         if (parts.length === 2 && parts[1] === 'result') {
-          if (req.method !== 'GET') {
-            methodNotAllowed(res, 'GET');
-            return true;
-          }
-          if (typeof ports.getTaskResult !== 'function') {
-            throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task result lookup is unavailable');
-          }
-          const taskId = decodePathSegment(parts[0], 'taskId');
-          const result = await ports.getTaskResult({ taskId });
-          sendJson(res, 200, result);
+          const getTaskResult = requireRoutePort(req, res, {
+            method: 'GET',
+            portFn: ports.getTaskResult,
+            disabledCode: 'EXPERT_TASK_NOT_FOUND',
+            disabledMessage: 'Task result lookup is unavailable',
+          });
+          if (!getTaskResult) return true;
+          sendJson(res, 200, await getTaskResult({ taskId: decodePathSegment(parts[0], 'taskId') }));
           return true;
         }
         if (parts.length === 2 && parts[1] === 'followups') {
-          if (req.method !== 'POST') {
-            methodNotAllowed(res, 'POST');
-            return true;
-          }
-          if (!hasMutationHeader(req)) {
-            throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
-          }
-          if (typeof ports.followupTask !== 'function') {
-            throw new ExpertsError('EXPERT_DISPATCH_DISABLED', 'Expert dispatch is disabled');
-          }
+          const followupTask = requireRoutePort(req, res, {
+            method: 'POST',
+            mutation: true,
+            portFn: ports.followupTask,
+            disabledCode: 'EXPERT_DISPATCH_DISABLED',
+            disabledMessage: 'Expert dispatch is disabled',
+          });
+          if (!followupTask) return true;
           const taskId = decodePathSegment(parts[0], 'taskId');
           const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
-          const result = await ports.followupTask({ taskId, ...rawBody });
-          sendJson(res, 201, result);
+          sendJson(res, 201, await followupTask({ taskId, ...rawBody }));
           return true;
         }
         if (parts.length === 2 && parts[1] === 'cancel') {
-          if (req.method !== 'POST') {
-            methodNotAllowed(res, 'POST');
-            return true;
-          }
-          if (!hasMutationHeader(req)) {
-            throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
-          }
-          if (typeof ports.cancelTask !== 'function') {
-            throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task cancellation is unavailable');
-          }
-          const taskId = decodePathSegment(parts[0], 'taskId');
-          const result = await ports.cancelTask({ taskId });
-          sendJson(res, 200, result);
+          const cancelTask = requireRoutePort(req, res, {
+            method: 'POST',
+            mutation: true,
+            portFn: ports.cancelTask,
+            disabledCode: 'EXPERT_TASK_NOT_FOUND',
+            disabledMessage: 'Task cancellation is unavailable',
+          });
+          if (!cancelTask) return true;
+          sendJson(res, 200, await cancelTask({ taskId: decodePathSegment(parts[0], 'taskId') }));
           return true;
         }
         throw new ExpertsError('EXPERT_NOT_FOUND', 'Unknown expert task route');

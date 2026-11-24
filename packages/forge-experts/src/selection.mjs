@@ -3,11 +3,13 @@
  * Independent axis (P2): zero cross-axis imports; binds employee, expert, session,
  * delegation scope, and draft digest so stale, mutated, or replayed picks fail closed.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { computeCanonicalDigest } from './digest.mjs';
 import { ExpertsError } from './errors.mjs';
 
 const DEFAULT_SELECTION_TTL_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_PENDING_SELECTIONS = 256;
+const DEFAULT_MAX_PENDING_PER_OWNER = 16;
 const MAX_TASK_TEXT_CHARS = 32_000;
 const MAX_REUSE_REFS = 20;
 
@@ -28,14 +30,13 @@ function normalizeReuseRefs(reuseRefs) {
 }
 
 export function computeDraftDigest({ expertId, sessionId, delegationScope, taskText, reuseRefs = [] }) {
-  const canonical = JSON.stringify({
+  return computeCanonicalDigest({
     expertId: String(expertId ?? '').trim(),
     sessionId: String(sessionId ?? '').trim(),
     delegationScope: String(delegationScope ?? '').trim(),
     taskText: String(taskText ?? ''),
     reuseRefs: Array.isArray(reuseRefs) ? [...reuseRefs] : [],
   });
-  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
 
 export const SelectionPrepareBodySchema = Object.freeze({
@@ -116,8 +117,21 @@ export function createSelectionService(ports) {
   const maxPendingSelections = Number.isInteger(ports.maxPendingSelections) && ports.maxPendingSelections > 0
     ? ports.maxPendingSelections
     : DEFAULT_MAX_PENDING_SELECTIONS;
+  const maxPendingPerOwner = Number.isInteger(ports.maxPendingPerOwner) && ports.maxPendingPerOwner > 0
+    ? ports.maxPendingPerOwner
+    : Math.min(DEFAULT_MAX_PENDING_PER_OWNER, maxPendingSelections);
 
   const pending = new Map();
+
+  function ownerKeyFor(entry) {
+    return JSON.stringify([
+      entry.scope.instanceId,
+      entry.scope.orgId,
+      entry.scope.issuer,
+      entry.scope.subject,
+      entry.sessionId,
+    ]);
+  }
 
   function pruneExpired() {
     const at = now();
@@ -129,6 +143,17 @@ export function createSelectionService(ports) {
   function storeBounded(token, entry) {
     pruneExpired();
     pending.delete(token);
+    const targetOwner = ownerKeyFor(entry);
+    const ownerTokens = [];
+    for (const [existingToken, existingEntry] of pending.entries()) {
+      if (ownerKeyFor(existingEntry) === targetOwner) ownerTokens.push(existingToken);
+    }
+    // Enforce per-owner (subject + session) quota before global cap so one
+    // noisy session only evicts its own oldest picks rather than other users'.
+    while (ownerTokens.length >= maxPendingPerOwner) {
+      const oldestOwn = ownerTokens.shift();
+      if (oldestOwn !== undefined) pending.delete(oldestOwn);
+    }
     pending.set(token, entry);
     while (pending.size > maxPendingSelections) {
       const oldest = pending.keys().next().value;

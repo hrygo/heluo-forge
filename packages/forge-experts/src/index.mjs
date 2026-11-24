@@ -116,6 +116,8 @@ export function createExpertsHost(ports) {
     getMentionVersion: () => mentions.getViewVersion(),
     now: ports.now,
     selectionTtlMs: ports.selectionTtlMs,
+    maxPendingSelections: ports.maxPendingSelections,
+    maxPendingPerOwner: ports.maxPendingPerOwner,
   });
   selectionRef = selection;
 
@@ -130,6 +132,7 @@ export function createExpertsHost(ports) {
     checkDelegraSessionScope: ports.checkDelegraSessionScope,
     evaluatePolicy: ports.evaluatePolicy,
     openStorageDomain: ports.openStorageDomain,
+    onCorrelationPersistError: ports.onCorrelationPersistError,
     createDelegraTask: ports.createDelegraTask ?? (() => {
       throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task creation connector is not configured');
     }),
@@ -245,6 +248,11 @@ export async function apply(ctx, config = {}) {
     config,
     delegraClient,
     evaluatePolicy,
+    onCorrelationPersistError: ({ requestId, status, message }) => {
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] request correlation update failed', { requestId, status, message });
+      }
+    },
     getIamSession: () => {
       const iam = readService(ctx, 'iam');
       if (!iam || typeof iam.getSession !== 'function') {

@@ -177,3 +177,69 @@ test('selection fails closed when dispatch is disabled and enforces single-use d
     (err) => err.code === 'EXPERT_SELECTION_INVALID',
   );
 });
+
+test('selection enforces per-owner quota so one noisy session cannot evict another session', async () => {
+  let activeScope = makeScope({ subject: 'emp-victim' });
+  const selection = createSelectionService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => activeScope,
+    assertScopeCurrent: () => {},
+    resolveSessionScope: async () => ({ delegationScope: 'proj-alpha' }),
+    now: () => 1_700_000_000_000,
+    maxPendingSelections: 8,
+    maxPendingPerOwner: 2,
+  });
+
+  const victim = await selection.prepare({
+    expertId: 'exp-1',
+    sessionId: 'sess-victim',
+    scopeEpoch: 1,
+    taskText: 'Victim draft',
+  });
+
+  // Noisy caller prepares 5 selections exceeding its per-owner cap of 2.
+  activeScope = makeScope({ subject: 'emp-noisy' });
+  const noisyTokens = [];
+  for (let i = 0; i < 5; i += 1) {
+    const res = await selection.prepare({
+      expertId: 'exp-1',
+      sessionId: 'sess-noisy',
+      scopeEpoch: 1,
+      taskText: `Noisy draft ${i}`,
+    });
+    noisyTokens.push(res.selectionToken);
+  }
+
+  // Only 1 victim + 2 newest noisy tokens remain.
+  assert.equal(selection.pendingCount(), 3);
+
+  // Victim's token is still intact and consumable.
+  const consumedVictim = selection.consume({
+    selectionToken: victim.selectionToken,
+    scope: makeScope({ subject: 'emp-victim' }),
+    scopeEpoch: 1,
+    sessionId: 'sess-victim',
+    taskText: 'Victim draft',
+  });
+  assert.equal(consumedVictim.expertId, 'exp-1');
+
+  // Noisy caller's oldest token was evicted by its own quota, while its newest survives.
+  assert.throws(
+    () => selection.consume({
+      selectionToken: noisyTokens[0],
+      scope: activeScope,
+      scopeEpoch: 1,
+      sessionId: 'sess-noisy',
+      taskText: 'Noisy draft 0',
+    }),
+    (err) => err.code === 'EXPERT_SELECTION_INVALID',
+  );
+  const consumedNewest = selection.consume({
+    selectionToken: noisyTokens[4],
+    scope: activeScope,
+    scopeEpoch: 1,
+    sessionId: 'sess-noisy',
+    taskText: 'Noisy draft 4',
+  });
+  assert.equal(consumedNewest.expertId, 'exp-1');
+});

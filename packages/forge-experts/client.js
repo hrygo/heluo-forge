@@ -275,6 +275,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'forge-experts-ui', 'data-testid': 'forge-experts-panel' },
         h('div', { className: 'fexp-header' },
           h('h2', null, '专家智能体'),
+          // Stage 3A 管理页暂不开放聊天 @ 委派发起入口；上方预置的委派/策略类错误文案供 Stage 3B 委派交互接入后直接消费。
           h('p', { 'data-testid': 'fexp-dispatch-notice' }, '聊天 @ 专家委派尚未开放，当前可在管理页提前维护个人启用列表。'),
         ),
         h('div', { className: 'fexp-toolbar' },

@@ -8,6 +8,7 @@
  * and keeps authoritative readback/cancel open even after dispatchEnabled is turned off (§9.2).
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { computeCanonicalDigest } from './digest.mjs';
 import { ExpertsError } from './errors.mjs';
 
 export const REQUEST_CORRELATIONS_DOMAIN_NAME = 'forge_experts_requests';
@@ -41,13 +42,12 @@ function normalizeReuseRefs(reuseRefs) {
 }
 
 function computeDispatchDigest({ expertId, delegationScope, taskText, reuseRefs = [] }) {
-  const canonical = JSON.stringify({
+  return computeCanonicalDigest({
     expertId: String(expertId ?? '').trim(),
     delegationScope: String(delegationScope ?? '').trim(),
     taskText: String(taskText ?? ''),
     reuseRefs: Array.isArray(reuseRefs) ? [...reuseRefs] : [],
   });
-  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
 
 export function deriveCorrelationKey({ instanceId, orgId, issuer, subject, requestId }) {
@@ -254,6 +254,33 @@ export function createDispatchService(ports) {
   let domainHandle = null;
   let table = null;
   let closed = false;
+  // Bounded in-memory taskId -> { originSessionRef, expertId, delegationScope } index
+  // populated by local dispatches/reconciliations so follow-ups reuse full preference
+  // and scope re-verification without reading raw task payloads.
+  const taskContextById = new Map();
+  const MAX_TASK_CONTEXT_CACHE = 512;
+
+  function rememberTaskContext(scope, taskId, context) {
+    if (!isNonEmptyString(taskId)) return;
+    const key = deriveCorrelationKey({ ...scope, requestId: `task:${taskId.trim()}` });
+    taskContextById.delete(key);
+    taskContextById.set(key, Object.freeze({
+      originSessionRef: context.originSessionRef,
+      expertId: context.expertId,
+      delegationScope: context.delegationScope,
+    }));
+    while (taskContextById.size > MAX_TASK_CONTEXT_CACHE) {
+      const oldest = taskContextById.keys().next().value;
+      if (oldest === undefined) break;
+      taskContextById.delete(oldest);
+    }
+  }
+
+  function lookupTaskContext(scope, taskId) {
+    if (!isNonEmptyString(taskId)) return null;
+    const key = deriveCorrelationKey({ ...scope, requestId: `task:${taskId.trim()}` });
+    return taskContextById.get(key) ?? null;
+  }
 
   async function open() {
     if (domainHandle && !closed) return;
@@ -273,6 +300,7 @@ export function createDispatchService(ports) {
 
   async function close() {
     closed = true;
+    taskContextById.clear();
     if (domainHandle) {
       const closing = domainHandle;
       domainHandle = null;
@@ -302,10 +330,29 @@ export function createDispatchService(ports) {
     return validated.data;
   }
 
-  function readCorrelation(scope, requestId) {
+  async function persistCorrelationBestEffort(scope, record) {
+    try {
+      await persistCorrelation(scope, record);
+    } catch (persistError) {
+      // Never swallow post-delivery correlation convergence failures silently:
+      // surface minimal non-sensitive metadata so stuck `pending_delivery` records remain observable.
+      try {
+        ports.onCorrelationPersistError?.({
+          requestId: record.requestId,
+          status: record.status,
+          message: persistError?.message ?? String(persistError),
+        });
+      } catch {
+        // Diagnostics callback must not override the primary dispatch outcome.
+      }
+    }
+  }
+
+  async function readCorrelation(scope, requestId) {
     if (closed || !table) return null;
     try {
-      const raw = table.get(deriveCorrelationKey({ ...scope, requestId }));
+      // Await table.get so both synchronous KvTable.get and async storage adapters work seamlessly.
+      const raw = await table.get(deriveCorrelationKey({ ...scope, requestId }));
       if (raw === undefined || raw === null) return null;
       const parsed = RequestCorrelationSchema.safeParse(raw);
       return parsed.success ? parsed.data : null;
@@ -315,7 +362,10 @@ export function createDispatchService(ports) {
   }
 
   async function checkPolicy(policyInput) {
-    if (typeof ports.evaluatePolicy !== 'function') return;
+    if (typeof ports.evaluatePolicy !== 'function') {
+      // Fail closed (P3): outbound dispatch/followup must never bypass Forge Policy when the gate is absent.
+      throw new ExpertsError('EXPERT_POLICY_DENIED', 'Forge Policy egress gate is not configured; dispatch is fail-closed');
+    }
     let verdict;
     try {
       verdict = await ports.evaluatePolicy(policyInput);
@@ -341,6 +391,47 @@ export function createDispatchService(ports) {
       'EXPERT_POLICY_DENIED',
       verdict?.reason ?? 'Expert dispatch blocked by Forge Policy',
     );
+  }
+
+  async function verifyInPreferenceBoundary({ scope, startEpoch, expertId, delegationScope }) {
+    const runBoundary = typeof ports.runInPreferenceBoundary === 'function'
+      ? ports.runInPreferenceBoundary
+      : (fn) => fn();
+
+    return runBoundary(async () => {
+      ports.assertScopeCurrent(startEpoch, scope);
+      if (!expertId || !delegationScope) return { scopeVerified: true };
+      if (ports.isPreferencePending?.({ scope, expertId })) {
+        throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert preference update is pending; re-confirm before sending');
+      }
+      const enabled = await ports.listConfirmedEnabled({ scope, expertIds: [expertId] });
+      const pref = enabled.find((item) => item.expertId === expertId);
+      if (!pref) {
+        throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert is no longer enabled in personal preferences');
+      }
+      const check = await ports.checkDelegraSessionScope({
+        scope,
+        delegationScope,
+        expertIds: [expertId],
+      });
+      ports.assertScopeCurrent(startEpoch, scope);
+      if (check?.scopeVerified !== true) {
+        throw new ExpertsError('EXPERT_SCOPE_UNVERIFIED', 'Delegra did not verify session delegation scope');
+      }
+      const row = Array.isArray(check.results)
+        ? check.results.find((entry) => entry?.expertId === expertId)
+        : null;
+      if (!row || row.callableInScope !== true) {
+        throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Employee is not authorized to call this expert in current scope');
+      }
+      if (!row.authContinuityDigest || row.authContinuityDigest !== pref.authContinuityDigest) {
+        throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert authorization continuity changed; re-enable before sending');
+      }
+      if (row.acceptingTasks !== 'accepting') {
+        throw new ExpertsError('EXPERT_NOT_ACCEPTING', 'Expert is currently not accepting new tasks');
+      }
+      return check;
+    });
   }
 
   async function dispatchTask(rawInput) {
@@ -410,51 +501,20 @@ export function createDispatchService(ports) {
 
     // 4. Final serialized re-verification in the same boundary as preference updates (§3.6).
     // A preference disable submitted earlier wins and aborts this dispatch before outbound transport.
-    const runBoundary = typeof ports.runInPreferenceBoundary === 'function'
-      ? ports.runInPreferenceBoundary
-      : (fn) => fn();
-
     let scopeCheck;
     try {
-      scopeCheck = await runBoundary(async () => {
-        ports.assertScopeCurrent(startEpoch, scope);
-        if (ports.isPreferencePending?.({ scope, expertId: binding.expertId })) {
-          throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert preference update is pending; re-confirm before sending');
-        }
-        const enabled = await ports.listConfirmedEnabled({ scope, expertIds: [binding.expertId] });
-        const pref = enabled.find((item) => item.expertId === binding.expertId);
-        if (!pref) {
-          throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert is no longer enabled in personal preferences');
-        }
-        const check = await ports.checkDelegraSessionScope({
-          scope,
-          delegationScope: binding.delegationScope,
-          expertIds: [binding.expertId],
-        });
-        ports.assertScopeCurrent(startEpoch, scope);
-        if (check?.scopeVerified !== true) {
-          throw new ExpertsError('EXPERT_SCOPE_UNVERIFIED', 'Delegra did not verify session delegation scope');
-        }
-        const row = Array.isArray(check.results)
-          ? check.results.find((entry) => entry?.expertId === binding.expertId)
-          : null;
-        if (!row || row.callableInScope !== true) {
-          throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Employee is not authorized to call this expert in current scope');
-        }
-        if (!row.authContinuityDigest || row.authContinuityDigest !== pref.authContinuityDigest) {
-          throw new ExpertsError('EXPERT_CALL_FORBIDDEN', 'Expert authorization continuity changed; re-enable before sending');
-        }
-        if (row.acceptingTasks !== 'accepting') {
-          throw new ExpertsError('EXPERT_NOT_ACCEPTING', 'Expert is currently not accepting new tasks');
-        }
-        return check;
+      scopeCheck = await verifyInPreferenceBoundary({
+        scope,
+        startEpoch,
+        expertId: binding.expertId,
+        delegationScope: binding.delegationScope,
       });
     } catch (error) {
-      await persistCorrelation(scope, {
+      await persistCorrelationBestEffort(scope, {
         ...baseRecord,
         status: 'aborted_before_delivery',
         updatedAt: new Date(now()).toISOString(),
-      }).catch(() => {});
+      });
       throw error;
     }
 
@@ -473,12 +533,17 @@ export function createDispatchService(ports) {
         reuseRefs: input.reuseRefs,
         payloadDigest,
       });
-      await persistCorrelation(scope, {
+      rememberTaskContext(scope, receipt.taskId, {
+        originSessionRef: binding.sessionId,
+        expertId: binding.expertId,
+        delegationScope: binding.delegationScope,
+      });
+      await persistCorrelationBestEffort(scope, {
         ...baseRecord,
         taskId: receipt.taskId ?? null,
         status: 'accepted',
         updatedAt: new Date(now()).toISOString(),
-      }).catch(() => {});
+      });
       return Object.freeze({
         ...receipt,
         requestId,
@@ -486,22 +551,22 @@ export function createDispatchService(ports) {
       });
     } catch (error) {
       if (error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN') {
-        await persistCorrelation(scope, {
+        await persistCorrelationBestEffort(scope, {
           ...baseRecord,
           status: 'unknown',
           updatedAt: new Date(now()).toISOString(),
-        }).catch(() => {});
+        });
         throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', error.message, {
           status: 503,
           retryable: true,
           details: { ...(error.details ?? {}), requestId },
         });
       }
-      await persistCorrelation(scope, {
+      await persistCorrelationBestEffort(scope, {
         ...baseRecord,
         status: 'rejected',
         updatedAt: new Date(now()).toISOString(),
-      }).catch(() => {});
+      });
       throw error;
     }
   }
@@ -513,17 +578,22 @@ export function createDispatchService(ports) {
     }
     const cleanId = requestId.trim();
     const scope = await ports.resolveScope();
-    const existing = readCorrelation(scope, cleanId);
+    const existing = await readCorrelation(scope, cleanId);
     try {
       const authoritative = await ports.getDelegraTaskByRequest({ scope, requestId: cleanId });
       if (existing) {
+        rememberTaskContext(scope, authoritative.taskId ?? existing.taskId, {
+          originSessionRef: existing.originSessionRef,
+          expertId: existing.expertId,
+          delegationScope: existing.delegationScope,
+        });
         const reconcilable = existing.status === 'pending_delivery' || existing.status === 'unknown';
-        await persistCorrelation(scope, {
+        await persistCorrelationBestEffort(scope, {
           ...existing,
           taskId: reconcilable ? (authoritative.taskId ?? existing.taskId) : existing.taskId,
           status: reconcilable ? 'accepted' : existing.status,
           updatedAt: new Date(now()).toISOString(),
-        }).catch(() => {});
+        });
       }
       return Object.freeze({
         ...authoritative,
@@ -531,11 +601,11 @@ export function createDispatchService(ports) {
       });
     } catch (error) {
       if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && existing) {
-        await persistCorrelation(scope, {
+        await persistCorrelationBestEffort(scope, {
           ...existing,
           status: 'not_found',
           updatedAt: new Date(now()).toISOString(),
-        }).catch(() => {});
+        });
       }
       throw error;
     }
@@ -564,30 +634,106 @@ export function createDispatchService(ports) {
     if (!isNonEmptyString(taskId)) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'taskId is required');
     }
+    const cleanTaskId = taskId.trim();
     const parsed = FollowupTaskBodySchema.safeParse(rawBody);
     if (!parsed.success) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', parsed.error);
     }
     const input = parsed.data;
     const scope = await ports.resolveScope();
+    const startEpoch = scope.scopeEpoch;
     const requestId = input.requestId ?? generateRequestId();
+    const knownContext = lookupTaskContext(scope, cleanTaskId);
+    const payloadDigest = computeCanonicalDigest({
+      taskId: cleanTaskId,
+      taskText: input.taskText,
+      reuseRefs: input.reuseRefs,
+    });
 
+    // 1. Evaluate Forge Policy outside the preference serial boundary (§3.6).
     await checkPolicy({
       action: 'expert.followup',
-      taskId: taskId.trim(),
+      taskId: cleanTaskId,
+      ...(knownContext ? { expertId: knownContext.expertId, delegationScope: knownContext.delegationScope } : {}),
       orgId: scope.orgId,
+      payloadDigest,
       taskText: input.taskText,
       reuseRefs: input.reuseRefs,
       confirmationToken: input.confirmationToken,
     });
 
-    return ports.createDelegraFollowup({
-      scope,
-      taskId: taskId.trim(),
+    // 2. Persist minimal #247 request correlation BEFORE outbound followup delivery.
+    const createdAt = new Date(now()).toISOString();
+    const baseRecord = {
+      schemaVersion: 1,
       requestId,
-      taskText: input.taskText,
-      reuseRefs: input.reuseRefs,
-    });
+      instanceId: scope.instanceId,
+      orgId: scope.orgId,
+      issuer: scope.issuer,
+      subject: scope.subject,
+      originSessionRef: knownContext?.originSessionRef ?? `task:${cleanTaskId}`,
+      expertId: knownContext?.expertId ?? `task:${cleanTaskId}`,
+      delegationScope: knownContext?.delegationScope ?? `task:${cleanTaskId}`,
+      payloadDigest,
+      taskId: cleanTaskId,
+      status: 'pending_delivery',
+      createdAt,
+      updatedAt: createdAt,
+    };
+    await persistCorrelation(scope, baseRecord);
+
+    // 3. Final serialized re-verification in the preference boundary before outbound delivery (§3.6).
+    try {
+      await verifyInPreferenceBoundary({
+        scope,
+        startEpoch,
+        expertId: knownContext?.expertId ?? null,
+        delegationScope: knownContext?.delegationScope ?? null,
+      });
+    } catch (error) {
+      await persistCorrelationBestEffort(scope, {
+        ...baseRecord,
+        status: 'aborted_before_delivery',
+        updatedAt: new Date(now()).toISOString(),
+      });
+      throw error;
+    }
+
+    // 4. Outbound followup delivery with correlation status convergence.
+    try {
+      const receipt = await ports.createDelegraFollowup({
+        scope,
+        taskId: cleanTaskId,
+        requestId,
+        taskText: input.taskText,
+        reuseRefs: input.reuseRefs,
+      });
+      await persistCorrelationBestEffort(scope, {
+        ...baseRecord,
+        status: 'accepted',
+        updatedAt: new Date(now()).toISOString(),
+      });
+      return receipt;
+    } catch (error) {
+      if (error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN') {
+        await persistCorrelationBestEffort(scope, {
+          ...baseRecord,
+          status: 'unknown',
+          updatedAt: new Date(now()).toISOString(),
+        });
+        throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', error.message, {
+          status: 503,
+          retryable: true,
+          details: { ...(error.details ?? {}), requestId },
+        });
+      }
+      await persistCorrelationBestEffort(scope, {
+        ...baseRecord,
+        status: 'rejected',
+        updatedAt: new Date(now()).toISOString(),
+      });
+      throw error;
+    }
   }
 
   async function cancelTask({ taskId }) {
