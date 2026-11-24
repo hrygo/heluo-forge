@@ -85,8 +85,21 @@ test("方案 A 契约检查：管理 API 必须全面通过 ctx.connection.fetch
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: "test-skill" }),
   });
+  const markerReads = [];
+  const getHeader = badReq.headers.get.bind(badReq.headers);
+  badReq.headers.get = name => { markerReads.push(name); return getHeader(name); };
   const badRes = await createRoute.fetch(badReq);
   assert.equal(badRes.status, 403);
+  assert.deepEqual(markerReads, ["x-dsh-skills-manager"], "缺失规范标记时直接拒绝，不查询其他兼容头");
+  for (const marker of ["", "0", "true"]) {
+    const response = await createRoute.fetch(new Request(badReq.url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-dsh-skills-manager": marker },
+      body: JSON.stringify({ name: "test-skill" }),
+    }));
+    assert.equal(response.status, 403, "非规范标记值必须拒绝");
+    assert.equal((await response.json()).code, "error.proto.forbidden");
+  }
   const badBody = await badRes.json();
   assert.equal(badBody.code, "error.proto.forbidden");
 

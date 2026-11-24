@@ -43,7 +43,7 @@ function canonicalBody(value: unknown): unknown {
 }
 
 function validateMutationRequest(req: Request) {
-  const marker = req.headers.get(CLIENT_MARKER_HEADER) || req.headers.get("x-michengai-client");
+  const marker = req.headers.get(CLIENT_MARKER_HEADER);
   if (marker !== "1") return { statusCode: 403, code: "error.proto.forbidden", error: "forbidden mutation request" };
   const origin = req.headers.get("origin");
   if (origin) {

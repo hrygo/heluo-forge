@@ -4,10 +4,6 @@
   "private": true,
   "type": "module",
   "description": "技能管理 — 本地技能管理与 Nacos 企业公共库",
-  "author": {
-    "name": "MichengAI",
-    "url": "https://github.com/MichengAI"
-  },
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },

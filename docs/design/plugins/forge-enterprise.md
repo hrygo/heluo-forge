@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.10.1 |
+| 版本 | V1.10.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -154,7 +154,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-通用底座的 `insert:` 段挂四个面向全体员工的 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 12 动作目录、无 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-skills-manager`。技能管理器以固定行 `heluo-skills-manager` 独立配置和停用，行 id 不与旧 `@michengai/dsh-skills-manager` 的 `skills-manager` 行共用，两行并存时必须移除旧行；默认未配置 Nacos 时仍提供本地管理，配置与凭据边界见[技能管理器设计](forge-skills-manager.md)。
+通用底座的 `insert:` 段挂四个面向全体员工的 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 12 动作目录、无 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-skills-manager`。技能管理器以固定行 `heluo-skills-manager` 单次挂载、独立配置和停用；默认未配置 Nacos 时仍提供本地管理，配置与凭据边界见[技能管理器设计](forge-skills-manager.md)。
 
 **双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装并由宿主装配通用企业登录与模型管理；实际使用仍受配置、存储和宿主能力门禁约束。本包不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
 
