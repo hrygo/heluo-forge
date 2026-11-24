@@ -163,6 +163,22 @@ test('空响应或无状态：命令报 CONTEXT_EMPTY，不伪装成功', async 
   assert.ok(!result.text.includes(ENTRY_NEXT_STEPS));
 });
 
+test('空卡片（undefined / null）：报 CONTEXT_EMPTY 并给恢复方向，不落到 INTERNAL', async () => {
+  for (const [label, factory] of [
+    ['undefined', () => undefined],
+    ['null', () => null],
+  ]) {
+    const { ctx, registered } = host();
+    registerEntry(ctx, spyService(factory).service);
+    const result = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+    assert.equal(result.kind, 'error', `${label}：不伪装成功`);
+    assert.match(result.text, /CONTEXT_EMPTY/u, `${label}：归空响应而不是 INTERNAL`);
+    assert.match(result.text, /没有卡片状态/u, `${label}：说明缺什么`);
+    assert.match(result.text, /devops-change ARD123456/u, `${label}：给出恢复命令`);
+    assert.ok(!result.text.includes(ENTRY_NEXT_STEPS), `${label}：不得追加成功旁白`);
+  }
+});
+
 test('就绪卡自报变更号与请求不一致：CONTEXT_UNCONFIRMED，不报成功', async () => {
   const { ctx, registered } = host();
   registerEntry(

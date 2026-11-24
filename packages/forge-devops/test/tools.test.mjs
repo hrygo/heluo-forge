@@ -601,6 +601,25 @@ test('装配：上下文卡 ready 才绑定变更号，blocked 不绑定（入�
   await seq.service.startFromChange('ARD999999');
   assert.equal(seq.service.changeId(), 'ARD123456', '阻塞响应保留上一次成功加载的变更上下文');
 
+  // 已绑 ARD123456 后请求 ARD999999、注入却回 ARD123456 的就绪卡：命令报不可确认，
+  // 旧绑定必须原样保留（评审意见：号不匹配时既不能当成功，也不能被覆盖）。
+  const mismatchAfterBind = mountIndex({
+    flow: { startFromChange: async () => readyCard },
+  });
+  await mismatchAfterBind.service.startFromChange('ARD123456');
+  await mismatchAfterBind.service.startFromChange('ARD999999');
+  assert.equal(mismatchAfterBind.service.changeId(), 'ARD123456', '号不匹配的就绪卡保留旧绑定');
+
+  // `ok` 缺失/为 false 的卡片即使状态自称 ready、号也对得上，也不能绑定（fail closed）。
+  for (const card of [
+    { ...readyCard, ok: undefined },
+    { ...readyCard, ok: false },
+  ]) {
+    const unconfirmed = mountIndex({ flow: { startFromChange: async () => card } });
+    await unconfirmed.service.startFromChange('ARD123456');
+    assert.equal(unconfirmed.service.changeId(), null, '未显式自报 ok=true 的卡片不得绑定');
+  }
+
   const empty = mountIndex({ flow: { startFromChange: async () => ({}) } });
   await empty.service.startFromChange('ARD123456');
   assert.equal(empty.service.changeId(), null, '空响应不能留下半绑定状态');
