@@ -8,6 +8,10 @@
 
 ## 2026-11-24 主线集成复核
 
+最终集成基线为 `d96ab50`，在本地 rebase 保留新增桌面壳与统一员工包构建。统一构建的配置清单与发布 Environment 映射接入 Nacos 四项必填及可选超时，凭据首尾空格与字面引号保留；缺项及非法值拒绝，预览与元数据不含凭据值。`node --test --test-reporter=spec tests/build-employee-package.test.mjs tests/desktop-shell-contract.test.mjs tests/check-repo.test.mjs` 共 39 项，32 通过、7 失败（约 10.8 秒）；同基线隔离检出 37 项，30 通过、相同 7 失败（约 10.6 秒），逐项比对失败名称一致。失败为缺少 `zip` 及 Windows 配置文件模式位，不记员工 zip/桌面端验收通过。检查器单独回归 23 项通过（约 11.6 秒）。下列 `96fe261` 阶段所验插件及制包/安装实现、用例在第二次 rebase 后逐文件比对无变化，不重复计算其验证次数。
+
+最终固定工具链 `pnpm install --frozen-lockfile --ignore-scripts` 通过（约 3.1 秒）；`node scripts/check-docs.mjs` 通过（221 文件、94 份受控文档，约 1.3 秒）；`node scripts/dsh-version.mjs check` 通过。`node scripts/check-repo.mjs` 仍仅报 IAM bin 执行位错误；固定 Node 且 PATH 同步后 `node --run check` 在首步工作区符号链接创建因 Windows `EPERM` 停止（约 0.5 秒）。企业服务、原生宿主 SDK 兼容、完整 GUI 和目标平台交付均未在本轮补验。
+
 本轮以主线 `96fe261` 为对照，Windows、固定 Node 24.21.0 / pnpm 11.28.5。冻结锁文件安装（禁用安装脚本）通过，约 5.7 秒；插件 `verify` 142 项全部通过，测试约 94.9 秒。五文件制包/安装回归 169 项中 109 通过、56 失败、4 跳过，约 51.0 秒；主线隔离检出同范围 156 项中 96 通过、56 失败、4 跳过，约 47.7 秒。逐项比较失败名称完全一致，无新增失败；失败涉及 Windows 权限、符号链接与路径夹具，不能据此记为完整交付通过。新增凭据组合验证覆盖实际 tarball、制作器回执、安装器与旧 IAM 绑定兼容；补充三项定向验证通过，约 0.5 秒。企业补丁及版本集成 35 项通过，约 4.1 秒。构建/闭包/校验/装卸演练 79 项中 73 通过、4 失败、2 跳过，约 28.1 秒；失败涉及符号链接、执行位及 npm 路径，未另行逐项运行主线对照；跳过为未提供 DSH SDK/CLI。
 
 文档检查、版本检查通过（约 1.2 / 1.1 秒）；仓库检查因 IAM bin 执行位失败（约 1.7 秒）。全量 `node --run check` 在首步工作区链接因 Windows `EPERM` 停止，后续阶段未运行。本轮不记全库通过，不代表真实企业 IAM/Nacos、桌面 GUI、目标平台交付或原生 SDK 兼容验收。

@@ -81,6 +81,11 @@ jobs:
           HELUO_IAM_CLIENT_AUTH_METHOD: ${{ secrets.HELUO_IAM_CLIENT_AUTH_METHOD }}
           HELUO_IAM_CLIENT_SECRET_REF: ${{ secrets.HELUO_IAM_CLIENT_SECRET_REF }}
           HELUO_IAM_CLIENT_SECRET: ${{ secrets.HELUO_IAM_CLIENT_SECRET }}
+          HELUO_NACOS_SERVER_URL: ${{ secrets.HELUO_NACOS_SERVER_URL }}
+          HELUO_NACOS_NAMESPACE_ID: ${{ secrets.HELUO_NACOS_NAMESPACE_ID }}
+          HELUO_NACOS_USERNAME: ${{ secrets.HELUO_NACOS_USERNAME }}
+          HELUO_NACOS_PASSWORD: ${{ secrets.HELUO_NACOS_PASSWORD }}
+          HELUO_NACOS_TIMEOUT_MS: ${{ secrets.HELUO_NACOS_TIMEOUT_MS }}
         run: |
           if [[ -z "$HELUO_PUBLIC_LICENSE" ]]; then
             echo 'HELUO_PUBLIC_LICENSE is not set; the build needs an explicit license decision.' >&2
