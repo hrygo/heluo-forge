@@ -10,7 +10,7 @@ import { addressInUse, findLaunchUrl } from '../src/launch-url.mjs';
 import { closeAction, quitConfirmation } from '../src/lifecycle.mjs';
 import { LOOPBACK_HOST, loopbackUrl } from '../src/loopback.mjs';
 import { classifyTarget, permissionAllowed } from '../src/navigation.mjs';
-import { childEnvironment, loginShellArgs, parseShellEnv } from '../src/shell-env.mjs';
+import { childEnvironment, loginShellArgs, loginShellFallbackArgs, parseNulEnv, parseShellEnv } from '../src/shell-env.mjs';
 
 // A process token in an announcement. Its absence from every refusal is asserted.
 const TOKEN = 'process-token-7f3a9c';
@@ -88,6 +88,9 @@ test('no permission is ever granted', () => {
   }
 });
 
+// In the line form a multi-line value cannot be told apart from what follows it. A line that is
+// not a variable is dropped, never joined to the one before it: it may be the body of an exported
+// shell function, which many login environments carry.
 test('the login shell environment is parsed as variables and the shell keeps its own knobs', () => {
   assert.deepEqual(
     parseShellEnv(
@@ -98,11 +101,31 @@ test('the login shell environment is parsed as variables and the shell keeps its
   assert.deepEqual(parseShellEnv(undefined), {});
 });
 
-test('a login shell is asked for its environment where there is one', () => {
-  assert.deepEqual(loginShellArgs({ platform: 'darwin', shell: '/bin/zsh' }), ['/bin/zsh', '-ilc', 'printenv']);
-  assert.deepEqual(loginShellArgs({ platform: 'linux', shell: '/bin/bash' }), ['/bin/bash', '-ilc', 'printenv']);
-  assert.equal(loginShellArgs({ platform: 'win32', shell: '/bin/zsh' }), null);
-  assert.equal(loginShellArgs({ platform: 'darwin', shell: '' }), null);
+test('a login shell is asked for its environment where there is one, NUL-separated where it can be', () => {
+  // The preferred form: a value may contain newlines and still be one value.
+  assert.deepEqual(loginShellArgs({ platform: 'darwin', shell: '/bin/zsh' }), ['/bin/zsh', '-ilc', 'env -0']);
+  assert.deepEqual(loginShellArgs({ platform: 'linux', shell: '/bin/bash' }), ['/bin/bash', '-ilc', 'env -0']);
+  // The line form, for a shell whose env has no -0.
+  assert.deepEqual(loginShellFallbackArgs({ platform: 'linux', shell: '/bin/bash' }), ['/bin/bash', '-ilc', 'printenv']);
+  for (const ask of [loginShellArgs, loginShellFallbackArgs]) {
+    assert.equal(ask({ platform: 'win32', shell: '/bin/zsh' }), null);
+    assert.equal(ask({ platform: 'darwin', shell: '' }), null);
+  }
+});
+
+test('NUL-separated entries keep a value its newlines and skip what is not a variable', () => {
+  const printed = [
+    'HOME=/profiles/someone',
+    'MOTD=first line\nsecond line',
+    'BASH_FUNC_module%%=() {  eval x\n}',
+    'NODE_OPTIONS=--require ./x.js',
+    '=empty',
+    'BAD-NAME=1',
+    '',
+  ].join('\0');
+  assert.deepEqual(parseNulEnv(printed), { HOME: '/profiles/someone', MOTD: 'first line\nsecond line' });
+  assert.deepEqual(parseNulEnv(''), {});
+  assert.deepEqual(parseNulEnv(undefined), {});
 });
 
 test('a child gets the login shell variables over the GUI ones, a longer PATH and none of the shell knobs', () => {

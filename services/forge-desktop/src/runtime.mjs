@@ -41,6 +41,8 @@ export function createRuntime({
   let cancelStart = null;
   let finishStop = null;
   let forceTimer;
+  // The last process the runtime killed whose exit has not been observed yet.
+  let retiring = null;
 
   function enter(next, code) {
     phase = next;
@@ -86,6 +88,7 @@ export function createRuntime({
         // An address the shell may not load is not waited out: the
         // service is stopped now, or it would keep listening where it is.
         handle.kill('SIGKILL');
+        retiring = handle;
         failStart(error?.code ?? 'LAUNCH_URL_REJECTED', error?.message ?? 'the web profile announced an address the shell may not load');
         return;
       }
@@ -144,6 +147,7 @@ export function createRuntime({
     handle.exited.then((info = {}) => {
       lastExit = { code: info.code ?? null, signal: info.signal ?? null };
       if (child === handle) child = null;
+      if (retiring === handle) retiring = null;
       if (phase === 'stopping') {
         launch = null;
         lastFailure = null;
@@ -166,6 +170,7 @@ export function createRuntime({
     timer = setTimer(() => {
       // Past the deadline the process may not linger and announce later.
       handle.kill('SIGKILL');
+      retiring = handle;
       failStart('START_TIMEOUT', `the web profile did not announce its address within ${startTimeoutMs} ms`);
     }, startTimeoutMs);
     void watch(handle.output, null, true);
@@ -184,10 +189,14 @@ export function createRuntime({
 
   function start() {
     if (phase === 'ready') return Promise.resolve({ ...launch });
-    if (phase === 'starting') return starting;
+    if (starting !== null) return starting;
     if (phase === 'stopping') {
       return Promise.reject(new ShellError('STOPPING', 'the web profile is stopping; it can be started again once it has exited'));
     }
+    // A process the runtime killed may still be letting go of its port. The
+    // next one starts once its exit has been seen, or it would fail for a
+    // reason that belongs to the previous start.
+    if (retiring !== null) return (starting = retiring.exited.then(begin));
     return begin();
   }
 

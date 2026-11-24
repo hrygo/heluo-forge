@@ -9,14 +9,16 @@
  * step will stage and are confirmed when the first installer is built.
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as electron from 'electron';
 
+import { fail } from './errors.mjs';
 import { embeddedExec, runCommand } from './process.mjs';
 import { createRuntime } from './runtime.mjs';
 import { startShell } from './shell.mjs';
-import { childEnvironment, loginShellArgs, parseShellEnv } from './shell-env.mjs';
+import { childEnvironment, loginShellArgs, loginShellFallbackArgs, parseNulEnv, parseShellEnv } from './shell-env.mjs';
 
 const PROFILE = 'web';
 const BIND_HOST = '127.0.0.1';
@@ -25,9 +27,19 @@ const TRAY_ICON = join(process.resourcesPath, 'brand', 'tray.png');
 
 /** The user's login shell, asked for its environment the way a terminal has it. */
 async function environmentForChildren() {
-  const shellArgs = loginShellArgs({ shell: process.env.SHELL ?? '' });
-  // A login shell that fails or prints nothing leaves the GUI environment in place.
-  const loginEnv = shellArgs === null ? {} : parseShellEnv((await runCommand(shellArgs[0], shellArgs.slice(1), { timeout: 15_000 })).stdout);
+  const options = { shell: process.env.SHELL ?? '' };
+  const ask = (args) => runCommand(args[0], args.slice(1), { timeout: 15_000 });
+  const primary = loginShellArgs(options);
+  const fallback = loginShellFallbackArgs(options);
+  // `env -0` keeps a value's newlines. Where the shell's `env` has no `-0` the
+  // line form is used; a login shell that fails or prints nothing leaves the
+  // GUI environment in place.
+  let loginEnv = {};
+  if (primary !== null) {
+    const asked = await ask(primary);
+    if (asked.code === 0) loginEnv = parseNulEnv(asked.stdout);
+    else loginEnv = parseShellEnv((await ask(fallback)).stdout);
+  }
   // The shell's own variables never reach a child; ELECTRON_RUN_AS_NODE is set per child.
   return childEnvironment(process.env, loginEnv, { prepend: [join(process.resourcesPath, 'bin')] });
 }
@@ -58,6 +70,11 @@ async function main() {
     markerPath: join(electron.app.getPath('userData'), 'first-run.json'),
     profile: PROFILE,
     bindHost: BIND_HOST,
+    // The embedded runtime is where the installer put it. Said here, that is
+    // an explanation; found later, it is a service that leaves at once.
+    preflight: () => {
+      if (!existsSync(DSH_ENTRY)) fail('EMBEDDED_RUNTIME_MISSING', 'the embedded runtime entry is missing');
+    },
     embeddedCommand: process.execPath,
     env,
     // The installer may run only the embedded runtime: this binary as Node, with the dsh entry first.

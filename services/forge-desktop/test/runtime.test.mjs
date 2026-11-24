@@ -379,3 +379,58 @@ test('each line is looked at once: the scanning grows with what is printed, not 
   fake.exit();
   await stopping;
 });
+
+test('after a start that was killed, the next one waits until that process is seen to exit', async () => {
+  const first = fakeProcess();
+  const second = fakeProcess();
+  const made = [first, second];
+  const timers = manualTimers();
+  let spawns = 0;
+  const runtime = createRuntime({
+    spawn: () => {
+      spawns += 1;
+      return made.shift().handle;
+    },
+    startTimeoutMs: 1000,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  const starting = runtime.start();
+  timers.fire(1000);
+  await rejectsCode(starting, 'START_TIMEOUT');
+  // Asked again at once: the killed process may still be letting go of its port.
+  const again = runtime.start();
+  await flush();
+  assert.equal(spawns, 1, 'a second process was started before the first was seen to exit');
+  assert.equal(runtime.start(), again, 'asked a third time: the same wait');
+  first.exit({ code: null, signal: 'SIGKILL' });
+  await flush();
+  assert.equal(spawns, 2);
+  assert.equal(runtime.snapshot().phase, 'starting');
+  second.say(ANNOUNCE);
+  assert.equal((await again).origin, ORIGIN);
+});
+
+test('the same after an address the shell may not load', async () => {
+  const first = fakeProcess();
+  const second = fakeProcess();
+  const made = [first, second];
+  let spawns = 0;
+  const runtime = createRuntime({
+    spawn: () => {
+      spawns += 1;
+      return made.shift().handle;
+    },
+  });
+  const starting = runtime.start();
+  first.say('dsh web: http://0.0.0.0:43210/?token=elsewhere-1b2c\n');
+  await rejectsCode(starting, 'LAUNCH_URL_REJECTED');
+  const again = runtime.start();
+  await flush();
+  assert.equal(spawns, 1);
+  first.exit({ code: null, signal: 'SIGKILL' });
+  await flush();
+  assert.equal(spawns, 2);
+  second.say(ANNOUNCE);
+  assert.equal((await again).origin, ORIGIN);
+});
