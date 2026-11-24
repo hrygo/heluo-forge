@@ -30,8 +30,12 @@ try {
   if (gitOutput(['write-tree'], { cwd }).trim() !== tree || gitOutput(['rev-parse', '--verify', 'HEAD^{commit}'], { cwd }).trim() !== head || existsSync(mergePath)) throw new Error('scan baseline changed');
   writeFileSync(messageFile, message, 'utf8');
   console.error('sensitive-scan: clean; attestation written');
-} catch {
+} catch (error) {
   // Never print error messages: they can contain rule text, paths or key material.
-  console.error('sensitive-scan: blocked; scan or signing could not complete');
+  // A workbook format problem is reported by its fixed category only.
+  const formatBlocked = error?.code === 'SENSITIVE_SCAN_WORKBOOK_FORMAT';
+  console.error(formatBlocked
+    ? 'sensitive-scan: blocked; 工作簿格式不受支持（范围：workbook）'
+    : 'sensitive-scan: blocked; scan or signing could not complete');
   process.exitCode = 1;
 }

@@ -4,6 +4,9 @@ import { gitRaw } from './team-guard.mjs';
 import { decodeText, isIgnored, scanBuffer, scanText } from './team-scan.mjs';
 
 const TEXT_LIMIT = 10 * 1024 * 1024;
+// Fixed submitter-facing category for an unreadable workbook; kept local so an
+// upgraded install never depends on a new export from the scanner module.
+const WORKBOOK_FORMAT = Object.freeze({ code: 'SENSITIVE_SCAN_WORKBOOK_FORMAT', category: '工作簿格式不受支持' });
 const XLSX_LIMIT = 20 * 1024 * 1024;
 const spreadsheets = new Set(['.xlsx', '.xlsm', '.xltx']);
 
@@ -51,6 +54,12 @@ export function scanChange({ cwd, parentTree, tree, rules }) {
     if (buffer.length !== size) throw new Error('blocked');
     if (xlsx) {
       const result = scanBuffer(buffer, file, rules);
+      if (result.kind === 'xlsx-invalid') {
+        // Only the fixed category travels: raw parser text may name internal parts.
+        const blocked = new Error(WORKBOOK_FORMAT.category);
+        blocked.code = WORKBOOK_FORMAT.code;
+        throw blocked;
+      }
       if (result.kind !== 'xlsx' || result.findings.length) throw new Error('blocked');
       continue;
     }

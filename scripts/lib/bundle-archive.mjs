@@ -11,12 +11,37 @@ import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 
 const BLOCK_SIZE = 512;
-const MAX_FILE_BYTES = 64 * 1024 * 1024;
+const HEADER_SLACK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Resource budget for reading an artifact back from its own bytes.
+ *
+ * Basis (measured 2026-11-24 on the shipped entries): enterprise pack is 0.41 MB
+ * compressed / 1.46 MB inflated / 264 KB largest file; the engineering entry is
+ * 0.51 MB / 1.64 MB / 189 KB. The budget keeps roughly two orders of magnitude
+ * of headroom for native addons and images while bounding what a corrupt or
+ * hostile stream can make this process inflate.
+ */
+export const ARCHIVE_LIMITS = Object.freeze({
+  compressedBytes: 32 * 1024 * 1024,
+  totalBytes: 128 * 1024 * 1024,
+  fileBytes: 64 * 1024 * 1024,
+});
+
+/** Archive failures carry a stable category so callers can diagnose them. */
+export class ArchiveError extends Error {
+  constructor(code, message) {
+    super(`bundle archive: ${message}`);
+    this.name = 'ArchiveError';
+    this.code = code;
+  }
+}
 const PACKAGE_PREFIX = 'package/';
 const ZERO_BLOCK = Buffer.alloc(BLOCK_SIZE);
 const SHA256 = (body) => createHash('sha256').update(body).digest('hex');
 
-const fail = (message) => { throw new Error(`bundle archive: ${message}`); };
+const fail = (message, code = 'BUNDLE_ARCHIVE_CORRUPT') => { throw new ArchiveError(code, message); };
+const tooLarge = (message) => fail(message, 'BUNDLE_ARCHIVE_TOO_LARGE');
 
 /** ustar fields are "0-padded octal, terminated by NUL and/or spaces". */
 function readOctal(header, offset, length, field) {
@@ -84,18 +109,31 @@ function normalizePath(raw, rootPrefix = PACKAGE_PREFIX) {
  *   the release-tool tarball can be read with its own root.
  * @returns {Array<{ path: string, size: number, sha256: string, mode: string, content?: Buffer }>}
  */
-export function readBundleEntries(source, { withContent = false, prefix: rootPrefix = PACKAGE_PREFIX } = {}) {
+export function readBundleEntries(source, { withContent = false, prefix: rootPrefix = PACKAGE_PREFIX, limits = ARCHIVE_LIMITS } = {}) {
   if (!rootPrefix.endsWith('/') || rootPrefix.startsWith('/') || rootPrefix.includes('..')) fail(`invalid archive root ${JSON.stringify(rootPrefix)}`);
+  if (!Number.isSafeInteger(limits?.compressedBytes) || !Number.isSafeInteger(limits?.totalBytes) || !Number.isSafeInteger(limits?.fileBytes)) {
+    fail('invalid archive budget');
+  }
   const bytes = typeof source === 'string' ? readFileSync(source) : source;
   if (!(bytes instanceof Uint8Array)) fail('source must be a tarball path or buffer');
+  if (bytes.length > limits.compressedBytes) {
+    tooLarge(`compressed input is ${bytes.length} bytes, budget ${limits.compressedBytes}`);
+  }
   let tar;
   try {
-    tar = gunzipSync(bytes);
-  } catch {
+    // Header and padding blocks also count towards the inflated stream; the
+    // content budget is enforced after parsing. The slack keeps memory bounded
+    // without turning ordinary archives into budget failures.
+    tar = gunzipSync(bytes, { maxOutputLength: limits.totalBytes + limits.fileBytes + HEADER_SLACK_BYTES });
+  } catch (error) {
+    if (error?.code === 'ERR_BUFFER_TOO_LARGE' || error instanceof RangeError) {
+      tooLarge(`inflated content exceeds the budget of ${limits.totalBytes} bytes`);
+    }
     fail('not a gzip stream');
   }
   const entries = [];
   const seen = new Set();
+  let totalBytes = 0;
   let offset = 0;
   let pax = {};
   while (offset + BLOCK_SIZE <= tar.length) {
@@ -125,7 +163,9 @@ export function readBundleEntries(source, { withContent = false, prefix: rootPre
     pax = {};
     if (seen.has(entryPath)) fail(`duplicate path "${entryPath}"`);
     seen.add(entryPath);
-    if (size > MAX_FILE_BYTES) fail(`file too large "${entryPath}" (${size} bytes)`);
+    if (size > limits.fileBytes) tooLarge(`file "${entryPath}" is ${size} bytes, budget ${limits.fileBytes}`);
+    totalBytes += size;
+    if (totalBytes > limits.totalBytes) tooLarge(`inflated content exceeds the budget of ${limits.totalBytes} bytes`);
     const body = tar.subarray(bodyStart, bodyStart + size);
     const entry = { path: entryPath, size, sha256: SHA256(body), mode: (mode & 0o7777).toString(8).padStart(4, '0') };
     if (withContent) entry.content = body;
