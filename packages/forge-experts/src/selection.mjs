@@ -270,7 +270,7 @@ export function createSelectionService(ports) {
     if (entry.sessionId !== String(sessionId ?? '').trim()) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Selection token does not belong to current session');
     }
-    if (entry.draftVersion !== null && draftVersion !== null && entry.draftVersion !== draftVersion) {
+    if ((entry.draftVersion ?? null) !== (draftVersion ?? null)) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Draft version changed after selection; re-confirm expert');
     }
 

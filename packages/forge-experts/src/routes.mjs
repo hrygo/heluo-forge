@@ -8,7 +8,8 @@ export const REQUEST_HEADER = 'x-forge-experts-request';
 export const EDIT_TOKEN_HEADER = 'x-forge-experts-edit-token';
 const REQUEST_HEADER_VALUE = '1';
 const MAX_BODY_BYTES = 8 * 1024;
-const MAX_TASK_BODY_BYTES = 64 * 1024;
+// taskText allows up to 32,000 UTF-16 code units; allow up to 4 bytes/char in UTF-8 plus JSON envelope overhead.
+const MAX_TASK_BODY_BYTES = 32_000 * 4 + 8 * 1024;
 
 function sendJson(res, status, body) {
   res.statusCode = status;

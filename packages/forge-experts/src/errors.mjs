@@ -59,10 +59,26 @@ export class ExpertsError extends Error {
   }
 }
 
+const SAFE_DETAIL_KEYS = new Set(['requestId', 'requestTraceId', 'confirmationScope']);
+
+function sanitizeDetails(details) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return undefined;
+  const out = {};
+  let hasAny = false;
+  for (const key of SAFE_DETAIL_KEYS) {
+    if (typeof details[key] === 'string' && details[key].trim().length > 0) {
+      out[key] = details[key].trim();
+      hasAny = true;
+    }
+  }
+  return hasAny ? out : undefined;
+}
+
 export function serializeError(error) {
   const known = error instanceof ExpertsError && Object.hasOwn(ERROR_STATUS, error.code);
   const code = known ? error.code : 'EXPERT_INTERNAL_ERROR';
   const status = known ? error.status : 500;
+  const details = known ? sanitizeDetails(error.details) : undefined;
   return {
     status,
     body: {
@@ -70,7 +86,7 @@ export function serializeError(error) {
         code,
         message: known ? error.message : 'Expert service operation failed',
         retryable: known ? error.retryable : false,
-        ...(known && error.details ? { details: error.details } : {}),
+        ...(details ? { details } : {}),
       },
     },
   };

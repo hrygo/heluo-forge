@@ -517,10 +517,11 @@ export function createDispatchService(ports) {
     try {
       const authoritative = await ports.getDelegraTaskByRequest({ scope, requestId: cleanId });
       if (existing) {
+        const reconcilable = existing.status === 'pending_delivery' || existing.status === 'unknown';
         await persistCorrelation(scope, {
           ...existing,
-          taskId: authoritative.taskId ?? existing.taskId,
-          status: 'accepted',
+          taskId: reconcilable ? (authoritative.taskId ?? existing.taskId) : existing.taskId,
+          status: reconcilable ? 'accepted' : existing.status,
           updatedAt: new Date(now()).toISOString(),
         }).catch(() => {});
       }
