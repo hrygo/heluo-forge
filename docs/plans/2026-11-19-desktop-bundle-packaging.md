@@ -6,21 +6,25 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-026 |
 | 文档名称 | 桌面端成套打包工作计划（Electron 分发矩阵） |
-| 版本 | V0.8.4 |
+| 版本 | V0.8.6 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-23 |
-| 门禁 | 计划文档；P0 前置验证未开始，任何安装包未构建；内置运行时接入、凭据存储、Windows / Linux 自承载、`web` profile 并发、壳内认证闭环与麒麟 Electron 兼容性均以 P0 探针结论为准 |
-| 交付门禁 | 仅计划与只读依据引用；Electron / Chromium 及内置运行时的再分发许可、三平台壳打包链、公开仓 Secrets 统一构建链、全部 P0 探针与目标机安装均未实测 |
+| 最后更新 | 2026-11-24 |
+| 确认人 | 项目负责人 |
+| 确认日期 | 2026-11-23 |
+| 确认事项 | 确认本计划为实施依据；代码与脚本先于 P0 探针实施，验证后置 |
+| 适用范围 | 实施顺序。G0 各项在验证前保持未测，不因实现先行视为通过；本计划的门禁规则与回退预案不变 |
+| 门禁 | 计划文档；统一构建（§4.0 改造清单第 1–5、7 项）、壳工程判断逻辑与品牌图标派生脚本已实现并通过离线用例，实施记录见 §4.2；P0 十项探针均未执行，远端构建链未实测，任何安装包未构建；内置运行时接入、凭据存储、Windows / Linux 自承载、`web` profile 并发、壳内认证闭环与麒麟 Electron 兼容性均以 P0 探针结论为准 |
+| 交付门禁 | 统一构建链与壳工程只有离线用例及本机冒烟证据，不可分发；Electron / Chromium 及内置运行时的再分发许可、三平台壳打包链、公开仓 Secrets 统一构建链、全部 P0 探针与目标机安装均未实测 |
 | 文档层级 | L2 实施计划；范围由需求基线承担，安装路径选型收敛后回写需求基线 D3 与受控架构文档 |
 
 > 编制依据：上游打包体系参考开源仓库 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的 `apps/desktop`（electron-builder，仅作构建形态与工程纪律借鉴，不进入交付）。目标 DSH 版本以根 [.dsh-version](<../../.dsh-version>)（0.2.1-rc.3）为准。本计划构成桌面分发路线与品牌定制层级的立项依据；受控文档同步留待 G0 通过后按 §4.6 执行；计划批准待 P0 探针结果后另行记录，审核 / 批准维持待定。
 >
-> 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[公版插件、企业私有包与官方 DSH 集成方案](<../architecture/public-enterprise-bundle.md>)、[总体架构](<../architecture/platform-architecture.md>)、[推广方案](<rollout-plan.md>)、[品牌与外观详细设计](<../design/plugins/forge-brand.md>)、[品牌资产规范](<../assets/branding/cyber-long/usage.txt>)、[双端客户端分发](<../../deploy/clients/README.md>)、[DSH 插件高阶规范](<../engineering/dsh-plugin-conventions.md>)、[#222](https://github.com/hrygo/heluo-forge/issues/222)、[#123](https://github.com/hrygo/heluo-forge/issues/123)。
+> 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[公版插件、企业私有包与官方 DSH 集成方案](<../architecture/public-enterprise-bundle.md>)、[总体架构](<../architecture/platform-architecture.md>)、[推广方案](<rollout-plan.md>)、[品牌与外观详细设计](<../design/plugins/forge-brand.md>)、[品牌资产规范](<../assets/branding/cyber-long/usage.txt>)、[双端客户端分发](<../../deploy/clients/README.md>)、[DSH 插件高阶规范](<../engineering/dsh-plugin-conventions.md>)、[桌面壳详细设计](<../design/services/desktop-shell.md>)（CORP-DSH-DESIGN-025）、[#222](https://github.com/hrygo/heluo-forge/issues/222)、[#123](https://github.com/hrygo/heluo-forge/issues/123)。
 
 ## 1. 目标与范围
 
@@ -101,7 +105,7 @@
 | 10 | Electron 44.7.0 自承载 Node 下 `node:sqlite` 与凭据存储（值级加密、0600 密钥文件）的可用性 | 企业登录与凭据存储的前提；不可用则方案重新设计 | P0 |
 | 11 | 自承载运行随包内嵌的 dsh 在 Windows 与 Linux 的可行性；dsh 运行时原生依赖（`node-pty` 等）在五个目标（win x64、mac arm64 / x64、linux arm64 / x86_64）的预编译 | 某平台不可行则该平台回退路线 B | P0 |
 | 12 | 终端 CLI 与壳并发使用同一 `web` profile 的安全性（会话持久化、插件写锁、凭据库） | 不安全则壳改用独立 profile | P0 |
-| 13 | 壳内认证闭环：dsh web 的 launch URL 获取方式、IAM 经系统浏览器登录后壳内会话的恢复 | 首启与登录流程的设计输入 | P0 |
+| 13 | 壳内认证闭环：dsh web 的 launch URL 获取方式、IAM 经系统浏览器登录后壳内会话的恢复 | 首启与登录流程的设计输入。线索（2026-11-23 静态阅读 `@deepseek-ai/dsh` 0.2.2-rc.5，非探针结论）：web 应用就绪后向 stdout 打印一行 `dsh web: <带进程令牌的认证地址>`，命令行选项含 `--host`、`--port`、`--no-open`；锁定版以探针确认 | P0 |
 
 ## 4. 阶段与门禁
 
@@ -123,8 +127,8 @@
 1. **触发**：推 `v*` tag 触发构建工作流，或在该 tag 上手动触发；tag 版本号对齐员工包版本（一个 tag = 一套制品基线），与 [.dsh-version](<../../.dsh-version>) 锁定版的对应关系、源提交与摘要清单位置写入草稿 Release 说明。
 2. **CI 矩阵**：windows runner 构建 Windows x64 壳 NSIS 安装包、`.ico` 派生与 win x64 内置运行时；macos runner 构建 macOS arm64 / x64 壳 dmg / zip、`.icns` 派生与 mac 双架构内置运行时；ubuntu arm64 / x86_64 runner 构建麒麟壳 deb、预编译原生依赖与 linux 双架构内置运行时。
 3. **统一构建**：构建企业插件包 → 注入企业配置 → 组装员工包（中性安装包 + 企业资产目录 + `INSTALL.md` + `SHA256SUMS`），附 SHA-256 摘要清单，作为资产挂到触发 tag 对应的草稿 Release；多 job 矩阵由一个前置 job 创建草稿、其余 job 只上传，不经 workflow artifact 在 job 间传递；内嵌的 dsh 运行时制品、内置运行时分发包与 Electron 二进制经摘要比对后方可编排进安装包。P1 完成构建、注入与企业资产，P2–P4 依次接入各平台中性安装包。
-4. **配置注入**：插件不读环境变量，`.env` 只是输入格式。工作流把 Actions Secrets 中的配置键按映射表（见配置清单）转成插件配置字段，写入 patch 层中对应插件条目的 `config:`，与插件包一起构成企业资产。签发方由 Discovery 文档提供，不注入 issuer。客户端密钥不进 patch 层：它随企业资产交付，壳首启时写入本机凭据库并删除明文副本，记录名为 `clientSecretRef` 的值。配置值不写入构建日志、错误体与清单。
-5. **插件加载**：企业组合包 `@heluo/forge-enterprise` 为默认安装单元，研发扩展包 `@heluo/forge-engineering` 按需加入企业资产。壳首次启动时依次执行三步：密钥入库（`client-secret set`）、安装插件包（`dsh plugin --profile web add <tgz>`）、写入 patch 层（`cordis.patch.yml`，每个插件一条含 `id`、`name`、`config` 的 `insert` 条目）；任一步失败不进入工作区。宿主启动时按 patch 层挂载插件。
+4. **配置注入**：插件不读环境变量，`.env` 只是输入格式。工作流把 `release-bundle` 环境的 Environment Secrets 中的配置键以环境变量映射交给构建脚本，构建脚本按映射表（见配置清单）转成插件配置字段，写入 patch 层中对应插件条目的 `config:`，与插件包一起构成企业资产；配置值只存在于构建进程内存，不落临时文件。签发方由 Discovery 文档提供，不注入 issuer。客户端密钥不进 patch 层：它随企业资产交付，由安装器在首启时写入本机凭据库并删除明文副本，记录名为 `clientSecretRef` 的值。配置值不写入构建日志、错误体与清单。
+5. **插件加载**：企业组合包 `@heluo/forge-enterprise` 为默认安装单元，研发扩展包 `@heluo/forge-engineering` 按需加入企业资产（其补丁层不含 IAM 行，以中性 tgz 原样随包）。壳首启时委托员工包内的安装器（`init-enterprise-plugin.mjs`）完成：校验员工包完整性、安装企业插件包（`dsh plugin --profile web add <tgz>`，经自承载 Node 运行）并核对制品证据、把客户端密钥写入本机凭据库后删除明文副本。企业配置随私版 tgz 内的 `dsh.bundle.patch` 由宿主随包装载；壳是否还需向 `web` profile 写入 `cordis.patch.yml` 与企业 npm 源 / 索引 preset，待 P0 第 6 项结论后确定，在此之前不写入。任一步失败不进入工作区；已完成的首启按员工包清单摘要记录，同一员工包不再重复初始化。
 6. **人工确认**：统一构建放在受保护的 GitHub 环境中，审批人批准后构建才运行；无人批准不产出员工包。
 7. **交付**：有仓库写权限的人从草稿 Release 下载员工包后上传企业内网下载站，不指定固定机器，也不设内网侧预检环节；员工包附 SHA-256 摘要清单，可独立核对。工作流不发布 Release：上传时遇同名 Release 已发布即拒绝，上传后回读 Release 核对资产名与大小，不一致即报告失败。是否公开发布是另行的人工决定，没有防止误发布的技术开关。
 8. **CI 纪律**：固定 Action SHA、最小权限、构建日志不含敏感值；工作流变更配套正反向用例，遵循仓库 CI 约定。
@@ -145,7 +149,7 @@
 | 8 | 旧流程处置 | 公版发布与私版制作的两段式流程（`build-public-release`、`make-private-bundle`、`release-delivery`）不再参与统一构建；它们是路线 B 的实现，过渡期保留作回退路径，三平台桌面端在企业真实终端验收通过后（#123）连同用例与文档一并退役，见 §4.6 |
 | 9 | 验证 | 单测、变异验证（去掉写权限禁令、清单外键禁令、已发布拒绝或资产核对之一，对应用例必须失败）与 `pnpm check` 全量；远端实测在首次推 tag 时取证 |
 
-**公开仓 Actions Secrets 配置清单**：值不写入本计划，由打包人员经 Actions Secrets 逐键存入；下表预留键位、注入位置与约束。
+**公开仓 Environment Secrets 配置清单**：值不写入本计划，由打包人员逐键存为 `release-bundle` 环境的 Environment Secrets，不存仓库级 Secrets——只有进入该环境的作业能读取，进入须审批。下表预留键位、注入位置与约束。
 
 | 键 | 注入位置 | 约束 |
 |---|---|---|
@@ -159,12 +163,14 @@
 | `HELUO_IAM_CALLBACK_ADDRESS` | `callbackAddress` | 回环回调地址 |
 | `HELUO_IAM_MANAGED_MODELS_BASE_URL` | `managedModels.baseURL` | 企业网关地址 |
 | `HELUO_IAM_DEFAULT_PROVIDER` | `defaultProvider` | 网关的模型路由标识 |
-| `HELUO_IAM_ALLOW_INSECURE_HTTP` | `allowInsecureHttp` | 布尔；内网 HTTP 时启用，表示接受明文传输风险 |
+| `HELUO_IAM_ALLOW_INSECURE_HTTP` | 制作器校验开关（不入 patch 层） | 布尔；内网 HTTP 时启用，表示接受明文传输风险。机密模式下由制作器写入插件的 `allowInsecureClientAuthHttp: true` |
 | `HELUO_IAM_CLIENT_AUTH_METHOD` | `clientAuthMethod` | 须与 IAM 登记的认证方法一致 |
 | `HELUO_IAM_CLIENT_SECRET_REF` | `clientSecretRef` | 非秘密引用，标识凭据库中的客户端密钥记录 |
 | `HELUO_IAM_CLIENT_SECRET` | 本机凭据库（不进 patch 层） | 随企业资产交付，壳首启时以 `client-secret set` 写入并删除明文副本 |
 
-现状：`release-bundle` 尚未运行过（仓库无 `v*` tag 与 Release），现有用例对该工作流文件没有断言。
+仓库变量：`HELUO_PUBLIC_LICENSE`（构建声明的许可，未设置时构建拒绝）、`HELUO_WITH_ENGINEERING`（`true` 时把研发扩展包加入企业资产）。
+
+现状：`release-bundle` 尚未运行过（仓库无 `v*` tag 与 Release）；工作流的窄例外条件由 `tests/check-repo.test.mjs` 断言，远端行为（环境审批、Secrets 读取、草稿可见性）待首次推 tag 实测。
 
 ### 4.1 P0 前置验证（G0）
 
@@ -189,13 +195,22 @@
 4. **外层品牌规范**：外层安装器名称、快捷方式名称与图标、zip / `INSTALL.md`、deb 元数据统一以「河洛 Forge 企业版」呈现并沿用河洛苍螭资产规范。
 5. **统一构建流水线**：按 §4.0 改造清单完成 `release-bundle` 的统一构建与草稿 Release 上传，作为后续各阶段的构建入口。
 
+**实施记录（2026-11-23，代码先行、验证后置）**：
+
+- 第 5 项对应 §4.0 改造清单第 1–5、7 项已实现：`.github/workflows/release-bundle.yml`、`scripts/build-employee-package.mjs`、`scripts/upload-draft-release.mjs`、`scripts/lib/release-config.mjs`（配置键清单，检查器与构建脚本共用）、`scripts/lib/repo-rules.mjs` 的窄例外，以及 `tests/check-repo.test.mjs`、`tests/build-employee-package.test.mjs`、`tests/upload-draft-release.test.mjs` 三份用例。离线证据：用例 45 项通过，18 个规则变异全部被对应用例杀死，全量离线检查通过；真实链路本机冒烟一次通过（合成配置、隔离目录）。未做：第 6 项 Secrets 与仓库设置（`release-bundle` 环境的必需评审人与部署分支限制、两个仓库变量），以及首次推 tag 远端实测。
+- 壳工程的设计先行部分已完成：[桌面壳详细设计](<../design/services/desktop-shell.md>)（CORP-DSH-DESIGN-025）已登记设计索引；`services/forge-desktop/` 实现了不依赖 Electron 的判断模块（进程状态机、launch URL 解析与回环校验、导航与权限判定、登录 shell 环境合并、企业资产校验与首启、关窗与退出判定）和以注入接口装配的 `shell.mjs`。离线证据：37 项用例与 3 项构建—壳契约用例通过，15 个规则变异全部被杀死。壳已建 `package.json`（暂不声明依赖，锁文件只登记工作区成员）并标「状态：可用」，未接 Electron 运行，未打包。
+- 第 3 项（外层品牌资产派生）的脚本已具备：`scripts/derive-brand-icons.mjs` 从品牌源文件派生 Windows `.ico`、macOS `.icns` 与缺失的小尺寸切图，输入按品牌 `manifest.json` 的 SHA-256 闭环校验，派生产物另记 `derivation-manifest.json`，不改写源文件；栅格化依次尝试 `rsvg-convert` 与 `sips`，两者皆无且缺尺寸时以 `MISSING_RASTERIZER` 失败。离线证据：`tests/derive-brand-icons.test.mjs` 10 项通过；对仓库真实品牌资产的本机冒烟一次通过（`file` 识别出 6 条目的 ICO 与 ICNS，源文件零改动）。未做：接入 Release 流水线 CI、派生资产登记入 manifest 校验体系。
+- 第 1、2、4 项（forge-brand 包、品牌资源随包、外层品牌规范）未实现。
+
+**口径确认（2026-11-24，项目负责人逐条确认）**：企业配置存为 `release-bundle` 环境的 Environment Secrets；配置值只存在于构建进程内存；研发扩展包以中性 tgz 按需随包；包内私版插件版本为 `<tag 版本>-corp.1`；「其余工作流一律只读」执行为禁止 `contents: write`，不扩展到现有工作流的其他写权限；品牌图标派生沿用既有实现；壳先建清单并标「可用」，清单暂不声明依赖，验证后置；首启的 `cordis.patch.yml` 写入留待 P0 第 6 项。
+
 **GB 出口判据**：`release-bundle` 统一构建通过 `pnpm check` 并完成首次推 tag 远端实测（含环境审批与 Secrets 读取） + forge-brand 双端外观覆盖实测通过（含缺失回退）+ 外层派生资产经 manifest 校验 + 安全提示 / 审批 / 审计入口未被品牌化隐藏。外层图标派生失败时仅外层材料回退中性命名，不阻塞插件级品牌化。
 
 ### 4.3 P2 壳工程核心实现与 Windows x64 打包（G2）
 
 1. **壳工程立项与实现**：按「设计先行 → 准入核验 → 清单与测试 → 编码」在 `services/` 建立全平台壳工程：Electron 精确钉 44.7.0（package-shape 断言拒绝 `^` / `~` 浮动）；`ELECTRON_RUN_AS_NODE` 自承载内嵌 dsh（macOS 开发构建已实测，见 §4.5）；`--no-open` 防双开、仅绑定 `127.0.0.1`（配置层白名单拒绝其他值）、单实例锁、launch URL 认证、子进程退出清理与端口冲突处理（状态机显式：spawning → ready → stopped，不确定保持 pending）；GUI 进程补 PATH；登录 shell 环境读取（GUI 进程环境与用户启动文件合并，参考上游 `<shell> -ilc` 机制）；完整河洛品牌（`app-icon` 切图）；配套正反向测试。
 2. **内嵌载荷**：锁定版 dsh 运行时（npm 制品原样 + SHA-256 校验）+ 预编译原生依赖（避免终端 `node-gyp rebuild`）；企业插件、企业 npm 源 / 索引 preset 与配好的 `cordis.patch.yml` 属于企业资产，由首启企业配置装载。
-3. **首启企业配置初始化**：首次启动时读取企业资产（优先自动探测安装来源目录，未探测到时由用户指定企业资产包），依次执行密钥入库（`client-secret set`）、安装企业插件（`dsh plugin --profile web add`，经内嵌 pnpm，由自承载 Node 运行）、向 `web` profile 写入企业 npm 源 / 索引 preset 与 `cordis.patch.yml`；每步幂等，任一步失败时不进入工作区，密钥入库后删除明文副本。
+3. **首启企业配置初始化**：首次启动时读取企业资产（优先自动探测安装来源目录，未探测到时由用户指定企业资产包），校验员工包完整性后委托员工包内的安装器依次完成密钥入库（`client-secret set`）、安装企业插件（`dsh plugin --profile web add`，经内嵌 pnpm，由自承载 Node 运行）与制品证据核对；企业配置随私版 tgz 的 `dsh.bundle.patch` 装载；`cordis.patch.yml` 与企业 npm 源 / 索引 preset 的写入待 P0 第 6 项结论后接入。每步幂等，任一步失败时不进入工作区，密钥入库后删除明文副本。
 4. **内置运行时**：随包携带 Python 与 Office 库、Node、pnpm 的分发包，带版本清单与哈希；首次使用时离线安装到 `$DSH_HOME`，接入方式按 §3 #9 探针结论实现。
 5. **托盘与后台驻留**：系统托盘常驻；关窗隐藏至托盘，运行中任务不中断；退出前确认（任务状态可查询时按状态提示，否则一律提示）；macOS 沿用 Dock 生命周期。
 6. **安全基线**：渲染进程启用 `contextIsolation` 与 sandbox，关闭 `nodeIntegration`；`will-navigate` 与 `window.open` 只放行回环地址，其余链接交给系统浏览器；麦克风、摄像头、通知等权限请求默认拒绝；preload 仅暴露最小接口。
@@ -229,7 +244,7 @@
 
 ## 5. 工程约束与验收判据
 
-- 构建入口为 GitHub Actions Release 流水线：产物与 SHA-256 摘要作为资产挂 draft Release 并保持草稿；产物不入库、不公开，不上传 workflow artifact。企业配置只以 Actions Secrets 提供给配置注入步骤，写入权限 600 的临时配置文件并在运行后清理，不进仓库、构建日志、错误体与回执。
+- 构建入口为 GitHub Actions Release 流水线：产物与 SHA-256 摘要作为资产挂 draft Release 并保持草稿；产物不入库、不公开，不上传 workflow artifact。企业配置只以 `release-bundle` 环境的 Environment Secrets 经环境变量映射提供给配置注入步骤，只存在于构建进程内存，不落临时文件，不进仓库、构建日志、错误体与回执。
 - 配置注入的键以检查器白名单约束：仅允许 §4.0 配置清单中的键，引用清单之外的键即 `check:repo` 失败。
 - 公开仓不承载公开产物：构建产物只存在于草稿 Release 与企业内网下载站；仅 `release-bundle` 声明 `contents: write`，其余工作流一律只读。
 - 内嵌官方 dsh 运行时制品字节原样，交付物内提供可独立核对的摘要；自有壳不签名，完整性以摘要校验为准。
