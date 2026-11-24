@@ -1,11 +1,14 @@
 /**
  * Pure Cordis assembly point for @heluo/forge-experts (P2 / P3 / P8).
- * Holds zero mutable business state; connects scope, catalog, preferences, mentions, and routes via explicit ports.
+ * Holds zero mutable business state; connects scope, catalog, preferences,
+ * mentions, selection, dispatch, delegra-client, and routes via explicit ports.
  */
 import { createScopeManager } from './scope.mjs';
 import { createCatalogService } from './catalog.mjs';
 import { createPreferencesStore, PreferencePutBodySchema } from './preferences.mjs';
 import { createMentionsService } from './mentions.mjs';
+import { createSelectionService } from './selection.mjs';
+import { createDispatchService } from './dispatch.mjs';
 import { API_PREFIX, createExpertsRoutes } from './routes.mjs';
 import { createDelegraClient } from './delegra-client.mjs';
 import { ExpertsError } from './errors.mjs';
@@ -33,6 +36,7 @@ export function createExpertsHost(ports) {
   let catalogRef = null;
   let preferencesRef = null;
   let mentionsRef = null;
+  let selectionRef = null;
 
   const scope = createScopeManager({
     getIamSession: ports.getIamSession,
@@ -41,6 +45,7 @@ export function createExpertsHost(ports) {
       catalogRef?.invalidate(scopeEpoch);
       preferencesRef?.invalidateScope(scopeEpoch);
       mentionsRef?.invalidate(scopeEpoch, null);
+      selectionRef?.invalidateScope(scopeEpoch);
       routesRef?.broadcast({
         type: 'scope-changed',
         scopeEpoch,
@@ -56,6 +61,7 @@ export function createExpertsHost(ports) {
     verifyOrgCallable: ports.verifyOrgCallable,
     onPreferenceChanged({ scopeEpoch, expertId, viewVersion }) {
       mentionsRef?.invalidate(scopeEpoch, null);
+      selectionRef?.invalidateExpert(scopeEpoch, expertId);
       routesRef?.broadcast({ type: 'preference-updated', scopeEpoch, expertId, viewVersion });
     },
     now: ports.now,
@@ -95,11 +101,59 @@ export function createExpertsHost(ports) {
     checkDelegraSessionScope: ports.checkDelegraSessionScope,
     getKnownExpert: (scopeEpoch, expertId) => catalog.getKnownExpert(scopeEpoch, expertId),
     onMentionsInvalidated({ scopeEpoch, sessionId, viewVersion }) {
+      selectionRef?.invalidateSession(scopeEpoch, sessionId);
       routesRef?.broadcast({ type: 'mentions-invalidated', scopeEpoch, sessionId, viewVersion });
     },
     now: ports.now,
   });
   mentionsRef = mentions;
+
+  const selection = createSelectionService({
+    isDispatchEnabled: () => dispatchEnabled,
+    resolveScope: () => scope.resolveForRequest(),
+    assertScopeCurrent: (epoch, expectedScope) => scope.assertCurrent(epoch, expectedScope),
+    resolveSessionScope: ports.resolveSessionScope,
+    getMentionVersion: () => mentions.getViewVersion(),
+    now: ports.now,
+    selectionTtlMs: ports.selectionTtlMs,
+    maxPendingSelections: ports.maxPendingSelections,
+    maxPendingPerOwner: ports.maxPendingPerOwner,
+  });
+  selectionRef = selection;
+
+  const dispatch = createDispatchService({
+    isDispatchEnabled: () => dispatchEnabled,
+    resolveScope: () => scope.resolveForRequest(),
+    assertScopeCurrent: (epoch, expectedScope) => scope.assertCurrent(epoch, expectedScope),
+    consumeSelection: (params) => selection.consume(params),
+    runInPreferenceBoundary: (fn) => preferences.runSerialized(fn),
+    listConfirmedEnabled: (params) => preferences.listConfirmedEnabled(params),
+    isPreferencePending: (params) => preferences.isPending(params),
+    checkDelegraSessionScope: ports.checkDelegraSessionScope,
+    evaluatePolicy: ports.evaluatePolicy,
+    openStorageDomain: ports.openStorageDomain,
+    onCorrelationPersistError: ports.onCorrelationPersistError,
+    createDelegraTask: ports.createDelegraTask ?? (() => {
+      throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task creation connector is not configured');
+    }),
+    getDelegraTaskByRequest: ports.getDelegraTaskByRequest ?? (() => {
+      throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task reconciliation connector is not configured');
+    }),
+    getDelegraTask: ports.getDelegraTask ?? (() => {
+      throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task lookup connector is not configured');
+    }),
+    getDelegraTaskResult: ports.getDelegraTaskResult ?? (() => {
+      throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task result connector is not configured');
+    }),
+    createDelegraFollowup: ports.createDelegraFollowup ?? (() => {
+      throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task followup connector is not configured');
+    }),
+    cancelDelegraTask: ports.cancelDelegraTask ?? (() => {
+      throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task cancel connector is not configured');
+    }),
+    now: ports.now,
+    generateRequestId: ports.generateRequestId,
+  });
 
   const routes = createExpertsRoutes({
     isManagementEnabled: () => managementEnabled,
@@ -112,6 +166,13 @@ export function createExpertsHost(ports) {
     getEditSettlement: (params) => preferences.getEditSettlement(params),
     setPreference: (params) => preferences.setEnabled(params),
     validatePutBody: (body) => PreferencePutBodySchema.safeParse(body),
+    prepareSelection: (body) => selection.prepare(body),
+    dispatchTask: (body) => dispatch.dispatchTask(body),
+    reconcileTaskByRequest: (params) => dispatch.reconcileByRequest(params),
+    getTask: (params) => dispatch.getTask(params),
+    getTaskResult: (params) => dispatch.getTaskResult(params),
+    followupTask: (params) => dispatch.followupTask(params),
+    cancelTask: (params) => dispatch.cancelTask(params),
     getViewVersion: () => Math.max(catalog.getViewVersion(), preferences.getViewVersion(), mentions.getViewVersion()),
   });
   routesRef = routes;
@@ -120,9 +181,15 @@ export function createExpertsHost(ports) {
     managementEnabled,
     isolatedMentionsPreviewEnabled,
     dispatchEnabled,
-    open: () => (managementEnabled ? preferences.open() : Promise.resolve()),
+    open: async () => {
+      if (!managementEnabled) return;
+      await preferences.open();
+      await dispatch.open();
+    },
     close: async () => {
       routes.closeAllStreams();
+      selection.clear();
+      await dispatch.close();
       await preferences.close();
     },
     handleRequest: routes.handle,
@@ -130,6 +197,8 @@ export function createExpertsHost(ports) {
     catalog,
     preferences,
     mentions,
+    selection,
+    dispatch,
     routes,
     delegraClient: ports.delegraClient ?? null,
   });
@@ -165,9 +234,25 @@ export async function apply(ctx, config = {}) {
     })
     : null;
 
+  const evaluatePolicy = typeof config?.evaluatePolicy === 'function'
+    ? config.evaluatePolicy
+    : (() => {
+      const policy = readService(ctx, 'forgePolicy');
+      if (policy && typeof policy.decideEgress === 'function') {
+        return (params) => policy.decideEgress(params);
+      }
+      return undefined;
+    })();
+
   const host = createExpertsHost({
     config,
     delegraClient,
+    evaluatePolicy,
+    onCorrelationPersistError: ({ requestId, status, message }) => {
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] request correlation update failed', { requestId, status, message });
+      }
+    },
     getIamSession: () => {
       const iam = readService(ctx, 'iam');
       if (!iam || typeof iam.getSession !== 'function') {
@@ -214,6 +299,24 @@ export async function apply(ctx, config = {}) {
         : () => {
           throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra session scope checker is not configured');
         }),
+    createDelegraTask: typeof config?.createDelegraTask === 'function'
+      ? config.createDelegraTask
+      : delegraClient?.createTask,
+    getDelegraTaskByRequest: typeof config?.getDelegraTaskByRequest === 'function'
+      ? config.getDelegraTaskByRequest
+      : delegraClient?.getTaskByRequest,
+    getDelegraTask: typeof config?.getDelegraTask === 'function'
+      ? config.getDelegraTask
+      : delegraClient?.getTask,
+    getDelegraTaskResult: typeof config?.getDelegraTaskResult === 'function'
+      ? config.getDelegraTaskResult
+      : delegraClient?.getTaskResult,
+    createDelegraFollowup: typeof config?.createDelegraFollowup === 'function'
+      ? config.createDelegraFollowup
+      : delegraClient?.createFollowup,
+    cancelDelegraTask: typeof config?.cancelDelegraTask === 'function'
+      ? config.cancelDelegraTask
+      : delegraClient?.cancelTask,
   });
 
   if (managementEnabled) {

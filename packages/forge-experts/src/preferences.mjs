@@ -603,6 +603,7 @@ export function createPreferencesStore(ports) {
     invalidateScope,
     isPending,
     listConfirmedEnabled,
+    runSerialized: (fn) => enqueue(fn),
     isDegraded: () => degraded,
     getDegradedReason: () => degradedReason,
     getViewVersion: () => viewVersion,

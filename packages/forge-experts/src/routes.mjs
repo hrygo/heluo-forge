@@ -8,6 +8,8 @@ export const REQUEST_HEADER = 'x-forge-experts-request';
 export const EDIT_TOKEN_HEADER = 'x-forge-experts-edit-token';
 const REQUEST_HEADER_VALUE = '1';
 const MAX_BODY_BYTES = 8 * 1024;
+// taskText allows up to 32,000 UTF-16 code units; allow up to 4 bytes/char in UTF-8 plus JSON envelope overhead.
+const MAX_TASK_BODY_BYTES = 32_000 * 4 + 8 * 1024;
 
 function sendJson(res, status, body) {
   res.statusCode = status;
@@ -24,7 +26,7 @@ function methodNotAllowed(res, allow) {
   });
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let bytes = 0;
@@ -37,7 +39,7 @@ function readJsonBody(req) {
     req.on('data', (chunk) => {
       if (settled) return;
       bytes += chunk.length;
-      if (bytes > MAX_BODY_BYTES) {
+      if (bytes > maxBytes) {
         fail(new ExpertsError('EXPERT_REQUEST_TOO_LARGE', 'Request body exceeds limit'));
         req.resume?.();
         return;
@@ -69,6 +71,22 @@ function hasMutationHeader(req) {
   return true;
 }
 
+function decodePathSegment(rawSegment, label) {
+  if (!rawSegment || rawSegment.includes('/') || /%2f/i.test(rawSegment)) {
+    throw new ExpertsError('EXPERT_REQUEST_INVALID', `Invalid ${label}`);
+  }
+  let decoded;
+  try {
+    decoded = decodeURIComponent(rawSegment);
+  } catch {
+    throw new ExpertsError('EXPERT_REQUEST_INVALID', `Invalid ${label} encoding`);
+  }
+  if (!decoded || decoded.includes('/')) {
+    throw new ExpertsError('EXPERT_REQUEST_INVALID', `Invalid ${label}`);
+  }
+  return decoded;
+}
+
 function connectionRejection(req, getConnection) {
   let conn;
   try {
@@ -84,6 +102,22 @@ function connectionRejection(req, getConnection) {
   } catch {
     return 503;
   }
+}
+
+function requireRoutePort(req, res, { method, mutation = false, portFn, disabledCode, disabledMessage }) {
+  if (req.method !== method) {
+    methodNotAllowed(res, method);
+    return null;
+  }
+  if (mutation) {
+    if (!hasMutationHeader(req)) {
+      throw new ExpertsError('EXPERT_REQUEST_HEADER_REQUIRED', 'Missing required same-origin request header');
+    }
+  }
+  if (typeof portFn !== 'function') {
+    throw new ExpertsError(disabledCode, disabledMessage);
+  }
+  return portFn;
 }
 
 export function createExpertsRoutes(ports) {
@@ -186,20 +220,104 @@ export function createExpertsRoutes(ports) {
         return true;
       }
 
+      if (url.pathname === `${API_PREFIX}/selections`) {
+        const prepareSelection = requireRoutePort(req, res, {
+          method: 'POST',
+          mutation: true,
+          portFn: ports.prepareSelection,
+          disabledCode: 'EXPERT_DISPATCH_DISABLED',
+          disabledMessage: 'Expert dispatch is disabled',
+        });
+        if (!prepareSelection) return true;
+        const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
+        sendJson(res, 201, await prepareSelection(rawBody));
+        return true;
+      }
+
+      if (url.pathname === `${API_PREFIX}/tasks`) {
+        const dispatchTask = requireRoutePort(req, res, {
+          method: 'POST',
+          mutation: true,
+          portFn: ports.dispatchTask,
+          disabledCode: 'EXPERT_DISPATCH_DISABLED',
+          disabledMessage: 'Expert dispatch is disabled',
+        });
+        if (!dispatchTask) return true;
+        const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
+        const receipt = await dispatchTask(rawBody);
+        sendJson(res, receipt?.idempotentReplay ? 200 : 201, receipt);
+        return true;
+      }
+
+      if (url.pathname.startsWith(`${API_PREFIX}/tasks/by-request/`)) {
+        const reconcileTaskByRequest = requireRoutePort(req, res, {
+          method: 'GET',
+          portFn: ports.reconcileTaskByRequest,
+          disabledCode: 'EXPERT_TASK_NOT_FOUND',
+          disabledMessage: 'Task reconciliation is unavailable',
+        });
+        if (!reconcileTaskByRequest) return true;
+        const requestId = decodePathSegment(url.pathname.slice(`${API_PREFIX}/tasks/by-request/`.length), 'requestId');
+        sendJson(res, 200, await reconcileTaskByRequest({ requestId }));
+        return true;
+      }
+
+      if (url.pathname.startsWith(`${API_PREFIX}/tasks/`)) {
+        const tail = url.pathname.slice(`${API_PREFIX}/tasks/`.length);
+        const parts = tail.split('/');
+        if (parts.length === 1) {
+          const getTask = requireRoutePort(req, res, {
+            method: 'GET',
+            portFn: ports.getTask,
+            disabledCode: 'EXPERT_TASK_NOT_FOUND',
+            disabledMessage: 'Task lookup is unavailable',
+          });
+          if (!getTask) return true;
+          sendJson(res, 200, await getTask({ taskId: decodePathSegment(parts[0], 'taskId') }));
+          return true;
+        }
+        if (parts.length === 2 && parts[1] === 'result') {
+          const getTaskResult = requireRoutePort(req, res, {
+            method: 'GET',
+            portFn: ports.getTaskResult,
+            disabledCode: 'EXPERT_TASK_NOT_FOUND',
+            disabledMessage: 'Task result lookup is unavailable',
+          });
+          if (!getTaskResult) return true;
+          sendJson(res, 200, await getTaskResult({ taskId: decodePathSegment(parts[0], 'taskId') }));
+          return true;
+        }
+        if (parts.length === 2 && parts[1] === 'followups') {
+          const followupTask = requireRoutePort(req, res, {
+            method: 'POST',
+            mutation: true,
+            portFn: ports.followupTask,
+            disabledCode: 'EXPERT_DISPATCH_DISABLED',
+            disabledMessage: 'Expert dispatch is disabled',
+          });
+          if (!followupTask) return true;
+          const taskId = decodePathSegment(parts[0], 'taskId');
+          const rawBody = await readJsonBody(req, MAX_TASK_BODY_BYTES);
+          sendJson(res, 201, await followupTask({ taskId, ...rawBody }));
+          return true;
+        }
+        if (parts.length === 2 && parts[1] === 'cancel') {
+          const cancelTask = requireRoutePort(req, res, {
+            method: 'POST',
+            mutation: true,
+            portFn: ports.cancelTask,
+            disabledCode: 'EXPERT_TASK_NOT_FOUND',
+            disabledMessage: 'Task cancellation is unavailable',
+          });
+          if (!cancelTask) return true;
+          sendJson(res, 200, await cancelTask({ taskId: decodePathSegment(parts[0], 'taskId') }));
+          return true;
+        }
+        throw new ExpertsError('EXPERT_NOT_FOUND', 'Unknown expert task route');
+      }
+
       if (url.pathname.startsWith(`${API_PREFIX}/preferences/`)) {
-        const rawId = url.pathname.slice(`${API_PREFIX}/preferences/`.length);
-        if (!rawId || rawId.includes('/') || /%2f/i.test(rawId)) {
-          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId');
-        }
-        let expertId;
-        try {
-          expertId = decodeURIComponent(rawId);
-        } catch {
-          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId encoding');
-        }
-        if (!expertId || expertId.includes('/')) {
-          throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid expertId');
-        }
+        const expertId = decodePathSegment(url.pathname.slice(`${API_PREFIX}/preferences/`.length), 'expertId');
         const scope = await ports.resolveScope();
         const known = ports.getKnownExpert(scope.scopeEpoch, expertId);
         if (!known || !known.access.readable) {
