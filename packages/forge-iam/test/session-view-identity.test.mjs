@@ -12,9 +12,9 @@ import { sessionView } from '../src/session-read.mjs';
 import { sessionFromRecord } from '../src/cli-session.mjs';
 
 const IDENTITY = Object.freeze({
-  user_id: '000001',
-  user_name: '张三',
-  work_no: 'zhangsan',
+  workNo: '000001',
+  name: '张三',
+  name: 'Zhang San',
 });
 
 test('the Host session view carries the projected identity', () => {

@@ -166,22 +166,22 @@ test('the identity projection whitelist admits only the three confirmed fields',
   }
 
   const frame = await projectOne({ ...READY_VIEW,
-    identity: { user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan' } });
-  assert.deepEqual(frame.identity, { user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan' });
+    identity: { workNo: '10001234', name: 'Zhang San' } });
+  assert.deepEqual(frame.identity, { workNo: '10001234', name: 'Zhang San' });
   assert.ok(Object.isFrozen(frame.identity));
-  assert.deepEqual(Object.keys(frame.identity), ['user_id', 'user_name', 'work_no']);
+  assert.deepEqual(Object.keys(frame.identity), ['workNo', 'name']);
 
-  const partial = await projectOne({ ...READY_VIEW, identity: { user_id: '10001234' } });
-  assert.deepEqual(partial.identity, { user_id: '10001234' });
+  const partial = await projectOne({ ...READY_VIEW, identity: { workNo: '10001234' } });
+  assert.deepEqual(partial.identity, { workNo: '10001234' });
 
   for (const invalid of [
-    { ...READY_VIEW, identity: { user_id: '10001234', nickname: 'unexpected' } },
-    { ...READY_VIEW, identity: { user_id: 42 } },
-    { ...READY_VIEW, identity: { user_name: '' } },
-    { ...READY_VIEW, identity: { get work_no() { return 'zhangsan'; } } },
+    { ...READY_VIEW, identity: { workNo: '10001234', nickname: 'unexpected' } },
+    { ...READY_VIEW, identity: { workNo: 42 } },
+    { ...READY_VIEW, identity: { name: '' } },
+    { ...READY_VIEW, identity: { get name() { return 'Zhang San'; } } },
     { ...READY_VIEW, identity: 'text' },
-    { ...READY_VIEW, identity: ['user_id'] },
-    { ...READY_VIEW, identity: { user_id: 'x', ...Object.fromEntries([['toString', ' hostile']]) } },
+    { ...READY_VIEW, identity: ['workNo'] },
+    { ...READY_VIEW, identity: { workNo: 'x', ...Object.fromEntries([['toString', ' hostile']]) } },
   ]) {
     const iam = createFakeIam();
     iam.view = invalid;

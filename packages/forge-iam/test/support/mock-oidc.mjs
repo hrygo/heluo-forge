@@ -91,16 +91,28 @@ export async function startMockOidc({
         const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : (queryToken ?? '');
         if (!accessTokens.has(token)) { res.writeHead(401); res.end(); return; }
         const { subject } = accessTokens.get(token);
-        // 定稿口径的真实响应形态（issue #160）：sub/authTime 必须被严格投影丢弃。
-        // 全部为占位值，不含真实个人数据。
-        const body = {
-          sub: subject,
-          employeeNumber: '10001234',
-          displayName: 'Zhang San',
-          giveName: 'zhangsan',
-          authTime: 1794363364,
-        };
-        if (control.userInfoMode === 'missingName') delete body.displayName;
+        // 两套候选口径的真实响应形态（issue #160）：口径待 IAM 确认
+        // （#433 第 3 项），因此两套都保留，测试各自按对应映射取值。
+        // sub/authTime 必须被严格投影丢弃。全部为占位值，不含真实个人数据。
+        const workNoPinyin = control.userInfoMode.startsWith('workNoPinyin');
+        const body = workNoPinyin
+          ? {
+            sub: subject,
+            work_no: '10001234',
+            pinyin: 'Zhang San',
+            authTime: 1794363364,
+          }
+          : {
+            sub: subject,
+            employeeNumber: '10001234',
+            displayName: 'Zhang San',
+            giveName: 'zhangsan',
+            authTime: 1794363364,
+          };
+        if (control.userInfoMode.endsWith('MissingName') || control.userInfoMode === 'missingName') {
+          delete body.displayName;
+          delete body.pinyin;
+        }
         return json(res, 200, body);
       }
       if (url.pathname === '/authorize') {
