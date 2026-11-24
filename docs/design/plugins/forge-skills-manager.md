@@ -4,9 +4,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档编号 | CORP-DSH-DESIGN-021 |
+| 文档编号 | CORP-DSH-DESIGN-026 |
 | 文档名称 | 企业技能管理器详细设计 |
-| 版本 | V1.0.3 |
+| 版本 | V1.0.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
@@ -127,6 +127,6 @@ Markdown 及其依赖在构建期内联进唯一客户端 bundle，React 复用�
 
 ### 6.3 构建与人工调试入口
 
-可执行开发步骤集中在[随包 README](../../../packages/forge-skills-manager/README.md#构建与打包)：固定工具链安装依赖，先将 TypeScript 和构建期库生成到 `lib/`，再使用仓库打包器生成独立或企业 `.tgz`，最后独立校验 manifest 与摘要。[打包方式选择](../../../packages/forge-skills-manager/README.md#打包方式选择)区分开发 profile 配置与正式包内预置；[企业测试包与正式环境包交付](../../../packages/forge-skills-manager/README.md#企业测试包与正式环境包交付)给出正式交付方式下测试/正式两套配置的独立版本与目录、脱敏预检、摘要确认、产物及安装验收步骤。两套环境均要求制包时提供 Nacos 四项配置，不构成第三种开发模式；脚本不提供额外的模式开关。字段判据由[Nacos 契约 §1.1](../../contracts/nacos-skills.md#11-正式制包输入)维护。构建不隐含打包，安装不触发二次编译；正式环境配置不表示生产准入。Windows 企业打包的既有 IAM 执行位限制单列，不通过修改其他插件规避。
+可执行开发步骤集中在[随包 README](../../../packages/forge-skills-manager/README.md#构建与打包)：固定工具链安装依赖，先将 TypeScript 和构建期库生成到 `lib/`，再使用仓库打包器生成独立或企业 `.tgz`，最后独立校验 manifest 与摘要。[打包方式选择](../../../packages/forge-skills-manager/README.md#打包方式选择)区分开发 profile 配置与正式包内预置；[企业测试包与正式环境包交付](../../../packages/forge-skills-manager/README.md#企业测试包与正式环境包交付)给出正式交付方式下测试/正式两套配置的独立版本与目录、脱敏预检、摘要确认、产物及安装验收步骤。两套环境均要求制包时提供 Nacos 四项配置，不构成第三种开发模式；脚本不提供额外的模式开关。字段判据由[Nacos 契约 §1.1](../../contracts/nacos-skills.md#11-正式制包输入)维护。构建不隐含打包，安装不触发二次编译；正式环境配置不表示生产准入。Windows 本地源码检查仍受 IAM bin 执行位限制；归档规则及最终制品须独立核验，不据此宣称完整交付通过。
 
 [人工调试流程](../../../packages/forge-skills-manager/README.md#本地人工调试)使用隔离用户目录、Agent 来源、`DSH_HOME`、测试 workspace 和独立 profile；依次安装制品、登记一个 bundle，按制品是否预置配置选择合并开发 patch 或移除旧 Nacos 覆盖项，再启动环回 web 宿主。仅隔离 `DSH_HOME` 且保留真实用户目录的方式可用于本机来源检查，但不属于完全隔离的文件数据验收。修改源码后重新构建、打包、安装并重启该测试宿主，不能依赖浏览器刷新加载仓库源码。`verify-host.mjs` 执行后清理测试进程，人工持续试用使用独立启动流程。

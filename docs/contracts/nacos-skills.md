@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-SKILLS-001 |
 | 文档名称 | Nacos 公共技能库契约 |
-| 版本 | V1.2.1 |
+| 版本 | V1.2.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
@@ -35,7 +35,7 @@ Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理�
 
 ### 1.1 正式制包输入
 
-`make-private-bundle.mjs` 与 `release-delivery.mjs` 对装配 `heluo-skills-manager` 的企业公版要求下列四项配置；测试环境私版与正式环境私版采用同一判据。未装配技能管理器的企业包无需提供 Nacos 字段，回执声明未内嵌秘密；向该类包提供 Nacos 字段时拒绝，不静默丢弃。中性企业公版的源码构建不要求部署值。
+`make-private-bundle.mjs` 与 `release-delivery.mjs` 对装配 `heluo-skills-manager` 的企业公版要求下列四项配置；测试环境私版与正式环境私版采用同一判据。未装配技能管理器的企业包无需提供 Nacos 字段，回执不声明内嵌 Nacos 密码；向该类包提供 Nacos 字段时拒绝，不静默丢弃。中性企业公版的源码构建不要求部署值。
 
 | 专用配置文件字段 | 写入运行字段 | 校验与默认 |
 |---|---|---|
@@ -48,6 +48,8 @@ Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理�
 专用文件按 `KEY=VALUE` 数据解析，不接受 `export`、重复键、未知键及命令/展开语法；引号仅用于包裹值，不执行 shell 或转义求值。旧制包字段 `HELUO_NACOS_USERNAME_ENV`、`HELUO_NACOS_PASSWORD_ENV`、`HELUO_NACOS_ALLOW_INSECURE_HTTP` 不在白名单中，报 `CONFIG_UNKNOWN_KEY`。缺少四项必填值或校验失败报 `CONFIG_INVALID`，不回显原值。
 
 正式制包从未跟踪、受 Git 忽略的专用配置读取上述字段，写入 bundle 内声明 `heluo-skills-manager` 的补丁层。代码及中性公版不包含部署值。员工不再注入环境变量；完整配置文件不进入交付物，预检和回执只列字段名，明确标记已内嵌 Nacos 密码。
+
+私版元数据的 `config.embeddedSecrets` 仅列包内 Nacos 密码（`["nacos.password"]` 或 `[]`）；`config.clientSecretEmbedded` 单独声明是否采用现有 IAM 客户端密钥独立文件交付，`config.secretEmbedded` 是两者的合计布尔值。Nacos 密码不触发 IAM 绑定文件读取；两者同时交付时，安装器分别核验 Nacos 必填字段和 IAM 绑定文件。旧版仅以 `secretEmbedded: true` 声明的 IAM 交付继续要求有效绑定文件。IAM 客户端密钥不写入插件补丁或元数据，仍按其独立流程预置到目标凭据库。
 
 Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `scripts/lib/nacos-release.mjs`；两个制包入口及库调用共用此模块。预检在输出计划和请求摘要确认前检查公版中的 Nacos 运行文件与配套工具一致，仅允许 LF/CRLF 差异；缺失或不匹配报 `NACOS_RUNTIME_MISMATCH`，不输出已配置成功计划。正式写包前重复核验，不信任之前的预检状态。独立工具链附带 `packages/forge-skills-manager/docs/packaging.md`，不要求制包人员取得源码或修改公共 Skill。
 

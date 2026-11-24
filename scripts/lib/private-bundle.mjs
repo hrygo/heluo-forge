@@ -1028,6 +1028,7 @@ export function makePrivateBundle(input) {
     changed: built.changed,
     configKeys: built.metadata.config.keys,
     secretEmbedded: built.metadata.config.secretEmbedded,
+    clientSecretEmbedded: built.metadata.config.clientSecretEmbedded,
     manifest: join(output, 'bundle-manifest.json'),
     release: join(output, 'private-release.json'),
     verified: true,

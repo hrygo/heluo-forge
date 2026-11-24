@@ -498,7 +498,6 @@ test('standalone toolchain includes Nacos rules runtime and packaging instructio
   const maker = await import(pathToFileURL(join(extracted, 'scripts/lib/private-bundle.mjs')));
   const config = maker.buildConfig(maker.parseEnvConfig([
     'HELUO_IAM_AUTH_MODE=public',
-    'HELUO_IAM_ISSUER=https://iam.corp.example',
     'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=test-client',
     'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',

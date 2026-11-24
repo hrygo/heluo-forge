@@ -588,7 +588,9 @@ test('a confidential private bundle carries only the declared IAM method and ref
   assert.match(patch, /clientSecretRef: "enterprise-oidc"/u);
   assert.doesNotMatch(patch, /^\s*(?:clientSecret|client_secret):/mu);
   const metadata = JSON.parse(entries.find((entry) => entry.path === 'heluo-private-release.json').content.toString('utf8'));
-  assert.equal(metadata.config.secretEmbedded, false);
+  assert.equal(metadata.config.secretEmbedded, true);
+  assert.equal(metadata.config.clientSecretEmbedded, false);
+  assert.deepEqual(metadata.config.embeddedSecrets, ['nacos.password']);
   assert.doesNotMatch(JSON.stringify(metadata), /enterprise-oidc/u);
 });
 
@@ -994,6 +996,39 @@ test('the shipped profile mapping passes the plugin schema', () => {
   const result = validateConfig({ ...iam });
   assert.equal('issues' in result, false, JSON.stringify(result.issues ?? []));
   assert.deepEqual(result.value.profileFields, { name: 'pinyin', workNo: 'work_no' });
+});
+
+test('private metadata distinguishes Nacos and IAM client secrets in every combination', t => {
+  for (const withNacos of [false, true]) {
+    for (const withClientSecret of [false, true]) {
+      const config = buildConfig(parseEnvConfig([
+        ...IAM_ENV,
+        ...(withNacos ? NACOS_ENV : []),
+        'HELUO_IAM_AUTH_MODE=confidential',
+        'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+        'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+        ...(withClientSecret ? ['HELUO_IAM_CLIENT_SECRET=synthetic-client-secret'] : []),
+      ].join('\n'), { allowSecret: true }));
+      const bytes = publicTarball({ patch: patchText({ skills: withNacos }) });
+      const built = buildPrivateTarball({ entries: readBundleEntries(bytes, { withContent: true }),
+        config, version: '0.1.0-corp.1', baseSha256: createHash('sha256').update(bytes).digest('hex') });
+      const packed = readBundleEntries(built.tar, { withContent: true });
+      const metadata = JSON.parse(packed.find(entry => entry.path === 'heluo-private-release.json').content);
+      const patch = packed.find(entry => entry.path === 'cordis.patch.yml').content.toString('utf8');
+      assert.equal(metadata.config.secretEmbedded, withNacos || withClientSecret);
+      assert.equal(metadata.config.clientSecretEmbedded, withClientSecret);
+      assert.deepEqual(metadata.config.embeddedSecrets, withNacos ? ['nacos.password'] : []);
+      assert.doesNotMatch(patch + JSON.stringify(metadata), /synthetic-client-secret/);
+      assert.equal(patch.includes('synthetic-password'), withNacos);
+      const root = temp(t);
+      const publicPath = join(root, 'public.tgz');
+      writeFileSync(publicPath, bytes);
+      const result = makePrivateBundle({ publicPath, expectedSha256: createHash('sha256').update(bytes).digest('hex'),
+        config, version: '0.1.0-corp.1', output: join(root, 'private'), repoRoot: join(root, 'repo') });
+      assert.equal(result.secretEmbedded, withNacos || withClientSecret);
+      assert.equal(result.clientSecretEmbedded, withClientSecret);
+    }
+  }
 });
 
 test('Nacos requirement follows the installed plugin instead of every private bundle', () => {

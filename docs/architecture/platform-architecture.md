@@ -262,7 +262,7 @@ flowchart TB
 | DSH 原生插件市场 | DSH 内置 | 读取 AIHUB 索引、展示插件并调用官方 manager 安装 | `pluginMarket`、`pluginManager` |
 | `@heluo/forge-brand` | 配置 bundle | 产品名、Logo、主题 token | `brand`、`client-ui-theme` |
 
-组合方式区分目标职责与实际交付：当前 umbrella patch 既有官方行 `disabled` 覆写，也以 `insert` 插入 credentials-keychain、policy、IAM、skills-manager 四个 Host；`@heluo/forge-sdd` 已于 2026-11-03 从依赖、bundledDependencies 与 bin 移除并删除包，不是第四个 Host。已安装 profile 与已发布制品不动；历史兼容语义见[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)。**可被关闭不等于关闭后仍保持依赖权限**：IAM、policy 和必要审计须在相关操作时满足安全依赖，缺失则拒绝；可执行性仍须按门禁取得负向验收证据。
+组合方式区分目标职责与实际交付：当前 umbrella patch 既有官方行 `disabled` 覆写，也以 `insert` 插入 credentials-keychain、policy、IAM、skills-manager 四个 Host；`@heluo/forge-sdd` 已于 2026-11-03 从依赖、bundledDependencies 与 bin 移除并删除包，不属于 Host。已安装 profile 与已发布制品不动；历史兼容语义见[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)。**可被关闭不等于关闭后仍保持依赖权限**：IAM、policy 和必要审计须在相关操作时满足安全依赖，缺失则拒绝；可执行性仍须按门禁取得负向验收证据。
 
 ## 7. 领域设计
 

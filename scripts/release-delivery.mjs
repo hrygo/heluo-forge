@@ -676,7 +676,7 @@ export function buildDelivery(input) {
       privateSha256: made.sha256,
       privateVersion: made.version,
       configKeys: made.configKeys,
-      clientSecretEmbedded: made.secretEmbedded,
+      clientSecretEmbedded: made.clientSecretEmbedded,
       verified: verified.ok,
       branding,
     };

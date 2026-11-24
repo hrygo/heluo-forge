@@ -108,6 +108,28 @@ function expectCode(fn, code) {
   });
 }
 
+test('delivery plan distinguishes Nacos password from an explicitly embedded IAM client secret', t => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const baseEnv = readFileSync(configPath, 'utf8').split('\n').filter(line => !line.startsWith('HELUO_IAM_AUTH_MODE='));
+  for (const withClientSecret of [false, true]) {
+    const config = buildConfig(parseEnvConfig([
+      ...baseEnv,
+      `HELUO_IAM_AUTH_MODE=${withClientSecret ? 'confidential' : 'public'}`,
+      ...(withClientSecret ? [
+        'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+        'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+        'HELUO_IAM_CLIENT_SECRET=synthetic-client-secret',
+      ] : []),
+    ].join('\n'), { allowSecret: true }));
+    const result = buildDelivery({ publicPath, publicSha256: sha256, config,
+      embedClientSecret: withClientSecret, version: '0.1.0-corp.1',
+      output: join(root, 'delivery'), toolRoot: TOOL_ROOT, dryRun: true });
+    assert.equal(result.plan.clientSecretEmbedded, withClientSecret);
+    assert.deepEqual(result.plan.embeddedSecrets, ['nacos.password']);
+    assert.doesNotMatch(JSON.stringify(result.plan), /synthetic-client-secret|synthetic-password/);
+  }
+});
+
 test('dry-run prints the redacted plan and writes nothing', (t) => {
   const { root, publicPath, configPath, sha256 } = fixture(t);
   const output = join(root, 'delivery');
@@ -321,6 +343,10 @@ for (const script of ['release-delivery.mjs', 'make-private-bundle.mjs']) {
     const discoveryUrl = `${issuer}/.well-known/openid-configuration`;
     document = { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks` };
     const initial = [
+      'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+      'HELUO_NACOS_NAMESPACE_ID=public',
+      'HELUO_NACOS_USERNAME=svc-ci',
+      'HELUO_NACOS_PASSWORD=synthetic-password',
       'HELUO_IAM_AUTH_MODE=confidential',
       'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
       'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
@@ -873,6 +899,10 @@ test('--embed-client-secret 允许把客户端密钥写进交付目录，但不�
   const secret = 'corp-secret-value-abcdef';
   const configPath = join(root, 'confidential.env');
   writeFileSync(configPath, [
+    'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+    'HELUO_NACOS_NAMESPACE_ID=public',
+    'HELUO_NACOS_USERNAME=svc-ci',
+    'HELUO_NACOS_PASSWORD=synthetic-password',
     'HELUO_IAM_AUTH_MODE=confidential',
     'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=DSH',
@@ -949,6 +979,10 @@ test('--previous-issuer 把历史绑定写进 client-secret.json，供安装器�
   const { root, publicPath, sha256 } = fixture(t);
   const configPath = join(root, 'confidential.env');
   writeFileSync(configPath, [
+    'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+    'HELUO_NACOS_NAMESPACE_ID=public',
+    'HELUO_NACOS_USERNAME=svc-ci',
+    'HELUO_NACOS_PASSWORD=synthetic-password',
     'HELUO_IAM_AUTH_MODE=confidential',
     'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=DSH',
