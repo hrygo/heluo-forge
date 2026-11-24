@@ -218,12 +218,16 @@ function blockedText(result, changeId) {
     next.push(`下一步：确认 dop 可用后重跑 ${chain}；仍失败按卡内「未知项」排查。`);
   }
   // 入参错误只给"改参数"一条方向：dop 可用与否与变更号写错无关，不掺配置与重试旁白。
-  const missing =
-    items.length === 0
-      ? reason === ENTRY_REASONS.MISSING_OR_INVALID
-        ? '缺失项：无（未发起读取）。'
-        : '缺失项：无（卡片未列出未知项，按未就绪处理）。'
-      : `缺失项：${items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`)).join('；')}`;
+  const missingLineOf = () => {
+    if (items.length > 0) {
+      const listed = items.map((item) => (item.field === '' ? item.reason : `${item.field}：${item.reason}`));
+      return `缺失项：${listed.join('；')}`;
+    }
+    return reason === ENTRY_REASONS.MISSING_OR_INVALID
+      ? '缺失项：无（未发起读取）。'
+      : '缺失项：无（卡片未列出未知项，按未就绪处理）。';
+  };
+  const missing = missingLineOf();
   const lines = [
     `${ENTRY_NAME}：${reason}${detail}`,
     headline,

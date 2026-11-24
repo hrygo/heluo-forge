@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-009 |
 | 文档名称 | DevOps 接入详细设计 |
-| 版本 | V0.12.0 |
+| 版本 | V0.13.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -27,6 +27,8 @@
 >
 > 2026-11-18（r19）新增会话起始变更选择器：新会话工具栏行（`conversation.hero.options`）注册 `devops.change-picker`，打开面板时才 `GET /api/forge-devops/changes`（复用 `change.list` 的同一读链路与策略门禁），选中后按当前模板插入当前编辑器草稿位点（r20 起模板可在设置页改写，未配置时用内置默认值）。只读清单不代表业务授权；插入不自动发送。
 > 2026-11-19（r20）提示词模板改为**维护者配置**：新增补丁层配置键 `promptTemplate`（默认值为结构化编排指令），由只读端点 `GET /api/forge-devops/prompt` 下发给选择器；页面不提供编辑入口（终端用户自配容易漏掉验收与提问步骤），非法配置在装配期拒绝激活。
+> 2026-11-24（r22）补记 `change.read` 的绑定边界：一次成功的读取同样绑定请求号，归一失败（`normalize_error` 非空但原因码不是 `CONTEXT_ID_MISMATCH`）时**仍然绑定**——解读不了不等于读到的是别的变更，而绑定对象是已过格式校验的请求号；只有能确认记录自报号不同（`CONTEXT_ID_MISMATCH`）时才收回。该档比 `cardReadyFor` 宽松一档，属于设计约定，不是漏判。
+>
 > 2026-11-24（r21）入口裁决改以卡片状态为准：`ok` 只表示读面走完了，不代表事实已取回。`devops-change` 只在卡片 `ready` 且自报变更号存在并等于请求号时输出成功与后续步骤；`blocked`、失败与空响应报阻塞（`CONTEXT_BLOCKED` / `CONTEXT_EMPTY`），`ready` 但自报号不符或缺省报不可确认（`CONTEXT_UNCONFIRMED`），三种情况都保留诊断卡与缺失项、给出配置或重试方向，且不改写会话绑定（issue #342）。
 >
 > 关联文档：[总体架构 §7.3](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md) REQ-12、[策略与审计](forge-policy.md)。
