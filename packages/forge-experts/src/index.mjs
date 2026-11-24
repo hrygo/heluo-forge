@@ -156,6 +156,15 @@ export function createExpertsHost(ports) {
     generateRequestId: ports.generateRequestId,
   });
 
+  const dispatchPorts = Object.freeze({
+    dispatchTask: (body) => dispatch.dispatchTask(body),
+    reconcileByRequest: (params) => dispatch.reconcileByRequest(params),
+    getTask: (params) => dispatch.getTask(params),
+    getTaskResult: (params) => dispatch.getTaskResult(params),
+    followupTask: (params) => dispatch.followupTask(params),
+    cancelTask: (params) => dispatch.cancelTask(params),
+  });
+
   const routes = createExpertsRoutes({
     isManagementEnabled: () => managementEnabled,
     getConnection: ports.getConnection,
@@ -168,24 +177,15 @@ export function createExpertsHost(ports) {
     setPreference: (params) => preferences.setEnabled(params),
     validatePutBody: (body) => PreferencePutBodySchema.safeParse(body),
     prepareSelection: (body) => selection.prepare(body),
-    dispatchTask: (body) => dispatch.dispatchTask(body),
-    reconcileTaskByRequest: (params) => dispatch.reconcileByRequest(params),
-    getTask: (params) => dispatch.getTask(params),
-    getTaskResult: (params) => dispatch.getTaskResult(params),
-    followupTask: (params) => dispatch.followupTask(params),
-    cancelTask: (params) => dispatch.cancelTask(params),
+    ...dispatchPorts,
+    reconcileTaskByRequest: dispatchPorts.reconcileByRequest,
     getViewVersion: () => Math.max(catalog.getViewVersion(), preferences.getViewVersion(), mentions.getViewVersion()),
   });
   routesRef = routes;
 
   const tools = createExpertToolBridge({
     isDispatchEnabled: () => dispatchEnabled,
-    dispatchTask: (body) => dispatch.dispatchTask(body),
-    reconcileByRequest: (params) => dispatch.reconcileByRequest(params),
-    getTask: (params) => dispatch.getTask(params),
-    getTaskResult: (params) => dispatch.getTaskResult(params),
-    followupTask: (params) => dispatch.followupTask(params),
-    cancelTask: (params) => dispatch.cancelTask(params),
+    ...dispatchPorts,
   });
 
   return Object.freeze({
@@ -350,11 +350,30 @@ export async function apply(ctx, config = {}) {
   }
 
   const toolRegistry = readService(ctx, 'tools');
-  const unregisterTools = host.dispatchEnabled && toolRegistry && typeof toolRegistry.register === 'function'
-    ? host.tools.getToolDefinitions()
-      .map((definition) => toolRegistry.register(definition))
-      .filter((dispose) => typeof dispose === 'function')
-    : [];
+  const unregisterTools = [];
+  if (host.dispatchEnabled) {
+    if (!toolRegistry || typeof toolRegistry.register !== 'function') {
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] tool registry unavailable; restricted expert tools not registered');
+      }
+    } else {
+      try {
+        for (const definition of host.tools.getToolDefinitions()) {
+          const dispose = toolRegistry.register(definition);
+          if (typeof dispose === 'function') unregisterTools.push(dispose);
+        }
+      } catch (error) {
+        for (const dispose of unregisterTools) {
+          try { dispose(); } catch { /* best-effort rollback */ }
+        }
+        if (typeof unregisterRoute === 'function') {
+          try { unregisterRoute(); } catch { /* best-effort rollback */ }
+        }
+        await host.close().catch(() => {});
+        throw error;
+      }
+    }
+  }
 
   ctx.provide?.('forgeExperts', host);
   // Cordis runs a plain function plugin with `new` and never emits a `dispose`
