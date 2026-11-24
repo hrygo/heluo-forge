@@ -20,6 +20,7 @@ import { grantIdentity, safeMessage } from './service-helpers.mjs';
 import { createCredentialRegistry } from './credential-registry.mjs';
 import { createExtTokenStore } from './ext-token-store.mjs';
 import { createExtTokensService, createCredentialBroker } from './service-ext-tokens.mjs';
+import { createTokenExchangeService } from './service-token-exchange.mjs';
 
 /**
  * Host-side IAM session. Login is OIDC authorization-code + PKCE against
@@ -287,8 +288,37 @@ export function createIamService(rawConfig, options = {}) {
 
   const extCredentialBroker = createCredentialBroker({ extTokens, registry: credentialRegistry });
 
+  const tokenExchange = createTokenExchangeService({
+    targets: config.tokenExchangeTargets,
+    getSessionRef: () => {
+      if (!canUseExtensionCredentials() || !ctx.lastGrant) return null;
+      const accessExpiresAt = typeof ctx.lastGrant.accessExpiresAt === 'number'
+        ? ctx.lastGrant.accessExpiresAt
+        : Date.parse(ctx.lastGrant.accessExpiresAt);
+      if (!Number.isFinite(accessExpiresAt)) return null;
+      return {
+        issuer: ctx.lastGrant.issuer,
+        subject: ctx.lastGrant.subject,
+        accessExpiresAt,
+        // Bind to authEpoch, sessionEpoch, and the persisted grant's
+        // sessionInstanceId so a re-login adopted from another Host invalidates
+        // old handles, while in-session token refresh keeps the same binding.
+        epoch: `${authEpoch}:${sessionEpoch}:${ctx.lastGrant.sessionInstanceId ?? ''}`,
+      };
+    },
+    resolveSubjectToken: () => token.resolveToken(),
+    fetchImpl,
+    now,
+    httpTimeoutMs: config.httpTimeoutMs,
+  });
+
   const service = {
     extCredentialBroker,
+    exchangeAudienceCredential: (input) => tokenExchange.exchange({
+      target: input?.target,
+      scope: input?.scope,
+    }),
+    listTokenExchangeTargets: () => tokenExchange.listTargets(),
     listExtCredentials: () => extTokens.listProjectedStatuses(),
     saveExtCredential: (input) => extTokens.saveToken(input),
     clearExtCredential: (input) => extTokens.clearToken(input),
@@ -450,6 +480,7 @@ clearGatewayCredential: gateway.clearCredential,
 
     async dispose() {
       consumptionWitness?.dispose();
+      tokenExchange.revokeAll();
       if (ctx.disposed) return;
       ctx.disposed = true;
       token.cancelRenewal('disposed');
