@@ -206,3 +206,83 @@ DSH_BIN=/path/to/dsh FORGE_EXPERTS_TARGET=web node scripts/probe/run-forge-exper
 每项结果按 `PASS`、`FAIL`、`BLOCKED`、`NOT RUN` 逐项记录并写入 `$TMPDIR/forge-experts-host-preflight-<pid>-<ts>.json`
 （临时工作区在退出时删除；不触碰真实 `DSH_HOME` 与仓库工作区，并在 `finally` 中核对工作区未变）。退出码：`0` 全部
 `PASS`，`1` 存在 `FAIL`，`2` 缺少目标启动器、发行物或前置证据（`BLOCKED` / `NOT RUN`）。
+
+## IAM 存档访问拦截（步骤 0 P0 探针）
+
+```sh
+node scripts/probe/run-store-access-p0-probe.mjs
+```
+
+驱动脚本在临时目录建**真实合成库**（`credentials.sqlite` 含 `records` 与模拟新增的
+`future_table`）、密钥目录与一份根外文件；用独立 `DSH_HOME` 从 `sdk` 模板引导 `dev`
+profile，再以临时 patch 挂载 `store-access-p0-plugin.mjs`（`DSH_BIN` 可换目标可执行
+文件，`DSH_HOST_PROBE_PROFILE` 可换 profile）。探针插件在 `tools/pre-execute` 上按
+「路径落在合成存档根内」「命令文本点名存档或 `auth token`」判定拒绝，并直接调用
+`ctx.tools.execute()` 派发内建工具，断言拒绝后工具体零执行、库内容与
+`PRAGMA data_version` 未变、根外访问不受影响。
+
+| 断言 | 含义 |
+|---|---|
+| `deny-read-store-db` / `deny-read-keyring` | `read` 指向库文件或密钥文件被拒，返回文本不含 canary |
+| `deny-write-store-file` / `deny-edit-store-file` | 写入/编辑存档被拒，附属文件未创建 |
+| `deny-bash-sqlite-select` / `deny-bash-sqlite-future-table` | `sqlite3` 查询库或新增表都被拒（按文件判定，不依赖表名） |
+| `deny-bash-sqlite-write-keeps-data` / `deny-bash-remove-store` | 改写与删除被拒，库文件、记录内容与 `data_version` 不变 |
+| `deny-auth-token-before-cli` | `sh -c '… auth token'` 被拒，包装脚本哨兵未生成 |
+| `deny-terminal-send-store` | `terminal_send` 指向不存在的会话也被前置拒绝，证明判定在会话查找之前 |
+| `run-code-coverage` | `run_code` 未注册时记为 `available: false`，不计为覆盖 |
+| `deny-registered-tool-zero-execution` | 登记工具的工具体在拒绝时零调用 |
+| `allow-read-outside-store` / `allow-bash-outside-store` | 根外读写放行，判定范围收窄在存档根 |
+| `store-unchanged-after-denials` | 全部拒绝后库行数、canary 与 `data_version` 一致 |
+
+判定轮之后，驱动还会**不装判定**跑 `read-only`、`workspace-write`、`danger-full-access`
+三种权限模式（环境轮），把合成库复制到 `$HOME/.forge-p0-sandbox-<rand>/iam-store` 后观察
+沙箱对存档目录与工作区的读/写；用 `bash` 发起是为了区分工具层策略与执行环境限制。
+注意 `bash` 在沙箱拒绝写入时 `isError` 仍为 `false`，拒绝只出现在 stderr 文本里，判定要
+按文本与文件是否创建来做，不能只看 `isError`。
+
+2026-11-24 实测（`0.2.1-rc.5`，node v24.13.0，darwin-arm64）：判定轮 15/15 通过、
+`denials=11`、退出码 0；环境轮显示写受模式约束、**读不受限**（三种模式下 `sqlite3` 都能
+读到 canary 明文）。记录见
+[docs/design/verification/iam-store-access-p0.md](../../docs/design/verification/iam-store-access-p0.md)。
+它只证明宿主事件面与拒绝的零执行，不代表企业装配下规则已挂上（P1-A…E 另行取证），
+也不证明执行环境能阻止读取存档。
+
+## `run-store-access-p1-probe.mjs`（P1：企业装配）
+
+P0 探针验证宿主事件面；P1 探针验证**真实装配**：把仓库内的 `forge-policy`、
+`forge-credentials-keychain`、`forge-iam` 复制进 profile 的 `@heluo/` 命名空间，以 `--patch`
+依次应用被测补丁，再用 overlay 让 keychain 使用同一临时目录并挂载
+`store-access-p1-plugin.mjs`（只派发真实工具，不实现判定）。
+
+```sh
+node scripts/probe/run-store-access-p1-probe.mjs --label enterprise
+node scripts/probe/run-store-access-p1-probe.mjs --label stack-engineering-first \
+  --patch packages/forge-engineering/cordis.patch.yml --patch packages/forge-enterprise/cordis.patch.yml
+node scripts/probe/run-store-access-p1-probe.mjs --label stack-enterprise-first \
+  --patch packages/forge-enterprise/cordis.patch.yml --patch packages/forge-engineering/cordis.patch.yml
+DSH_HOST_PROBE_EXPECT=closed node scripts/probe/run-store-access-p1-probe.mjs \
+  --label engineering-only --patch packages/forge-engineering/cordis.patch.yml
+DSH_HOST_PROBE_EXPECT=fingerprint node scripts/probe/run-store-access-p1-probe.mjs \
+  --label mismatch --keychain-default
+```
+
+| 断言 | 含义 |
+|---|---|
+| `assembly-policy-mounted` | policy 已挂载且 `storeDirectories()` 为两条（叠装时最多等 5 秒，等 keychain 注入回调 arm） |
+| `deny-read-store-db` / `deny-read-keyring` | `read` 指向库或密钥被拒，文本不含 canary |
+| `deny-write-store-file` / `deny-bash-sqlite-select` / `deny-bash-cat-store` / `deny-glob-store` / `deny-bash-remove-store` | 写、查询、搬运、遍历、删除存档都被拒 |
+| `deny-auth-token` / `deny-auth-token-before-cli` | 取票被拒；包装脚本哨兵未生成，证明 CLI 未启动 |
+| `allow-whoami` / `allow-read-outside` | `auth whoami` 与根外读取不被策略拒绝 |
+| `store-unchanged-after-denials` | 全部拒绝后 canary 行与 `data_version` 未变 |
+
+`--keychain-default` 让 keychain 保持平台默认目录、`HELUO_FORGE_STORE_DIRECTORY` 仍指向临时
+目录，用来制造目录错配；`DSH_HOST_PROBE_EXPECT=fingerprint` 切换为指纹兜底断言，
+`DSH_HOST_PROBE_EXPECT=closed` 断言 engineering 单装下守卫不判定（没有任何拒绝文案）。
+
+守卫不绑定规则开关（2026-11-24 裁决 C）：`forge-policy` 无条件注入 `credentials-store-location`，
+keychain 提供该服务即生效，服务始终缺席即不判定。补丁层因此不写 `rules`，五个场景都不需要
+额外开关，也不受 Cordis「config 后者整体覆盖」影响。
+
+2026-11-24 实测：企业单装 13/13、engineering→enterprise 13/13、enterprise→engineering 13/13、
+engineering 单装 4/4（closed）、目录错配 4/4（fingerprint）。
+记录见 [docs/design/verification/iam-store-access-p1.md](../../docs/design/verification/iam-store-access-p1.md)。
