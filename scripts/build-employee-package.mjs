@@ -336,6 +336,7 @@ export function buildEmployeePackage(input) {
       source: { commit: release.commit, dirty: isDirty(root) },
       host: { dshVersion: hostVersion(root) },
       packages,
+      branding: delivery.branding,
       configKeys: delivery.configKeys,
       clientSecretEmbedded: delivery.clientSecretEmbedded,
       discovery: DISCOVERY_NOT_RUN,
