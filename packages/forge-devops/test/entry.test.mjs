@@ -258,6 +258,27 @@ test('阻塞归因按固定顺序归口：读面失败 / 空状态 / 未自报�
   }
 });
 
+test('未知原因码与超长状态：归并成 CONTEXT_BLOCKED 并截断，原码仍可见', async () => {
+  const { ctx, registered } = host();
+  registerEntry(
+    ctx,
+    spyService({ ok: false, reason: 'TEAM_CUSTOM_FAIL', detail: 'x'.repeat(400) }).service,
+  );
+  const failed = await registered.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(failed.kind, 'error');
+  assert.match(failed.text, /CONTEXT_BLOCKED/u, '未知码按阻塞归并，不进不相干方向');
+  assert.match(failed.text, /TEAM_CUSTOM_FAIL/u, '原码仍可见，便于诊断');
+  assert.match(failed.text, /…/u, '超长 detail 被截断');
+  assert.ok(!/x{200,}/u.test(failed.text), '不得把 400 字符原样塞进首行');
+
+  const { ctx: ctx2, registered: reg2 } = host();
+  registerEntry(ctx2, spyService({ ok: true, status: 'bl'.repeat(60), changeId: 'ARD123456' }).service);
+  const long = await reg2.get(ENTRY_NAME).handler({ rawInput: 'ARD123456' });
+  assert.equal(long.kind, 'error');
+  assert.match(long.text, /状态 blbl[^\n]*…/u, '超长状态截断后仍单行');
+  assert.ok(!long.text.includes('bl'.repeat(41)), '状态不超过上限');
+});
+
 test('入参错误信封：只给修正变更号格式的方向，不掺配置与 dop 重试旁白', async () => {
   const { ctx, registered } = host();
   registerEntry(

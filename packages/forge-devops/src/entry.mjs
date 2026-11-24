@@ -65,6 +65,24 @@ export const ENTRY_REASONS = Object.freeze({
  */
 const CONFIG_REASONS = Object.freeze(['CONFIG_MISSING', 'CONFIG_INVALID', READ_REASONS.NO_READER]);
 
+/**
+ * 已知原因码集合：`card.reason` 只在这些码内原样透出，其余按 `CONTEXT_BLOCKED` 归并。
+ *
+ * 恢复方向是按原因码分流的；把上游任意字符串当原因码放行，会让自定义码落进
+ * "确认 dop 可用后重跑"这类不相干的方向。归并时原码仍写进裁决语，诊断不丢。
+ */
+const KNOWN_REASONS = Object.freeze([
+  ...Object.values(ENTRY_REASONS),
+  ...Object.values(READ_REASONS),
+  ...CONFIG_REASONS,
+  // dop 适配器把子进程失败统一折成这个码（见 dop-adapter.mjs 的 FAILURE_CODE）。
+  'COMMAND_FAILED',
+]);
+
+/** 裁决语里嵌入的上游字符串长度上限：控制字符已折叠，超长串再截断，别把首行撑爆。 */
+const MAX_STATUS_LENGTH = 40;
+const MAX_DETAIL_LENGTH = 120;
+
 /** 去重 key 用 NUL 拼接：正常 `field` / `reason` 取值里不会出现它，不会拼出歧义键。 */
 const UNKNOWN_KEY_SEPARATOR = '\u0000';
 
@@ -111,6 +129,12 @@ function singleLine(value) {
     .trim();
 }
 
+/** 单行化后再截断：超长上游串不把裁决语撑爆，末尾加省略号表示被截过。 */
+function clamp(value, max) {
+  const text = singleLine(value);
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
 /** 缺失项只取 `(field, reason)` 唯一对：同因多项不重复刷屏，空原因不计。 */
 function unknownsOf(result) {
   // 契约形状是 `payloadOf` 的顶层 `unknowns`；卡片内的副本不是第二真源，不再猜第二条路径。
@@ -140,21 +164,21 @@ function unknownsOf(result) {
  */
 function blockedOutcomeOf(card) {
   if (card?.ok === false) {
-    const reason =
-      typeof card.reason === 'string' && singleLine(card.reason) !== ''
-        ? singleLine(card.reason)
-        : ENTRY_REASONS.CONTEXT_BLOCKED;
+    const raw = typeof card.reason === 'string' ? singleLine(card.reason) : '';
+    // 只有已知原因码才进分流：自定义码按 CONTEXT_BLOCKED 处理，原码仍写进裁决语便于诊断。
+    const reason = KNOWN_REASONS.includes(raw) ? raw : ENTRY_REASONS.CONTEXT_BLOCKED;
+    const unknown = raw !== '' && !KNOWN_REASONS.includes(raw);
     // 入参错误根本没发起读取：别用"读取失败"描述它，否则恢复方向会往 dop 上带偏。
-    return {
-      reason,
-      headline:
-        reason === ENTRY_REASONS.MISSING_OR_INVALID
-          ? '阻塞：变更号不合法，未发起平台读取。'
-          : '阻塞：上下文读取失败，未取回可推进的变更事实。',
-    };
+    let headline = '阻塞：上下文读取失败，未取回可推进的变更事实。';
+    if (reason === ENTRY_REASONS.MISSING_OR_INVALID) {
+      headline = '阻塞：变更号不合法，未发起平台读取。';
+    } else if (unknown) {
+      headline = `阻塞：上下文读取失败（${clamp(raw, MAX_STATUS_LENGTH)}），未取回可推进的变更事实。`;
+    }
+    return { reason, headline };
   }
   // 判据走 `cardStatusOf`（只去空白），展示前再 `singleLine` 折控制字符：状态里的换行会打断多行文案。
-  const status = singleLine(cardStatusOf(card));
+  const status = clamp(cardStatusOf(card), MAX_STATUS_LENGTH);
   if (status === '') {
     return {
       reason: ENTRY_REASONS.CONTEXT_EMPTY,
@@ -197,7 +221,7 @@ function blockedText(result, changeId) {
   // 读面失败的 `detail` 是"为什么没读到"的第一手说明，保留在首行，不塞进卡片正文。
   const detail =
     result?.ok === false && typeof result?.detail === 'string' && singleLine(result.detail) !== ''
-      ? `：${singleLine(result.detail)}`
+      ? `：${clamp(result.detail, MAX_DETAIL_LENGTH)}`
       : '';
   // 恢复方向按原因并列：配置问题指配置页，变更号不可确认时提示核对号与读面回填；
   // 两条同时成立就都给（配置没通也可能伴随号对不上），都不成立才退到通用重试方向。
