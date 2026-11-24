@@ -410,11 +410,6 @@ export function apply(ctx, rawConfig = {}) {
   };
 
   /**
-   * 绑定判据在 `change-context.mjs` 的 `cardReadyFor` 里，与命令入口共用同一份：
-   * `ok` 只说明读面走完，事实是否取回看 `status` 与自报变更号（issue #342）。
-   */
-
-  /**
    * `change.read` 的归一投影（与上下文卡同一映射，不复制第二份）。
    *
    * 读成功但记录归一失败时**不抛**：`normalized=null`、`normalize_error=<原因码>`，
@@ -693,6 +688,11 @@ export function apply(ctx, rawConfig = {}) {
       // 只在读成功（envelope status=succeeded）时绑定：失败仍要能重试，不留下半绑定状态。
       // 读回记录自报的号与请求号不符时（归一阶段判 `CONTEXT_REASONS.ID_MISMATCH`）同样不绑：绑定代表"会话读到的就是这条"，
       // 信封说成功但记录是别的变更，绑上去等于把别人的变更当成本次目标。
+      //
+      // 这里的判据与 `context` / `startFromChange` 的 `cardReadyFor` **不同，且是有意为之**：
+      // 那两处拿到的是上下文卡，卡自带"就绪 + 自报号"可供 fail-closed 判定；`change.read` 是信封投影，
+      // 没有卡片状态可比，设计约定"读成功即绑定"（docs/design/plugins/forge-devops.md §5.1），
+      // 只在能确认读到的是别人的变更时收回绑定。
       if (
         action === 'change.read' &&
         result?.status === 'succeeded' &&
@@ -702,7 +702,10 @@ export function apply(ctx, rawConfig = {}) {
       }
       return result;
     },
-    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；就绪且自报号匹配才绑定变更号。 */
+    /**
+     * 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）。
+     * 绑定判据与命令入口共用 `cardReadyFor`：卡片就绪且自报号匹配才绑定（issue #342）。
+     */
     context: async (input = {}) => {
       // 目标号与 flow 共用同一实现（`requestedTargetOf`），不在这里再写一份取号规则。
       const requestedTarget = requestedTargetOf(input);
