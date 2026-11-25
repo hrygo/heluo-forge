@@ -19,7 +19,7 @@ const config = {
 };
 const input = { key: 'synthetic-new-key', deviceLabel: 'test-device' };
 
-async function setup(t, { existing = false, gatewayBaseURL, serviceConfig = config } = {}) {
+async function setup(t, { existing = false, gatewayBaseURL, serviceConfig } = {}) {
   const fixture = createAtomicGatewayFixture();
   await createGrantStore(fixture.credentials).write({
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
@@ -27,11 +27,14 @@ async function setup(t, { existing = false, gatewayBaseURL, serviceConfig = conf
     accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh', scope: 'openid',
     obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
   });
+  // The enterprise preset owns the gateway target (issue #226), so every case
+  // runs with the same address the seeded credential is bound to.
+  const baseURL = gatewayBaseURL ?? 'https://gateway.corp.example/v1';
   if (existing) seedGateway(fixture.credentials, {
     value: 'synthetic-existing-key', ownerSubject: 'synthetic-subject', enteredAt: new Date(now).toISOString(),
-    ...(gatewayBaseURL ? { baseURL: gatewayBaseURL } : {}),
+    baseURL,
   });
-  const service = createIamService(serviceConfig, {
+  const service = createIamService(serviceConfig ?? { ...config, managedModels: { baseURL } }, {
     credentials: fixture.credentials, now: () => now, ...fixture.options,
     fetch: async () => { throw new Error('unexpected network'); },
   });
@@ -131,7 +134,9 @@ test('a newer gateway generation cannot confirm an earlier committed save', asyn
   f.adapter.afterCommit = async () => {
     f.adapter.afterCommit = null;
     await createGatewayCredentialStore(f.credentials, f.options).save({
-      value: 'synthetic-later-key', ownerSubject: 'synthetic-subject', enteredAt: new Date(now).toISOString(),
+      value: 'synthetic-later-key', ownerSubject: 'synthetic-subject',
+      issuer: config.issuer, baseURL: 'https://gateway.corp.example/v1',
+      enteredAt: new Date(now).toISOString(),
     });
   };
   await assert.rejects(f.service.saveGatewayCredential(input), { code: 'IAM_GATEWAY_WRITE_UNKNOWN' });
@@ -177,7 +182,9 @@ test('a gateway replacement while the post-commit identity read waits cannot con
   await entered.promise;
   try {
     await createGatewayCredentialStore(f.credentials, f.options).save({
-      value: 'synthetic-later-key', ownerSubject: 'synthetic-subject', enteredAt: new Date(now).toISOString(),
+      value: 'synthetic-later-key', ownerSubject: 'synthetic-subject',
+      issuer: config.issuer, baseURL: 'https://gateway.corp.example/v1',
+      enteredAt: new Date(now).toISOString(),
     });
     release.resolve();
     assert.equal((await promptly(save))?.code, 'IAM_GATEWAY_WRITE_UNKNOWN');
@@ -203,7 +210,9 @@ test('a gateway saved while a clear reads storage cannot confirm an obsolete emp
   await entered.promise;
   try {
     await createGatewayCredentialStore(f.credentials, f.options).save({
-      value: 'synthetic-later-key', ownerSubject: 'synthetic-subject', enteredAt: new Date(now).toISOString(),
+      value: 'synthetic-later-key', ownerSubject: 'synthetic-subject',
+      issuer: config.issuer, baseURL: 'https://gateway.corp.example/v1',
+      enteredAt: new Date(now).toISOString(),
     });
     release.resolve();
     assert.equal((await promptly(clear))?.code, 'IAM_GATEWAY_WRITE_UNKNOWN');
@@ -339,7 +348,7 @@ for (const newerPublication of [false, true]) {
       view() { return { gatewayCredential: provider.gatewaySummary }; },
     };
     const gateway = createServiceGateway({
-      config: {}, ctx, provider,
+      config: { managedModels: { baseURL: 'https://gateway.corp.example/v1' } }, ctx, provider,
       grants: { assertGrantContext() {}, async prepareAuthentication() {}, ownerOf() { return targetStore; } },
       now: () => now, configured: true, getAuthEpoch: () => authEpoch,
       isSigningOut: () => false, bumpGeneration() {},
