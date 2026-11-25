@@ -2412,7 +2412,9 @@ window.__ModuleLoader__.load({
           ) : null,
         // 企业配置拥有目标地址时不提供改地址入口：地址由 Host 读取，
         // 界面输入既改不了真实目标，也会诱导用户以为换了地址就能继续用旧凭证。
-        gatewayUi.addressAuthoritative || gatewayUi.rebindRequired
+        // Only an authoritative address is not editable. A re-entry without an
+        // enterprise preset still needs the person to type the new address.
+        gatewayUi.addressAuthoritative
           ? h('div', { style: { ...fieldLabel } },
             h('span', { style: { fontWeight: 500, fontSize: 13 } }, '网关地址'),
             h('span', { style: { ...muted, fontFamily: 'monospace' } }, gateway.baseURL ?? view.modelAccess?.baseURL ?? '—'),
