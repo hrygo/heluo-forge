@@ -128,10 +128,14 @@ export function projectExpertResultEnvelope(rawResult) {
   const runId = isNonEmptyString(rawResult.runId) ? rawResult.runId.trim() : null;
   const runGeneration = normalizeOptionalInteger(rawResult.runGeneration);
   const resultVersion = normalizeOptionalInteger(rawResult.resultVersion);
-  // Support both top-level fields and Delegra Stage B2 nested `result` envelopes
-  // (a bare string `result` serves as both concise summary and collapsed raw output).
+  // Support both top-level fields and Delegra Stage B2 nested `result` envelopes.
+  // Cap bare-string `result` when projected into `summary` so long outputs stay collapsed in `rawResult`.
+  const SUMMARY_MAX_LENGTH = 500;
   const nestedResult = isPlainObject(rawResult.result) ? rawResult.result : null;
-  const summary = pickFirstString([rawResult.summary, nestedResult?.summary, rawResult.result], '');
+  const bareResultSummary = typeof rawResult.result === 'string'
+    ? rawResult.result.slice(0, SUMMARY_MAX_LENGTH)
+    : null;
+  const summary = pickFirstString([rawResult.summary, nestedResult?.summary, bareResultSummary], '');
   const rawOutput = pickFirstString([
     rawResult.rawResult,
     rawResult.content,

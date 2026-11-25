@@ -860,6 +860,8 @@ export function createDispatchService(ports) {
         reject(new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Pending task reconciliation timed out', { retryable: true }));
       }, ms);
     });
+    // NOTE: Promise.race bounds the HTTP wait window without cancelling an in-flight
+    // upstream by-request read (idempotent GET); timed-out IDs stay in stillPending for next pass.
     return Promise.race([promise, timeout]).finally(() => {
       if (timer) clearTimeout(timer);
     });

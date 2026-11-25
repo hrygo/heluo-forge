@@ -3,13 +3,13 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 
-import { createIamService } from '../../forge-iam/src/service.mjs';
-import { createGrantStore } from '../../forge-iam/src/store.mjs';
-import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT_TYPE } from '../../forge-iam/src/service-token-exchange.mjs';
-import { MemoryCredentials } from '../../forge-iam/test/support/memory-credentials.mjs';
-import { apply as applyPolicy } from '../../forge-policy/src/index.mjs';
-import { apply as applyExperts } from '../src/index.mjs';
-import { API_PREFIX, REQUEST_HEADER } from '../src/routes.mjs';
+import { createIamService } from '../packages/forge-iam/src/service.mjs';
+import { createGrantStore } from '../packages/forge-iam/src/store.mjs';
+import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT_TYPE } from '../packages/forge-iam/src/service-token-exchange.mjs';
+import { MemoryCredentials } from '../packages/forge-iam/test/support/memory-credentials.mjs';
+import { apply as applyPolicy } from '../packages/forge-policy/src/index.mjs';
+import { apply as applyExperts } from '../packages/forge-experts/src/index.mjs';
+import { API_PREFIX, REQUEST_HEADER } from '../packages/forge-experts/src/routes.mjs';
 
 function createMemoryStorage() {
   const domains = new Map();
