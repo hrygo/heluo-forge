@@ -15,9 +15,9 @@ const TITLE = '河洛 Forge 企业版';
 // What the user can do about each failure. The code is always shown with it,
 // and every code the modules can raise has an entry (asserted by the tests).
 const GUIDANCE = Object.freeze({
-  ASSETS_NOT_FOUND: '未找到企业资产包。请确认员工包已随应用放置，或指定它的位置后重新启动。',
-  ASSETS_INVALID: '企业资产包不完整或已被改动。请重新放置完整的员工包后重新启动。',
-  FIRST_RUN_FAILED: '企业插件初始化失败。重新启动会再试一次；仍然失败时请联系管理员并提供错误码。',
+  ASSETS_NOT_FOUND: '未找到企业资产包。请确认员工包已随应用放置，然后从托盘菜单重试。',
+  ASSETS_INVALID: '企业资产包不完整或已被改动。请重新放置完整的员工包，然后从托盘菜单重试。',
+  FIRST_RUN_FAILED: '企业插件初始化失败。回到企业网络后从托盘菜单「重试企业配置」续跑；仍然失败时请联系管理员并提供错误码。',
   FIRST_RUN_MARKER: '无法记录初始化结果。请检查应用数据目录是否可写后重新启动。',
   BAD_ARGUMENT: '应用的启动参数不完整。请重新安装应用。',
   BIND_HOST_REJECTED: '配置的监听地址不被允许。',
@@ -51,7 +51,9 @@ export function guidanceFor(code) {
  * @param {{platform: string, assetsCandidates: string[], markerPath: string, profile: string, bindHost: string,
  *   embeddedCommand: string, env: object, exec: Function, loadInstaller: Function,
  *   createRuntime: Function, spawnProfile: Function, runtimeOptions?: object, trayIcon?: string,
- *   preflight?: Function, failureStopWaitMs?: number}} options
+ *   statusPage?: string, preflight?: Function, failureStopWaitMs?: number}} options
+ *   `statusPage` is the shell's own local setup page: loaded while the first
+ *   run is pending or has failed, replaced by the workspace when it succeeds.
  *   `preflight` runs before anything else and fails the start by throwing; `failureStopWaitMs`
  *   bounds how long a failure report waits for the service to stop.
  * @returns {{outcome: Promise<{started: boolean, origin?: string, code?: string}>}}
@@ -59,7 +61,7 @@ export function guidanceFor(code) {
 export function startShell(electron, options) {
   const { app } = electron;
   const { platform, assetsCandidates, markerPath, profile, bindHost, embeddedCommand, env, exec, loadInstaller, createRuntime, spawnProfile } = options;
-  const context = { window: null, tray: null, runtime: null, quitting: false };
+  const context = { window: null, tray: null, runtime: null, quitting: false, retrying: false, pendingRetry: false, trustedOrigin: null };
 
   if (app.requestSingleInstanceLock() === false) {
     // Another copy owns the profile; starting a second web profile would collide with it.
@@ -77,30 +79,99 @@ export function startShell(electron, options) {
     void quit();
   });
 
-  async function boot() {
-    // What the app needs in order to exist at all, before anything is touched.
-    options.preflight?.();
-    assertBindHost(bindHost);
+  /** The installer-driven part: verify the package, install, record the run. */
+  async function performFirstRun() {
     // One package, one identity: the first candidate that carries a manifest.
     // Its digest decides whether the first run is done and is what the record
     // of the first run carries, so the two can never disagree.
     const current = identifyEmployeePackage({ candidates: assetsCandidates });
     // A package whose first run is done is not inspected again: the installer
     // consumed part of it. Any other package is verified whole, then installed.
-    if (firstRunNeeded({ markerPath, manifestDigest: current?.manifestDigest ?? null, profile })) {
-      const assets = locateEnterpriseAssets({ candidates: assetsCandidates });
-      // main.mjs resolves the installer through a dynamic import: await it, or
-      // the profile initializer receives a Promise instead of a function.
-      await initializeProfile({ assets, runInit: await loadInstaller(assets.installerPath), env, exec, profile, dsh: embeddedCommand });
-      if (writeFirstRunMarker(markerPath, { manifestDigest: assets.manifestDigest, profile }) === null) {
-        fail('FIRST_RUN_MARKER', 'the first-run record could not be written');
-      }
+    if (!firstRunNeeded({ markerPath, manifestDigest: current?.manifestDigest ?? null, profile })) return;
+    const assets = locateEnterpriseAssets({ candidates: assetsCandidates });
+    // main.mjs resolves the installer through a dynamic import: await it, or
+    // the profile initializer receives a Promise instead of a function.
+    await initializeProfile({ assets, runInit: await loadInstaller(assets.installerPath), env, exec, profile, dsh: embeddedCommand });
+    if (writeFirstRunMarker(markerPath, { manifestDigest: assets.manifestDigest, profile }) === null) {
+      fail('FIRST_RUN_MARKER', 'the first-run record could not be written');
     }
+  }
+
+  /** The window opens before the first run: the status page is what the user sees meanwhile. */
+  function showStatus(state, code) {
+    if (typeof options.statusPage !== 'string' || context.window === null) return;
+    const query = { state };
+    if (code !== undefined) query.code = code;
+    context.window.loadFile(options.statusPage, { query }).then(
+      () => context.window.show(),
+      () => context.window.show(),
+    );
+  }
+
+  /** Start the web profile and move the window onto it. */
+  async function startWorkspace() {
     context.runtime = createRuntime({ ...options.runtimeOptions, spawn: spawnProfile });
     const launch = await context.runtime.start();
-    createWindow(launch);
+    context.trustedOrigin = launch.origin;
     createTray();
-    return { started: true, origin: launch.origin };
+    context.window.loadURL(launch.href).then(
+      () => context.window.show(),
+      // A page that cannot be loaded means the service is gone: that is a startup failure, not a quit.
+      () => void report({ code: context.runtime.snapshot().failure?.code ?? 'EXITED' }),
+    );
+    return launch;
+  }
+
+  /** Tray-driven retry: the same idempotent first run, then the normal start. */
+  async function retryFirstRun() {
+    if (context.retrying || context.runtime !== null || context.quitting) return;
+    context.retrying = true;
+    context.pendingRetry = false;
+    createTray();
+    showStatus('initializing');
+    try {
+      await performFirstRun();
+      await startWorkspace();
+    } catch (error) {
+      const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+      context.pendingRetry = true;
+      createTray();
+      showStatus('failed', code);
+    } finally {
+      context.retrying = false;
+    }
+  }
+
+  async function boot() {
+    // What the app needs in order to exist at all, before anything is touched.
+    options.preflight?.();
+    assertBindHost(bindHost);
+    const needed = firstRunNeeded({
+      markerPath,
+      manifestDigest: identifyEmployeePackage({ candidates: assetsCandidates })?.manifestDigest ?? null,
+      profile,
+    });
+    // The interface exists from the first moment; a bare default profile must
+    // not (the official sign-in bypasses stay open until the patch is in).
+    openWindow();
+    createTray();
+    try {
+      if (needed) {
+        showStatus('initializing');
+        await performFirstRun();
+      }
+      const launch = await startWorkspace();
+      return { started: true, origin: launch.origin };
+    } catch (error) {
+      if (!needed) throw error;
+      // The enterprise setup is incomplete, not broken: the window stays on the
+      // status page and the tray offers an idempotent retry.
+      const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+      context.pendingRetry = true;
+      createTray();
+      showStatus('failed', code);
+      return { started: false, code, retryable: true };
+    }
   }
 
   async function report(error) {
@@ -130,7 +201,8 @@ export function startShell(electron, options) {
     return { started: false, code };
   }
 
-  function createWindow(launch) {
+  function openWindow() {
+    if (context.window !== null) return;
     const window = new electron.BrowserWindow({
       width: 1280,
       height: 800,
@@ -142,9 +214,11 @@ export function startShell(electron, options) {
     context.window = window;
     // Only the local web profile loads here. A link or a script that navigates
     // elsewhere, or asks for a new window, hands an http(s) address to the
-    // system browser; everything else is stopped before a loader sees it.
+    // system browser; everything else is stopped before a loader sees it. The
+    // trusted origin is set when the workspace starts; until then only the
+    // shell's own status page has been loaded, and it links nowhere.
     const guard = (target) => {
-      const action = classifyTarget(target, { origin: launch.origin });
+      const action = classifyTarget(target, { origin: context.trustedOrigin ?? undefined });
       if (action === 'external') void electron.shell.openExternal(target);
       return action;
     };
@@ -155,7 +229,7 @@ export function startShell(electron, options) {
     // A redirect comes from a server, not from something done on the user's
     // behalf: it is stopped, and nothing is opened in its place.
     window.webContents.on('will-redirect', (event, url) => {
-      if (classifyTarget(url, { origin: launch.origin }) !== 'load') event.preventDefault();
+      if (classifyTarget(url, { origin: context.trustedOrigin ?? undefined }) !== 'load') event.preventDefault();
     });
     window.webContents.setWindowOpenHandler(({ url }) => {
       guard(url);
@@ -169,22 +243,26 @@ export function startShell(electron, options) {
       event.preventDefault();
       window.hide();
     });
-    window.loadURL(launch.href).then(
-      () => window.show(),
-      // A page that cannot be loaded means the service is gone: that is a startup failure, not a quit.
-      () => void report({ code: context.runtime.snapshot().failure?.code ?? 'EXITED' }),
-    );
+    return window;
   }
 
+  /** The tray follows the shell's state: a pending setup adds the retry entry. */
   function createTray() {
+    const template = [
+      { label: '显示窗口', click: reveal },
+      ...(context.pendingRetry ? [{ label: '重试企业配置', click: () => void retryFirstRun() }] : []),
+      { label: '退出', click: () => void quit() },
+    ];
+    const menu = electron.Menu.buildFromTemplate(template);
+    if (context.tray !== null) {
+      context.tray.setContextMenu(menu);
+      return;
+    }
     if (typeof electron.Tray !== 'function' || options.trayIcon === undefined) return;
     try {
       const tray = new electron.Tray(electron.nativeImage.createFromPath(options.trayIcon));
       tray.setToolTip(TITLE);
-      tray.setContextMenu(electron.Menu.buildFromTemplate([
-        { label: '显示窗口', click: reveal },
-        { label: '退出', click: () => void quit() },
-      ]));
+      tray.setContextMenu(menu);
       tray.on('click', reveal);
       context.tray = tray;
     } catch {

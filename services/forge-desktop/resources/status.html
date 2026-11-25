@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>河洛 Forge 企业版</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #070C16; color: #FFFFFF;
+    font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  }
+  main { max-width: 560px; padding: 48px 40px; text-align: center; }
+  .mark {
+    font-size: 30px; font-weight: 700; letter-spacing: 1px;
+    background: linear-gradient(90deg, #1D4ED8, #00D2FE, #00F5FF);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .mark small { display: block; margin-top: 6px; font-size: 12px; letter-spacing: 4px; color: #94A3B8; -webkit-text-fill-color: #94A3B8; }
+  h1 { margin-top: 36px; font-size: 20px; font-weight: 600; }
+  p { margin-top: 14px; color: #94A3B8; }
+  .code {
+    display: inline-block; margin-top: 18px; padding: 4px 14px; border: 1px solid #1D4ED8;
+    border-radius: 999px; color: #00D2FE; font: 12px/1.6 ui-monospace, monospace;
+  }
+  .steps { margin: 26px auto 0; text-align: left; max-width: 420px; color: #94A3B8; }
+  .steps li { margin: 8px 0 8px 1.4em; }
+  footer { margin-top: 44px; font-size: 12px; color: #64748B; }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">河洛 Forge<small>企业版</small></div>
+  <h1 id="title">正在初始化企业配置</h1>
+  <p id="detail">首次启动需要完成企业插件安装，请稍候。</p>
+  <span class="code" id="code" hidden></span>
+  <ol class="steps" id="steps" hidden>
+    <li>确认本机已接入<b>企业网络</b>（或可解析内网域名的 VPN）</li>
+    <li>点击屏幕右上角托盘图标，选择<b>「重试企业配置」</b></li>
+    <li>仍然失败时，联系管理员并提供上方错误码</li>
+  </ol>
+  <footer>企业内部使用 · 河洛 Forge 企业版</footer>
+</main>
+<script>
+  const query = new URLSearchParams(location.search);
+  const state = query.get('state') ?? 'initializing';
+  const code = query.get('code');
+  const title = document.getElementById('title');
+  const detail = document.getElementById('detail');
+  const steps = document.getElementById('steps');
+  const codeBox = document.getElementById('code');
+  if (state === 'failed') {
+    title.textContent = '企业配置未完成';
+    detail.textContent = '初始化未能完成；应用已就绪，回到企业网络后重试即可续跑，已完成步骤不会重复。';
+    steps.hidden = false;
+    if (code) { codeBox.textContent = '错误码 ' + code; codeBox.hidden = false; }
+  }
+</script>
+</body>
+</html>

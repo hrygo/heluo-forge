@@ -75,4 +75,6 @@ test('布局契约：main.mjs 消费 layout.mjs 的导出，不内联资源路�
   assert.match(layout, /export const TRAY_ICON_PARTS/u);
   assert.match(layout, /export const BIN_DIR/u);
   assert.match(layout, /export const ASSETS_DIR/u);
+  assert.match(layout, /export const STATUS_PAGE_PARTS/u);
+  assert.match(main, /STATUS_PAGE_PARTS/u, 'main.mjs must read the setup page path from layout.mjs');
 });

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-025 |
 | 文档名称 | 河洛 Forge 企业版桌面壳详细设计 |
-| 版本 | V0.1.3 |
+| 版本 | V0.1.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -106,6 +106,8 @@ createRuntime({ spawn, findLaunchUrl, startTimeoutMs, stopGraceMs, onEvent })
 locateEnterpriseAssets({ candidates })            // 第一个通过校验的员工包目录，否则抛 ASSETS_NOT_FOUND
 firstRunNeeded({ markerPath, manifestDigest })    // 已完成且员工包未变时为 false
 initializeProfile({ assets, runInit, env, exec }) // 委托安装器；非零结论抛 FIRST_RUN_FAILED
+
+**首启未完成时的窗口语义（2026-11-25）**：需要首启或首启失败时，窗口先于运行时打开并加载壳自带的本地品牌引导页（`brand/status.html`，无 preload、无外链、不承载任何企业配置值；状态与错误码经查询串注入）。首启失败不退出应用：托盘菜单提供「重试企业配置」，重试复用同一安装器幂等续跑；成功后写入首启标记并转入正常启动（窗口改载 launch URL）。禁止以未打补丁的默认 profile 提前提供界面：官方登录旁路（O3）只有在企业补丁装载后才算关闭。
 ```
 
 ```js title="navigation：窗口边界"
@@ -164,7 +166,7 @@ stateDiagram-v2
 |---|---|---|---|
 | 未找到可用的企业资产 | 抛 `ASSETS_NOT_FOUND`，提示指定员工包 | 错误提示，无工作区 | 是 |
 | 当前员工包不完整：清单或摘要清单缺失、摘要不符、列出的路径是符号链接 | 抛 `ASSETS_INVALID`，不改用其他候选 | 错误提示，无工作区 | 是 |
-| 安装器返回非零结论 | 抛 `FIRST_RUN_FAILED`，带安装器错误码 | 错误提示，无工作区 | 是 |
+| 安装器返回非零结论 | 抛 `FIRST_RUN_FAILED`，带安装器错误码；窗口加载本地品牌引导页（状态 + 错误码 + 企业网络指引），应用驻留，托盘菜单「重试企业配置」幂等续跑（2026-11-25 负责人裁决：先开界面、页内提示、后续配置） | 引导页提示，无工作区 | 回企业网后重试 |
 | 启动超时 | 终止子进程，`START_TIMEOUT` | 错误提示 | 是 |
 | 端口被占用 | `PORT_CONFLICT` | 提示关闭占用进程或换端口 | 是 |
 | 就绪后意外退出 | `failed`，保留退出码 | 错误提示 | 是 |

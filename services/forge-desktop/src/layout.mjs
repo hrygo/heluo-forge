@@ -18,3 +18,6 @@ export const BIN_DIR = 'bin';
 
 /** Where the first-run lookup probes for an employee package, resources-relative. */
 export const ASSETS_DIR = 'enterprise-assets';
+
+/** The shell's own setup page, resources-relative: no preload, no links, no values. */
+export const STATUS_PAGE_PARTS = ['brand', 'status.html'];
