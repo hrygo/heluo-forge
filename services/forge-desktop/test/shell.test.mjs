@@ -220,7 +220,7 @@ function webProfile() {
 }
 
 /** A whole shell world: package, marker, installer, web profile and the Electron stand-in. */
-function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller } = {}) {
+function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller, diagnosticLog, now } = {}) {
   const fx = fakeElectron(electron);
   const root = temp(t);
   // `assets` reuses a package that already exists (typically one a first run consumed).
@@ -253,6 +253,8 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
     statusPage: '/brand/status.html',
     ...(preflight === undefined ? {} : { preflight }),
     failureStopWaitMs,
+    ...(diagnosticLog === undefined ? {} : { diagnosticLog }),
+    ...(now === undefined ? {} : { now }),
   });
   return { ...fx, root, pkg, processes, installs, exec, shell };
 }
@@ -267,7 +269,7 @@ test('the first run installs the package, then a window shows the local service 
   assert.equal(outcome.origin, ORIGIN);
   // The installer ran once, with the package, the profile and the embedded runtime.
   assert.equal(fx.installs.length, 1);
-  assert.deepEqual(fx.installs[0].argv, ['--release', join(fx.pkg.directory, 'enterprise-plugin'), '--profile', 'web', '--dsh', '/apps/electron', '--json']);
+  assert.deepEqual(fx.installs[0].argv, ['--release', join(fx.pkg.directory, 'enterprise-plugin'), '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--json']);
   assert.equal(fx.installs[0].exec, fx.exec);
   assert.deepEqual(JSON.parse(readFileSync(join(fx.root, 'userData', 'first-run.json'), 'utf8')), {
     schema: 'heluo-first-run/1',
@@ -391,12 +393,133 @@ test('a failed first run keeps the window on the status page with a tray retry, 
   assert.equal(window.loads.length, 0, 'no workspace address without a completed setup');
   assert.ok(window.fileLoads.length >= 2, 'initializing, then the failure state');
   assert.equal(window.fileLoads[0].query.state, 'initializing');
-  assert.deepEqual({ ...window.fileLoads.at(-1).query }, { state: 'failed', code: 'FIRST_RUN_FAILED' });
-  assert.equal(JSON.stringify(window.fileLoads).includes('/a/host/path'), false, 'the installer text is not shown');
+  // The page names the installer's code and repeats its reason: one text for every cause said nothing about which one stopped the run.
+  assert.deepEqual({ ...window.fileLoads.at(-1).query }, {
+    state: 'failed',
+    code: 'FIRST_RUN_FAILED',
+    installer: 'IAM_CLIENT_SECRET_PROVISION_FAILED',
+    reason: 'init: 调用 dsh 失败（/a/host/path）',
+    remedy: guidanceFor('FIRST_RUN_FAILED'),
+  });
   assert.equal(fx.messages.length, 0, 'no modal dialog for a retryable state');
   assert.equal(fx.log.includes('quit'), false, 'the app stays alive for the retry');
   assert.ok(fx.trays[0].menu.some((item) => item.label === '重试企业配置'));
   assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), false, 'no record without success');
+});
+
+/** An installer that stopped with a verdict of its own: code, reason, remedy, and what it printed. */
+const stoppedInstaller = async () => ({
+  code: 1,
+  lines: ['企业插件初始化', 'profile：web', '命令：dsh plugin --profile web add /packages/enterprise.tgz'],
+  warnings: ['warn: 一条警告'],
+  result: {
+    ok: false,
+    error: { code: 'IAM_DISCOVERY_FAILED', message: 'init: 读取 IAM Discovery 失败（fetch failed）：https://idp.corp.example/x', next: '确认这台机器能访问企业 IAM 后重试；密钥文件仍保留。' },
+  },
+});
+
+test('a failed first run is written to the log whole: the installer\'s code, reason, remedy, output and warnings', async (t) => {
+  const root = temp(t);
+  const log = join(root, 'userData', 'logs', 'first-run.log');
+  const at = new Date('2026-11-25T12:00:00.000Z');
+  const fx = world(t, { installer: stoppedInstaller, diagnosticLog: log, now: () => at });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED', retryable: true });
+  const entry = readFileSync(log, 'utf8');
+  assert.match(entry, /^=== 2026-11-25T12:00:00\.000Z 企业配置初始化：失败 ===$/mu);
+  assert.match(entry, /^错误码：FIRST_RUN_FAILED（安装器 IAM_DISCOVERY_FAILED）$/mu);
+  assert.match(entry, /^原因：init: 读取 IAM Discovery 失败（fetch failed）：https:\/\/idp\.corp\.example\/x$/mu);
+  assert.match(entry, /^处理：确认这台机器能访问企业 IAM 后重试；密钥文件仍保留。$/mu);
+  // The whole account, in the order it was printed: the page shows a bounded line, the log does not cut.
+  assert.match(entry, /^回显：\n  企业插件初始化\n  profile：web\n  命令：dsh plugin --profile web add \/packages\/enterprise\.tgz$/mu);
+  assert.match(entry, /^警告：\n  warn: 一条警告$/mu);
+  // The installer's remedy is shown in its own words, and the page names the log.
+  const query = { ...fx.windows[0].fileLoads.at(-1).query };
+  assert.equal(query.installer, 'IAM_DISCOVERY_FAILED');
+  assert.equal(query.remedy, '确认这台机器能访问企业 IAM 后重试；密钥文件仍保留。');
+  assert.equal(query.log, log);
+});
+
+test('a completed first run is written to the log with the installer\'s conclusion', async (t) => {
+  const root = temp(t);
+  const log = join(root, 'logs', 'first-run.log');
+  const at = new Date('2026-11-25T12:30:00.000Z');
+  const fx = world(t, {
+    diagnosticLog: log,
+    now: () => at,
+    installer: async () => ({ code: 0, lines: ['状态：已安装同版本 1.2.3-corp.1，本次不写入', '核验：L1 退出码 0'], warnings: [], result: { ok: true, status: 'already-installed' } }),
+  });
+  assert.equal((await fx.shell.outcome).started, true);
+  const entry = readFileSync(log, 'utf8');
+  assert.match(entry, /^=== 2026-11-25T12:30:00\.000Z 企业配置初始化：完成 ===\n安装器结论：already-installed（退出码 0）\n回显：\n  状态：已安装同版本 1\.2\.3-corp\.1，本次不写入\n  核验：L1 退出码 0$/mu);
+  // A workspace that started shows no failure, so the page never carries the log's path.
+  assert.equal(fx.windows[0].fileLoads.some((load) => load.query.log !== undefined), false);
+});
+
+test('a retry appends to the same log; a log that cannot be written is not a failure of the application', async (t) => {
+  const root = temp(t);
+  const log = join(root, 'logs', 'first-run.log');
+  let attempts = 0;
+  const fx = world(t, {
+    diagnosticLog: log,
+    // Stops twice with different causes, then completes.
+    installer: async () => {
+      attempts += 1;
+      if (attempts === 1) return stoppedInstaller();
+      if (attempts === 2) {
+        return { code: 1, lines: [], warnings: [], result: { ok: false, error: { code: 'PNPM_REQUIRED', message: 'init: 找不到 pnpm', next: '先安装 Node.js LTS。' } } };
+      }
+      return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } };
+    },
+  });
+  assert.equal((await fx.shell.outcome).retryable, true);
+  const [window] = fx.windows;
+  // Resolves once the interface shows what the latest attempt came to.
+  const settled = (done) => new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => { clearInterval(timer); reject(new Error('the retry never settled')); }, 5_000);
+    const timer = setInterval(() => {
+      if (!done()) return;
+      clearInterval(timer);
+      clearTimeout(deadline);
+      resolve();
+    }, 5);
+    timer.unref?.();
+    deadline.unref?.();
+  });
+  fx.trays[0].menu.find((item) => item.label === '重试企业配置').click();
+  await settled(() => window.fileLoads.at(-1)?.query.installer === 'PNPM_REQUIRED');
+  fx.trays[0].menu.find((item) => item.label === '重试企业配置').click();
+  await settled(() => window.loads.length === 1 && fx.processes.length === 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  const entries = readFileSync(log, 'utf8').split('\n=== ').filter(Boolean);
+  assert.equal(entries.length, 3, 'one entry per attempt, the failed ones and the completed one');
+  assert.match(entries[0], /企业配置初始化：失败/);
+  assert.match(entries[1], /^2026[^\n]*\n错误码：FIRST_RUN_FAILED（安装器 PNPM_REQUIRED）\n原因：init: 找不到 pnpm\n处理：先安装 Node\.js LTS。$/mu);
+  assert.match(entries[2], /企业配置初始化：完成/);
+
+  // A path that cannot be created (a file sits where the directory would be): the shell carries on regardless.
+  const blocked = join(root, 'not-a-directory');
+  writeFileSync(blocked, 'occupied');
+  const silent = world(t, { installer: stoppedInstaller, diagnosticLog: join(blocked, 'logs', 'first-run.log') });
+  assert.deepEqual(await silent.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED', retryable: true });
+  assert.equal(silent.windows[0].fileLoads.at(-1).query.reason, 'init: 读取 IAM Discovery 失败（fetch failed）：https://idp.corp.example/x');
+});
+
+test('a refused employee package and a failure that ends the application are written to the log too', async (t) => {
+  const root = temp(t);
+  const log = join(root, 'logs', 'first-run.log');
+  const tampered = world(t, { diagnosticLog: log });
+  writeFileSync(join(tampered.pkg.directory, TARBALL), 'changed');
+  assert.deepEqual(await tampered.shell.outcome, { started: false, code: 'ASSETS_INVALID', retryable: true });
+  // No installer ran: the entry is the shell's own account, with what was wrong in the package.
+  const refused = readFileSync(log, 'utf8');
+  assert.match(refused, /^=== [^\n]+ 企业配置初始化：失败 ===\n错误码：ASSETS_INVALID\n说明：the employee package is not intact\n问题：\n  .+does not match its digest$/mu);
+  assert.equal(refused.includes('安装器'), false);
+  // The page has no installer verdict to show: the shell's guidance for the code stands in.
+  assert.deepEqual({ ...tampered.windows[0].fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID', remedy: guidanceFor('ASSETS_INVALID'), log });
+
+  const fatal = world(t, { diagnosticLog: join(root, 'fatal.log'), preflight: () => { throw Object.assign(new Error('the embedded runtime entry is missing'), { code: 'EMBEDDED_RUNTIME_MISSING' }); } });
+  assert.deepEqual(await fatal.shell.outcome, { started: false, code: 'EMBEDDED_RUNTIME_MISSING' });
+  assert.match(readFileSync(join(root, 'fatal.log'), 'utf8'), /^=== [^\n]+ 应用未能启动 ===\n错误码：EMBEDDED_RUNTIME_MISSING\n说明：the embedded runtime entry is missing\n$/u);
 });
 
 test('without a package, with a broken one, or with a forbidden bind address, nothing starts', async (t) => {
@@ -405,7 +528,8 @@ test('without a package, with a broken one, or with a forbidden bind address, no
   assert.deepEqual(await tampered.shell.outcome, { started: false, code: 'ASSETS_INVALID', retryable: true });
   assert.equal(tampered.processes.length, 0);
   assert.equal(tampered.messages.length, 0, 'a retryable state is shown in the window, not a dialog');
-  assert.deepEqual({ ...tampered.windows[0].fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID' });
+  // No installer ran, so the shell's guidance for the code is what the page says to do.
+  assert.deepEqual({ ...tampered.windows[0].fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID', remedy: guidanceFor('ASSETS_INVALID') });
 
   const none = world(t, { candidates: [join(temp(t), 'absent')] });
   assert.deepEqual(await none.shell.outcome, { started: false, code: 'ASSETS_NOT_FOUND', retryable: true });

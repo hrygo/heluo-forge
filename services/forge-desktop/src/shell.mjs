@@ -1,3 +1,4 @@
+import { appendDiagnostic, failureRecord, firstRunDone, firstRunStopped, installerVerdict, statusQuery } from './diagnostic.mjs';
 import { fail } from './errors.mjs';
 import {
   firstRunNeeded,
@@ -51,17 +52,28 @@ export function guidanceFor(code) {
  * @param {{platform: string, assetsCandidates: string[], markerPath: string, profile: string, bindHost: string,
  *   embeddedCommand: string, env: object, exec: Function, loadInstaller: Function,
  *   createRuntime: Function, spawnProfile: Function, runtimeOptions?: object, trayIcon?: string,
- *   statusPage?: string, preflight?: Function, failureStopWaitMs?: number}} options
+ *   statusPage?: string, preflight?: Function, failureStopWaitMs?: number,
+ *   diagnosticLog?: string, now?: Function, scriptExec?: Function}} options
  *   `statusPage` is the shell's own local setup page: loaded while the first
  *   run is pending or has failed, replaced by the workspace when it succeeds.
  *   `preflight` runs before anything else and fails the start by throwing; `failureStopWaitMs`
  *   bounds how long a failure report waits for the service to stop.
+ *   `diagnosticLog` is the file the first run and every reported failure are
+ *   written to, and whose path the status page shows; `now` supplies the time of an entry.
+ *   `scriptExec` is the executor the installer runs the plugin's own CLI with
+ *   (the secret provisioning commands); without it the installer uses its terminal form.
  * @returns {{outcome: Promise<{started: boolean, origin?: string, code?: string}>}}
  */
 export function startShell(electron, options) {
   const { app } = electron;
   const { platform, assetsCandidates, markerPath, profile, bindHost, embeddedCommand, env, exec, loadInstaller, createRuntime, spawnProfile } = options;
   const context = { window: null, tray: null, runtime: null, quitting: false, retrying: false, pendingRetry: false, trustedOrigin: null };
+  const now = options.now ?? (() => new Date());
+
+  /** One entry in the log, when there is one; an entry that cannot be written is not a failure of the application. */
+  function record(text) {
+    return typeof options.diagnosticLog === 'string' && options.diagnosticLog !== '' ? appendDiagnostic(options.diagnosticLog, text) : false;
+  }
 
   if (app.requestSingleInstanceLock() === false) {
     // Another copy owns the profile; starting a second web profile would collide with it.
@@ -91,21 +103,35 @@ export function startShell(electron, options) {
     const assets = locateEnterpriseAssets({ candidates: assetsCandidates });
     // main.mjs resolves the installer through a dynamic import: await it, or
     // the profile initializer receives a Promise instead of a function.
-    await initializeProfile({ assets, runInit: await loadInstaller(assets.installerPath), env, exec, profile, dsh: embeddedCommand });
+    const outcome = await initializeProfile({ assets, runInit: await loadInstaller(assets.installerPath), env, exec, scriptExec: options.scriptExec, profile, dsh: embeddedCommand });
     if (writeFirstRunMarker(markerPath, { manifestDigest: assets.manifestDigest, profile }) === null) {
       fail('FIRST_RUN_MARKER', 'the first-run record could not be written');
     }
+    record(firstRunDone({ at: now(), outcome }));
   }
 
-  /** The window opens before the first run: the status page is what the user sees meanwhile. */
-  function showStatus(state, code) {
+  /** The status page with what is known about the current state; nothing else is loaded before the workspace. */
+  function showStatus(query) {
     if (typeof options.statusPage !== 'string' || context.window === null) return;
-    const query = { state };
-    if (code !== undefined) query.code = code;
     context.window.loadFile(options.statusPage, { query }).then(
       () => context.window.show(),
       () => context.window.show(),
     );
+  }
+
+  /**
+   * A failure shown on the status page: the code, and with a first run that
+   * stopped, the installer's own code, reason and remedy. The same account,
+   * whole, goes into the log.
+   *
+   * @returns {string} the code shown
+   */
+  function showFailure(error) {
+    const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+    const verdict = code === 'FIRST_RUN_FAILED' ? installerVerdict(error?.details) : null;
+    record(firstRunStopped({ at: now(), code, verdict, error }));
+    showStatus(statusQuery({ state: 'failed', code, verdict, fallback: guidanceFor(code), log: options.diagnosticLog }));
+    return code;
   }
 
   /** Start the web profile and move the window onto it. */
@@ -128,15 +154,14 @@ export function startShell(electron, options) {
     context.retrying = true;
     context.pendingRetry = false;
     createTray();
-    showStatus('initializing');
+    showStatus({ state: 'initializing' });
     try {
       await performFirstRun();
       await startWorkspace();
     } catch (error) {
-      const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
       context.pendingRetry = true;
       createTray();
-      showStatus('failed', code);
+      showFailure(error);
     } finally {
       context.retrying = false;
     }
@@ -157,7 +182,7 @@ export function startShell(electron, options) {
     createTray();
     try {
       if (needed) {
-        showStatus('initializing');
+        showStatus({ state: 'initializing' });
         await performFirstRun();
       }
       const launch = await startWorkspace();
@@ -166,16 +191,16 @@ export function startShell(electron, options) {
       if (!needed) throw error;
       // The enterprise setup is incomplete, not broken: the window stays on the
       // status page and the tray offers an idempotent retry.
-      const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
       context.pendingRetry = true;
       createTray();
-      showStatus('failed', code);
+      const code = showFailure(error);
       return { started: false, code, retryable: true };
     }
   }
 
   async function report(error) {
     const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+    record(failureRecord({ at: now(), code, message: error?.message }));
     context.quitting = true;
     // The service was asked to leave already, or it has left. The user is not
     // kept waiting on it: after `failureStopWaitMs` the failure is shown anyway.

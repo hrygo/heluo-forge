@@ -65,6 +65,31 @@ test('钉版反向：浮动范围、未知版本与运行时依赖各自被拒�
   }
 });
 
+/**
+ * dsh is started only through the shell's own entry, which hands it the bundled
+ * pnpm; and both entries come from layout.mjs. Kept pure so the mutation cases
+ * below prove each guard fails.
+ */
+export function entryProblems(main, cli, layout) {
+  const problems = [];
+  if (!/export const PNPM_ENTRY_PARTS/u.test(layout)) problems.push('layout.mjs must export PNPM_ENTRY_PARTS');
+  if (!/export const DSH_ENTRY_PARTS/u.test(layout)) problems.push('layout.mjs must export DSH_ENTRY_PARTS');
+  // The entry takes both resource paths from the layout, and runs as Node: no Electron in it.
+  if (!/\{ DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS \} from '\.\/layout\.mjs'/u.test(cli)) problems.push('embedded-cli.mjs must read both entries from layout.mjs');
+  if (/from 'electron'|import\('electron'\)/u.test(cli)) problems.push('embedded-cli.mjs runs as Node and must not import electron');
+  // main.mjs starts the entry for the profile and for the installer, never dsh's own file.
+  if (!/\{ EMBEDDED_ENTRY \} from '\.\/embedded-cli\.mjs'/u.test(main)) problems.push("main.mjs must import EMBEDDED_ENTRY from './embedded-cli.mjs'");
+  if (!/spawn\(process\.execPath, \[EMBEDDED_ENTRY, /u.test(main)) problems.push('the web profile must be started through EMBEDDED_ENTRY');
+  if (!/embeddedExec\(\{ command: process\.execPath, entry: EMBEDDED_ENTRY, env \}\)/u.test(main)) problems.push('the installer executor must start EMBEDDED_ENTRY');
+  if (/\[DSH_ENTRY,/u.test(main)) problems.push('dsh entry must not be started directly: it would look for pnpm on PATH');
+  // The entries' paths are the layout's, never spelled out here.
+  if (!/\{ ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS \} from '\.\/layout\.mjs'/u.test(main)) {
+    problems.push('main.mjs must read the resource paths from layout.mjs');
+  }
+  if (/'pnpm', 'bin'|'node_modules', '@deepseek-ai'/u.test(`${main}\n${cli}`)) problems.push('resource paths must come from layout.mjs, not be inlined');
+  return problems;
+}
+
 test('布局契约：main.mjs 消费 layout.mjs 的导出，不内联资源路径', async () => {
   const main = await readFile(join(PKG_ROOT, 'src', 'main.mjs'), 'utf8');
   assert.match(main, /from '\.\/layout\.mjs'/u);
@@ -77,4 +102,27 @@ test('布局契约：main.mjs 消费 layout.mjs 的导出，不内联资源路�
   assert.match(layout, /export const ASSETS_DIR/u);
   assert.match(layout, /export const STATUS_PAGE_PARTS/u);
   assert.match(main, /STATUS_PAGE_PARTS/u, 'main.mjs must read the setup page path from layout.mjs');
+});
+
+test('入口契约：dsh 只经壳的入口启动（随包 pnpm 由此交给 dsh），两处入口路径都取自 layout.mjs', async () => {
+  const [main, cli, layout] = await Promise.all(['main.mjs', 'embedded-cli.mjs', 'layout.mjs'].map((name) => readFile(join(PKG_ROOT, 'src', name), 'utf8')));
+  assert.deepEqual(entryProblems(main, cli, layout), []);
+});
+
+test('入口契约反向：绕过壳的入口、内联路径、入口内引用 electron 各自被拒（变异证明）', async () => {
+  const [main, cli, layout] = await Promise.all(['main.mjs', 'embedded-cli.mjs', 'layout.mjs'].map((name) => readFile(join(PKG_ROOT, 'src', name), 'utf8')));
+  const variants = [
+    [main.replace('spawn(process.execPath, [EMBEDDED_ENTRY, ', 'spawn(process.execPath, [DSH_ENTRY, '), cli, layout, /must be started through EMBEDDED_ENTRY|\[DSH_ENTRY,/],
+    [main.replace('entry: EMBEDDED_ENTRY, env', 'entry: DSH_ENTRY, env'), cli, layout, /must start EMBEDDED_ENTRY/],
+    [main.replace(', PNPM_ENTRY_PARTS', ''), cli, layout, /must read the resource paths from layout\.mjs/],
+    [main, cli.replace("import { join } from 'node:path';", "import { join } from 'node:path';\nimport { app } from 'electron';"), layout, /must not import electron/],
+    [main, cli.replace('{ DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS }', '{ DSH_ENTRY_PARTS }'), layout, /must read both entries from layout\.mjs/],
+    [main, cli.replace('join(resources, ...PNPM_ENTRY_PARTS)', "join(resources, 'pnpm', 'bin', 'pnpm.mjs')"), layout, /not be inlined/],
+    [main, cli, layout.replace('export const PNPM_ENTRY_PARTS', 'export const PACKAGE_MANAGER_PARTS'), /must export PNPM_ENTRY_PARTS/],
+  ];
+  for (const [variantMain, variantCli, variantLayout, pattern] of variants) {
+    const problems = entryProblems(variantMain, variantCli, variantLayout);
+    assert.ok(problems.length > 0, 'a mutated source must produce at least one problem');
+    assert.match(problems.join('\n'), pattern);
+  }
 });

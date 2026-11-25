@@ -5,6 +5,10 @@
     "sha256": "67da5a3c458f46cd278e0eec6ad0e3a44e99fd13087c6f11a1b362268900a52c",
     "bytes": 2201324
   },
-  "pnpm": null,
-  "notes": "dsh 制品自注册表获取并按本台账核验（版本随 .dsh-version 变更时同步更新本文件）。pnpm 与内置运行时分发包待 P2 第 4 项接入（依赖 P0 #9 探针结论）。"
+  "pnpm": {
+    "version": "11.28.5",
+    "sha256": "1ef4e447a68713656064f3f174c0f44719960a043a3fe2299169d08cf1dbf8ee",
+    "bytes": 5736887
+  },
+  "notes": "dsh 与 pnpm 制品自注册表获取并按本台账核验（dsh 版本随 .dsh-version 变更时同步更新本文件；pnpm 版本与根 package.json 的 packageManager 一致，由暂存用例断言）。Python 与 Office 库等其余内置运行时分发包待 P2 第 4 项接入（依赖 P0 #9 探针结论）。"
 }

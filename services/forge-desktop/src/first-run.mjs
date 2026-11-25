@@ -214,22 +214,48 @@ export function writeFirstRunMarker(path, { manifestDigest, profile }) {
  * client secret, the artifact record. The shell only decides that it runs, and
  * refuses to continue unless its verdict is success.
  *
- * @param {{assets: object, runInit: Function, env: object, exec: Function, profile: string, dsh: string}} input
+ * `--pnpm-from-host` tells the installer that the dsh it is given carries its
+ * own pnpm for package operations (the shell's entry hands it over), so it
+ * looks for none on PATH and installs none.
+ *
+ * The installer's whole account travels with a failure (`details`: its code,
+ * its reason and remedy, and what it printed), so the shell can show which of
+ * several causes stopped the run instead of one text for all of them.
+ *
+ * `scriptExec` is the shell's executor for the plugin's own CLI (the secret
+ * provisioning commands run it directly, not through dsh); without it the
+ * installer uses its terminal form.
+ *
+ * @param {{assets: object, runInit: Function, env: object, exec: Function, scriptExec?: Function, profile: string, dsh: string}} input
  *   `dsh` is the executable the installer is allowed to run; `exec` starts it.
+ * @returns {Promise<{code: number, lines: string[], warnings: string[], result: object}>} the installer's outcome
  */
-export async function initializeProfile({ assets, runInit, env, exec, profile, dsh }) {
+export async function initializeProfile({ assets, runInit, env, exec, scriptExec, profile, dsh }) {
   if (typeof runInit !== 'function' || typeof dsh !== 'string' || dsh === '') {
     fail('BAD_ARGUMENT', 'initializing the profile needs the installer and the embedded runtime');
   }
+  if (scriptExec !== undefined && typeof scriptExec !== 'function') {
+    fail('BAD_ARGUMENT', 'the plugin script executor is a function or nothing');
+  }
   const outcome = await runInit({
-    argv: ['--release', assets.pluginDirectory, '--profile', profile, '--dsh', dsh, '--json'],
+    argv: ['--release', assets.pluginDirectory, '--profile', profile, '--dsh', dsh, '--pnpm-from-host', '--json'],
     env,
     exec,
+    ...(scriptExec === undefined ? {} : { scriptExec }),
   });
-  const code = typeof outcome?.result?.error?.code === 'string' ? outcome.result.error.code : 'UNKNOWN';
+  const failure = outcome?.result?.error;
+  const code = typeof failure?.code === 'string' ? failure.code : 'UNKNOWN';
   if (outcome?.code !== 0 || outcome?.result?.ok !== true) {
-    // Only the installer's code is repeated: its text carries paths and host output.
-    fail('FIRST_RUN_FAILED', `the enterprise profile could not be initialized (${code})`, { code });
+    // The message repeats only the installer's code; its text is carried in the details.
+    // What the installer printed before it stopped is the record of how far the run got.
+    const printed = Array.isArray(outcome?.progress) ? outcome.progress : outcome?.lines;
+    fail('FIRST_RUN_FAILED', `the enterprise profile could not be initialized (${code})`, {
+      code,
+      reason: typeof failure?.message === 'string' ? failure.message : '',
+      next: typeof failure?.next === 'string' ? failure.next : '',
+      lines: Array.isArray(printed) ? printed : [],
+      warnings: Array.isArray(outcome?.warnings) ? outcome.warnings : [],
+    });
   }
-  return outcome.result;
+  return outcome;
 }
