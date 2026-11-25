@@ -203,6 +203,14 @@
 - 第 1、2 项（forge-brand 包、品牌资源随包）2026-11-24 已实现（issue #459）：`packages/forge-brand` 按设计六字段交付令牌校验与安全回退（对比度双底 ≥3:1、超长截断、外链与路径逃逸拒绝、缺失回退品牌默认），`apply` 经 `ctx.provide('forge-brand')` 暴露；`icon.svg` 与 `assets/wordmark-color.svg` 和品牌源文件逐字节一致并经品牌 manifest SHA-256 交叉校验（package-shape 测试）；16 项单元用例通过。`@heluo/forge-enterprise` 依赖闭包与补丁层中性行（不带 config）携带本包，品牌身份为包内默认，公版保持配置中性。宿主 token 消费面与 Logo 双端解析路径经负责人裁决留 GB 双端实测（缺接缝按 `HOST_SEAM_UNAVAILABLE` 降级，不影响装载）。
 - 第 4 项（外层品牌规范）2026-11-24 已实现（issue #459）：员工包新增 `branding/` 目录——ico/icns、8 档 PNG 与 `wordmark-color.svg` 经品牌 manifest 逐件校验后复制（与源逐字节一致），并写入 `app-identity.json` 应用标识五元组（appId `com.heluo.forge.enterprise`、升级 GUID、productName、可执行名、显示名「河洛 Forge 企业版」）；`INSTALL.md` 标题与启动器文案统一品牌呈现（Windows 启动器用 ASCII `Heluo Forge Enterprise` 规避代码页风险）。品牌套件整体缺失时降级省略 `branding/`（GB 判据：不阻塞插件级品牌化），存在但登记不符则拒绝构建。员工包清单记录品牌材料来源（manifest 版本、身份五元组与文件名）。快捷方式创建与 deb 元数据落地属 P2 壳打包（electron-builder 消费 `branding/` 与身份真源），本项交付其全部品牌材料。
 
+**P2 一期实施记录（2026-11-24，issue #463）**：
+
+- 第 1 项的工具链面：`services/forge-desktop` devDependencies 精确钉 `electron@44.7.0` 与 `electron-builder@26.0.12`（package-shape 断言拒绝 `^`/`~` 浮动与运行时依赖，含变异证明）；工作区 override 把 `@electron/node-gyp` 的 git 引用钉回 npm 发布版，`onlyBuiltDependencies` 只放行 electron 二进制下载。`src/layout.mjs` 抽出资源布局常量，main.mjs 与暂存工具共享（package-shape 断言 main.mjs 不得内联资源路径）。
+- 第 2 项的暂存面：`scripts/stage-desktop-payload.mjs` 按 `runtime-lock.json` 台账（dsh 0.2.1-rc.3 SHA-256）核验制品后以 npm 前缀安装**依赖闭包**（dsh 非自包含单文件包，裸 tgz 缺 `@deepseek-ai/dsh-app-boot` 等同版本锁定依赖），托盘图标经品牌 manifest 校验复制，员工资产按 ASSETS_DIR 暂存；`tests/stage-desktop-payload.test.mjs` 以可注入安装器离线验证布局双向契约（4 项）。
+- 第 7 项的配置面：`scripts/build-desktop-installer.mjs` 从员工包 `branding/app-identity.json` 生成 electron-builder 配置（appId/GUID/productName/可执行名/产物名逐字段来自身份真源，图标用品牌 ico/icns，NSIS x64 目标就绪）；`tests/build-desktop-installer.test.mjs` 4 项含身份篡改偏离判据。
+- 集成冒烟（mac 本机，设计 §10 集成层首次执行）：`--dir` 构建出 `heluo-forge-enterprise.app`（未签名）；真实 Electron 启动后单实例锁生效，首启经包内安装器在沙箱 DSH_HOME 建 web profile 并装入 `@heluo/forge-enterprise` 0.1.2-corp.1（安装证据 `.heluo-enterprise-install.json` 含双摘要），止步 IAM Discovery（企业内网地址不可达，设计内降级且密钥保留）；预写首启标记直启后，内嵌 dsh 以 `--profile web --host 127.0.0.1 --no-open` 运行并监听 `127.0.0.1:3080`，渲染进程 `--enable-sandbox`。过程中修正两个实际缺陷：暂存前缀目录取值（闭包安装语义）与本机环境泄漏 `ELECTRON_RUN_AS_NODE` 导致的静默 node 态。
+- 未做：NSIS windows-runner 流水线接线、离线 Win10 x64 VM 验收（第 7/8 项主体）、内置 pnpm/Node 工具链与 Python/Office 库（第 4 项，接 P0 #9 探针）、真实企业网络 IAM 登录与托盘/退出 GUI 交互取证、资产探测失败后的用户指定入口（第 3 项局部）。
+
 **口径确认（2026-11-24，项目负责人逐条确认）**：企业配置存为 `release-bundle` 环境的 Environment Secrets；配置值只存在于构建进程内存；研发扩展包以中性 tgz 按需随包；包内私版插件版本为 `<tag 版本>-corp.1`；「其余工作流一律只读」执行为禁止 `contents: write`，不扩展到现有工作流的其他写权限；品牌图标派生沿用既有实现；壳先建清单并标「可用」，清单暂不声明依赖，验证后置；首启的 `cordis.patch.yml` 写入留待 P0 第 6 项。
 
 **GB 出口判据**：`release-bundle` 统一构建通过 `pnpm check` 并完成首次推 tag 远端实测（含环境审批与 Secrets 读取） + forge-brand 双端外观覆盖实测通过（含缺失回退）+ 外层派生资产经 manifest 校验 + 安全提示 / 审批 / 审计入口未被品牌化隐藏。外层图标派生失败时仅外层材料回退中性命名，不阻塞插件级品牌化。

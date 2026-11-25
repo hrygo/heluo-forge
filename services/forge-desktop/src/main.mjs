@@ -15,6 +15,7 @@ import { pathToFileURL } from 'node:url';
 import * as electron from 'electron';
 
 import { fail } from './errors.mjs';
+import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
 import { embeddedExec, runCommand } from './process.mjs';
 import { createRuntime } from './runtime.mjs';
 import { startShell } from './shell.mjs';
@@ -22,8 +23,8 @@ import { childEnvironment, loginShellArgs, loginShellFallbackArgs, parseNulEnv, 
 
 const PROFILE = 'web';
 const BIND_HOST = '127.0.0.1';
-const DSH_ENTRY = join(process.resourcesPath, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-const TRAY_ICON = join(process.resourcesPath, 'brand', 'tray.png');
+const DSH_ENTRY = join(process.resourcesPath, ...DSH_ENTRY_PARTS);
+const TRAY_ICON = join(process.resourcesPath, ...TRAY_ICON_PARTS);
 
 /** The user's login shell, asked for its environment the way a terminal has it. */
 async function environmentForChildren() {
@@ -41,7 +42,7 @@ async function environmentForChildren() {
     else loginEnv = parseShellEnv((await ask(fallback)).stdout);
   }
   // The shell's own variables never reach a child; ELECTRON_RUN_AS_NODE is set per child.
-  return childEnvironment(process.env, loginEnv, { prepend: [join(process.resourcesPath, 'bin')] });
+  return childEnvironment(process.env, loginEnv, { prepend: [join(process.resourcesPath, BIN_DIR)] });
 }
 
 /** The web profile's process: this app's binary as Node, running the embedded dsh. */
@@ -66,7 +67,7 @@ async function main() {
   const env = await environmentForChildren();
   await startShell(electron, {
     platform: process.platform,
-    assetsCandidates: [join(process.resourcesPath, 'enterprise-assets'), join(dirname(process.execPath), 'enterprise-assets')],
+    assetsCandidates: [join(process.resourcesPath, ASSETS_DIR), join(dirname(process.execPath), ASSETS_DIR)],
     markerPath: join(electron.app.getPath('userData'), 'first-run.json'),
     profile: PROFILE,
     bindHost: BIND_HOST,

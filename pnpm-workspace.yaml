@@ -1,3 +1,12 @@
 packages:
   - packages/*
   - services/*
+
+# @electron/rebuild 引用 electron 的 node-gyp 分叉时使用 git 引用，pnpm 11 的
+# blockExoticSubdeps 默认拒绝 git 型子依赖；分叉在 npm 同名发布，钉回注册表。
+overrides:
+  '@electron/node-gyp': npm:@electron/node-gyp@10.2.0-electron.2
+
+# electron 的 postinstall 下载平台二进制；只有构建期工具需要执行安装脚本。
+onlyBuiltDependencies:
+  - electron
