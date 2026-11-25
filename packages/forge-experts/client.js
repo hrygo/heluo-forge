@@ -339,14 +339,26 @@ window.__ModuleLoader__.load({
             activeEpoch = result.body?.scopeEpoch ?? activeEpoch;
             activeVersion = result.body?.viewVersion ?? activeVersion;
             const list = Array.isArray(result.body?.candidates) ? result.body.candidates : [];
-            return list.map((item) => ({
-              id: item.expertId,
-              label: item.disambiguation ? `${item.displayName} · ${item.disambiguation}` : `${item.displayName} (${item.expertId})`,
-              description: item.responsibility ?? '',
-              expertId: item.expertId,
-              scopeEpoch: item.scopeEpoch,
-              viewVersion: item.viewVersion,
-            }));
+            const nameCounts = Object.create(null);
+            for (const item of list) {
+              if (typeof item?.displayName === 'string') {
+                nameCounts[item.displayName] = (nameCounts[item.displayName] ?? 0) + 1;
+              }
+            }
+            return list.map((item) => {
+              const duplicateName = typeof item?.displayName === 'string' && nameCounts[item.displayName] > 1;
+              const suffix = item.disambiguation
+                ? item.disambiguation
+                : (duplicateName ? (item.responsibility || item.expertId) : '');
+              return {
+                id: item.expertId,
+                label: suffix ? `${item.displayName} · ${suffix}` : item.displayName,
+                description: item.responsibility ?? '',
+                expertId: item.expertId,
+                scopeEpoch: item.scopeEpoch,
+                viewVersion: item.viewVersion,
+              };
+            });
           },
           onPick(picked) {
             if (!picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion) {
@@ -356,9 +368,18 @@ window.__ModuleLoader__.load({
           },
         };
 
+        const pendingDrafts = new Map();
+        let draftRecoveryListener = null;
+
         if (enableSelectionBinding) {
           // 生产 @ 选择绑定：仅在用户显式点选且未失效时向 Host 申请单次 selectionToken；
           // 任何失效、撤权或网络异常均保留草稿并给出明确提示，不静默发送（#245 / #246）。
+          sourceSpec.onDraftRecovery = (listener) => {
+            draftRecoveryListener = typeof listener === 'function' ? listener : null;
+            return () => {
+              if (draftRecoveryListener === listener) draftRecoveryListener = null;
+            };
+          };
           sourceSpec.prepareSubmit = async ({ picked, sessionId, taskText, draftVersion, reuseRefs = [] } = {}) => {
             const draft = { taskText: typeof taskText === 'string' ? taskText : '', draftVersion: draftVersion ?? null, reuseRefs: Array.isArray(reuseRefs) ? [...reuseRefs] : [] };
             if (!picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion || !picked.expertId) {
@@ -389,6 +410,9 @@ window.__ModuleLoader__.load({
                   notice: resultNotice(result),
                 };
               }
+              if (typeof sessionId === 'string' && sessionId.trim()) {
+                pendingDrafts.set(sessionId.trim(), draft);
+              }
               return {
                 ok: true,
                 selectionToken: result.body.selectionToken,
@@ -411,18 +435,42 @@ window.__ModuleLoader__.load({
         }
 
         unregister = triggers.registerSource(sourceSpec);
+        return { pendingDrafts, getRecoveryListener: () => draftRecoveryListener };
       };
 
-      registerGroup();
+      let activeHooks = registerGroup();
       const closeStream = openEventStream(
         (payload) => {
           if (payload.type === 'ready') {
-            registerGroup();
+            activeHooks = registerGroup() ?? activeHooks;
+            return;
+          }
+          if (payload.type === 'turn-finalized' && enableSelectionBinding && payload.preserveDraft === true) {
+            const sessionKey = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
+            const recoveredDraft = sessionKey ? (activeHooks?.pendingDrafts?.get(sessionKey) ?? null) : null;
+            if (sessionKey) activeHooks?.pendingDrafts?.delete(sessionKey);
+            const notice = typeof payload.notice === 'string' && payload.notice
+              ? payload.notice
+              : (ERROR_NOTICE[payload.code] ?? ERROR_NOTICE.EXPERT_SELECTION_INVALID);
+            const listener = activeHooks?.getRecoveryListener?.();
+            if (typeof listener === 'function') {
+              try {
+                listener({
+                  sessionId: sessionKey || null,
+                  expertId: payload.expertId ?? null,
+                  status: payload.status ?? 'failed',
+                  code: payload.code ?? null,
+                  preserveDraft: true,
+                  draft: recoveredDraft,
+                  notice,
+                });
+              } catch { /* best effort */ }
+            }
             return;
           }
           if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {
             dropGroup();
-            registerGroup();
+            activeHooks = registerGroup();
           }
         },
         () => {
@@ -433,6 +481,7 @@ window.__ModuleLoader__.load({
 
       return () => {
         closeStream();
+        activeHooks?.pendingDrafts?.clear();
         dropGroup();
       };
     }
