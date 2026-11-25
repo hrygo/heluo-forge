@@ -235,3 +235,187 @@ test('FIX-09: assembly prefers the provider path and falls back to direct regist
   assert.ok(direct[0].content.length > 0);
   viaDirect.dispose();
 });
+
+function customPack(clauses) {
+  const root = mkdtempSync(join(tmpdir(), 'forge-engineering-conflict-'));
+  mkdirSync(join(root, 'clauses'), { recursive: true });
+  const indexed = clauses.map((clause, index) => {
+    const bodyFile = `clauses/c-${index}.md`;
+    writeFileSync(join(root, bodyFile), clause.bodyText ?? `# ${clause.id}\nBODY:${clause.id}\n`);
+    const { bodyText: _bodyText, ...rest } = clause;
+    return {
+      title: clause.title ?? clause.id,
+      level: clause.level ?? 'hard',
+      status: clause.status ?? 'active',
+      owner: clause.owner ?? 'platform',
+      summary: clause.summary ?? `summary:${clause.id}`,
+      appliesTo: clause.appliesTo ?? [{ system: 'devops' }],
+      ...rest,
+      body: bodyFile,
+    };
+  });
+  writeFileSync(join(root, 'clauses.json'), JSON.stringify({ version: 1, clauses: indexed }));
+  return { root };
+}
+
+test('issue #344: case-normalized skill name conflicts fail before registration with zero registrations', () => {
+  const { root } = customPack([
+    { id: 'Clause-A', bodyText: '# Clause-A\nBODY-UPPER\n' },
+    { id: 'clause-a', bodyText: '# clause-a\nBODY-LOWER\n' },
+  ]);
+  const systems = [{ name: 'devops' }];
+  const selection = selectClauses({ pack: loadClausePack({ root }), systems });
+  const expected = (error) => {
+    assert.ok(error instanceof EnterpriseSkillError);
+    assert.equal(error.code, 'ENTERPRISE_SKILL_NAME_CONFLICT');
+    assert.match(error.message, /enterprise-clause-a/u);
+    assert.match(error.message, /Clause-A/u);
+    assert.match(error.message, /clause-a/u);
+    assert.deepEqual(error.details, {
+      conflicts: [{ name: 'enterprise-clause-a', clauses: ['Clause-A', 'clause-a'] }],
+    });
+    return true;
+  };
+
+  let providerCalls = 0;
+  const providerCtx = { skills: { registerProvider: () => ((providerCalls += 1), () => {}) } };
+  assert.throws(() => registerEnterpriseSkillsViaProvider(providerCtx, { selection }), expected);
+  assert.equal(providerCalls, 0, 'provider path must register nothing on conflict');
+  assert.throws(() => assembleEnterpriseSkills(providerCtx, { root, systems }), expected);
+  assert.equal(providerCalls, 0, 'assembly via provider must register nothing on conflict');
+
+  let directCalls = 0;
+  const directCtx = { skills: { register: () => ((directCalls += 1), () => {}) } };
+  assert.throws(() => registerEnterpriseSkills(directCtx, { selection }), expected);
+  assert.equal(directCalls, 0, 'direct registration must register nothing on conflict');
+  assert.throws(() => assembleEnterpriseSkills(directCtx, { root, systems }), expected);
+  assert.equal(directCalls, 0, 'assembly via direct fallback must register nothing on conflict');
+});
+
+test('issue #344: punctuation and mixed-case conflicts list all colliding clause ids with zero partial registration', () => {
+  const { root } = customPack([
+    { id: 'ok-1' },
+    { id: 'A_1' },
+    { id: 'A.1' },
+    { id: 'A-1' },
+    { id: 'Foo Bar' },
+    { id: 'foo/bar' },
+  ]);
+  const selection = selectClauses({ pack: loadClausePack({ root }), systems: [{ name: 'devops' }] });
+  const expected = (prefix) => (error) => {
+    assert.ok(error instanceof EnterpriseSkillError);
+    assert.equal(error.code, 'ENTERPRISE_SKILL_NAME_CONFLICT');
+    assert.deepEqual(error.details, {
+      conflicts: [
+        { name: `${prefix}-a-1`, clauses: ['A_1', 'A.1', 'A-1'] },
+        { name: `${prefix}-foo-bar`, clauses: ['Foo Bar', 'foo/bar'] },
+      ],
+    });
+    for (const id of ['A_1', 'A.1', 'A-1', 'Foo Bar', 'foo/bar']) {
+      assert.equal(error.message.includes(id), true, `diagnostic should list ${id}`);
+    }
+    return true;
+  };
+
+  let providerCalls = 0;
+  assert.throws(
+    () => registerEnterpriseSkillsViaProvider({ skills: { registerProvider: () => ((providerCalls += 1), () => {}) } }, { selection, namePrefix: 'ent' }),
+    expected('ent'),
+  );
+  assert.equal(providerCalls, 0);
+
+  let directCalls = 0;
+  assert.throws(
+    () => registerEnterpriseSkills({ skills: { register: () => ((directCalls += 1), () => {}) } }, { selection, namePrefix: 'ent' }),
+    expected('ent'),
+  );
+  assert.equal(directCalls, 0, 'earlier non-conflicting clauses must not be partially registered');
+});
+
+test('issue #344: non-registered advice, expired, or not-applicable clauses do not trigger false conflicts', async () => {
+  const { root } = customPack([
+    { id: 'Clause-A', level: 'hard', status: 'active', appliesTo: [{ system: 'devops' }], bodyText: '# Active Hard\nONLY-HARD\n' },
+    { id: 'clause_a', level: 'advice', status: 'active', appliesTo: [{ system: 'devops' }] },
+    { id: 'clause.a', level: 'hard', status: 'expired', appliesTo: [{ system: 'devops' }] },
+    { id: 'clause a', level: 'hard', status: 'active', appliesTo: [{ system: 'gitee' }] },
+  ]);
+  const systems = [{ name: 'devops' }];
+
+  let factory;
+  const viaProvider = assembleEnterpriseSkills(
+    { skills: { registerProvider: (make) => ((factory = make), () => {}) } },
+    { root, systems },
+  );
+  assert.deepEqual(viaProvider.registered, [{ id: 'Clause-A', name: 'enterprise-clause-a' }]);
+  const provider = factory();
+  const list = await provider.list();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].locator.clause, 'Clause-A');
+  assert.match((await provider.get(list[0])).content, /ONLY-HARD/u);
+  viaProvider.dispose();
+
+  const direct = [];
+  const viaDirect = assembleEnterpriseSkills(
+    { skills: { register: (skill) => (direct.push(skill), () => {}) } },
+    { root, systems },
+  );
+  assert.deepEqual(viaDirect.registered, [{ id: 'Clause-A', name: 'enterprise-clause-a' }]);
+  assert.equal(direct.length, 1);
+  assert.match(direct[0].content, /ONLY-HARD/u);
+  viaDirect.dispose();
+});
+
+test('issue #344: without conflicts, registered list, discovered candidates, and lazy bodies point to the same clause', async () => {
+  const { root } = customPack([
+    { id: 'foo', bodyText: '# foo\nBODY-FOO\n' },
+    { id: 'enterprise-foo', bodyText: '# enterprise-foo\nBODY-ENTERPRISE-FOO\n' },
+    { id: 'Alpha-2', bodyText: '# Alpha-2\nBODY-ALPHA-2\n' },
+  ]);
+  const systems = [{ name: 'devops' }];
+
+  let factory;
+  const viaProvider = assembleEnterpriseSkills(
+    { skills: { registerProvider: (make) => ((factory = make), () => {}) } },
+    { root, systems },
+  );
+  assert.deepEqual(viaProvider.registered, [
+    { id: 'foo', name: 'enterprise-foo' },
+    { id: 'enterprise-foo', name: 'enterprise-enterprise-foo' },
+    { id: 'Alpha-2', name: 'enterprise-alpha-2' },
+  ]);
+  const provider = factory();
+  const list = await provider.list();
+  assert.equal(list.length, 3);
+  for (let index = 0; index < list.length; index += 1) {
+    const candidate = list[index];
+    const reg = viaProvider.registered[index];
+    assert.equal(candidate.name, reg.name);
+    assert.deepEqual(candidate.locator, { clause: reg.id });
+    const byCandidate = await provider.get(candidate);
+    const byName = await provider.get(reg.name);
+    assert.equal(byCandidate.name, reg.name);
+    assert.deepEqual(byCandidate.locator, { clause: reg.id });
+    assert.equal(byCandidate.content, viaProvider.bodyFor(reg.id));
+    assert.equal(byName.content, viaProvider.bodyFor(reg.id));
+  }
+  assert.match((await provider.get(list[1])).content, /BODY-ENTERPRISE-FOO/u);
+  assert.equal(
+    await provider.get({ name: 'enterprise-foo', locator: { clause: 'enterprise-foo' } }),
+    undefined,
+    'mismatched candidate name and locator must not return a wrong clause',
+  );
+  viaProvider.dispose();
+
+  const direct = [];
+  const viaDirect = assembleEnterpriseSkills(
+    { skills: { register: (skill) => (direct.push(skill), () => {}) } },
+    { root, systems },
+  );
+  assert.deepEqual(viaDirect.registered, viaProvider.registered);
+  assert.equal(direct.length, 3);
+  for (let index = 0; index < direct.length; index += 1) {
+    assert.equal(direct[index].name, viaDirect.registered[index].name);
+    assert.equal(direct[index].content, viaDirect.bodyFor(viaDirect.registered[index].id));
+  }
+  viaDirect.dispose();
+});
