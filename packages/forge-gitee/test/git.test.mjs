@@ -654,6 +654,29 @@ test('静态：gitee-git.mjs 不直接起进程，也不依赖 CLI 出口实现'
 
 /* ------------------------------------------------------------ 离线端到端 */
 
+test('评审 OID 解析区分歧义、读取故障与目录回落', async () => {
+  const oid = 'a'.repeat(40);
+  const calls = [];
+  let result;
+  const adapter = createGiteeGitAdapter({
+    cwd: '/workspace/default',
+    runner: { async runGit(request) { calls.push(request); return result; } },
+  });
+  for (const [output, reason] of [
+    [{ exitCode: 0, stdout: `${oid}\n${'a'.repeat(7)}${'b'.repeat(33)}` }, GIT_REASONS.INVALID_ARGUMENT],
+    [{ exitCode: 1, stdout: '' }, GIT_REASONS.COMMAND_FAILED],
+    [{ exitCode: null, timedOut: true }, GIT_REASONS.COMMAND_TIMEOUT],
+    [{ exitCode: 0, stdout: oid, truncated: true }, GIT_REASONS.INVALID_OUTPUT],
+    [{ exitCode: 0, stdout: null }, GIT_REASONS.INVALID_OUTPUT],
+  ]) {
+    result = output;
+    await assert.rejects(adapter.resolveCommit('aaaaaaa', '  '), { name: 'GiteeGitError', reason });
+    assert.equal(calls.at(-1).cwd, '/workspace/default');
+  }
+  await assert.rejects(adapter.resolveCommit('aaaaaaa', '/workspace/review'), { reason: GIT_REASONS.INVALID_OUTPUT });
+  assert.equal(calls.at(-1).cwd, '/workspace/review');
+});
+
 test('评审 OID 只接受唯一的实际提交对象', { skip: !GIT_AVAILABLE }, async () => {
   const work = mkdtempSync(join(tmpdir(), 'forge-gitee-review-oid-'));
   const git = (...args) => execFileSync(GIT_BIN, ['-C', work, ...args], {

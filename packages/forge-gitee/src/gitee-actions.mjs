@@ -344,12 +344,7 @@ function execFields(exec) {
  * @param {object} spec `{ tool, action, target, objectType, title, confirm, command, params, readback }`
  * @returns {Promise<object>} 动作信封
  */
-async function executeWrite(service, spec) {
-  const session = service.session();
-  const { tool, action, target, objectType, title, confirm, command, params, readback } = spec;
-  const key = idempotencyKey({ change: spec.change, action, objectType, target, title });
-
-  // 台账先看：命中的两种结果都不该再碰门禁与子进程。
+function lookupWrite(session, { tool, action, target }, key) {
   const prior = session.lookup(key);
   if (prior !== undefined) {
     if (prior.status === 'done') {
@@ -383,6 +378,20 @@ async function executeWrite(service, spec) {
       });
     }
   }
+  return undefined;
+}
+
+async function executeWrite(service, spec) {
+  const session = service.session();
+  const { tool, action, target, objectType, confirm } = spec;
+  const keyFor = (title) => idempotencyKey({ change: spec.change, action, objectType, target, title });
+  let key;
+  if (spec.prepareTitle === undefined) {
+    key = keyFor(spec.title);
+    const prior = lookupWrite(session, spec, key);
+    if (prior !== undefined) return prior;
+  }
+  let reused;
 
   let verdict;
   try {
@@ -406,7 +415,14 @@ async function executeWrite(service, spec) {
           ...(text(spec.params?.head) === '' ? {} : { head: spec.params.head }),
           ...(text(spec.params?.base) === '' ? {} : { base: spec.params.base }),
         },
-        run: async () => runWrite(service, spec),
+        run: async () => {
+          if (spec.prepareTitle === undefined) return runWrite(service, spec);
+          const prepared = await spec.prepareTitle();
+          if (prepared.status !== undefined) return prepared;
+          key = keyFor(prepared.title);
+          reused = lookupWrite(session, spec, key);
+          return reused ?? runWrite(service, { ...spec, title: prepared.title });
+        },
       },
     });
   } catch (error) {
@@ -429,7 +445,7 @@ async function executeWrite(service, spec) {
       : (text(verdict?.status) === 'denied' ? 'denied' : 'failed');
     const promoted = status === 'unknown' && text(verdict?.status) !== 'unknown';
     // 有副作用痕迹的失败升格 `unknown` 并写台账：下次不许重放。
-    if (status === 'unknown') {
+    if (status === 'unknown' && key !== undefined) {
       session.record({ key, status: 'unknown', action, target, evidence: undefined });
     }
     return actionResult({
@@ -447,8 +463,9 @@ async function executeWrite(service, spec) {
   }
 
   const produced = isPlainObject(verdict.value) ? verdict.value : null;
+  if (reused !== undefined && produced === reused) return reused;
   if (produced === null || !ACTION_STATUSES.includes(text(produced.status))) {
-    session.record({ key, status: 'unknown', action, target, evidence: undefined });
+    if (key !== undefined) session.record({ key, status: 'unknown', action, target, evidence: undefined });
     return actionResult({
       tool,
       action,
@@ -465,7 +482,7 @@ async function executeWrite(service, spec) {
 
   // 台账登记放在这里（门禁裁决之后、唯一一处）：`done` 可复用，`unknown` 阻断重放，
   // `failed`（确定未生效）不写台账，于是"重试"永远不会被自己的失败记录挡住。
-  if (produced.status === 'done' || produced.status === 'unknown') {
+  if (key !== undefined && (produced.status === 'done' || produced.status === 'unknown')) {
     session.record({
       key,
       status: produced.status,
@@ -894,19 +911,9 @@ export function publishReview() {
         });
       }
 
-      let commit;
-      try {
-        commit = await service.git().resolveCommit(revision, await resolveCwd(exec));
-        if (!/^[0-9a-f]{40}$/u.test(commit) || !commit.startsWith(revision)) throw new Error('无效提交对象');
-      } catch {
-        return denyInput(spec, ACTION_REASONS.INVALID_ARGUMENT, '无法在本地仓库唯一解析 commit；请确认对象存在且为提交，并提供完整 OID', {
-          target: shape.target,
-        });
-      }
-
       // 页脚必须让 `review-ai-source` 这类硬规则"看得见"两件事：这条评审是 AI 产出的，
       // 以及它针对哪个版本。写成 `[AI] provider=…` 时规则判不出来，真实评审会一律被拒。
-      const footer = `\n\n---\n> AI 生成：provider=gitee · PR 版本：${commit.slice(0, 7)} · 变更 ${change.changeId} · 人工结论不在此处代写`;
+      const footer = `\n\n---\n> AI 生成：provider=gitee · PR 版本：${revision.slice(0, 7)} · 变更 ${change.changeId} · 人工结论不在此处代写`;
       return executeWrite(service, {
         ...spec,
         ...execFields(exec),
@@ -915,7 +922,23 @@ export function publishReview() {
         change: change.changeId,
         target: shape.target,
         objectType: GITEE_OBJECT_TYPES.REVIEW,
-        title: `${change.changeId}@${commit}`,
+        prepareTitle: async () => {
+          const cwd = await resolveCwd(exec);
+          let commit;
+          try {
+            commit = await service.git().resolveCommit(revision, cwd);
+          } catch (error) {
+            if (error?.name !== 'GiteeGitError') throw error;
+            if (error.reason === 'GIT_INVALID_ARGUMENT') {
+              return denyInput(spec, ACTION_REASONS.INVALID_ARGUMENT, '无法在本地仓库唯一解析 commit；请确认对象存在且为提交，并提供完整 OID', { target: shape.target });
+            }
+            return { status: 'failed', reason: error.reason, rule: 'git-commit-resolution-failed', detail: error.message };
+          }
+          if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/u.test(commit) || !commit.startsWith(revision)) {
+            throw new TypeError('Git 提交解析端口返回无效 OID');
+          }
+          return { title: `${change.changeId}@${commit}` };
+        },
         confirm: input.confirm,
         command: 'prComment',
         params: { target: shape.ref, body: `${body.body}${footer}` },
@@ -1367,7 +1390,7 @@ export function writeToolDefinitions(service, resolveCwd) {
         properties: {
           target: { type: 'string', description: '目标 PR：owner/name#12 或 owner/name!12' },
           changeId: PARAMETERS.changeId,
-          commit: { type: 'string', description: '被审查的提交 sha（7..40 位十六进制）' },
+          commit: { type: 'string', description: '被审查、且能在本地仓库唯一解析的提交 sha（7..40 位十六进制）' },
           body: PARAMETERS.body,
           confirm: PARAMETERS.confirm,
         },
