@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { checkRepo } from '../scripts/lib/repo-rules.mjs';
-import { auditTarball, binIsExecutable, npmExecutable, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, binIsExecutable, npmExecutable, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
 import { buildValidRepo } from './check-repo.test.mjs';
 
 function write(root, path, content) {
@@ -323,7 +323,25 @@ test('bin executability on Windows answers from the git index, not NTFS', () => 
     assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus }), true, 'index 100755 counts as executable');
     const six = (dir, target) => '100644 packages/forge-sample/src/cli.mjs';
     assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus: six }), false, 'index 100644 stays a problem');
-    assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus: () => null }), false, 'no git answer is a problem');
+    assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus: () => null }), undefined, 'no git answer is unknown: the tarball audit owns the invariant there');
+  });
+});
+
+test('release audit cannot misjudge a Windows stage outside any git repository', () => {
+  withFixture((root) => {
+    // buildBundle stages the release copy under the OS temp tree: no git index
+    // answers there, and NTFS cannot hold the bit. The audit must not
+    // manufacture a violation; the packed tarball mode stays the invariant.
+    const stage = join(root, 'release', 'package');
+    write(root, 'release/package/src/index.mjs', 'export const ok = true;\n');
+    write(root, 'release/package/src/cli.mjs', '#!/usr/bin/env node\n');
+    write(root, 'release/package/README.md', '# forge-sample\n\n状态：可用\n');
+    write(root, 'release/package/package.json', manifest({ bin: { 'forge-sample': './src/cli.mjs' } }));
+    const unknown = auditReleaseClosure(stage, { platform: 'win32' });
+    assert.equal(unknown.some((error) => error.includes('must be executable')), false, unknown.join('\n'));
+    // A git answer of 100644 is still a real violation: the win32 path stays armed.
+    const denied = auditReleaseClosure(stage, { platform: 'win32', gitStatus: () => '100644 packages/forge-sample/src/cli.mjs' });
+    assert.ok(denied.some((error) => error.includes('must be executable')), denied.join('\n'));
   });
 });
 

@@ -156,11 +156,18 @@ function checkFileList(label, base, pkg, errors) {
  * Executability of a bin entry as git recorded it. NTFS cannot hold the
  * executable bit, so a Windows checkout answers from the index instead of the
  * filesystem: the bit the registry tarball is built from is the index's.
+ *
+ * The answer is three-valued. `undefined` means this directory can hold no
+ * answer on this platform — a Windows checkout outside any git repository,
+ * such as the staged release copy under the OS temp tree. The packed tarball's
+ * own mode (auditTarball) is the enforced invariant there, so an unknown
+ * answer is not a violation.
  */
 export function binIsExecutable(base, target, { platform = process.platform, gitStatus } = {}) {
   if (platform === 'win32') {
     const status = typeof gitStatus === 'function' ? gitStatus(base, target) : gitIndexStatus(base, target);
-    return /^100755 /u.test(status ?? '');
+    if (status == null) return undefined;
+    return /^100755 /u.test(status);
   }
   return (statSync(join(base, target)).mode & 0o100) !== 0;
 }
@@ -173,7 +180,7 @@ function gitIndexStatus(base, target) {
   }
 }
 
-function checkEntryPoints(label, base, pkg, errors) {
+function checkEntryPoints(label, base, pkg, errors, { platform, gitStatus } = {}) {
   const requireTarget = (value, where) => {
     if (typeof value !== 'string') return;
     if (value.includes('*')) {
@@ -189,7 +196,10 @@ function checkEntryPoints(label, base, pkg, errors) {
     requireTarget(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
       const full = join(base, target);
-      if (existsSync(full) && !binIsExecutable(base, target)) {
+      // Only a definite `false` is a violation. `undefined` means the platform
+      // cannot answer for this directory (win32 outside git); the tarball audit
+      // enforces the packed mode, which is what the terminal actually runs.
+      if (existsSync(full) && binIsExecutable(base, target, { platform, gitStatus }) === false) {
         errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
       }
     }
@@ -413,7 +423,7 @@ export function auditTarball({ label, manifest, packed }) {
 }
 
 /** Inspect the actual unpacked release, not names in the source workspace. */
-export function auditReleaseClosure(base, { allowInstalledBinLinks = false } = {}) {
+export function auditReleaseClosure(base, { allowInstalledBinLinks = false, platform, gitStatus } = {}) {
   const errors = [];
   const seen = new Set();
   const rootModules = join(base, 'node_modules');
@@ -427,7 +437,7 @@ export function auditReleaseClosure(base, { allowInstalledBinLinks = false } = {
       if (pkg.scripts?.[lifecycle] !== undefined) errors.push(`bundle: release ${pkg.name} has install-time script ${lifecycle}`);
     }
     checkFileList(`release ${pkg.name}`, dir, pkg, errors);
-    checkEntryPoints(`release ${pkg.name}`, dir, pkg, errors);
+    checkEntryPoints(`release ${pkg.name}`, dir, pkg, errors, { platform, gitStatus });
     const bundled = new Set(pkg.bundledDependencies ?? []);
     errors.push(...peerDependencyErrors(pkg.name, pkg, { prefix: 'bundle: release ' }));
     for (const [name, spec] of Object.entries(pkg.dependencies ?? {})) {
