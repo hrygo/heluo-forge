@@ -128,6 +128,19 @@ export function mkdirp(path) {
   mkdirSync(path, { recursive: true });
 }
 
+/**
+ * File name of a runner-filesystem path, whichever separator the runner used.
+ *
+ * `basename()` answers for the current platform only: a POSIX `basename()`
+ * does not split a Windows path's backslashes, and extracting with
+ * `lastIndexOf('/')` on a Windows path returns the whole absolute path as the
+ * "name". Split on both separators so artifact names are correct everywhere.
+ */
+export function baseNameOf(path) {
+  if (typeof path !== 'string' || path === '') throw new Error('release: path must be a non-empty string');
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+}
+
 /** Write then rename in the same directory: a crash leaves the old bytes, never half a file. */
 export function atomicWrite(path, bytes) {
   mkdirp(dirname(path));
