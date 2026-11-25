@@ -1121,3 +1121,20 @@ test('the rebind banner names the actual reason (issue #226 review)', async t =>
     assert.match(panel.text(panel.render()), pattern, reason);
   }
 });
+
+test('an enterprise preset keeps the first configuration address read-only (issue #226 review)', async t => {
+  // `unconfigured` used to omit the address ownership, so a fresh install under
+  // an enterprise preset rendered an editable address box that the Host then
+  // rejected. The panel must show the preset as fixed text from the start.
+  const fresh = {
+    ...view,
+    gatewayCredential: { state: 'unconfigured', matchesAccount: false, addressAuthoritative: true, baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: { configured: true, state: 'ready', models: [] },
+  };
+  const panel = await mountPanel(async () => Response.json(fresh));
+  t.after(() => panel.close());
+  const rendered = nodes(panel.render());
+  assert.equal(rendered.filter(node => node?.props?.['aria-label'] === '网关地址').length, 0, 'no editable address when the enterprise owns it');
+  assert.match(panel.text(panel.render()), /gateway\.corp\.example/u);
+  assert.match(panel.text(panel.render()), /由企业配置统一下发，此处不可修改/u);
+});
