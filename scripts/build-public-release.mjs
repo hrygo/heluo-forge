@@ -23,7 +23,7 @@ import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
 import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf, patchLayerProblems, requiredRowsForEntry } from './lib/private-bundle.mjs';
-import { scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
+import { baseNameOf, scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -213,7 +213,10 @@ export function buildPublicRelease(input) {
   try {
     const bundleDirectory = join(staging, 'artifact');
     const built = buildBundle({ root, entry: input.entry, destination: bundleDirectory });
-    const tarballName = built.tarball.slice(built.tarball.lastIndexOf('/') + 1);
+    // Windows runners join with backslashes; extracting the name must survive
+    // either separator or the whole absolute path becomes the "name" and the
+    // rename below joins it into a nonexistent destination.
+    const tarballName = baseNameOf(built.tarball);
     const tarballPath = join(staging, tarballName);
     renameSync(built.tarball, tarballPath);
     const entries = readBundleEntries(tarballPath, { withContent: true });

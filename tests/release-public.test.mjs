@@ -15,9 +15,21 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
-import { sha256 } from '../scripts/lib/release-support.mjs';
+import { baseNameOf, sha256 } from '../scripts/lib/release-support.mjs';
 import { buildPublicRelease } from '../scripts/build-public-release.mjs';
 import { createReleaseTree, ENTRY, MEMBER, put } from './fixtures/release-tree.mjs';
+
+test('the artifact name survives a runner that joins with backslashes', () => {
+  // buildPublicRelease renames the built tarball out of its artifact directory
+  // by name. On a Windows runner join() emits backslashes, and extracting the
+  // name with `lastIndexOf('/')` returns the whole absolute path as the "name",
+  // which then joins into a nonsense destination and fails the rename. The
+  // extraction must split on whichever separator the runner used.
+  assert.equal(baseNameOf('D:\\a\\_temp\\artifact\\heluo-forge-enterprise-0.1.0.tgz'), 'heluo-forge-enterprise-0.1.0.tgz', 'backslash-joined path yields the file name');
+  assert.equal(baseNameOf('/tmp/forge-bundle-artifact-1/heluo-forge-enterprise-0.1.0.tgz'), 'heluo-forge-enterprise-0.1.0.tgz', 'slash-joined path yields the file name');
+  assert.equal(baseNameOf('plain.tgz'), 'plain.tgz');
+  assert.throws(() => baseNameOf(''), /must be a non-empty string/u);
+});
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOOL_ROOT = REPO;

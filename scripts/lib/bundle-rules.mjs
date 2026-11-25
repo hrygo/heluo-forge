@@ -174,7 +174,11 @@ export function binIsExecutable(base, target, { platform = process.platform, git
 
 function gitIndexStatus(base, target) {
   try {
-    return execFileSync('git', ['ls-files', '-s', '--', target], { cwd: base, encoding: 'utf8' }).trim();
+    // The probe is expected to run outside any git repository (the staged
+    // release copy under the OS temp tree); git's "fatal: not a repository"
+    // would be printed as step noise even though the miss is the answer, so
+    // stderr is discarded on purpose.
+    return execFileSync('git', ['ls-files', '-s', '--', target], { cwd: base, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return null;
   }
