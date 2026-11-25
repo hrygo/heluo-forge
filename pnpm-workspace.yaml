@@ -8,5 +8,9 @@ overrides:
   '@electron/node-gyp': npm:@electron/node-gyp@10.2.0-electron.2
 
 # electron 的 postinstall 下载平台二进制；只有构建期工具需要执行安装脚本。
+# electron-winstaller（Squirrel.Windows 工具，随 electron-builder 进树）的脚本
+# 显式声明忽略：NSIS 目标用不到它，pnpm 在 CI 会把未声明的被忽略脚本当错误。
 onlyBuiltDependencies:
   - electron
+ignoredBuiltDependencies:
+  - electron-winstaller
