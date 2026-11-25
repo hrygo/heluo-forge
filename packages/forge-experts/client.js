@@ -99,6 +99,15 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
+    async function postSelectionPrepare(payload) {
+      const response = await fetch(`${API_BASE}/selections`, {
+        method: 'POST',
+        headers: REQUEST_HEADERS,
+        body: JSON.stringify(payload),
+      });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
     function openEventStream(onMessage, onError) {
       if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return () => {};
       const source = new window.EventSource(`${API_BASE}/events`);
@@ -294,8 +303,8 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // §6 出口（管理包默认只注册设置页；仅在 Stage 3A-2 隔离预览下挂载 @ 候选组与失效注销）
-    function mountIsolatedMentionsSource(ctx) {
+    // §6 出口（管理包默认只注册设置页；隔离预览仅挂载候选组，dispatchEnabled 开放生产 @ 选择绑定与草稿保护）
+    function mountMentionsSource(ctx, { enableSelectionBinding }) {
       const triggers = typeof ctx.get === 'function' ? ctx.get('inputTriggers') : ctx.inputTriggers;
       if (!triggers || typeof triggers.registerSource !== 'function') return () => {};
 
@@ -318,7 +327,7 @@ window.__ModuleLoader__.load({
       const registerGroup = () => {
         if (unregister) return;
         const mountedGen = ++generation;
-        unregister = triggers.registerSource({
+        const sourceSpec = {
           id: 'forge-experts-mentions',
           trigger: '@',
           label: '专家智能体',
@@ -332,7 +341,7 @@ window.__ModuleLoader__.load({
             const list = Array.isArray(result.body?.candidates) ? result.body.candidates : [];
             return list.map((item) => ({
               id: item.expertId,
-              label: item.disambiguation ? `${item.displayName} · ${item.disambiguation}` : item.displayName,
+              label: item.disambiguation ? `${item.displayName} · ${item.disambiguation}` : `${item.displayName} (${item.expertId})`,
               description: item.responsibility ?? '',
               expertId: item.expertId,
               scopeEpoch: item.scopeEpoch,
@@ -345,7 +354,63 @@ window.__ModuleLoader__.load({
             }
             return { accepted: true, expertId: picked.expertId, scopeEpoch: picked.scopeEpoch, viewVersion: picked.viewVersion };
           },
-        });
+        };
+
+        if (enableSelectionBinding) {
+          // 生产 @ 选择绑定：仅在用户显式点选且未失效时向 Host 申请单次 selectionToken；
+          // 任何失效、撤权或网络异常均保留草稿并给出明确提示，不静默发送（#245 / #246）。
+          sourceSpec.prepareSubmit = async ({ picked, sessionId, taskText, draftVersion, reuseRefs = [] } = {}) => {
+            const draft = { taskText: typeof taskText === 'string' ? taskText : '', draftVersion: draftVersion ?? null, reuseRefs: Array.isArray(reuseRefs) ? [...reuseRefs] : [] };
+            if (!picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion || !picked.expertId) {
+              return {
+                ok: false,
+                code: 'EXPERT_SELECTION_INVALID',
+                preserveDraft: true,
+                draft,
+                notice: ERROR_NOTICE.EXPERT_SELECTION_INVALID,
+              };
+            }
+            try {
+              const result = await postSelectionPrepare({
+                expertId: picked.expertId,
+                sessionId,
+                scopeEpoch: picked.scopeEpoch,
+                viewVersion: picked.viewVersion,
+                taskText: draft.taskText,
+                ...(Number.isInteger(draft.draftVersion) ? { draftVersion: draft.draftVersion } : {}),
+                ...(draft.reuseRefs.length > 0 ? { reuseRefs: draft.reuseRefs } : {}),
+              });
+              if (!result.ok || !result.body?.selectionToken) {
+                return {
+                  ok: false,
+                  code: resultCode(result),
+                  preserveDraft: true,
+                  draft,
+                  notice: resultNotice(result),
+                };
+              }
+              return {
+                ok: true,
+                selectionToken: result.body.selectionToken,
+                expertId: result.body.expertId,
+                sessionId: result.body.sessionId,
+                draftDigest: result.body.draftDigest,
+                expiresAt: result.body.expiresAt,
+                preserveDraft: false,
+              };
+            } catch {
+              return {
+                ok: false,
+                code: 'EXPERT_DIRECTORY_UNAVAILABLE',
+                preserveDraft: true,
+                draft,
+                notice: ERROR_NOTICE.EXPERT_DIRECTORY_UNAVAILABLE,
+              };
+            }
+          };
+        }
+
+        unregister = triggers.registerSource(sourceSpec);
       };
 
       registerGroup();
@@ -372,6 +437,14 @@ window.__ModuleLoader__.load({
       };
     }
 
+    function mountIsolatedMentionsSource(ctx) {
+      return mountMentionsSource(ctx, { enableSelectionBinding: false });
+    }
+
+    function mountProductionMentionsSource(ctx) {
+      return mountMentionsSource(ctx, { enableSelectionBinding: true });
+    }
+
     return {
       inject: ['slots'],
       apply(ctx, options = {}) {
@@ -387,6 +460,8 @@ window.__ModuleLoader__.load({
         }
         if (options?.isolatedMentionsPreview === true) {
           disposers.push(mountIsolatedMentionsSource(ctx));
+        } else if (options?.dispatchEnabled === true) {
+          disposers.push(mountProductionMentionsSource(ctx));
         }
         // Cordis collects cleanup through `ctx.effect`; it never emits a
         // `dispose` event, so registering one leaks every slot subscription.

@@ -1,7 +1,7 @@
 /**
  * Pure Cordis assembly point for @heluo/forge-experts (P2 / P3 / P8).
  * Holds zero mutable business state; connects scope, catalog, preferences,
- * mentions, selection, dispatch, tool, delegra-client, and routes via explicit ports.
+ * mentions, selection, dispatch, prestep, tool, delegra-client, and routes via explicit ports.
  */
 import { createScopeManager } from './scope.mjs';
 import { createCatalogService } from './catalog.mjs';
@@ -9,6 +9,7 @@ import { createPreferencesStore, PreferencePutBodySchema } from './preferences.m
 import { createMentionsService } from './mentions.mjs';
 import { createSelectionService } from './selection.mjs';
 import { createDispatchService } from './dispatch.mjs';
+import { createPreStepGuard } from './prestep.mjs';
 import { createExpertToolBridge } from './tool.mjs';
 import { API_PREFIX, createExpertsRoutes } from './routes.mjs';
 import { createDelegraClient } from './delegra-client.mjs';
@@ -183,6 +184,14 @@ export function createExpertsHost(ports) {
   });
   routesRef = routes;
 
+  const prestep = createPreStepGuard({
+    isDispatchEnabled: () => dispatchEnabled,
+    resolveScope: () => scope.resolveForRequest(),
+    inspectSelection: (params) => selection.inspect(params),
+    discardSelection: (token) => selection.discard(token),
+    maxActiveTurns: ports.maxActiveTurns,
+  });
+
   const tools = createExpertToolBridge({
     isDispatchEnabled: () => dispatchEnabled,
     ...dispatchPorts,
@@ -199,6 +208,7 @@ export function createExpertsHost(ports) {
     },
     close: async () => {
       routes.closeAllStreams();
+      prestep.clear();
       selection.clear();
       await dispatch.close();
       await preferences.close();
@@ -210,6 +220,7 @@ export function createExpertsHost(ports) {
     mentions,
     selection,
     dispatch,
+    prestep,
     tools,
     routes,
     delegraClient: ports.delegraClient ?? null,
@@ -375,11 +386,30 @@ export async function apply(ctx, config = {}) {
     }
   }
 
+  const agentHooks = readService(ctx, 'agentHooks');
+  let unregisterPreStep = null;
+  if (host.dispatchEnabled && agentHooks && typeof agentHooks.registerPreStep === 'function') {
+    try {
+      const dispose = agentHooks.registerPreStep(host.prestep);
+      if (typeof dispose === 'function') unregisterPreStep = dispose;
+    } catch (error) {
+      for (const dispose of unregisterTools) {
+        try { dispose(); } catch { /* best-effort rollback */ }
+      }
+      if (typeof unregisterRoute === 'function') {
+        try { unregisterRoute(); } catch { /* best-effort rollback */ }
+      }
+      await host.close().catch(() => {});
+      throw error;
+    }
+  }
+
   ctx.provide?.('forgeExperts', host);
   // Cordis runs a plain function plugin with `new` and never emits a `dispose`
   // event, so cleanup must be registered as an effect or the route, the SSE
-  // streams, tool registrations and the domain handle leak for the life of the Host.
+  // streams, tool registrations, pre-step guard and the domain handle leak for the life of the Host.
   ctx.effect?.(() => async () => {
+    if (typeof unregisterPreStep === 'function') unregisterPreStep();
     for (const dispose of unregisterTools) dispose();
     if (typeof unregisterRoute === 'function') unregisterRoute();
     await host.close();

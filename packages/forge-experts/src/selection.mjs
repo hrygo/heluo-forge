@@ -268,18 +268,22 @@ export function createSelectionService(ports) {
     });
   }
 
-  function consume({ selectionToken, scope, scopeEpoch, sessionId, taskText, draftVersion = null, reuseRefs = [] }) {
+  function verifyEntry({ selectionToken, scope, scopeEpoch, sessionId, taskText, draftVersion = null, reuseRefs = [] }, { consumeEntry }) {
     if (!isNonEmptyString(selectionToken)) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'selectionToken is required');
     }
-    const entry = pending.get(selectionToken.trim());
+    const key = selectionToken.trim();
+    const entry = pending.get(key);
     if (!entry) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Selection token is missing, expired, or already consumed');
     }
-    // Single-use: remove immediately so replay or duplicate submit cannot reuse it.
-    pending.delete(selectionToken.trim());
+    if (consumeEntry) {
+      // Single-use: remove immediately so replay or duplicate submit cannot reuse it.
+      pending.delete(key);
+    }
 
     if (now() >= entry.expiresAt) {
+      pending.delete(key);
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Selection token has expired; re-select expert');
     }
     if (
@@ -290,17 +294,21 @@ export function createSelectionService(ports) {
       || entry.scope.issuer !== scope.issuer
       || entry.scope.subject !== scope.subject
     ) {
+      pending.delete(key);
       throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Selection token does not match active employee scope');
     }
     if (entry.sessionId !== String(sessionId ?? '').trim()) {
+      pending.delete(key);
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Selection token does not belong to current session');
     }
     if ((entry.draftVersion ?? null) !== (draftVersion ?? null)) {
+      pending.delete(key);
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Draft version changed after selection; re-confirm expert');
     }
 
     const normalizedRefs = normalizeReuseRefs(reuseRefs);
     if (!normalizedRefs) {
+      pending.delete(key);
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'Invalid reuseRefs');
     }
     const currentDigest = computeDraftDigest({
@@ -311,15 +319,31 @@ export function createSelectionService(ports) {
       reuseRefs: normalizedRefs,
     });
     if (currentDigest !== entry.draftDigest) {
+      pending.delete(key);
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Task draft changed after expert selection; re-confirm before sending');
     }
 
     return entry;
   }
 
+  function inspect(params) {
+    return verifyEntry(params, { consumeEntry: false });
+  }
+
+  function consume(params) {
+    return verifyEntry(params, { consumeEntry: true });
+  }
+
+  function discard(selectionToken) {
+    if (!isNonEmptyString(selectionToken)) return;
+    pending.delete(selectionToken.trim());
+  }
+
   return Object.freeze({
     prepare,
+    inspect,
     consume,
+    discard,
     invalidateScope,
     invalidateExpert,
     invalidateSession,
