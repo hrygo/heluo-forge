@@ -188,6 +188,26 @@ test('getResult projects #247 synthesis envelope with fail-closed authorized fil
     readOnly: true,
     message: DEFAULT_WAITING_USER_NOTICE,
   });
+
+  // Delegra Stage B2 returns summary/rawResult nested under `result` rather than top-level.
+  const nestedDelegra = projectExpertResultEnvelope({
+    taskId: 'task-204',
+    runId: 'run-10',
+    runGeneration: 1,
+    resultVersion: 2,
+    status: 'completed',
+    result: {
+      summary: 'Q4 营收同比增长 18%',
+      rawResult: 'Full Delegra ledger breakdown...',
+    },
+    sources: [{ id: 's1', authorized: true }],
+    artifacts: [{ id: 'a1', label: 'q4.pdf', authorized: true }],
+  });
+  assert.equal(nestedDelegra.summary, 'Q4 营收同比增长 18%');
+  assert.equal(nestedDelegra.rawResult, 'Full Delegra ledger breakdown...');
+  assert.equal(nestedDelegra.rawResultCollapsed, true);
+  assert.equal(nestedDelegra.sources.length, 1);
+  assert.equal(nestedDelegra.artifacts.length, 1);
 });
 
 test('null/undefined downstream responses map to EXPERT_TASK_NOT_FOUND (404) while malformed non-object payloads remain EXPERT_INTERNAL_ERROR (500)', async () => {

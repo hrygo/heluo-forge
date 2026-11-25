@@ -121,10 +121,21 @@ export function projectExpertResultEnvelope(rawResult) {
   const runId = isNonEmptyString(rawResult.runId) ? rawResult.runId.trim() : null;
   const runGeneration = normalizeOptionalInteger(rawResult.runGeneration);
   const resultVersion = normalizeOptionalInteger(rawResult.resultVersion);
-  const summary = typeof rawResult.summary === 'string' ? rawResult.summary : '';
+  const nestedResult = isPlainObject(rawResult.result) ? rawResult.result : null;
+  const summary = typeof rawResult.summary === 'string'
+    ? rawResult.summary
+    : (typeof nestedResult?.summary === 'string'
+      ? nestedResult.summary
+      : (typeof rawResult.result === 'string' ? rawResult.result : ''));
   const rawOutput = typeof rawResult.rawResult === 'string'
     ? rawResult.rawResult
-    : (typeof rawResult.content === 'string' ? rawResult.content : null);
+    : (typeof rawResult.content === 'string'
+      ? rawResult.content
+      : (typeof nestedResult?.rawResult === 'string'
+        ? nestedResult.rawResult
+        : (typeof nestedResult?.content === 'string'
+          ? nestedResult.content
+          : (typeof rawResult.result === 'string' ? rawResult.result : null))));
 
   const waitingUserNotice = status === 'waiting_user'
     ? Object.freeze({

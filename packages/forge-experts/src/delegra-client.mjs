@@ -131,7 +131,10 @@ function mapUpstreamError(status, body, { transportUnknownOn5xx = false } = {}) 
 
 function buildUrl(baseUrl, path, query) {
   const cleanBase = baseUrl.replace(/\/+$/u, '');
-  const url = new URL(`${cleanBase}${path}`);
+  const effectivePath = cleanBase.endsWith(EMPLOYEE_API_PREFIX) && path.startsWith(`${EMPLOYEE_API_PREFIX}/`)
+    ? path.slice(EMPLOYEE_API_PREFIX.length)
+    : path;
+  const url = new URL(`${cleanBase}${effectivePath}`);
   if (query && typeof query === 'object') {
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined && value !== null && value !== '') {
@@ -181,9 +184,18 @@ export function createDelegraClient(options) {
   const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 15_000;
 
   async function requestJson({ method, path, query, body, orgId, expectedScope, transportUnknownOnFailure = false }) {
+    const resolvedOrgId = orgId ?? expectedScope?.orgId ?? defaultOrgId ?? undefined;
+    const cleanOrgId = isNonEmptyString(resolvedOrgId) ? resolvedOrgId.trim() : undefined;
+    const exchangeScope = cleanOrgId && /^[\x21\x23-\x5B\x5D-\x7E]+$/u.test(cleanOrgId)
+      ? `employee:experts org:${cleanOrgId}`
+      : 'employee:experts';
     let handle;
     try {
-      handle = await options.exchangeCredential({ target, orgId: orgId ?? expectedScope?.orgId ?? defaultOrgId ?? undefined });
+      handle = await options.exchangeCredential({
+        target,
+        orgId: cleanOrgId,
+        scope: exchangeScope,
+      });
     } catch (error) {
       throw mapIamExchangeError(error);
     }
