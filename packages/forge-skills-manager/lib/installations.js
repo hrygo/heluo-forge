@@ -411,6 +411,28 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
   return {
     managerPath,
     sources,
+    prepareRestoreInspection: (id) => serialize(async () => {
+      const metadata = (await listTrash()).find((item) => item.id === id);
+      if (!metadata || metadata.entries.length !== 1 || metadata.entries[0] !== metadata.name || !metadata.repository && !metadata.catalog?.length) return void 0;
+      const data = await read();
+      const installs = data.installs.filter((record) => record.trashId === id && record.id === metadata.repository?.id && record.path === metadata.repository.path);
+      const catalogs = catalogRecords(data).filter((record) => record.trashId === id && metadata.catalog?.includes(record.id));
+      if (!installs.length && !catalogs.length) return void 0;
+      const fingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, metadata.name))));
+      return () => serialize(async () => {
+        const current = await read();
+        if (!await absentTrashPath(join(trashRootPath(), id))) return void 0;
+        for (const before of installs) {
+          const record = current.installs.find((item) => item.id === before.id && item.path === before.path && item.commit === before.commit && locationKey(item) === locationKey(before));
+          if (!record?.complete || record.trashId || record.restoreFingerprint || record.uninstallFingerprint || !await matches(record, fingerprint)) return void 0;
+        }
+        for (const before of catalogs) {
+          const record = catalogRecords(current).find((item) => item.id === before.id && locationKey(item) === locationKey(before));
+          if (record?.complete !== true || record.trashId || record.restoreFingerprint || !await catalogMatches(record, fingerprint)) return void 0;
+        }
+        return { state: "succeeded", result: { id, name: metadata.name, root: metadata.root } };
+      }, false, false);
+    }, false, false),
     catalogInstallations: (ids) => serialize(async () => {
       const data = await read();
       const selected = new Set(ids);
@@ -480,6 +502,17 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
           } catch (caught) {
             if (!isExpectedOperationError(caught)) throw caught;
             if (caught.code === "error.repo.capacity") throw caught;
+            let persisted;
+            try {
+              persisted = await read();
+            } catch (verificationError) {
+              if (!isExpectedOperationError(verificationError)) throw verificationError;
+            }
+            if (persisted && !catalogRecords(persisted).some((record) => record.id === id && record.root === location.root && record.workspace === location.workspace)) {
+              data.catalogInstalls = previousCatalog;
+              intent = void 0;
+              throw Object.assign(failure("\u5B89\u88C5\u610F\u56FE\u672A\u5199\u5165\uFF0C\u6280\u80FD\u6587\u4EF6\u672A\u590D\u5236\uFF1B\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u8BD5", "error.repo.state"), { statusCode: 500 });
+            }
             throw failure("\u5B89\u88C5\u610F\u56FE\u65E0\u6CD5\u5199\u5165\uFF0C\u672A\u590D\u5236\u6280\u80FD\u6587\u4EF6", "error.repo.installState");
           }
         }

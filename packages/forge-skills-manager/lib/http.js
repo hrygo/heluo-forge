@@ -201,7 +201,7 @@ function installHttp(ctx, dependencies) {
     return runFetch(() => {
       if (operationId === null || options?.mutation === false) return task();
       const target = createHash("sha256").update(JSON.stringify([new URL(req.url).pathname, req.headers.get("x-dsh-skills-session"), canonicalBody(body)])).digest("hex");
-      return operations.runMutation(operationId, target, task);
+      return operations.runMutation(operationId, target, task, options?.inspect ? () => options.inspect(body) : void 0);
     });
   };
   const routes = [
@@ -424,7 +424,14 @@ function installHttp(ctx, dependencies) {
     {
       path: `${API_PREFIX}/trash-restore`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b, scope) => repositories.restoreTrash(String(b.id || ""), { ...scope ?? {}, registeredWorkspaces: registeredWorkspacePaths(ctx) }), { afterSuccess: afterWrite })
+      fetch: (req) => {
+        let inspect;
+        return handlePost(req, async (b, scope) => {
+          const id = String(b.id || "");
+          inspect = await repositories.prepareRestoreInspection(id);
+          return repositories.restoreTrash(id, { ...scope ?? {}, registeredWorkspaces: registeredWorkspacePaths(ctx) });
+        }, { afterSuccess: afterWrite, inspect: async () => inspect?.() });
+      }
     },
     {
       path: `${API_PREFIX}/trash-delete`,

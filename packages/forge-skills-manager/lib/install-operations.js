@@ -67,12 +67,24 @@ function createInstallOperations() {
     validate(id, kind);
     const record = owner.records.get(id);
     if (!record || record.kind !== kind) return { state: "pending" };
-    if (record.outcome.state === "pending" && record.settled && record.inspect) {
+    if (record.outcome.state === "pending" && record.settled) {
       try {
-        const result = await record.inspect();
-        if (result) {
-          record.outcome = { state: "succeeded", result };
-          record.promise = Promise.resolve(result);
+        if (kind === "install" && record.inspect) {
+          const result = await record.inspect();
+          if (result) {
+            record.outcome = { state: "succeeded", result };
+            record.promise = Promise.resolve(result);
+          }
+        } else if (kind === "mutation" && record.inspectMutation) {
+          const outcome = await record.inspectMutation();
+          if (outcome) {
+            record.outcome = outcome;
+            record.promise = Promise.resolve(outcome.state === "succeeded" ? outcome.result : outcome.result ?? {
+              ok: false,
+              code: outcome.code,
+              error: outcome.error
+            });
+          }
         }
       } catch (error) {
         if (!isExpectedOperationError(error)) throw error;
@@ -80,7 +92,7 @@ function createInstallOperations() {
     }
     return record.outcome;
   }
-  function start(id, target, task, kind, inspect) {
+  function start(id, target, task, kind, inspect, inspectMutation) {
     const requestId = id === void 0 ? randomUUID() : id;
     validate(requestId, kind);
     const previous = owner.records.get(requestId);
@@ -96,7 +108,7 @@ function createInstallOperations() {
       for (const [key, record2] of owner.records) if (record2.outcome.state !== "pending") owner.records.delete(key);
       if (owner.records.size >= 256) throw Object.assign(new Error("\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u8BF7\u5148\u6838\u5BF9\u672C\u5730\u6280\u80FD"), { code: "error.repo.installState", statusCode: 409 });
     }
-    const record = { kind, target, outcome: { state: "pending" }, settled: false, inspect, promise: Promise.resolve().then(task) };
+    const record = { kind, target, outcome: { state: "pending" }, settled: false, inspect, inspectMutation, promise: Promise.resolve().then(task) };
     owner.records.set(requestId, record);
     record.promise = record.promise.then((result) => {
       record.settled = true;
@@ -121,7 +133,7 @@ function createInstallOperations() {
     signal: lifetime.signal,
     run: (id, target, task, inspect) => start(id, target, task, "install", inspect),
     status: (id) => readStatus(id, "install"),
-    runMutation: (id, target, task) => start(id, target, task, "mutation"),
+    runMutation: (id, target, task, inspect) => start(id, target, task, "mutation", void 0, inspect),
     mutationStatus: (id) => readStatus(id, "mutation")
   };
 }

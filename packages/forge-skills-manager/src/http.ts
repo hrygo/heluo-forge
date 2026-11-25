@@ -4,7 +4,7 @@ import type { HostContext } from "./host-types.js";
 import { installationSourceKey } from "./installation-records.js";
 import type { createInstallationManager } from "./installations.js";
 import type { createNacosClient } from "./nacos.js";
-import type { createInstallOperations } from "./install-operations.js";
+import type { MutationInspection,createInstallOperations } from "./install-operations.js";
 import type { HttpLocalPort } from "./local-ports.js";
 import { isExpectedOperationError,operationRejection } from "./operation-errors.js";
 import { attachProvenance } from "./provenance.js";
@@ -175,7 +175,7 @@ const requestSignal = (req: Request) => AbortSignal.any([req.signal, operations.
   const handlePost = async (
     req: Request,
     action: (body: RequestBody, scope: { projectCwds: string[] } | null, req: Request) => Promise<unknown>,
-    options?: { maxBytes?: number; afterSuccess?: (body: RequestBody) => void; queued?: boolean; mutation?: boolean }
+    options?: { maxBytes?: number; afterSuccess?: (body: RequestBody) => void; queued?: boolean; mutation?: boolean; inspect?: (body: RequestBody) => Promise<MutationInspection | undefined> }
   ) => {
     const mutationError = validateMutationRequest(req);
     if (mutationError) {
@@ -212,7 +212,7 @@ const requestSignal = (req: Request) => AbortSignal.any([req.signal, operations.
     return runFetch(() => {
       if (operationId === null || options?.mutation === false) return task();
       const target = createHash("sha256").update(JSON.stringify([new URL(req.url).pathname, req.headers.get("x-dsh-skills-session"), canonicalBody(body)])).digest("hex");
-      return operations.runMutation(operationId, target, task);
+      return operations.runMutation(operationId, target, task, options?.inspect ? () => options.inspect!(body) : undefined);
     });
   };
 
@@ -443,7 +443,14 @@ const requestSignal = (req: Request) => AbortSignal.any([req.signal, operations.
     {
       path: `${API_PREFIX}/trash-restore`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b, scope) => repositories.restoreTrash(String(b.id || ""), { ...(scope ?? {}), registeredWorkspaces: registeredWorkspacePaths(ctx) }), { afterSuccess: afterWrite }),
+      fetch: (req) => {
+        let inspect: (() => Promise<MutationInspection | undefined>) | undefined;
+        return handlePost(req, async (b, scope) => {
+          const id = String(b.id || "");
+          inspect = await repositories.prepareRestoreInspection(id);
+          return repositories.restoreTrash(id, { ...(scope ?? {}), registeredWorkspaces: registeredWorkspacePaths(ctx) });
+        }, { afterSuccess: afterWrite, inspect: async () => inspect?.() });
+      },
     },
     {
       path: `${API_PREFIX}/trash-delete`,

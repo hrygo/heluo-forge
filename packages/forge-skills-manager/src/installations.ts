@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import { join,resolve } from "node:path";
 import type { indexRegisteredWorkspaces } from "./core.js";
 import type { InstallationPort } from "./local-ports.js";
+import type { MutationInspection } from "./install-operations.js";
 import { isExpectedOperationError } from "./operation-errors.js";
 import { createInstallationRecords,fileIndex,installationSourceKey,isRepositoryRootKey,readSkillTree,signature } from "./installation-records.js";
 import { parseGitUrl } from "./legacy-sources.js";
@@ -387,6 +388,30 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
 return {
  managerPath,
  sources,
+prepareRestoreInspection: (id: string) => serialize(async () => {
+      const metadata = (await listTrash()).find(item => item.id === id);
+      if (!metadata || metadata.entries.length !== 1 || metadata.entries[0] !== metadata.name || (!metadata.repository && !metadata.catalog?.length)) return undefined;
+      const data = await read();
+      const installs = data.installs.filter(record => record.trashId === id && record.id === metadata.repository?.id && record.path === metadata.repository.path);
+      const catalogs = catalogRecords(data).filter(record => record.trashId === id && metadata.catalog?.includes(record.id));
+      if (!installs.length && !catalogs.length) return undefined;
+      const fingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, metadata.name))));
+      // Capture the exact pre-restore identities and resource digest, including local edits.
+      // Status reads verify the recovered records and files; they never perform recovery.
+      return (): Promise<MutationInspection | undefined> => serialize(async () => {
+        const current = await read();
+        if (!await absentTrashPath(join(trashRootPath(), id))) return undefined;
+        for (const before of installs) {
+          const record = current.installs.find(item => item.id === before.id && item.path === before.path && item.commit === before.commit && locationKey(item) === locationKey(before));
+          if (!record?.complete || record.trashId || record.restoreFingerprint || record.uninstallFingerprint || !await matches(record, fingerprint)) return undefined;
+        }
+        for (const before of catalogs) {
+          const record = catalogRecords(current).find(item => item.id === before.id && locationKey(item) === locationKey(before));
+          if (record?.complete !== true || record.trashId || record.restoreFingerprint || !await catalogMatches(record, fingerprint)) return undefined;
+        }
+        return { state: "succeeded", result: { id, name: metadata.name, root: metadata.root } };
+      }, false, false);
+    }, false, false),
 catalogInstallations: (ids: string[]) => serialize(async () => {
       const data = await read();
       const selected = new Set(ids);
@@ -452,6 +477,14 @@ installCatalog: (id: string, pack: import("./types.js").UploadInput, target: { r
           catch (caught) {
             if (!isExpectedOperationError(caught)) throw caught;
             if ((caught as CodedError).code === "error.repo.capacity") throw caught;
+            let persisted: RepositoryState | undefined;
+            try { persisted = await read(); }
+            catch (verificationError) { if (!isExpectedOperationError(verificationError)) throw verificationError; }
+            if (persisted && !catalogRecords(persisted).some(record => record.id === id && record.root === location.root && record.workspace === location.workspace)) {
+              data.catalogInstalls = previousCatalog;
+              intent = undefined; // Nothing was committed, so a rollback write is unnecessary.
+              throw Object.assign(failure("安装意图未写入，技能文件未复制；恢复磁盘写入后重试", "error.repo.state"), { statusCode: 500 });
+            }
             throw failure("安装意图无法写入，未复制技能文件", "error.repo.installState");
           }
         },

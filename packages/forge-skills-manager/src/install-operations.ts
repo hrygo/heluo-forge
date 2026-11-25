@@ -5,12 +5,14 @@ import { isExpectedOperationError, operationRejection } from "./operation-errors
 export interface InstallReceipt { name: string; root: string }
 export type InstallOutcome = { state: "pending" } | { state: "succeeded"; result: InstallReceipt } | { state: "rejected"; code: string; error: string };
 export type MutationOutcome = { state: "pending" } | { state: "succeeded"; result: unknown } | { state: "rejected"; code: string; error: string; result?: unknown };
+export type MutationInspection = Exclude<MutationOutcome, { state: "pending" }>;
 interface OperationRecord {
   kind: "install" | "mutation";
   target: string;
   outcome: MutationOutcome;
   settled: boolean;
   inspect?: () => Promise<InstallReceipt | undefined>;
+  inspectMutation?: () => Promise<MutationInspection | undefined>;
   promise: Promise<unknown>;
 }
 interface OperationOwner {
@@ -70,12 +72,22 @@ export function createInstallOperations() {
     validate(id, kind);
     const record = owner.records.get(id);
     if (!record || record.kind !== kind) return { state: "pending" };
-    if (record.outcome.state === "pending" && record.settled && record.inspect) {
+    if (record.outcome.state === "pending" && record.settled) {
       try {
-        const result = await record.inspect();
-        if (result) {
-          record.outcome = { state: "succeeded", result };
-          record.promise = Promise.resolve(result);
+        if (kind === "install" && record.inspect) {
+          const result = await record.inspect();
+          if (result) {
+            record.outcome = { state: "succeeded", result };
+            record.promise = Promise.resolve(result);
+          }
+        } else if (kind === "mutation" && record.inspectMutation) {
+          const outcome = await record.inspectMutation();
+          if (outcome) {
+            record.outcome = outcome;
+            record.promise = Promise.resolve(outcome.state === "succeeded" ? outcome.result : outcome.result ?? {
+              ok: false, code: outcome.code, error: outcome.error,
+            });
+          }
         }
       } catch (error) {
         if (!isExpectedOperationError(error)) throw error;
@@ -83,7 +95,7 @@ export function createInstallOperations() {
     }
     return record.outcome;
   }
-  function start<T>(id: unknown, target: string, task: () => Promise<T>, kind: "install" | "mutation", inspect?: () => Promise<InstallReceipt | undefined>): Promise<T> {
+  function start<T>(id: unknown, target: string, task: () => Promise<T>, kind: "install" | "mutation", inspect?: () => Promise<InstallReceipt | undefined>, inspectMutation?: () => Promise<MutationInspection | undefined>): Promise<T> {
     const requestId = id === undefined ? randomUUID() : id;
     validate(requestId, kind);
     const previous = owner.records.get(requestId);
@@ -99,7 +111,7 @@ export function createInstallOperations() {
       for (const [key, record] of owner.records) if (record.outcome.state !== "pending") owner.records.delete(key);
       if (owner.records.size >= 256) throw Object.assign(new Error("操作结果尚待确认，请先核对本地技能"), { code: "error.repo.installState", statusCode: 409 });
     }
-    const record: OperationRecord = { kind, target, outcome: { state: "pending" }, settled: false, inspect, promise: Promise.resolve().then(task) };
+    const record: OperationRecord = { kind, target, outcome: { state: "pending" }, settled: false, inspect, inspectMutation, promise: Promise.resolve().then(task) };
     owner.records.set(requestId, record);
     record.promise = record.promise.then(result => {
       record.settled = true;
@@ -121,7 +133,7 @@ export function createInstallOperations() {
     bindManager, enqueue, dispose, signal: lifetime.signal,
     run: (id: unknown, target: string, task: () => Promise<InstallReceipt>, inspect?: () => Promise<InstallReceipt | undefined>) => start(id, target, task, "install", inspect),
     status: (id: unknown) => readStatus(id, "install") as Promise<InstallOutcome>,
-    runMutation: <T>(id: unknown, target: string, task: () => Promise<T>) => start(id, target, task, "mutation"),
+    runMutation: <T>(id: unknown, target: string, task: () => Promise<T>, inspect?: () => Promise<MutationInspection | undefined>) => start(id, target, task, "mutation", undefined, inspect),
     mutationStatus: (id: unknown) => readStatus(id, "mutation"),
   };
 }

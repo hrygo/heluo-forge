@@ -71,6 +71,34 @@ test('local mutation receipts preserve rejection, uncertainty and the original l
   assert.deepEqual(await operations.mutationStatus(pendingId), { state: 'pending' });
   assert.deepEqual(await operations.mutationStatus(randomUUID()), { state: 'pending' });
   assert.deepEqual(await operations.mutationStatus(id), { state: 'succeeded', result });
+
+  const inspectedId = randomUUID();
+  let durable = false;
+  await operations.runMutation(inspectedId, 'inspected-target', async () => ({ ok: false, code: 'error.repo.installState' }), async () =>
+    durable ? { state: 'succeeded', result: { ok: true, value: 'confirmed' } } : undefined);
+  assert.deepEqual(await operations.mutationStatus(inspectedId), { state: 'pending' });
+  assert.throws(() => operations.runMutation(randomUUID(), 'inspected-target', async () => 'must not run'), { code: 'error.repo.installState' });
+  durable = true;
+  assert.deepEqual(await operations.mutationStatus(inspectedId), { state: 'succeeded', result: { ok: true, value: 'confirmed' } });
+  assert.deepEqual(await operations.runMutation(inspectedId, 'inspected-target', async () => assert.fail('must replay confirmed receipt')), { ok: true, value: 'confirmed' });
+  assert.equal(await operations.runMutation(randomUUID(), 'inspected-target', async () => 'new attempt'), 'new attempt');
+});
+
+test('mutation inspection preserves uncertainty on read failure and replays a confirmed rejection', async () => {
+  const operations = createInstallOperations();
+  const id = randomUUID();
+  let failure = Object.assign(new Error('unreadable state'), { code: 'EACCES' });
+  const rejection = { state: 'rejected', code: 'error.repo.state', error: 'not committed' };
+  await operations.runMutation(id, 'inspected-rejection', async () => ({ ok: false, code: 'error.repo.installState' }), async () => {
+    if (failure) throw failure;
+    return rejection;
+  });
+  assert.deepEqual(await operations.mutationStatus(id), { state: 'pending' });
+  failure = new TypeError('inspection defect');
+  await assert.rejects(operations.mutationStatus(id), error => error === failure);
+  failure = undefined;
+  assert.deepEqual(await operations.mutationStatus(id), rejection);
+  assert.deepEqual(await operations.runMutation(id, 'inspected-rejection', () => assert.fail('must not resend')), { ok: false, code: rejection.code, error: rejection.error });
 });
 
 test('unload rejects waiting admission and hot reload waits for an already started transaction', async () => {

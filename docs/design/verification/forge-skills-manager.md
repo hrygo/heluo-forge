@@ -6,6 +6,29 @@
 
 本地技能管理与 Nacos 只读发现；开发联调在 profile 修改配置，装配本插件的正式制包必须提供地址、命名空间、只读账号与密码并写入包内配置；Nacos 专项规则集中于独立模块，预检与最终生成共用，说明随工具链交付，HTTP/HTTPS 均可，无 Nacos HTTP 开关。回执明确标记内嵌 Nacos 密码，安装器接受该限定例外；源码及中性公版无部署值，页面与错误不回显凭据。旧环境变量方式兼容开发使用，不实现 IAM 换票。凭据可由解包读取，仅内部交付；企业权限与目标平台仍待验。
 
+## 2026-11-25 PR 465 主线同步与 P2 修复
+
+PR 分支保留协作者的锁文件与版本检查收口，19 个功能提交通过 `git rebase --force-rebase origin/main` 重放到 `1ebfc5e`，并由 `post-rewrite` 重新扫描、签名。保留主线 Windows bin 执行位判据及其测试，以及研发技能装配前的名称冲突检查；不产生 merge commit。
+
+普通变更回执增加只读核验入口，接入带目录来源或历史仓库来源的回收恢复。恢复前保留原身份、位置与完整资源摘要，包含用户本地修改；管理视图正常读取完成本地恢复后，只有原来源已确认、回收目录消失且完整资源一致才确认成功、解除客户端锁。状态查询不恢复、不移动资源；来源被替换、文件变化、读取失败及未知异常不被误报为成功。首次安装意图写失败后重新只读核验持久记录，确定未落盘且未复制资源时明确拒绝并允许新请求；记录无法读取或意图已提交时继续待确认，保留恢复证据。
+
+环境为 Windows、固定 Node 24.21.0 / pnpm 11.28.5，子进程 PATH 使用同一 Node。下列证据仅覆盖本地实现、合成数据与离线检查。
+
+| 命令与执行位置 | 结果与耗时 |
+|---|---|
+| 包目录：`node scripts/build.mjs`、`node node_modules/typescript/bin/tsc --noEmit` | 构建与类型检查通过，未单独计时；最终生成物一致性及类型结果另由完整 verify 核验 |
+| 隔离未修代码副本，包目录：`node --test --test-name-pattern="partially committed\|confirmed failure to persist" test/host-mutations.test.mjs` | 同一最终回归用例 3 项均因原缺陷失败，约 1.9 秒：两类恢复始终 pending，首次意图写失败返回 pending 而非 rejected |
+| 修复后包目录：`node --test test/host-mutations.test.mjs test/install-operations.test.mjs test/nacos-installation.test.mjs` | 20 项通过，约 3.3 秒；覆盖正常 HTTP 入口、管理视图恢复、只读核对、客户端后续写入、来源替换与文件变更拒绝、意图持续写失败及新 UUID 重试、读取失败与已提交意图的保守判定、卸载及热重载 |
+| 包目录：`node --run verify` | 148 项全部通过，无失败或跳过；含 25 个生成文件一致性、类型检查及结构变异验证，测试约 94.3 秒、整体约 102.4 秒 |
+| 根目录：`node --test packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-enterprise/test/package-shape.test.mjs packages/forge-enterprise/test/reflow.test.mjs packages/forge-engineering/test/skills.test.mjs tests/bundle-install-rehearsal.test.mjs` | 35 项通过、2 项跳过，约 0.7 秒；跳过 SDK/web 完整装卸演练，本机入口未识别可执行 DSH |
+| 根目录：`pnpm check` | 约 75.6 秒后在工作区链接步骤因 Windows symlink `EPERM` 停止；随后仅在忽略的 `node_modules` 内补齐缺失目录 junction，未修改全局权限或检查器 |
+| 根目录：`node --run check` | 生成物、类型、文档、仓库结构及技能检查通过；约 34.3 秒后在制品审计停止：IAM 与企业组合的 IAM bin 在 tarball 内为 0644。未进入全库单测阶段，不记全库通过 |
+| 主线 `1ebfc5e` 隔离归档：`node scripts/check-bundle-tarballs.mjs` | 约 17.9 秒，同样仅上述两个 bin 执行位审计失败；确认该失败在相同主线基线存在，不放宽归档判据 |
+| 根目录：`node scripts/dsh-version.mjs check` | 通过，约 1.8 秒 |
+| 根目录：`node scripts/check-docs.mjs`、`node scripts/check-repo.mjs`、`git diff --check` | 文档同步后复核通过，合计约 2.8 秒 |
+
+设计和 Nacos 契约同步回执与意图失败语义，根 README 的产品受众职责保持。整体制品验收保持待定；本轮未重新运行真实 CLI/SDK 兼容、完整桌面 GUI、企业 Nacos/IAM 或国产目标平台验收，不将本地 HTTP 与客户端控制器回归当作实机证据。
+
 ## 2026-11-25 主线集成复核
 
 集成基线为 `aac6077`，18 个分支提交通过 `git rebase --force-rebase origin/main` 回放并由 `post-rewrite` 重新扫描、签名。保留主线品牌插件、图标资产、员工包品牌材料与发布上传修复；企业底座同时装配凭据、策略、IAM、品牌与技能管理五项成员，与研发套件按 id 合并为九行。Nacos 密码声明与 IAM client secret 声明保持独立，主线品牌回执未丢失。
