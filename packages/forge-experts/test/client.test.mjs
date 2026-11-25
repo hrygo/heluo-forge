@@ -212,3 +212,123 @@ test('isolated mentions preview registers @ group, validates onPick version, res
     restore();
   }
 });
+
+test('production dispatchEnabled mounts @ source with disambiguated homonymous labels, prepareSubmit binding, and draft preservation on revocation/stale pick (#245/#246)', async () => {
+  const eventSources = [];
+  const postBodies = [];
+  let nextSelectionResponse = {
+    ok: true,
+    status: 201,
+    body: {
+      selectionToken: 'sel-prod-1',
+      expertId: 'exp-fin-2',
+      sessionId: 'sess-1',
+      draftDigest: 'sha256:abc',
+      expiresAt: '2030-01-01T00:02:00.000Z',
+    },
+  };
+
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/mentions')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            scopeEpoch: 5,
+            viewVersion: 7,
+            candidates: [
+              { expertId: 'exp-fin-1', displayName: '经营分析专家', disambiguation: '华东区', responsibility: '区域报表', scopeEpoch: 5, viewVersion: 7 },
+              { expertId: 'exp-fin-2', displayName: '经营分析专家', responsibility: '集团汇总', scopeEpoch: 5, viewVersion: 7 },
+            ],
+          };
+        },
+      };
+    }
+    if (url.includes('/selections') && init?.method === 'POST') {
+      postBodies.push(JSON.parse(init.body));
+      const res = nextSelectionResponse;
+      return { ok: res.ok, status: res.status, async json() { return res.body; } };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    let registeredSpec = null;
+    const disposeCallbacks = [];
+    const ctx = {
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          registeredSpec = spec;
+          return () => { registeredSpec = null; };
+        },
+      },
+      effect(register) {
+        const d = register();
+        if (typeof d === 'function') disposeCallbacks.push(d);
+      },
+    };
+
+    exported.apply(ctx, { dispatchEnabled: true });
+    assert.ok(registeredSpec && typeof registeredSpec.prepareSubmit === 'function');
+
+    const rows = await registeredSpec.query('', { sessionId: 'sess-1' });
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].label, '经营分析专家 · 华东区');
+    assert.equal(rows[1].label, '经营分析专家 (exp-fin-2)', 'homonymous experts without disambiguation must fall back to stable expertId');
+
+    // Valid pick -> prepareSubmit returns selectionToken
+    const ok = await registeredSpec.prepareSubmit({
+      picked: rows[1],
+      sessionId: 'sess-1',
+      taskText: 'Summarize group revenue',
+      draftVersion: 4,
+      reuseRefs: ['ref-1'],
+    });
+    assert.equal(ok.ok, true);
+    assert.equal(ok.selectionToken, 'sel-prod-1');
+    assert.equal(ok.preserveDraft, false);
+    assert.equal(postBodies.length, 1);
+    assert.equal(postBodies[0].expertId, 'exp-fin-2');
+    assert.equal(postBodies[0].draftVersion, 4);
+
+    // Server revocation/conflict -> draft preserved with clear notice
+    nextSelectionResponse = {
+      ok: false,
+      status: 403,
+      body: { error: { code: 'EXPERT_CALL_FORBIDDEN', message: 'revoked' } },
+    };
+    const revoked = await registeredSpec.prepareSubmit({
+      picked: rows[1],
+      sessionId: 'sess-1',
+      taskText: 'Important unsent draft',
+      draftVersion: 5,
+    });
+    assert.equal(revoked.ok, false);
+    assert.equal(revoked.code, 'EXPERT_CALL_FORBIDDEN');
+    assert.equal(revoked.preserveDraft, true);
+    assert.equal(revoked.draft.taskText, 'Important unsent draft');
+    assert.match(revoked.notice, /查看权限/u);
+
+    // Stale pick after SSE invalidation -> rejected locally with draft preserved and zero POST
+    eventSources[0].emit({ type: 'scope-changed', scopeEpoch: 6, viewVersion: 8 });
+    const stale = await registeredSpec.prepareSubmit({
+      picked: rows[1],
+      sessionId: 'sess-1',
+      taskText: 'Draft after switch',
+      draftVersion: 6,
+    });
+    assert.equal(stale.ok, false);
+    assert.equal(stale.code, 'EXPERT_SELECTION_INVALID');
+    assert.equal(stale.preserveDraft, true);
+    assert.equal(stale.draft.taskText, 'Draft after switch');
+    assert.equal(postBodies.length, 2, 'stale pick must not issue a new POST /selections');
+
+    for (const fn of disposeCallbacks) fn();
+    assert.equal(registeredSpec, null);
+  } finally {
+    restore();
+  }
+});
