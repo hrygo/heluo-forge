@@ -100,6 +100,11 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
       this.loads.push(url);
       return loadFails ? Promise.reject(new Error('ERR_CONNECTION_REFUSED')) : Promise.resolve();
     }
+    loadFile(path, { query } = {}) {
+      this.fileLoads ??= [];
+      this.fileLoads.push({ path, query });
+      return Promise.resolve();
+    }
     show() {
       this.visible = true;
     }
@@ -245,6 +250,7 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
     }),
     runtimeOptions: { startTimeoutMs: 60_000, stopGraceMs: 5_000 },
     trayIcon: '/apps/tray.png',
+    statusPage: '/brand/status.html',
     ...(preflight === undefined ? {} : { preflight }),
     failureStopWaitMs,
   });
@@ -327,6 +333,35 @@ test('a loader that hands back a promise (the main.mjs wiring) is awaited before
   assert.equal(existsSync(fx.markerPath ?? join(fx.root, 'userData', 'first-run.json')), true);
 });
 
+test('the tray retry finishes the setup later and moves the window onto the workspace', async (t) => {
+  let unreachable = true;
+  let attempts = 0;
+  const fx = world(t, {
+    installer: async () => {
+      attempts += 1;
+      return unreachable
+        ? { code: 1, lines: [], warnings: [], result: { ok: false, error: { code: 'IAM_DISCOVERY_FAILED', message: 'fetch failed' } } }
+        : { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } };
+    },
+  });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED', retryable: true });
+  const [window] = fx.windows;
+  // The network comes back; the user picks the tray retry.
+  unreachable = false;
+  fx.trays[0].menu.find((item) => item.label === '重试企业配置').click();
+  await new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (window.loads.length > 0 && fx.processes.length === 1) { clearInterval(timer); resolve(); }
+    }, 5);
+    timer.unref?.();
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 2, 'the retry re-ran the idempotent installer');
+  assert.equal(window.loads.length, 1, 'the workspace address replaced the status page');
+  assert.equal(fx.trays[0].menu.some((item) => item.label === '重试企业配置'), false, 'the retry entry leaves once setup is done');
+  assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), true);
+});
+
 test('a package whose first run is done is not installed again; a changed one is', async (t) => {
   const first = world(t);
   assert.equal((await first.shell.outcome).started, true);
@@ -345,31 +380,37 @@ test('a package whose first run is done is not installed again; a changed one is
   assert.equal(third.installs.length, 1, 'another package is installed');
 });
 
-test('a failed first run stops the shell before any service or window exists', async (t) => {
+test('a failed first run keeps the window on the status page with a tray retry, and no dialog', async (t) => {
   const fx = world(t, {
     installer: async () => ({ code: 1, lines: [], warnings: [], result: { ok: false, error: { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', message: 'init: 调用 dsh 失败（/a/host/path）' } } }),
   });
-  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED' });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED', retryable: true });
   assert.equal(fx.processes.length, 0);
-  assert.equal(fx.windows.length, 0);
-  assert.equal(fx.messages.length, 1);
-  assert.equal(fx.messages[0].type, 'error');
-  assert.match(fx.messages[0].message, /FIRST_RUN_FAILED/);
-  assert.equal(fx.messages[0].message.includes('/a/host/path'), false, 'the installer text is not shown');
+  assert.equal(fx.windows.length, 1, 'the interface exists from the first moment');
+  const [window] = fx.windows;
+  assert.equal(window.loads.length, 0, 'no workspace address without a completed setup');
+  assert.ok(window.fileLoads.length >= 2, 'initializing, then the failure state');
+  assert.equal(window.fileLoads[0].query.state, 'initializing');
+  assert.deepEqual({ ...window.fileLoads.at(-1).query }, { state: 'failed', code: 'FIRST_RUN_FAILED' });
+  assert.equal(JSON.stringify(window.fileLoads).includes('/a/host/path'), false, 'the installer text is not shown');
+  assert.equal(fx.messages.length, 0, 'no modal dialog for a retryable state');
+  assert.equal(fx.log.includes('quit'), false, 'the app stays alive for the retry');
+  assert.ok(fx.trays[0].menu.some((item) => item.label === '重试企业配置'));
   assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), false, 'no record without success');
-  assert.equal(fx.log.at(-1), 'quit');
 });
 
 test('without a package, with a broken one, or with a forbidden bind address, nothing starts', async (t) => {
   const tampered = world(t);
   writeFileSync(join(tampered.pkg.directory, TARBALL), 'changed');
-  assert.deepEqual(await tampered.shell.outcome, { started: false, code: 'ASSETS_INVALID' });
+  assert.deepEqual(await tampered.shell.outcome, { started: false, code: 'ASSETS_INVALID', retryable: true });
   assert.equal(tampered.processes.length, 0);
-  assert.match(tampered.messages[0].message, /ASSETS_INVALID/);
+  assert.equal(tampered.messages.length, 0, 'a retryable state is shown in the window, not a dialog');
+  assert.deepEqual({ ...tampered.windows[0].fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID' });
 
   const none = world(t, { candidates: [join(temp(t), 'absent')] });
-  assert.deepEqual(await none.shell.outcome, { started: false, code: 'ASSETS_NOT_FOUND' });
+  assert.deepEqual(await none.shell.outcome, { started: false, code: 'ASSETS_NOT_FOUND', retryable: true });
   assert.equal(none.installs.length, 0);
+  assert.ok(none.windows[0].fileLoads.at(-1).query.code === 'ASSETS_NOT_FOUND');
 
   const elsewhere = world(t, { bindHost: '0.0.0.0' });
   assert.deepEqual(await elsewhere.shell.outcome, { started: false, code: 'BIND_HOST_REJECTED' });
@@ -383,7 +424,7 @@ test('a broken package that comes first is reported; the shell does not quietly 
   const fx = world(t, { candidates: [broken.directory, intact.directory] });
   // Taking the intact one would leave the record of the first run pointing at
   // a package other than the first, and the next start would not agree with it.
-  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'ASSETS_INVALID' });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'ASSETS_INVALID', retryable: true });
   assert.equal(fx.installs.length, 0);
   assert.equal(fx.processes.length, 0);
   assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), false);
@@ -468,13 +509,17 @@ test('every failure the modules can raise has guidance for the user', () => {
 });
 
 test('a web profile that cannot start is reported, and the shell leaves', async (t) => {
+  const done = world(t);
+  await done.shell.outcome;
   const fx = world(t, {
+    assets: done.pkg.directory,
+    markerPath: join(done.root, 'userData', 'first-run.json'),
     spawnProfile: () => {
       throw Object.assign(new Error('spawn electron ENOENT'), { code: 'ENOENT' });
     },
   });
   assert.deepEqual(await fx.shell.outcome, { started: false, code: 'SPAWN_FAILED' });
-  assert.equal(fx.windows.length, 0);
+  assert.equal(fx.processes.length, 0);
   assert.match(fx.messages[0].message, /SPAWN_FAILED/);
   assert.equal(fx.log.at(-1), 'quit');
 });

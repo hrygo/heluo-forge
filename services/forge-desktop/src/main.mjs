@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 import * as electron from 'electron';
 
 import { fail } from './errors.mjs';
-import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
+import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
 import { embeddedExec, runCommand } from './process.mjs';
 import { createRuntime } from './runtime.mjs';
 import { startShell } from './shell.mjs';
@@ -84,6 +84,7 @@ async function main() {
     createRuntime,
     spawnProfile: spawnProfile(env),
     trayIcon: TRAY_ICON,
+    statusPage: join(process.resourcesPath, ...STATUS_PAGE_PARTS),
   }).outcome;
 }
 

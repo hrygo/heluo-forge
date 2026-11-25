@@ -25,7 +25,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ASSETS_DIR, DSH_ENTRY_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { ASSETS_DIR, DSH_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const TRAY_ICON_SOURCE = 'sizes/app-icon-256.png';
@@ -130,6 +130,13 @@ export function stagePayload({ output, dshTgz, brandDir, employeeAssets, lockPat
   mkdirSync(join(resources, ...TRAY_ICON_PARTS.slice(0, -1)), { recursive: true });
   writeFileSync(join(resources, ...TRAY_ICON_PARTS), trayBytes);
 
+  // The shell's own setup page travels beside the tray icon: local, link-free,
+  // carrying no enterprise values — the state arrives via the query string.
+  const statusSource = join(repoRoot, 'services', 'forge-desktop', 'resources', ...STATUS_PAGE_PARTS.slice(1));
+  if (!existsSync(statusSource)) fail('STATUS_PAGE_MISSING', `shell setup page not found: ${statusSource}`);
+  mkdirSync(join(resources, ...STATUS_PAGE_PARTS.slice(0, -1)), { recursive: true });
+  writeFileSync(join(resources, ...STATUS_PAGE_PARTS), readFileSync(statusSource));
+
   let assets = null;
   if (employeeAssets !== undefined) {
     const source = resolve(employeeAssets);
@@ -142,6 +149,7 @@ export function stagePayload({ output, dshTgz, brandDir, employeeAssets, lockPat
     schema: 'heluo-desktop-staging/1',
     dsh: { version: lock.dsh.version, sha256: lock.dsh.sha256, bytes: lock.dsh.bytes, artifact: basename(tgz) },
     tray: { source: TRAY_ICON_SOURCE, bytes: trayBytes.length, sha256: sha256Hex(trayBytes) },
+    statusPage: { source: STATUS_PAGE_PARTS.join('/'), bytes: readFileSync(join(resources, ...STATUS_PAGE_PARTS)).length },
     assets,
     layout: { dshEntry: DSH_ENTRY_PARTS.join('/'), trayIcon: TRAY_ICON_PARTS.join('/') },
   };

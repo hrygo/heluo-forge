@@ -211,6 +211,7 @@
 - 集成冒烟（mac 本机，设计 §10 集成层首次执行）：`--dir` 构建出 `heluo-forge-enterprise.app`（未签名）；真实 Electron 启动后单实例锁生效，首启经包内安装器在沙箱 DSH_HOME 建 web profile 并装入 `@heluo/forge-enterprise` 0.1.2-corp.1（安装证据 `.heluo-enterprise-install.json` 含双摘要），止步 IAM Discovery（企业内网地址不可达，设计内降级且密钥保留）；预写首启标记直启后，内嵌 dsh 以 `--profile web --host 127.0.0.1 --no-open` 运行并监听 `127.0.0.1:3080`，渲染进程 `--enable-sandbox`。过程中修正两个实际缺陷：暂存前缀目录取值（闭包安装语义）与本机环境泄漏 `ELECTRON_RUN_AS_NODE` 导致的静默 node 态。
 - 未做：NSIS windows-runner 流水线接线、离线 Win10 x64 VM 验收（第 7/8 项主体）、内置 pnpm/Node 工具链与 Python/Office 库（第 4 项，接 P0 #9 探针）、真实企业网络 IAM 登录与托盘/退出 GUI 交互取证、资产探测失败后的用户指定入口（第 3 项局部）。
 - 首启装配缺陷修复（2026-11-25，干净环境首次真实首启暴露）：`shell.mjs` 把 `loadInstaller(...)`（main.mjs 经动态 import 返回 `Promise<runInit>`）未经 await 传入 `initializeProfile`，函数守卫按 `BAD_ARGUMENT` 拒绝并弹框，应用无法启动。此前冒烟因「预写首启标记 + 安装器终端单独驱动」恰好绕过该集成路径。修复为 `runInit: await loadInstaller(...)`；回归用例先行（以 main.mjs 同形的 Promise 型 loader 驱动装配层，未修版本必挂、修复后通过），装配层 58 项用例全绿。
+- 窗口先行与页内配置提示（2026-11-25，负责人裁决「先开界面、页内提示、后续配置」）：需要首启或首启失败时窗口先开并加载壳自带本地品牌引导页（`resources/status.html` 暂存为 `brand/status.html`，无 preload 无外链，状态/错误码经查询串注入），应用驻留不弹框不退出，托盘菜单「重试企业配置」复用同一安装器幂等续跑（补放员工包、回企业网均可续），成功后窗口改载 launch URL 并移除重试项；运行时段失败仍走对话框+退出，禁止以未打补丁默认 profile 提前出界面（O3 官方登录旁路）。装配层 59 项用例含状态页驻留、重试续跑、运行时失败路径与布局契约。
 
 **口径确认（2026-11-24，项目负责人逐条确认）**：企业配置存为 `release-bundle` 环境的 Environment Secrets；配置值只存在于构建进程内存；研发扩展包以中性 tgz 按需随包；包内私版插件版本为 `<tag 版本>-corp.1`；「其余工作流一律只读」执行为禁止 `contents: write`，不扩展到现有工作流的其他写权限；品牌图标派生沿用既有实现；壳先建清单并标「可用」，清单暂不声明依赖，验证后置；首启的 `cordis.patch.yml` 写入留待 P0 第 6 项。
 

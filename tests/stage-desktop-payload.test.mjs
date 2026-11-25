@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { ASSETS_DIR, DSH_ENTRY_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { ASSETS_DIR, DSH_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { parseArguments, StageError, stagePayload } from '../scripts/stage-desktop-payload.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -78,6 +78,12 @@ test('暂存布局与 layout.mjs 双向契约：dsh 入口与托盘图标落在 
     readFileSync(join(resources, ...TRAY_ICON_PARTS)).equals(readFileSync(join(BRAND_DIR, 'sizes/app-icon-256.png'))),
     true,
     'tray icon is byte-identical to the brand source',
+  );
+  assert.equal(existsSync(join(resources, ...STATUS_PAGE_PARTS)), true, 'the setup page must sit beside the tray icon');
+  assert.equal(
+    readFileSync(join(resources, ...STATUS_PAGE_PARTS)).equals(readFileSync(join(REPO_ROOT, 'services/forge-desktop/resources/status.html'))),
+    true,
+    'the setup page is byte-identical to the shell source',
   );
   assert.equal(record.dsh.version, '0.0.0-test');
   assert.equal(record.assets, null);
