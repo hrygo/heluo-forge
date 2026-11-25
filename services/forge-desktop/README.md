@@ -1,12 +1,12 @@
 # 桌面壳（河洛 Forge 企业版）
 
-状态：可用（壳的判断逻辑与装配层已实现并离线测试，清单已建立）。Electron 入口尚未运行，打包链未验证，不构成可分发客户端。核对日期：2026-11-24。
+状态：可用（开发骨架）。判断逻辑与装配层离线测试齐备；Electron 44.7.0 与 electron-builder 26.0.12 已精确钉版入 devDependencies（package-shape 断言拒绝浮动）；载荷暂存（`scripts/stage-desktop-payload.mjs` + `runtime-lock.json` 台账）与安装包配置（`scripts/build-desktop-installer.mjs`，身份真源消费员工包 `branding/app-identity.json`）具备。2026-11-24 本机 mac `--dir` 构建冒烟：真实 Electron 启动、单实例、首启经安装器建 profile 并装入 `@heluo/forge-enterprise` 0.1.2-corp.1（沙箱 DSH_HOME）、IAM Discovery 止步企业内网边界（设计内降级）、预写标记直启后内嵌 dsh 以 `--profile web --host 127.0.0.1 --no-open` 运行并监听回环 3080、渲染进程启用 sandbox。未做：NSIS windows-runner 流水线、Win10 x64 VM 验收、内置 pnpm/Node 工具链（P2-4）、真实企业网络下的 IAM 登录联调。核对日期：2026-11-24。
 
 本目录是自有的 Electron 应用工程：一个窗口加载本机 `dsh --profile web`，一个托盘图标驻留。壳不修改 DSH，不编译上游 `apps/desktop`。设计见[桌面壳详细设计](../../docs/design/services/desktop-shell.md)（CORP-DSH-DESIGN-025），实施与验证归[桌面端成套打包工作计划](../../docs/plans/2026-11-19-desktop-bundle-packaging.md)（CORP-DSH-PLAN-026）。
 
 ## 清单
 
-`package.json` 暂不声明依赖。壳运行所需的 `electron` 精确钉在 `44.7.0`（dsh 的原生加载器带 Electron 指纹白名单，浮动解析会被拒绝启动），它与 `electron-builder` 随计划 P2 的打包步骤一并加入，届时同步锁文件：现在声明会让本地的 `pnpm check` 联网安装并改写锁文件，而单靠声明依赖也拿不到 Electron 二进制。清单里的 `engines.dsh` 是仓库检查器对服务清单的要求，取值与内嵌运行时的锁定版一致；壳本身不是 DSH 插件。仓库的离线检查不安装依赖，用例不需要 `electron`。
+`package.json` 的 `devDependencies` 精确钉 `electron@44.7.0`（dsh 的原生加载器带 Electron 指纹白名单，浮动解析会被拒绝启动）与 `electron-builder@26.0.12`；二者是构建期工具，壳的 npm 形态（`files: ["src","README.md"]`）不夹带工具链，产物是打包后的安装包。工作区为 `@electron/node-gyp` 的 git 引用钉回 npm 发布版（pnpm 11 拒绝 git 型子依赖），`onlyBuiltDependencies` 只放行 electron 的二进制下载 postinstall。Electron 二进制与 builder 自身依赖默认源可达性依环境而异，可用 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR` 指向镜像（环境配置，不入库）。清单里的 `engines.dsh` 是仓库检查器对服务清单的要求，取值与内嵌运行时的锁定版一致；壳本身不是 DSH 插件。仓库的离线检查不安装依赖，全部用例不需要 `electron`。
 
 ## 模块
 

@@ -45,6 +45,61 @@ function fixtureRoot() {
   return root;
 }
 
+test('listCodeOccurrences：锁文件只盯 dsh 族包键，无关包的巧合版本不误报', () => {
+  const root = fixtureRoot();
+  try {
+    const siblingVersion = sibling(BASELINE);
+    writeFileSync(
+      join(root, 'pnpm-lock.yaml'),
+      [
+        'lockfileVersion: 9.0',
+        '',
+        '  chromium-pickle-js@0.2.0:',
+        '    resolution: {integrity: sha512-x}',
+        '',
+        '  config-file-ts@0.2.8-rc1:',
+        '    resolution: {integrity: sha512-x}',
+        '',
+        `  @deepseek-ai/dsh@${siblingVersion}:`,
+        '    resolution: {integrity: sha512-x}',
+        '',
+      ].join('\n'),
+    );
+    const rows = listCodeOccurrences(root, BASELINE);
+    const lockRows = rows.filter((row) => row.file === 'pnpm-lock.yaml');
+    assert.ok(lockRows.length > 0, 'a dsh-family key in the lockfile is still guarded');
+    assert.ok(lockRows.every((row) => row.version === siblingVersion && row.kind === 'code-forbidden'));
+    assert.equal(
+      rows.some((row) => row.file === 'pnpm-lock.yaml' && /chromium-pickle-js|config-file-ts/u.test(row.text)),
+      false,
+      'unrelated packages must not be flagged',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('运行时台账是发行默认宿主：等于基线放行，漂移即 code-forbidden', () => {
+  const root = fixtureRoot();
+  try {
+    mkdirSync(join(root, 'services/forge-desktop'), { recursive: true });
+    const lockPath = join(root, 'services/forge-desktop/runtime-lock.json');
+    const lockOf = (version) =>
+      writeFileSync(lockPath, `${JSON.stringify({ schema: 'heluo-desktop-runtime-lock/1', dsh: { version, sha256: '0'.repeat(64), bytes: 1 } }, null, 2)}\n`);
+    lockOf(BASELINE);
+    let rows = listCodeOccurrences(root, BASELINE).filter((row) => row.file === 'services/forge-desktop/runtime-lock.json');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].kind, 'code-exception');
+
+    lockOf(sibling(BASELINE));
+    rows = listCodeOccurrences(root, BASELINE).filter((row) => row.file === 'services/forge-desktop/runtime-lock.json');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].kind, 'code-forbidden', 'a drifted ledger version must fail the check');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('readDshVersion 读单一真源，且形状合法', () => {
   assert.match(BASELINE, DSH_VERSION_SHAPE);
   assert.equal(readDshVersion(ROOT), BASELINE);
@@ -244,8 +299,13 @@ function corpusFiles(options) {
     join(root, 'docs/architecture/platform-architecture.md'),
     architecture ?? `- **锁版本**：一期兼容目标固定 DSH \`${baseline}\`（升级循环见设计索引）。\n`,
   );
-  // 交付包默认宿主版本：check 会断言它等于基线，语料默认给一份一致的文件。
+  // 交付包默认宿主版本：check 会断言它等于基线，语料默认给一致的文件（含桌面壳台账）。
   writeFileSync(join(root, 'scripts/init-enterprise-plugin.mjs'), `export const DEFAULT_HOST_VERSION = '${baseline}';\n`);
+  mkdirSync(join(root, 'services/forge-desktop'), { recursive: true });
+  writeFileSync(
+    join(root, 'services/forge-desktop/runtime-lock.json'),
+    `${JSON.stringify({ schema: 'heluo-desktop-runtime-lock/1', dsh: { version: baseline, sha256: '0'.repeat(64), bytes: 1 } }, null, 2)}\n`,
+  );
   for (const [rel, content] of Object.entries(files)) {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
     writeFileSync(join(root, rel), content);
@@ -273,7 +333,7 @@ test('CLI check：发行默认宿主版本必须等于基线，漂移或声明�
   withCorpus({}, (root) => {
     const result = runCli(root, ['check']);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /发行默认宿主 1 处已对齐/);
+    assert.match(result.stdout, /发行默认宿主 2 处已对齐/);
   });
   withCorpus(
     {

@@ -231,6 +231,11 @@ export const RELEASE_DEFAULT_HOSTS = [
     label: '交付包默认宿主版本',
     pattern: /export const DEFAULT_HOST_VERSION = '([^']+)'/,
   },
+  {
+    file: 'services/forge-desktop/runtime-lock.json',
+    label: '桌面壳运行时台账版本',
+    pattern: /"version": "([^"]+)"/,
+  },
 ];
 
 /** 改版：只改发行默认宿主的版本字面量；找不到声明时原样返回（交给 check 报缺失）。 */
@@ -369,6 +374,10 @@ export function listDocOccurrences(root = process.cwd(), baseline = readDshVersi
   return found;
 }
 
+/** The lockfile is resolution data, not code: only dsh-family package keys count. */
+const LOCKFILE = /(?:^|\/)pnpm-lock\.yaml$/u;
+const LOCKFILE_DSH_KEY = /(?:@deepseek-ai\/dsh[\w.-]*@|^\s+dsh@)/u;
+
 /** 代码与脚本中出现版本号的位置：全仓扫描，按允许清单与清单精确规则分类。 */
 export function listCodeOccurrences(root = process.cwd(), baseline = readDshVersion(root)) {
   const targets = walk(root, (rel) => CODE_EXT.test(rel) && !rel.startsWith('docs/'), root);
@@ -383,6 +392,9 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
     const lines = readLines(abs);
     if (!lines) continue;
     lines.forEach((line, index) => {
+      // Unrelated packages in the lockfile carry coincidental version strings;
+      // only a dsh-family key is a DSH version statement worth guarding.
+      if (LOCKFILE.test(rel) && !LOCKFILE_DSH_KEY.test(line)) return;
       for (const match of line.matchAll(SEMVER_IN_TEXT)) {
         if (!dshVersionInLine(match[0], line, baseline, { allowReleaseLine: true })) continue;
         let kind;
