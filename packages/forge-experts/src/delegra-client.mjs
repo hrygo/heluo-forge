@@ -10,8 +10,11 @@ import { createHash } from 'node:crypto';
 import { ERROR_STATUS, ExpertsError } from './errors.mjs';
 
 export const EMPLOYEE_API_PREFIX = '/api/v1/employee';
+export const EMPLOYEE_EXCHANGE_BASE_SCOPE = 'employee:experts';
 export const MAX_SCOPE_CHECK_EXPERTS = 100;
 export const MAX_VERIFY_PAGES = 20;
+// OAuth scope token allowlist (RFC 6749 NQCHAR): visible ASCII excluding space, quote, and backslash to prevent scope injection.
+const SAFE_SCOPE_TOKEN_RE = /^[\x21\x23-\x5B\x5D-\x7E]+$/u;
 
 const KNOWN_UPSTREAM_CODES = new Set(Object.keys(ERROR_STATUS));
 const RETRYABLE_UPSTREAM_CODES = new Set([
@@ -186,9 +189,9 @@ export function createDelegraClient(options) {
   async function requestJson({ method, path, query, body, orgId, expectedScope, transportUnknownOnFailure = false }) {
     const resolvedOrgId = orgId ?? expectedScope?.orgId ?? defaultOrgId ?? undefined;
     const cleanOrgId = isNonEmptyString(resolvedOrgId) ? resolvedOrgId.trim() : undefined;
-    const exchangeScope = cleanOrgId && /^[\x21\x23-\x5B\x5D-\x7E]+$/u.test(cleanOrgId)
-      ? `employee:experts org:${cleanOrgId}`
-      : 'employee:experts';
+    const exchangeScope = cleanOrgId && SAFE_SCOPE_TOKEN_RE.test(cleanOrgId)
+      ? `${EMPLOYEE_EXCHANGE_BASE_SCOPE} org:${cleanOrgId}`
+      : EMPLOYEE_EXCHANGE_BASE_SCOPE;
     let handle;
     try {
       handle = await options.exchangeCredential({

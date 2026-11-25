@@ -752,3 +752,87 @@ test('startup/reconnect by-request reconciliation recovers pending_delivery/unkn
     await h2.host.close();
   }
 });
+
+test('pending_index read failures fail closed (503 EXPERT_STORAGE_UNAVAILABLE) and concurrent dispatches serialize index updates with zero lost requestIds (#482)', async () => {
+  let failPendingIndexGet = false;
+  const baseStorage = createMemoryStorage({ asyncGet: true });
+  const wrappedStorage = {
+    domains: baseStorage.domains,
+    async open(spec) {
+      const domain = await baseStorage.open(spec);
+      return {
+        table(tableName) {
+          const tbl = domain.table(tableName);
+          return {
+            get(key) {
+              if (tableName === 'pending_index' && failPendingIndexGet) {
+                throw new Error('simulated pending_index read error');
+              }
+              return tbl.get(key);
+            },
+            async put(key, value) {
+              return tbl.put(key, value);
+            },
+          };
+        },
+        close: () => domain.close(),
+      };
+    },
+  };
+
+  const h = makeHarness({ dispatchEnabled: true, storage: wrappedStorage });
+  await h.host.open();
+  try {
+    await h.enableExpert();
+    h.setCreateBehavior('unknown');
+
+    const sel1 = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Concurrent task 1' },
+    });
+    const sel2 = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Concurrent task 2' },
+    });
+
+    const [r1, r2] = await Promise.all([
+      invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/tasks`,
+        headers: mutationHeaders(),
+        body: { selectionToken: sel1.body.selectionToken, sessionId: 'sess-1', taskText: 'Concurrent task 1' },
+      }),
+      invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/tasks`,
+        headers: mutationHeaders(),
+        body: { selectionToken: sel2.body.selectionToken, sessionId: 'sess-1', taskText: 'Concurrent task 2' },
+      }),
+    ]);
+    assert.equal(r1.status, 503);
+    assert.equal(r2.status, 503);
+
+    const pendingOk = await invokeRoute(h.host, { path: `${API_PREFIX}/tasks/pending` });
+    assert.equal(pendingOk.status, 200);
+    assert.equal(pendingOk.body.items.length, 2, 'serialized pending_index updates must preserve all concurrent requestIds');
+
+    failPendingIndexGet = true;
+    const pendingFail = await invokeRoute(h.host, { path: `${API_PREFIX}/tasks/pending` });
+    assert.equal(pendingFail.status, 503);
+    assert.equal(pendingFail.body.error.code, 'EXPERT_STORAGE_UNAVAILABLE');
+
+    const reconcileFail = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    assert.equal(reconcileFail.status, 503);
+    assert.equal(reconcileFail.body.error.code, 'EXPERT_STORAGE_UNAVAILABLE');
+  } finally {
+    await h.host.close();
+  }
+});

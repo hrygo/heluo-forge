@@ -8,6 +8,26 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function pickNonEmptyString(primary, fallback) {
+  if (isNonEmptyString(primary)) return primary.trim();
+  if (isNonEmptyString(fallback)) return fallback.trim();
+  return null;
+}
+
+function normalizeIamSession(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn !== false);
+  const issuer = pickNonEmptyString(raw.issuer, raw.principal?.issuer);
+  const subject = pickNonEmptyString(raw.subject, raw.principal?.subject);
+  if (!ready || !issuer || !subject) return null;
+  return Object.freeze({
+    state: 'ready',
+    issuer,
+    subject,
+    ...(isNonEmptyString(raw.orgId) ? { orgId: raw.orgId.trim() } : {}),
+  });
+}
+
 function normalizeScope(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const { instanceId, orgId, issuer, subject } = raw;
@@ -74,24 +94,6 @@ export function createScopeManager(ports) {
       throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Active scope identity has changed');
     }
   }
-
-function normalizeIamSession(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn !== false);
-  const issuer = isNonEmptyString(raw.issuer)
-    ? raw.issuer.trim()
-    : (isNonEmptyString(raw.principal?.issuer) ? raw.principal.issuer.trim() : null);
-  const subject = isNonEmptyString(raw.subject)
-    ? raw.subject.trim()
-    : (isNonEmptyString(raw.principal?.subject) ? raw.principal.subject.trim() : null);
-  if (!ready || !issuer || !subject) return null;
-  return Object.freeze({
-    state: 'ready',
-    issuer,
-    subject,
-    ...(isNonEmptyString(raw.orgId) ? { orgId: raw.orgId.trim() } : {}),
-  });
-}
 
   async function resolveForRequest() {
     let rawSession;

@@ -183,7 +183,6 @@ export function createPreStepGuard(ports) {
       sessionId: binding.sessionId,
       scopeEpoch: binding.scopeEpoch,
       draft,
-      delegateAttempted: false,
       delegatedTaskId: null,
       createdAt,
       expiresAt: createdAt + turnTtlMs,
@@ -225,7 +224,6 @@ export function createPreStepGuard(ports) {
     if (isNonEmptyString(toolInput.sessionId) && toolInput.sessionId.trim() !== turn.sessionId) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Delegate tool call sessionId does not match bound user session');
     }
-    turn.delegateAttempted = true;
     return Object.freeze({ allowed: true, expertId: turn.expertId });
   }
 
@@ -250,6 +248,8 @@ export function createPreStepGuard(ports) {
 
     if (isNonEmptyString(delegatedTaskId)) {
       turn.delegatedTaskId = delegatedTaskId.trim();
+      // Belt-and-suspenders single-use cleanup in case a custom host finalized without consuming via dispatchTask.
+      try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
       return Object.freeze({
         status: 'delegated',
         expertParticipated: true,

@@ -280,7 +280,9 @@ export async function apply(ctx, config = {}) {
           action: params.action,
           target: params.expertId ?? params.taskId ?? 'expert',
         });
-        const decision = verdict?.action ?? verdict?.decision ?? 'deny';
+        const rawDecision = verdict?.action ?? verdict?.decision;
+        // Fail-closed allowlist: only explicit 'allow' or 'confirm' passes through; any other value becomes 'deny'.
+        const decision = rawDecision === 'allow' || rawDecision === 'confirm' ? rawDecision : 'deny';
         return {
           decision,
           reason: verdict?.reason,
