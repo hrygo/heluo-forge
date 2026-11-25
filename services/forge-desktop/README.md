@@ -8,6 +8,8 @@
 
 `package.json` 的 `devDependencies` 精确钉 `electron@44.7.0`（dsh 的原生加载器带 Electron 指纹白名单，浮动解析会被拒绝启动）与 `electron-builder@26.0.12`；二者是构建期工具，壳的 npm 形态（`files: ["src","README.md"]`）不夹带工具链，产物是打包后的安装包。工作区为 `@electron/node-gyp` 的 git 引用钉回 npm 发布版（pnpm 11 拒绝 git 型子依赖），`onlyBuiltDependencies` 只放行 electron 的二进制下载 postinstall。Electron 二进制与 builder 自身依赖默认源可达性依环境而异，可用 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR` 指向镜像（环境配置，不入库）。清单里的 `engines.dsh` 是仓库检查器对服务清单的要求，取值与内嵌运行时的锁定版一致；壳本身不是 DSH 插件。仓库的离线检查不安装依赖，全部用例不需要 `electron`。
 
+安装包只携带运行时会读取的文件，规则写在 `scripts/build-desktop-installer.mjs` 的打包配置里。`extraResources.filter` 排除 TypeScript 源码与类型声明、source map 和调试符号：内嵌 Node 拒绝为 `node_modules` 内的 `.ts` 剥离类型，壳又从子进程环境里剥离 `NODE_OPTIONS`，source map 不会被加载；`runtime-lock.json` 钉定的 `@deepseek-ai/dsh` 目录原样随包。NSIS 归档关闭差分包、按 solid 压缩：差分形式只服务 electron-updater，本应用不建更新 feed。Electron 语言包只保留英文与简繁中文；electron-builder 26 在 macOS 上不裁语言包，因为 Electron 44 把它们放在 Framework 内。构建摘要的 `resources` 记录暂存资源的文件数与字节数，以及其中被规则排除的部分。
+
 ## 模块
 
 | 文件 | 职责 |

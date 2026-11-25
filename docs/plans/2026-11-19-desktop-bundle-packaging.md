@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-026 |
 | 文档名称 | 桌面端成套打包工作计划（Electron 分发矩阵） |
-| 版本 | V0.8.6 |
+| 版本 | V0.8.7 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-24 |
+| 最后更新 | 2026-11-25 |
 | 确认人 | 项目负责人 |
 | 确认日期 | 2026-11-23 |
 | 确认事项 | 确认本计划为实施依据；代码与脚本先于 P0 探针实施，验证后置 |
@@ -213,6 +213,7 @@
 - 首启装配缺陷修复（2026-11-25，干净环境首次真实首启暴露）：`shell.mjs` 把 `loadInstaller(...)`（main.mjs 经动态 import 返回 `Promise<runInit>`）未经 await 传入 `initializeProfile`，函数守卫按 `BAD_ARGUMENT` 拒绝并弹框，应用无法启动。此前冒烟因「预写首启标记 + 安装器终端单独驱动」恰好绕过该集成路径。修复为 `runInit: await loadInstaller(...)`；回归用例先行（以 main.mjs 同形的 Promise 型 loader 驱动装配层，未修版本必挂、修复后通过），装配层 58 项用例全绿。
 - 窗口先行与页内配置提示（2026-11-25，负责人裁决「先开界面、页内提示、后续配置」）：需要首启或首启失败时窗口先开并加载壳自带本地品牌引导页（`resources/status.html` 暂存为 `brand/status.html`，无 preload 无外链，状态/错误码经查询串注入），应用驻留不弹框不退出，托盘菜单「重试企业配置」复用同一安装器幂等续跑（补放员工包、回企业网均可续），成功后窗口改载 launch URL 并移除重试项；运行时段失败仍走对话框+退出，禁止以未打补丁默认 profile 提前出界面（O3 官方登录旁路）。装配层 59 项用例含状态页驻留、重试续跑、运行时失败路径与布局契约。
 - 桌面构建接入 Release 流水线（2026-11-25，负责人要求）：`release-bundle` 工作流新增 `desktop-mac`（macos-15，`--dir` 产物以 ditto 压为 `heluo-forge-enterprise-<tag>-mac-arm64.zip`）与 `desktop-windows`（windows-2025，electron-builder NSIS x64 产物 `heluo-forge-enterprise-<tag>-setup-x64.exe`）两任务，均 `needs: employee` 后各自重建员工包做内嵌资产（公共仓库的工作流 artifact 任何读者皆可下载，企业载荷不跨任务传递；needs 同时固定草稿与正文由 ubuntu 任务先建），进入同一 `release-bundle` 环境（tag `v*` 策略）。锁定版 dsh 制品在 runner 上经 `npm pack` 取得并由 `runtime-lock.json` SHA-256 台账核验；工具链 `pnpm install --frozen-lockfile`（electron/builder 二进制默认源）。检查器不变量全部保持（同触发器、顶层唯一 `contents: write`、checkout 全部 `persist-credentials: false`、secrets 仅 env 整行映射）。桌面产物均未签名：NSIS 首开会遇 SmartScreen、mac zip 需右键打开，签名属后续里程碑。
+- 安装包瘦身（2026-11-25，负责人要求，issue #485）：`scripts/build-desktop-installer.mjs` 的打包配置增加三项规则，配套正反向用例（8 个规则变异全部被对应用例杀死）。其一，NSIS 关闭差分包（`nsis.differentialPackage: false`）：差分形式只服务 electron-updater，本应用不建更新 feed；electron-builder 26.0.12 交给 7z 的参数由「非 solid、1 MB 字典」变为默认 solid。其二，`extraResources.filter` 在打包时排除 TypeScript 源码与类型声明、source map 与调试符号，`runtime-lock.json` 钉定的 `@deepseek-ai/dsh` 目录原样随包：这些文件运行时不读取（内嵌 Node 拒绝为 `node_modules` 内的 `.ts` 剥离类型、闭包内没有 TypeScript 编译器，壳剥离 `NODE_OPTIONS` 故 source map 不会被加载），而 electron-builder 的默认排除只作用于应用文件，不作用于 `extraResources`。其三，Electron 语言包只保留英文与简繁中文（`electronLanguages`）。构建摘要新增 `resources`（暂存资源的文件数与字节数、其中被排除的部分）。证据（本机 mac，载荷取 dsh 0.2.1-rc.3 的暂存树）：以 electron-builder 交给 7z 的同一组参数压同一份产物，现行参数 252.8 MiB、solid 168.8 MiB（降 33%），单线程解码由 8.5 秒降到 5.9 秒；`--dir` 构建逐文件核对，进包集合与规则一致（资源 63,137 → 24,356 个文件、681.1 → 434.9 MB，钉定目录的 8 个 `.d.ts` 保留）。未验：Windows 安装包的体积、安装耗时与 nsis7z 解包表现（本机到 Electron 发布源约 14 KB/s 且无 wine，无法交叉构建，由 `release-bundle` 的 windows runner 在下一个 tag 取证）；`electronLanguages` 的 Windows 路径未实测，在 macOS 上不生效（electron-builder 26 到应用 Resources 查找 `.lproj`，Electron 44 将其放在 Framework 内）。未做：依赖闭包去重（0.2.1-rc.3 暂存树里 `zod@4.4.3` 嵌套 50 份，需改暂存脚本）、闭包 lockfile 与体积预算门禁。
 
 **口径确认（2026-11-24，项目负责人逐条确认）**：企业配置存为 `release-bundle` 环境的 Environment Secrets；配置值只存在于构建进程内存；研发扩展包以中性 tgz 按需随包；包内私版插件版本为 `<tag 版本>-corp.1`；「其余工作流一律只读」执行为禁止 `contents: write`，不扩展到现有工作流的其他写权限；品牌图标派生沿用既有实现；壳先建清单并标「可用」，清单暂不声明依赖，验证后置；首启的 `cordis.patch.yml` 写入留待 P0 第 6 项。
 
