@@ -24,7 +24,6 @@
  *     --config <enterprise.env> --version <x.y.z> --output <dir>
  *     [--confirm <digest 前 8+ 位>] [--dry-run] [--tool-root <repo>] [--json]
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -55,7 +54,7 @@ import {
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
-import { assertOutsideDirectory, sha256 } from './lib/release-support.mjs';
+import { assertOutsideDirectory, sha256, zipDirectory } from './lib/release-support.mjs';
 
 const INSTALLER_SCRIPT = 'init-enterprise-plugin.mjs';
 
@@ -473,7 +472,7 @@ function launcherFiles() {
  *   config?: ReturnType<typeof import('./lib/private-bundle.mjs').buildConfig>, version: string,
  *   output: string, toolRoot?: string, dryRun?: boolean, confirm?: string, zipCommand?: string,
  *   warn?: (message: string) => void}} input
- *   `zipCommand` 仅供测试注入（默认 `zip`）：打包失败必须什么也不发布。
+ *   `zipCommand` 仅供测试注入（默认当前平台的原生归档器，POSIX 为 `zip`）：打包失败必须什么也不发布。
  *   `warn` 仅供测试注入（默认写 stderr）：清理时跳过别人的产物必须告警，不能静默。
  */
 export function buildDelivery(input) {
@@ -536,7 +535,8 @@ export function buildDelivery(input) {
   // 暂存目录里先放一个以最终目录名命名的内容根，zip 的内层路径才是 <output>/…。
   const content = join(staging, basename(output));
   const partialArchive = join(staging, 'archive.zip');
-  const zipCommand = input.zipCommand ?? 'zip';
+  // 未注入时保持 undefined：由 zipDirectory 选当前平台的原生归档器。
+  const zipCommand = input.zipCommand;
   const warn = input.warn ?? ((message) => process.stderr.write(`${message}\n`));
   const hadOutput = existsSync(output);
   // 占位文件里写本次运行的唯一标记：清理与「被别人换掉」的判定都按内容做，不按 inode。
@@ -627,10 +627,10 @@ export function buildDelivery(input) {
 
     // 交付物齐了才打包；zip 缺失或失败时不留半成品目录，重跑不会被 OUTPUT_EXISTS 挡住。
     try {
-      execFileSync(zipCommand, ['-r', '-q', partialArchive, basename(output)], { cwd: staging });
+      zipDirectory({ staging, name: basename(output), archive: partialArchive, zipCommand });
     } catch (error) {
       const reason = typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN');
-      fail('ARCHIVE_FAILED', `zip failed (${reason}) while packaging ${basename(output)} with ${zipCommand}; nothing was published`);
+      fail('ARCHIVE_FAILED', `zip failed (${reason}) while packaging ${basename(output)} with ${zipCommand ?? 'the platform archiver'}; nothing was published`);
     }
     if (!existsSync(partialArchive)) fail('ARCHIVE_FAILED', `zip did not write ${partialArchive}; nothing was published`);
     const archiveDigest = sha256(readFileSync(partialArchive));

@@ -9,7 +9,7 @@
  *
  * 用法：
  *   node scripts/build-desktop-installer.mjs --identity <app-identity.json> \
- *     --resources <staged resources dir> --version <x.y.z> --output <dir> \
+ *     --resources <staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
  *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] [--target dir|mac|win] [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
@@ -36,6 +36,20 @@ export class InstallerBuildError extends Error {
 const fail = (code, message) => {
   throw new InstallerBuildError(code, message);
 };
+
+/**
+ * The application version the installer carries, without the tag's leading `v`.
+ *
+ * The release lanes hand over the tag itself (`vX.Y.Z`). NSIS derives the
+ * Windows numeric version from the application version and refuses a leading
+ * `v` ("Invalid major number"), while the macOS `dir` target never looks — so
+ * the tag form is accepted here and normalized once, for every target.
+ */
+export function normalizeVersion(version) {
+  const match = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(version ?? '');
+  if (match === null) fail('BAD_ARGUMENT', '--version must be v<semver> or <semver>, for example v1.2.3');
+  return match[1];
+}
 
 export function parseArguments(argv) {
   const options = { identity: undefined, resources: undefined, version: undefined, output: undefined, appDir: undefined, brandDir: undefined, target: 'dir', configOnly: false, json: false };
@@ -120,6 +134,29 @@ function verifiedIcons(brandDir) {
   };
 }
 
+/**
+ * The CLI entry the `electron-builder` package declares for itself, or null
+ * when it is not installed.
+ *
+ * pnpm exposes that CLI as one shim per shell (`.cmd` on Windows, an sh script
+ * on POSIX); neither is a portable spawn target, so the build runs the declared
+ * entry with the Node that runs this tool, on every platform.
+ */
+export function builderEntry(builderDir, exists = existsSync, read = readFileSync) {
+  const manifestPath = join(builderDir, 'package.json');
+  if (!exists(manifestPath)) return null;
+  let manifest;
+  try {
+    manifest = JSON.parse(read(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  const entry = typeof manifest?.bin === 'string' ? manifest.bin : manifest?.bin?.['electron-builder'];
+  if (typeof entry !== 'string') return null;
+  const cli = join(builderDir, entry);
+  return exists(cli) ? cli : null;
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -129,11 +166,12 @@ async function main() {
   verifiedIcons(brandDir);
   const appDir = resolve(options.appDir ?? join(repoRoot, DEFAULT_APP_DIR));
   const outputDir = resolve(options.output);
+  const version = normalizeVersion(options.version);
   mkdirSync(outputDir, { recursive: true });
 
   const config = builderConfig({
     identity,
-    version: options.version,
+    version,
     resourcesDir: options.resources,
     iconsDir: join(brandDir, 'icons'),
     appDir,
@@ -145,7 +183,7 @@ async function main() {
   const summary = {
     schema: 'heluo-desktop-installer/1',
     identity: { appId: identity.appId, productName: identity.productName, executableName: identity.executableName, guid: identity.upgradeGuid, displayName: identity.displayName },
-    version: options.version,
+    version,
     target: options.target,
     config: configPath,
   };
@@ -154,14 +192,17 @@ async function main() {
     return;
   }
 
-  const builder = join(appDir, 'node_modules', '.bin', 'electron-builder');
-  if (!existsSync(builder)) fail('BUILDER_MISSING', `electron-builder not installed under ${appDir} (pnpm install first)`);
+  const builder = builderEntry(join(appDir, 'node_modules', 'electron-builder'));
+  if (builder === null) fail('BUILDER_MISSING', `electron-builder not installed under ${appDir} (pnpm install first)`);
   const args = ['--config', configPath];
   if (options.target === 'dir') args.push('--mac', '--dir');
   else if (options.target === 'mac') args.push('--mac');
   else args.push('--win');
-  const run = spawnSync(builder, args, { cwd: appDir, encoding: 'utf8' });
-  if (run.status !== 0) fail('BUILDER_FAILED', `electron-builder exited ${run.status}\n${(run.stdout ?? '').slice(-4000)}\n${(run.stderr ?? '').slice(-4000)}`);
+  const run = spawnSync(process.execPath, [builder, ...args], { cwd: appDir, encoding: 'utf8' });
+  if (run.error !== undefined || run.status !== 0) {
+    const outcome = run.error === undefined ? `exited ${run.status}` : `could not start (${run.error.message})`;
+    fail('BUILDER_FAILED', `electron-builder ${outcome}\n${(run.stdout ?? '').slice(-4000)}\n${(run.stderr ?? '').slice(-4000)}`);
+  }
   summary.builderLog = `${run.stdout ?? ''}`.trim().split('\n').slice(-3).join(' | ');
   process.stdout.write(options.json ? `${JSON.stringify(summary, null, 2)}\n` : `built: ${outputDir} (${options.target})\n`);
 }
