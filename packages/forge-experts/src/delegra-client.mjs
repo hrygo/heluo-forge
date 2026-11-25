@@ -170,7 +170,7 @@ export function computeFollowupPayloadDigest({ taskId, taskText, reuseRefs = [] 
 
 /**
  * @param {{
- *   exchangeCredential: (params: { target: string, orgId?: string }) => Promise<{ fetch: Function, resource?: string, dispose?: Function }>,
+ *   exchangeCredential: (params: { target: string, orgId?: string, scope?: string }) => Promise<{ fetch: Function, resource?: string, dispose?: Function }>,
  *   target?: string,
  *   baseUrl?: string,
  *   orgId?: string,

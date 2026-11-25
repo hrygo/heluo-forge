@@ -289,6 +289,9 @@ export async function apply(ctx, config = {}) {
           ...(decision === 'confirm' ? { confirmationScope: params.action } : {}),
         };
       }
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] no egress policy configured; dispatch fail-closed');
+      }
       throw new ExpertsError('EXPERT_POLICY_DENIED', 'Forge Policy egress gate is not configured; dispatch is fail-closed');
     };
 

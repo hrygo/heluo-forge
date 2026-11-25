@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
 
     async function requestJson(method, path, body) {
       const init = body === undefined
-        ? undefined
+        ? { method }
         : { method, headers: REQUEST_HEADERS, body: JSON.stringify(body) };
       const response = await fetch(`${API_BASE}${path}`, init);
       return { ok: response.ok, status: response.status, body: await readJson(response) };

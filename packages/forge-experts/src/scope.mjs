@@ -16,7 +16,9 @@ function pickNonEmptyString(primary, fallback) {
 
 function normalizeIamSession(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn !== false);
+  // Support both test/adapter shape (`state: 'ready'`) and real @heluo/forge-iam
+  // `sessionView()` shape (`status: 'ready', signedIn: true, principal: { issuer, subject }`).
+  const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn === true);
   const issuer = pickNonEmptyString(raw.issuer, raw.principal?.issuer);
   const subject = pickNonEmptyString(raw.subject, raw.principal?.subject);
   if (!ready || !issuer || !subject) return null;
