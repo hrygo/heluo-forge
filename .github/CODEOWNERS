@@ -1,2 +1,2 @@
-# 合并到 main 必须由 hrygo 或 miniceM 之一 review。
-* @hrygo @miniceM
+# 合并到 main 需要至少一位代码所有者批准。
+* @hrygo @miniceM @flyyang
