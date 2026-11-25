@@ -14,16 +14,45 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DSH_ENTRY_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const WIN_ICON = 'icons/app-icon.ico';
 const MAC_ICON = 'icons/app-icon.icns';
 const DEFAULT_BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
 const DEFAULT_APP_DIR = join('services', 'forge-desktop');
+
+/**
+ * File types the packaged runtime never reads. TypeScript sources and
+ * declarations: the embedded Node refuses to strip types under node_modules
+ * (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING) and nothing in the closure
+ * compiles TypeScript. Source maps: the shell drops NODE_OPTIONS from every
+ * child environment, so `--enable-source-maps` cannot reach the runtime. Debug
+ * symbols: only a debugger opens them. electron-builder's own default excludes
+ * apply to the app files, not to `extraResources`, where the runtime travels.
+ */
+const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb'];
+
+/**
+ * The one directory that travels exactly as its tarball laid it down: the dsh
+ * artifact `runtime-lock.json` pins by digest. Everything else under
+ * `dsh/node_modules` is the registry closure.
+ */
+const VERBATIM_RUNTIME_DIR = `${DSH_ENTRY_PARTS.slice(0, 4).join('/')}/`;
+
+/**
+ * The locales Electron keeps, each named the way the platform names its locale
+ * file: Windows and Linux write `en-US.pak` and `zh-CN.pak`, macOS writes
+ * `en.lproj` and `zh_CN.lproj`. A system in any other locale is served
+ * Electron's `en-US` resources. On macOS this list currently changes nothing:
+ * electron-builder 26 looks for `*.lproj` in the app's Resources, while
+ * Electron 44 keeps them inside its framework.
+ */
+const ELECTRON_LANGUAGES = ['en', 'en-US', 'zh-CN', 'zh_TW', 'zh-TW', 'zh_CN'];
 
 export class InstallerBuildError extends Error {
   constructor(code, message) {
@@ -98,9 +127,51 @@ export function readAppIdentity(path) {
 }
 
 /**
+ * Whether a staged file reaches the package. `relativePath` is `/`-separated
+ * from the resources root, and the extension match is exact, like the glob
+ * that carries the same rule to electron-builder.
+ */
+export function isPackaged(relativePath) {
+  if (relativePath.startsWith(VERBATIM_RUNTIME_DIR)) return true;
+  return !RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath));
+}
+
+/**
+ * The `extraResources` filter. electron-builder applies its patterns in order
+ * and lets a later pattern override an earlier one, so the verbatim directory
+ * is re-included after the exclusions, not before them.
+ */
+function runtimeFilter() {
+  return ['**/*', ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`), `${VERBATIM_RUNTIME_DIR}**`];
+}
+
+/**
+ * What the staged resources amount to, and how much of them the rule leaves
+ * out: the numbers every build log keeps. Regular files only; links are copied
+ * as links and are not counted.
+ */
+export function summarizeResources(resourcesDir) {
+  const root = resolve(resourcesDir);
+  const summary = { files: 0, bytes: 0, excluded: { files: 0, bytes: 0 } };
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    const size = statSync(path).size;
+    summary.files += 1;
+    summary.bytes += size;
+    if (!isPackaged(relative(root, path).split(sep).join('/'))) {
+      summary.excluded.files += 1;
+      summary.excluded.bytes += size;
+    }
+  }
+  return summary;
+}
+
+/**
  * The electron-builder configuration derived from the identity truth. Kept
- * pure: every field an installer carries is either a literal of the identity
- * or a path this tool was handed, nothing invented here.
+ * pure: the identity fields are literals of the identity, the paths are the
+ * ones this tool was handed, and the packaging rules are the three this file
+ * owns — what travels, which locales ship, how the archive is compressed.
  */
 export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir }) {
   return {
@@ -110,15 +181,21 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     artifactName: `${identity.executableName}-\${version}-\${arch}.\${ext}`,
     directories: { output: resolve(outputDir), buildResources: resolve(appDir) },
     files: ['src/**/*', 'package.json', 'runtime-lock.json'],
-    extraResources: [{ from: resolve(resourcesDir), to: '.' }],
+    extraResources: [{ from: resolve(resourcesDir), to: '.', filter: runtimeFilter() }],
     asar: true,
     extraMetadata: { version },
+    electronLanguages: [...ELECTRON_LANGUAGES],
     win: { icon: join(iconsDir, basename(WIN_ICON)), target: [{ target: 'nsis', arch: ['x64'] }] },
     nsis: {
       guid: identity.upgradeGuid,
       artifactName: `${identity.executableName}-\${version}-setup-\${arch}.\${ext}`,
       oneClick: true,
       perMachine: false,
+      // The differential form exists for electron-updater, and this app ships
+      // no update feed: an upgrade reinstalls. Its block-map layout (non-solid,
+      // 1 MB dictionary) is what makes the archive a third larger than a solid
+      // one, which also decodes faster.
+      differentialPackage: false,
     },
     mac: { icon: join(iconsDir, basename(MAC_ICON)), target: [{ target: 'dir', arch: ['arm64'] }] },
     linux: { icon: join(iconsDir), target: [{ target: 'deb', arch: ['x64'] }] },
@@ -186,6 +263,7 @@ async function main() {
     version,
     target: options.target,
     config: configPath,
+    resources: summarizeResources(options.resources),
   };
   if (options.configOnly) {
     process.stdout.write(options.json ? `${JSON.stringify(summary, null, 2)}\n` : `config: ${configPath}\n`);

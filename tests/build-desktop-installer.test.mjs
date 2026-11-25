@@ -14,7 +14,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { APP_IDENTITY } from '../scripts/release-delivery.mjs';
-import { builderConfig, builderEntry, normalizeVersion, parseArguments, readAppIdentity } from '../scripts/build-desktop-installer.mjs';
+import { builderConfig, builderEntry, isPackaged, normalizeVersion, parseArguments, readAppIdentity, summarizeResources } from '../scripts/build-desktop-installer.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -63,6 +63,48 @@ test('配置反向：换掉身份任一字段，配置随之偏离真源（判�
     const differs = real.appId !== doctored.appId || real.nsis.guid !== doctored.nsis.guid || real.productName !== doctored.productName || real.executableName !== doctored.executableName || real.artifactName !== doctored.artifactName;
     assert.equal(differs, true, `tampering ${field} must change the configuration`);
   }
+});
+
+test('安装包内容：运行时不读取的文件类型不进包，台账钉定的制品目录原样保留', () => {
+  // 规则只认文件类型，与所在目录无关：同一个 .d.ts，在制品目录内留下，在闭包里裁掉。
+  assert.equal(isPackaged('dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts'), true);
+  assert.equal(isPackaged('dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts'), false);
+  // 反向：被裁的类型换成 .js 就必须留下，否则规则裁掉了整个目录而不只是无用文件。
+  for (const excluded of ['core/index.ts', 'api/index.d.cts', 'api/index.d.mts', 'index.js.map', 'prebuilds/win32-x64/conpty.pdb']) {
+    assert.equal(isPackaged(`dsh/node_modules/pkg/lib/${excluded}`), false, excluded);
+  }
+  assert.equal(isPackaged('dsh/node_modules/pkg/lib/index.js'), true);
+  // 运行文件、许可与说明文本、品牌材料、员工包和 npm 的隐藏锁文件都不在规则内。
+  for (const kept of ['dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js', 'dsh/node_modules/zod/LICENSE.md', 'dsh/node_modules/openai/README.md', 'dsh/node_modules/.package-lock.json', 'brand/tray.png', 'brand/status.html', 'enterprise-assets/employee-manifest.json']) {
+    assert.equal(isPackaged(kept), true, kept);
+  }
+});
+
+test('打包配置：过滤规则与判定同源且顺序正确；关闭差分包；语言包只留英文与简繁中文', (t) => {
+  const root = temp(t);
+  const config = builderConfig({ identity: readAppIdentity(identityFile(root)), version: '1.2.3', resourcesDir: join(root, 'resources'), iconsDir: join(BRAND_DIR, 'icons'), appDir: join(REPO_ROOT, 'services', 'forge-desktop'), outputDir: join(root, 'dist') });
+  // electron-builder 按顺序应用并让后者覆盖前者：豁免目录排在排除规则之后才生效。
+  assert.deepEqual(config.extraResources[0].filter, ['**/*', '!**/*.ts', '!**/*.cts', '!**/*.mts', '!**/*.map', '!**/*.pdb', 'dsh/node_modules/@deepseek-ai/dsh/**']);
+  // 本应用不建自动更新 feed，差分形式的归档比 solid 归档大三分之一。
+  assert.equal(config.nsis.differentialPackage, false);
+  // 两种拼写各对应一种平台的语言文件名：macOS 用 en / zh_CN / zh_TW，Windows 与 Linux 用 en-US / zh-CN / zh-TW。
+  assert.deepEqual(config.electronLanguages, ['en', 'en-US', 'zh-CN', 'zh_TW', 'zh-TW', 'zh_CN']);
+});
+
+test('体积摘要：逐文件分类，数字取自真实文件', (t) => {
+  const root = temp(t);
+  const resources = join(root, 'resources');
+  const write = (rel, bytes) => {
+    mkdirSync(dirname(join(resources, rel)), { recursive: true });
+    writeFileSync(join(resources, rel), Buffer.alloc(bytes));
+  };
+  write('dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', 30);
+  write('dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts', 40);
+  write('dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js', 50);
+  write('dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js.map', 60);
+  write('dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts', 70);
+  write('brand/tray.png', 80);
+  assert.deepEqual(summarizeResources(resources), { files: 6, bytes: 330, excluded: { files: 2, bytes: 130 } });
 });
 
 test('图标与品牌 manifest 账本一致；参数解析限定目标', () => {
