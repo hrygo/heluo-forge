@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { checkRepo } from '../scripts/lib/repo-rules.mjs';
-import { auditTarball, npmExecutable, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
+import { auditTarball, binIsExecutable, npmExecutable, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
 import { buildValidRepo } from './check-repo.test.mjs';
 
 function write(root, path, content) {
@@ -311,6 +311,20 @@ test('tarball audit keeps locale pairs together', () => {
     ],
   });
   assert.ok(errors.some((error) => error.includes('missing locale/zh.json')), errors.join('\n'));
+});
+
+test('bin executability on Windows answers from the git index, not NTFS', () => {
+  withFixture((root) => {
+    // NTFS cannot hold the bit: a checkout answers from the index entry.
+    const base = join(root, 'packages/forge-sample');
+    addPackage(root, 'forge-sample', {});
+    write(root, 'packages/forge-sample/src/cli.mjs', '#!/usr/bin/env node\n');
+    const gitStatus = (dir, target) => (target === './src/cli.mjs' ? '100755 packages/forge-sample/src/cli.mjs' : '100644 packages/forge-sample/src/cli.mjs');
+    assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus }), true, 'index 100755 counts as executable');
+    const six = (dir, target) => '100644 packages/forge-sample/src/cli.mjs';
+    assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus: six }), false, 'index 100644 stays a problem');
+    assert.equal(binIsExecutable(base, './src/cli.mjs', { platform: 'win32', gitStatus: () => null }), false, 'no git answer is a problem');
+  });
 });
 
 test('bin targets must be executable in the working tree', () => {
