@@ -628,7 +628,7 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
   };
   await store.write(grant);
   seedGateway(atomic.credentials, {
-    value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: 'E1001',
+    value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: 'E1001', issuer: oidc.endpoints.issuer,
     deviceLabel: 'synthetic', enteredAt: new Date(clock).toISOString(),
   });
   const openService = async () => {

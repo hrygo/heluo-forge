@@ -1796,11 +1796,22 @@ window.__ModuleLoader__.load({
     }
 
     // §6 网关状态与徽章
+    // 每种重录原因对应一句具体指引；未知原因保留通用说法。
+    const REBIND_NOTICES = Object.freeze({
+      'address-changed': '网关地址已变更，请重新录入个人访问凭证。旧凭证不会发往新的网关地址。',
+      'issuer-changed': '企业身份签发方已变更，请重新录入个人访问凭证。旧凭证不会发往新的签发方。',
+      'legacy-unbound': '该凭证来自旧版本且未记录目标地址，请重新录入个人访问凭证。',
+      'address-missing': '该凭证未记录网关地址，请重新录入个人访问凭证。',
+      'issuer-missing': '该凭证未记录企业身份签发方，请重新录入个人访问凭证。',
+    });
+    const rebindNotice = reason => REBIND_NOTICES[reason]
+      ?? '网关地址或企业身份已变更，请重新录入个人访问凭证。旧凭证不会发往新的网关地址。';
     const GATEWAY_STATUS = {
       unknown: { label: '凭据状态尚未确认', badge: 'warn' },
       unconfigured: { label: '未保存', badge: 'idle' },
       configured: { label: '已保存', badge: 'success' },
       'owner-mismatch': { label: '属于其他账号，请核对记录', badge: 'error' },
+      'rebind-required': { label: '网关已变更，请重新录入', badge: 'warn' },
       invalid: { label: '记录不一致，已保留', badge: 'error' },
     };
     const statusLabel = state => (STATUS[state] ? STATUS[state].label : '未知状态');
@@ -1818,6 +1829,10 @@ window.__ModuleLoader__.load({
         unconfigured: state === 'unconfigured',
         unknown: state === 'unknown',
         ownerMismatch: state === 'owner-mismatch',
+        rebindRequired: state === 'rebind-required',
+        rebindReason: typeof credential?.rebindReason === 'string' ? credential.rebindReason : null,
+        // 企业配置拥有目标地址时，界面不提供改地址入口（issue #226）。
+        addressAuthoritative: credential?.addressAuthoritative === true,
         invalid: state === 'invalid',
       };
     }
@@ -2016,6 +2031,9 @@ window.__ModuleLoader__.load({
       IAM_GRANT_CONTEXT_MISMATCH: '登录状态已变化，请重新登录。',
       IAM_REFRESH_SUBJECT_MISMATCH: '登录状态已变化，请重新登录。',
       IAM_GATEWAY_KEY_INVALID: '个人访问凭证无法保存，请重新粘贴网关提供的凭证。',
+      IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED: '网关地址或企业身份已变更，请重新录入个人访问凭证。',
+      IAM_GATEWAY_URL_MISMATCH: '网关地址与企业配置不一致，凭证未保存。',
+      IAM_GATEWAY_BINDING_INCOMPLETE: '缺少可信的企业身份或网关地址，凭证未保存。',
       IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
       // 模型门禁与网关：与宿主 MESSAGES 同码同句
       ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
@@ -2394,16 +2412,34 @@ window.__ModuleLoader__.load({
           ...gatewayDetails.map((item, idx) => h('span', { key: idx, className: 'fiam-meta-item' }, item))
         ) : null,
         storageWarning,
-        h('label', { style: fieldLabel },
-          h('span', { style: { fontWeight: 500, fontSize: 13 } }, '网关地址'),
-          h('input', {
-            type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
-            value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
-            placeholder: 'https://gateway.example', disabled: credential.blocked || credential.saving || viewBarrier.current.pending,
-            onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle
-          }),
-          h('span', { style: muted }, '按网关提供的完整地址填写，包括所需的路径；修改地址时请重新输入对应的个人访问凭证。'),
-        ),
+        gatewayUi.rebindRequired
+          ? h('div', { role: 'status', className: 'fiam-unsaved-banner' },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              h('span', { className: 'fiam-badge fiam-badge-warn' }, '网关已变更'),
+              h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } },
+                rebindNotice(gatewayUi.rebindReason)),
+            ),
+          ) : null,
+        // 企业配置拥有目标地址时不提供改地址入口：地址由 Host 读取，
+        // 界面输入既改不了真实目标，也会诱导用户以为换了地址就能继续用旧凭证。
+        // Only an authoritative address is not editable. A re-entry without an
+        // enterprise preset still needs the person to type the new address.
+        gatewayUi.addressAuthoritative
+          ? h('div', { style: { ...fieldLabel } },
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '网关地址'),
+            h('span', { style: { ...muted, fontFamily: 'monospace' } }, gateway.baseURL ?? view.modelAccess?.baseURL ?? '—'),
+            h('span', { style: muted }, '由企业配置统一下发，此处不可修改。'),
+          )
+          : h('label', { style: fieldLabel },
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '网关地址'),
+            h('input', {
+              type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
+              value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
+              placeholder: 'https://gateway.example', disabled: credential.blocked || credential.saving || viewBarrier.current.pending,
+              onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle
+            }),
+            h('span', { style: muted }, '按网关提供的完整地址填写，包括所需的路径；修改地址时请重新输入对应的个人访问凭证。'),
+          ),
         hasDraftChanges
           ? h('div', { role: 'status', className: 'fiam-unsaved-banner' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },

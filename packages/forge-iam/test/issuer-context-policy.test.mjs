@@ -11,6 +11,7 @@ const clock = Date.parse('2026-11-02T00:00:00.000Z');
 const config = {
   discoveryUrl: `${issuerA}/.well-known/openid-configuration`,
   clientId: 'synthetic-client',
+  managedModels: { baseURL: 'https://gateway.corp.example/v1' },
 };
 const key = `uag-${'a'.repeat(32)}`;
 

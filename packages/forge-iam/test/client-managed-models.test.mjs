@@ -1085,3 +1085,56 @@ test('a model that cannot stream offers no way to enable it (issue #202 review)'
   assert.match(text, /不支持流式/u);
   assert.doesNotMatch(text, /一键启用/u, 'a model the host cannot stream must not offer an enable action');
 });
+
+test('re-entry without an enterprise preset still offers the address field (issue #226 review)', async t => {
+  // A stored Key bound to another address needs the person to type the new one;
+  // hiding the input would leave no way to complete the re-entry.
+  const rebind = {
+    ...view,
+    gatewayCredential: { state: 'rebind-required', rebindReason: 'address-missing', matchesAccount: true, baseURL: null },
+    modelAccess: { configured: true, state: 'ready', models: [] },
+  };
+  const panel = await mountPanel(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(rebind);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  const inputs = nodes(panel.render()).filter(node => node?.props?.['aria-label'] === '网关地址');
+  assert.equal(inputs.length, 1, 'the address must be editable when no preset owns it');
+  assert.equal(inputs[0].props.disabled, false);
+});
+
+test('the rebind banner names the actual reason (issue #226 review)', async t => {
+  const cases = [
+    ['issuer-changed', /签发方已变更/u],
+    ['address-changed', /网关地址已变更/u],
+    ['legacy-unbound', /旧版本且未记录目标地址/u],
+  ];
+  for (const [reason, pattern] of cases) {
+    const rebind = {
+      ...view,
+      gatewayCredential: { state: 'rebind-required', rebindReason: reason, matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+      modelAccess: { configured: true, state: 'ready', models: [] },
+    };
+    const panel = await mountPanel(async () => Response.json(rebind));
+    t.after(() => panel.close());
+    assert.match(panel.text(panel.render()), pattern, reason);
+  }
+});
+
+test('an enterprise preset keeps the first configuration address read-only (issue #226 review)', async t => {
+  // `unconfigured` used to omit the address ownership, so a fresh install under
+  // an enterprise preset rendered an editable address box that the Host then
+  // rejected. The panel must show the preset as fixed text from the start.
+  const fresh = {
+    ...view,
+    gatewayCredential: { state: 'unconfigured', matchesAccount: false, addressAuthoritative: true, baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: { configured: true, state: 'ready', models: [] },
+  };
+  const panel = await mountPanel(async () => Response.json(fresh));
+  t.after(() => panel.close());
+  const rendered = nodes(panel.render());
+  assert.equal(rendered.filter(node => node?.props?.['aria-label'] === '网关地址').length, 0, 'no editable address when the enterprise owns it');
+  assert.match(panel.text(panel.render()), /gateway\.corp\.example/u);
+  assert.match(panel.text(panel.render()), /由企业配置统一下发，此处不可修改/u);
+});
