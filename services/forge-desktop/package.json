@@ -6,7 +6,7 @@
   "description": "Heluo Forge Enterprise desktop shell: an Electron app whose window loads the local dsh --profile web",
   "main": "src/main.mjs",
   "engines": {
-    "dsh": ">=0.2.1-rc.3"
+    "dsh": ">=0.2.2-rc.5"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

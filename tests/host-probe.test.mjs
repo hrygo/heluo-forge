@@ -12,7 +12,7 @@ import { readDshVersion } from '../scripts/lib/dsh-version.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const runner = resolve(here, '../scripts/probe/run-host-probe.mjs');
 
-/** The target DSH tools service accepts one ToolExecutionInput and returns one result. */
+/** The target DSH tools service accepts a raw batch and correlates its results. */
 function singleCallHost(settle) {
   const seen = [];
   return {
@@ -20,10 +20,9 @@ function singleCallHost(settle) {
     tools: {
       execute: async (input) => {
         seen.push(input);
-        assert.equal(typeof input?.callId, 'string');
-        assert.equal(typeof input?.name, 'string');
-        assert.equal(Array.isArray(input?.calls), false);
-        return settle(input);
+        assert.equal(input.calls.length, 1);
+        const call = input.calls[0];
+        return { results: [{ callId: call.id, result: settle(call) }] };
       },
     },
   };
@@ -41,7 +40,7 @@ test('dispatchTool: sends the target host one call with parsed arguments', async
   assert.equal(result.text, 'probe_x ran');
   assert.equal(host.seen.length, 1);
   const [input] = host.seen;
-  assert.deepEqual(input, { callId: 'probe-7', name: 'probe_x', arguments: { target: 'demo' }, signal });
+  assert.deepEqual(input, { calls: [{ type: 'tool-call', id: 'probe-7', name: 'probe_x', arguments: '{"target":"demo"}' }], signal });
   assert.equal(result.shape.kind, 'object');
   assert.deepEqual(result.shape.keys, ['isError', 'content', 'value']);
 });
@@ -61,8 +60,8 @@ test('dispatchTool: preserves the single result error details', async () => {
 test('dispatchTool: defaults the call ID and arguments', async () => {
   const host = singleCallHost(() => textResult('probe_x ran'));
   await dispatchTool({ tools: host.tools }, 'probe_x', null, { callId: '' });
-  assert.equal(host.seen[0].callId, 'probe-probe_x');
-  assert.deepEqual(host.seen[0].arguments, {});
+  assert.equal(host.seen[0].calls[0].id, 'probe-probe_x');
+  assert.equal(host.seen[0].calls[0].arguments, '{}');
   assert.ok(host.seen[0].signal instanceof AbortSignal);
 });
 

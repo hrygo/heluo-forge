@@ -2,7 +2,7 @@
 
 > 状态：可用（管理包 Stage 3A-1/3A-2 本地单测与独立制品构建已通过；目标 DSH 实机与真实 Delegra 联调待验收）
 
-河洛（Heluo Forge）面向 DeepSeek Harness（DSH `>=0.2.1-rc.3`）的**专家智能体独立插件包**（方案 B 单安装单元）。
+河洛（Heluo Forge）面向 DeepSeek Harness（DSH `>=0.2.2-rc.5`）的**专家智能体独立插件包**（方案 B 单安装单元）。
 
 ## 定位与当前范围
 
@@ -26,4 +26,4 @@ node scripts/build-enterprise-bundle.mjs --entry @heluo/forge-experts "$(mktemp 
 ## 当前未验证范围
 
 - 目标企业环境中的真实 Delegra 员工目录、逐专家授权与撤权收敛（#244）；
-- 目标 DSH `0.2.1-rc.3` 发行物（Windows / macOS / 银河麒麟 Web）上的真实安装、重启与原生 UI 实机验收（#246）。
+- 目标 DSH 发行物（Windows / macOS / 银河麒麟 Web）上的真实安装、重启与原生 UI 实机验收（#246）。

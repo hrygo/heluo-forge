@@ -6,7 +6,7 @@
   "description": "Enterprise engineering workbench bundle for DeepSeek Harness: workbench settings, DevOps (DOP), Gitee workflow, issue-delivery skill, and shared policy catalog",
   "icon": "./icon.svg",
   "engines": {
-    "dsh": ">=0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.5"
   },
   "scripts": {
     "test": "node --test"

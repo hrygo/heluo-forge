@@ -6,7 +6,7 @@
   "icon": "./icon.svg",
   "description": "Enterprise Gitee integration for Heluo Forge: repository/Issue/PR queries, controlled writes, delivery judgement, gated local git commit/push, and settings panel",
   "engines": {
-    "dsh": ">=0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.5"
   },
   "scripts": {
     "test": "node --test"

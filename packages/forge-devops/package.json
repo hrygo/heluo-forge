@@ -6,7 +6,7 @@
   "icon": "./icon.svg",
   "description": "Enterprise DevOps host plugin for Heluo Forge: change flow queries, controlled updates, fixed argv adapters, and CLI configuration settings",
   "engines": {
-    "dsh": ">=0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.5"
   },
   "scripts": {
     "test": "node --test"

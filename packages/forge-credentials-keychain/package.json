@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Encrypted SQLite enterprise credentials provider for Heluo Forge",
   "engines": {
-    "dsh": ">=0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.5"
   },
   "scripts": {
     "test": "node --test"
