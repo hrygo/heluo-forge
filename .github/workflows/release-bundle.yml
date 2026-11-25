@@ -108,3 +108,201 @@ jobs:
             --directory "$RUNNER_TEMP/upload" \
             --repo "$GITHUB_REPOSITORY" \
             --notes "$RUNNER_TEMP/release-notes.md"
+
+  # The desktop lanes rebuild the employee package themselves: workflow
+  # artifacts are downloadable by any reader of a public repository, so the
+  # enterprise payload travels between jobs only inside the build directory.
+  # `needs` keeps the ubuntu lane first, so the draft Release and its notes
+  # exist before the desktop assets attach.
+  desktop-mac:
+    name: desktop installer (macos-arm64)
+    needs: employee
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: release-bundle
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Refuse anything but a tag
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != 'tag' ]]; then
+            echo 'release-bundle must be dispatched on a tag, not a branch.' >&2
+            exit 1
+          fi
+      - name: Install the pinned build toolchain
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Fetch the locked dsh artifact
+        run: |
+          VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
+          npm pack "@deepseek-ai/dsh@${VERSION}" --pack-destination "$RUNNER_TEMP"
+          echo "DSH_TGZ=$(ls "$RUNNER_TEMP"/deepseek-ai-dsh-*.tgz | head -1)" >> "$GITHUB_ENV"
+      - name: Build the employee package for embedding
+        env:
+          HELUO_PUBLIC_LICENSE: ${{ vars.HELUO_PUBLIC_LICENSE }}
+          WITH_ENGINEERING: ${{ vars.HELUO_WITH_ENGINEERING == 'true' }}
+          HELUO_IAM_AUTH_MODE: ${{ secrets.HELUO_IAM_AUTH_MODE }}
+          HELUO_IAM_ISSUER: ${{ secrets.HELUO_IAM_ISSUER }}
+          HELUO_IAM_DISCOVERY_URL: ${{ secrets.HELUO_IAM_DISCOVERY_URL }}
+          HELUO_IAM_REVOCATION_ENDPOINT: ${{ secrets.HELUO_IAM_REVOCATION_ENDPOINT }}
+          HELUO_IAM_CLIENT_ID: ${{ secrets.HELUO_IAM_CLIENT_ID }}
+          HELUO_IAM_SCOPES: ${{ secrets.HELUO_IAM_SCOPES }}
+          HELUO_IAM_CALLBACK_PORT: ${{ secrets.HELUO_IAM_CALLBACK_PORT }}
+          HELUO_IAM_CALLBACK_ADDRESS: ${{ secrets.HELUO_IAM_CALLBACK_ADDRESS }}
+          HELUO_IAM_MANAGED_MODELS_BASE_URL: ${{ secrets.HELUO_IAM_MANAGED_MODELS_BASE_URL }}
+          HELUO_IAM_DEFAULT_PROVIDER: ${{ secrets.HELUO_IAM_DEFAULT_PROVIDER }}
+          HELUO_IAM_ALLOW_INSECURE_HTTP: ${{ secrets.HELUO_IAM_ALLOW_INSECURE_HTTP }}
+          HELUO_IAM_CLIENT_AUTH_METHOD: ${{ secrets.HELUO_IAM_CLIENT_AUTH_METHOD }}
+          HELUO_IAM_CLIENT_SECRET_REF: ${{ secrets.HELUO_IAM_CLIENT_SECRET_REF }}
+          HELUO_IAM_CLIENT_SECRET: ${{ secrets.HELUO_IAM_CLIENT_SECRET }}
+        run: |
+          if [[ -z "$HELUO_PUBLIC_LICENSE" ]]; then
+            echo 'HELUO_PUBLIC_LICENSE is not set; the build needs an explicit license decision.' >&2
+            exit 1
+          fi
+          options=()
+          if [[ "$WITH_ENGINEERING" == 'true' ]]; then options+=(--with-engineering); fi
+          node scripts/build-employee-package.mjs \
+            --tag "$GITHUB_REF_NAME" \
+            --config-from-env \
+            --license "$HELUO_PUBLIC_LICENSE" \
+            --output "$RUNNER_TEMP/employee/heluo-forge-employee-assets" \
+            --notes "$RUNNER_TEMP/release-notes.md" \
+            --json \
+            "${options[@]}"
+      - name: Stage the desktop payload
+        run: |
+          node scripts/stage-desktop-payload.mjs \
+            --output "$RUNNER_TEMP/staged" \
+            --dsh-tgz "$DSH_TGZ" \
+            --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
+      - name: Build the desktop application bundle
+        run: |
+          node scripts/build-desktop-installer.mjs \
+            --identity "$RUNNER_TEMP/employee/heluo-forge-employee-assets/branding/app-identity.json" \
+            --resources "$RUNNER_TEMP/staged/resources" \
+            --version "$GITHUB_REF_NAME" \
+            --output "$RUNNER_TEMP/dist" \
+            --target dir \
+            --json
+          APP=$(ls -d "$RUNNER_TEMP/dist/mac-"*/heluo-forge-enterprise.app | head -1)
+          mkdir -p "$RUNNER_TEMP/upload"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" \
+            "$RUNNER_TEMP/upload/heluo-forge-enterprise-${GITHUB_REF_NAME}-mac-arm64.zip"
+      - name: Attach the desktop bundle to the draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/upload-draft-release.mjs \
+            --tag "$GITHUB_REF_NAME" \
+            --directory "$RUNNER_TEMP/upload" \
+            --repo "$GITHUB_REPOSITORY"
+
+  desktop-windows:
+    name: desktop installer (windows-x64)
+    needs: employee
+    runs-on: windows-2025
+    timeout-minutes: 45
+    environment: release-bundle
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Refuse anything but a tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != 'tag' ]]; then
+            echo 'release-bundle must be dispatched on a tag, not a branch.' >&2
+            exit 1
+          fi
+      - name: Install the pinned build toolchain
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Fetch the locked dsh artifact
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
+          npm pack "@deepseek-ai/dsh@${VERSION}" --pack-destination "$RUNNER_TEMP"
+          echo "DSH_TGZ=$(ls "$RUNNER_TEMP"/deepseek-ai-dsh-*.tgz | head -1)" >> "$GITHUB_ENV"
+      - name: Build the employee package for embedding
+        shell: bash
+        env:
+          HELUO_PUBLIC_LICENSE: ${{ vars.HELUO_PUBLIC_LICENSE }}
+          WITH_ENGINEERING: ${{ vars.HELUO_WITH_ENGINEERING == 'true' }}
+          HELUO_IAM_AUTH_MODE: ${{ secrets.HELUO_IAM_AUTH_MODE }}
+          HELUO_IAM_ISSUER: ${{ secrets.HELUO_IAM_ISSUER }}
+          HELUO_IAM_DISCOVERY_URL: ${{ secrets.HELUO_IAM_DISCOVERY_URL }}
+          HELUO_IAM_REVOCATION_ENDPOINT: ${{ secrets.HELUO_IAM_REVOCATION_ENDPOINT }}
+          HELUO_IAM_CLIENT_ID: ${{ secrets.HELUO_IAM_CLIENT_ID }}
+          HELUO_IAM_SCOPES: ${{ secrets.HELUO_IAM_SCOPES }}
+          HELUO_IAM_CALLBACK_PORT: ${{ secrets.HELUO_IAM_CALLBACK_PORT }}
+          HELUO_IAM_CALLBACK_ADDRESS: ${{ secrets.HELUO_IAM_CALLBACK_ADDRESS }}
+          HELUO_IAM_MANAGED_MODELS_BASE_URL: ${{ secrets.HELUO_IAM_MANAGED_MODELS_BASE_URL }}
+          HELUO_IAM_DEFAULT_PROVIDER: ${{ secrets.HELUO_IAM_DEFAULT_PROVIDER }}
+          HELUO_IAM_ALLOW_INSECURE_HTTP: ${{ secrets.HELUO_IAM_ALLOW_INSECURE_HTTP }}
+          HELUO_IAM_CLIENT_AUTH_METHOD: ${{ secrets.HELUO_IAM_CLIENT_AUTH_METHOD }}
+          HELUO_IAM_CLIENT_SECRET_REF: ${{ secrets.HELUO_IAM_CLIENT_SECRET_REF }}
+          HELUO_IAM_CLIENT_SECRET: ${{ secrets.HELUO_IAM_CLIENT_SECRET }}
+        run: |
+          if [[ -z "$HELUO_PUBLIC_LICENSE" ]]; then
+            echo 'HELUO_PUBLIC_LICENSE is not set; the build needs an explicit license decision.' >&2
+            exit 1
+          fi
+          options=()
+          if [[ "$WITH_ENGINEERING" == 'true' ]]; then options+=(--with-engineering); fi
+          node scripts/build-employee-package.mjs \
+            --tag "$GITHUB_REF_NAME" \
+            --config-from-env \
+            --license "$HELUO_PUBLIC_LICENSE" \
+            --output "$RUNNER_TEMP/employee/heluo-forge-employee-assets" \
+            --notes "$RUNNER_TEMP/release-notes.md" \
+            --json \
+            "${options[@]}"
+      - name: Stage the desktop payload
+        shell: bash
+        run: |
+          node scripts/stage-desktop-payload.mjs \
+            --output "$RUNNER_TEMP/staged" \
+            --dsh-tgz "$DSH_TGZ" \
+            --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
+      - name: Build the NSIS installer
+        shell: bash
+        run: |
+          node scripts/build-desktop-installer.mjs \
+            --identity "$RUNNER_TEMP/employee/heluo-forge-employee-assets/branding/app-identity.json" \
+            --resources "$RUNNER_TEMP/staged/resources" \
+            --version "$GITHUB_REF_NAME" \
+            --output "$RUNNER_TEMP/dist" \
+            --target win \
+            --json
+          mkdir -p "$RUNNER_TEMP/upload"
+          mv "$RUNNER_TEMP/dist/"heluo-forge-enterprise-*-setup-*.exe "$RUNNER_TEMP/upload/"
+      - name: Attach the installer to the draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/upload-draft-release.mjs \
+            --tag "$GITHUB_REF_NAME" \
+            --directory "$RUNNER_TEMP/upload" \
+            --repo "$GITHUB_REPOSITORY"
