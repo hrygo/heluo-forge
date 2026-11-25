@@ -12,6 +12,8 @@ import {
   RELEASE_RULE,
   aliasChangeRecord,
   buildContextCard,
+  cardReadyFor,
+  cardStatusOf,
   externalRepoFacts,
   firstReleaseInfo,
   normalizeChangeRecord,
@@ -552,6 +554,35 @@ test('外部事实：unknown 卡标 blocked，渲染 REPO_FACTS_EXTERNAL 与下�
   assert.ok(rendered.includes('forge_gitee_issue_read'));
   assert.ok(!rendered.includes('- 候选'), 'unknown 时不列候选——本包不判定承建仓库');
   assert.ok(rendered.includes('AC-12'));
+});
+
+test('cardReadyFor：只有 ok=true、状态 ready、自报号全等请求号才算就绪（fail closed）', () => {
+  const card = (extra = {}) => ({
+    ok: true,
+    status: 'ready',
+    changeId: 'ARD123456',
+    context: { change: { changeId: 'ARD123456' } },
+    ...extra,
+  });
+  assert.equal(cardReadyFor(card(), 'ARD123456'), true, '就绪且自报号匹配');
+  assert.equal(cardReadyFor(card(), 'ARD123456'), true);
+  assert.equal(cardReadyFor(null, 'ARD123456'), false, '无响应');
+  assert.equal(cardReadyFor(undefined, 'ARD123456'), false);
+  assert.equal(cardReadyFor({ ...card(), ok: undefined }, 'ARD123456'), false, 'ok 缺失按不可确认');
+  assert.equal(cardReadyFor({ ...card(), ok: false }, 'ARD123456'), false, '读面失败');
+  assert.equal(cardReadyFor({ ...card(), status: 'blocked' }, 'ARD123456'), false, '未就绪');
+  assert.equal(cardReadyFor({ ...card(), status: ' ready ' }, 'ARD123456'), true, '状态去空白后判定');
+  assert.equal(cardReadyFor(card(), ''), false, '没请求号不绑');
+  assert.equal(cardReadyFor(card(), 'ARD999999'), false, '号不符不绑');
+  assert.equal(cardReadyFor({ ...card(), changeId: '', context: {} }, 'ARD123456'), false, '未自报号，fail closed');
+  assert.equal(
+    cardReadyFor({ ok: true, status: 'ready', changeId: 'ARD123456', context: { change: { changeId: 'ARD999999' } } }, 'ARD123456'),
+    false,
+    '多来源自报号冲突不绑',
+  );
+  assert.equal(cardStatusOf({ status: ' ready ' }), 'ready');
+  assert.equal(cardStatusOf({}), '');
+  assert.equal(cardStatusOf({ status: 7 }), '');
 });
 
 test('sources 缺 provenance 即拒绝（种类/命令/时间或版本/产物类型四样都要）', () => {

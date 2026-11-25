@@ -67,7 +67,51 @@ const EVIDENCE_KINDS = Object.freeze([
 export const CHANGE_SOURCE_TYPES = Object.freeze(['mock', 'enterprise']);
 
 /** 卡片状态是流程态（与平台动作的 done/failed/denied/unknown 不是一套词，渲染时不得混用）。 */
-export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
+export const READY_STATUS = 'ready';
+
+/** 状态词表：就绪与阻塞两种，词面只在这一处定义，判据与文案都引用常量。 */
+export const CONTEXT_STATUSES = Object.freeze([READY_STATUS, 'blocked']);
+
+/**
+ * 卡片状态的归一化读法（issue #342）：`ready` / `blocked` 字面量以外的形状一律归空串。
+ *
+ * 入口的堵塞分流与装配层的绑定判据都必须走这一处，否则同一次响应会出现
+ * "判不就绪"与"说变更号不符"两种说法。
+ *
+ * @param {unknown} card service 返回的上下文卡
+ * @returns {string} 去掉空白的状态；非字符串或缺失时为 `''`
+ */
+export function cardStatusOf(card) {
+  // 归一化只做去空白：非字符串（含缺失）归空串，让"没状态"与"状态不可用"走同一条裁决。
+  return typeof card?.status === 'string' ? card.status.trim() : '';
+}
+
+/**
+ * 卡片是否"就绪且属于这次请求"：入口与装配层共用同一判据（issue #342），
+ * 避免出现"命令说成功、会话却没绑定"的分叉。
+ *
+ * - `ok` 必须是显式的 `true`：`false` 是读面失败，缺失则说明实现没自报成功，一律不算就绪（fail closed）；
+ * - `status` 必须是 `ready`；
+ * - 卡片必须**自报**变更号且全部等于请求号：报不上来视为不可确认，不绑定（fail closed），
+ *   否则换一个不回填变更号的注入实现，就绪卡会把"别的变更"静默绑进会话。
+ *   号按字面比较、不折叠大小写：变更号是平台侧不透明标识，`CHANGE_ID_PATTERN` 允许混合大小写，
+ *   而"平台回显是否改写大小写"尚无取证——凭猜测折叠，等于把两个不同的号当成同一个。
+ *
+ * @param {unknown} card service 返回的上下文卡
+ * @param {string} changeId 请求的变更号
+ * @returns {boolean}
+ */
+export function cardReadyFor(card, changeId) {
+  if (card === null || typeof card !== 'object') return false;
+  if (card.ok !== true) return false;
+  if (cardStatusOf(card) !== READY_STATUS) return false;
+  const wanted = typeof changeId === 'string' ? changeId.trim() : '';
+  if (wanted === '') return false;
+  const reported = [card.changeId, card.context?.change?.changeId]
+    .filter((value) => typeof value === 'string' && value.trim() !== '')
+    .map((value) => value.trim());
+  return reported.length > 0 && reported.every((value) => value === wanted);
+}
 
 /** `release_info` 的取值规则；写进卡片与报告，让人知道排期是怎么挑出来的。 */
 export const RELEASE_RULE = 'first-non-empty';

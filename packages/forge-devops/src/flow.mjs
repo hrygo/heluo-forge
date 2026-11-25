@@ -37,6 +37,17 @@ export const FLOW_REASONS = Object.freeze({
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 
+/**
+ * 取号口径的唯一实现：`target` 非空优先，否则回退 `changeId`。
+ *
+ * 入口、装配层与流程共用这一处，避免两处各写一份 `target || changeId` 后慢慢分叉，
+ * 出现"读的是 A 号、绑的是 B 号"。
+ */
+export function requestedTargetOf(input = {}) {
+  const target = text(input?.target);
+  return target === '' ? text(input?.changeId) : target;
+}
+
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
 /** 把适配器抛出的错误压成卡里的一条未知项；错误码原样保留，便于对照门禁目录。 */
@@ -231,7 +242,7 @@ export function createDevopsFlow({
       }),
     reader,
     startFromChange: async ({ changeId } = {}) => readChange(changeId),
-    context: async (input = {}) => readChange(text(input.target) || text(input.changeId)),
+    context: async (input = {}) => readChange(requestedTargetOf(input)),
     /**
      * 受控写的执行面：门禁/confirm/绑定在装配层，这里只把三个字段交给固定 argv。
      * 未配置运行时环境时抛 `NO_READER`（零子进程），与只读面同一条 fail-closed 语义。

@@ -478,7 +478,9 @@ test('装配：流程协作者就位后工具→服务→协作者逐层交下�
 test('装配：产物落盘要先用入口绑定变更号，写出后路径与头部可核对', async () => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'forge-devops-assembly-'));
   try {
-    const flow = { startFromChange: async () => ({ ok: true, text: '## 上下文卡' }) };
+    const flow = {
+      startFromChange: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '## 上下文卡' }),
+    };
     const { registered } = mountIndex({ flow });
 
     const before = parse(
@@ -556,35 +558,122 @@ test('写回经装配层：先读再写、目标不一致拒绝、门禁收到�
   assert.deepEqual(writes().at(-1), { action: FLOW_ACTIONS.CHANGE_UPDATE, target: 'ARD123456' }, '门禁收到动作与目标');
 });
 
-test('装配：上下文卡 ready 时绑定变更号，blocked 不绑定', async () => {
-  const readyFlow = {
-    context: async () => ({
-      ok: true,
-      status: 'ready',
-      changeId: 'ARD123456',
-      card: { change: { changeId: 'ARD123456' } },
-      text: '## 上下文卡',
-    }),
-    startFromChange: async () => ({ ok: true, text: '## 上下文卡' }),
+test('装配：上下文卡 ready 才绑定变更号，blocked 不绑定（入口与聚合读同一规则）', async () => {
+  const readyCard = {
+    ok: true,
+    status: 'ready',
+    changeId: 'ARD123456',
+    card: { change: { changeId: 'ARD123456' } },
+    text: '## 上下文卡',
   };
+  const readyFlow = { context: async () => readyCard, startFromChange: async () => readyCard };
   const ready = mountIndex({ flow: readyFlow });
   assert.equal(ready.service.changeId(), null);
   await ready.service.context({ target: 'ARD123456' });
   assert.equal(ready.service.changeId(), 'ARD123456', '卡片 ready 即绑定，落盘不必再走命令入口');
 
-  const blockedFlow = {
-    context: async () => ({ ok: true, status: 'blocked', changeId: 'ARD123456', card: {}, text: '## 上下文卡' }),
-    startFromChange: async () => ({ ok: true, text: '## 上下文卡' }),
+  const viaEntry = mountIndex({ flow: readyFlow });
+  await viaEntry.service.startFromChange('ARD123456');
+  assert.equal(viaEntry.service.changeId(), 'ARD123456', '入口读到就绪卡即绑定');
+
+  const blockedCard = {
+    ok: true,
+    status: 'blocked',
+    changeId: 'ARD123456',
+    card: {},
+    unknowns: [{ field: 'dop.change.view', reason: 'CONFIG_MISSING' }],
+    text: '## 上下文卡',
   };
+  const blockedFlow = { context: async () => blockedCard, startFromChange: async () => blockedCard };
   const blocked = mountIndex({ flow: blockedFlow });
   await blocked.service.context({ target: 'ARD123456' });
   assert.equal(blocked.service.changeId(), null, '事实不全的卡不得绑定变更号');
+  await blocked.service.startFromChange('ARD123456');
+  assert.equal(blocked.service.changeId(), null, '阻塞响应不得绑定变更号');
+
+  // 就绪后再遇阻塞：保留上一次成功绑定，不覆盖也不清空（issue #342 完成标准 3）。
+  const seq = mountIndex({
+    flow: {
+      startFromChange: async ({ changeId }) => (changeId === 'ARD123456' ? readyCard : blockedCard),
+    },
+  });
+  await seq.service.startFromChange('ARD123456');
+  await seq.service.startFromChange('ARD999999');
+  assert.equal(seq.service.changeId(), 'ARD123456', '阻塞响应保留上一次成功加载的变更上下文');
+
+  // 已绑 ARD123456 后请求 ARD999999、注入却回 ARD123456 的就绪卡：命令报不可确认，
+  // 旧绑定必须原样保留（评审意见：号不匹配时既不能当成功，也不能被覆盖）。
+  const mismatchAfterBind = mountIndex({
+    flow: { startFromChange: async () => readyCard },
+  });
+  await mismatchAfterBind.service.startFromChange('ARD123456');
+  await mismatchAfterBind.service.startFromChange('ARD999999');
+  assert.equal(mismatchAfterBind.service.changeId(), 'ARD123456', '号不匹配的就绪卡保留旧绑定');
+
+  // `ok` 缺失/为 false 的卡片即使状态自称 ready、号也对得上，也不能绑定（fail closed）。
+  for (const card of [
+    { ...readyCard, ok: undefined },
+    { ...readyCard, ok: false },
+  ]) {
+    const unconfirmed = mountIndex({ flow: { startFromChange: async () => card } });
+    await unconfirmed.service.startFromChange('ARD123456');
+    assert.equal(unconfirmed.service.changeId(), null, '未显式自报 ok=true 的卡片不得绑定');
+  }
+
+  const empty = mountIndex({ flow: { startFromChange: async () => ({}) } });
+  await empty.service.startFromChange('ARD123456');
+  assert.equal(empty.service.changeId(), null, '空响应不能留下半绑定状态');
+
+  const mismatch = mountIndex({
+    flow: { startFromChange: async () => ({ ok: true, status: 'ready', changeId: 'ARD999999', text: '卡' }) },
+  });
+  await mismatch.service.startFromChange('ARD123456');
+  assert.equal(mismatch.service.changeId(), null, '就绪卡自报的变更号与请求不一致时不得绑定');
+
+  const unreported = mountIndex({
+    flow: { startFromChange: async () => ({ ok: true, status: 'ready', text: '卡' }) },
+  });
+  await unreported.service.startFromChange('ARD123456');
+  assert.equal(unreported.service.changeId(), null, '就绪卡未自报变更号时不可确认，不得绑定');
+
+  const contextMismatch = mountIndex({
+    flow: { context: async () => ({ ok: true, status: 'ready', changeId: 'ARD999999', text: '卡' }), startFromChange: async () => null },
+  });
+  await contextMismatch.service.context({ target: 'ARD123456' });
+  assert.equal(contextMismatch.service.changeId(), null, '聚合读与入口同一判据：自报号不符不得绑定');
+
+  const contextUnreported = mountIndex({
+    flow: { context: async () => ({ ok: true, status: 'ready', text: '卡' }), startFromChange: async () => null },
+  });
+  await contextUnreported.service.context({ target: 'ARD123456' });
+  assert.equal(contextUnreported.service.changeId(), null, '聚合读与入口同一判据：未自报号不得绑定');
+
+  // `forge_devops_change_context` 的 target 是必填（schema required）；直调 service 不传 target 时
+  // 没有"这次请求的是哪个变更"，绑上卡片自报号等于替调用方猜目标，故 fail closed。
+  const contextNoTarget = mountIndex({
+    flow: {
+      context: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '卡' }),
+      startFromChange: async () => null,
+    },
+  });
+  await contextNoTarget.service.context({});
+  assert.equal(contextNoTarget.service.changeId(), null, '未指定请求号时不绑定');
+
+  // flow 按 `target || changeId` 取号，装配层必须同口径：只传 changeId 的调用方也要能绑定。
+  const contextByChangeId = mountIndex({
+    flow: {
+      context: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '卡' }),
+      startFromChange: async () => null,
+    },
+  });
+  await contextByChangeId.service.context({ changeId: 'ARD123456' });
+  assert.equal(contextByChangeId.service.changeId(), 'ARD123456', '只传 changeId 时按同一目标号绑定');
 });
 
 test('装配：artifact_write 的 data 经真实 service 落盘，body/data 互斥与机检失败由 artifacts 报出', async () => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'forge-devops-data-'));
   try {
-    const flow = { startFromChange: async () => ({ ok: true, text: '## 上下文卡' }) };
+    const flow = { startFromChange: async () => ({ ok: true, status: 'ready', changeId: 'ARD123456', text: '## 上下文卡' }) };
     const { registered, service } = mountIndex({ flow });
     assert.equal((await service.startFromChange('ARD123456')).ok, true);
     const tool = registered.get(ARTIFACT_TOOL);
@@ -787,6 +876,33 @@ test('装配：change.read 归一失败不抛错，raw 照常返回并写 normal
   assert.equal(result.facts.normalize_error, 'CONTEXT_RECORD_INVALID');
   assert.deepEqual(result.facts.raw, { id: 'ARD123456' }, 'raw 仍然返回');
   assert.equal(service.changeId(), 'ARD123456', '归一失败不影响绑定（读成功即绑定）');
+});
+
+test('装配：change.read 读回的记录号与请求号不符时不绑定', async () => {
+  const reader = {
+    read: async ({ target }) => ({
+      status: 'succeeded',
+      target_ref: target,
+      source_revision: 'dop:swapped',
+      raw: {
+        id: 'ARD999999',
+        title: '积分商城改造',
+        status: 'in_progress',
+        type: 'requirement',
+        owner: 'hosea',
+        description: '积分商城支持兑换券',
+        acceptance_criteria: ['兑换券可抵扣'],
+        created_at: '2026-10-20T00:00:00Z',
+        sub_systems: [{ code: 'points-mall', name: '积分商城' }],
+        user_stories: [],
+      },
+    }),
+  };
+  const { service } = mountIndex({ reader });
+  const result = await service.read({ action: 'change.read', target: 'ARD123456' });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.facts.normalize_error, 'CONTEXT_ID_MISMATCH');
+  assert.equal(service.changeId(), null, '信封成功但记录是别的变更号，不得绑定');
 });
 
 

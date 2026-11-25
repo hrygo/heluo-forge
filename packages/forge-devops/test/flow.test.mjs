@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { createDevopsFlow } from '../src/flow.mjs';
+import { createDevopsFlow, requestedTargetOf } from '../src/flow.mjs';
 import { apply, FLOW_KEY, READ_ACTIONS, READ_REASONS, SERVICE_KEY } from '../src/index.mjs';
 import { CLI_PAGE_HINT, CLI_REASONS } from '../src/cli-config.mjs';
 import { CLI_API_PREFIX, CLI_ROUTE_PATH } from '../src/http.mjs';
@@ -76,6 +76,14 @@ test('配置齐全时 startFromChange 产出卡：只取 dop 一条事实，承�
   assert.match(result.text, /上下文卡/u);
   assert.match(result.text, /REPO_FACTS_EXTERNAL/u);
   assert.match(result.text, /forge_gitee_repository_read/u);
+});
+
+test('取号口径：target 优先、回退 changeId、都为空给空串（唯一实现）', () => {
+  assert.equal(requestedTargetOf({ target: ' ARD123456 ', changeId: 'ARD999999' }), 'ARD123456');
+  assert.equal(requestedTargetOf({ target: '   ', changeId: ' ARD123456 ' }), 'ARD123456');
+  assert.equal(requestedTargetOf({ changeId: 'ARD123456' }), 'ARD123456');
+  assert.equal(requestedTargetOf({}), '');
+  assert.equal(requestedTargetOf({ target: 42, changeId: null }), '');
 });
 
 test('未配置运行时环境：产出 blocked 卡、未知项点名 CONFIG_MISSING，且零子进程调用', async () => {

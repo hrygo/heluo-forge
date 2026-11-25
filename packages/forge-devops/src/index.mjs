@@ -32,9 +32,9 @@ import {
 } from './read.mjs';
 import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
-import { displayableChange, normalizeChangeRecord } from './change-context.mjs';
+import { CONTEXT_REASONS, cardReadyFor, displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
-import { createDevopsFlow } from './flow.mjs';
+import { createDevopsFlow, requestedTargetOf } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
 import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS, deriveSourceType } from './cli-config.mjs';
 import { DEFAULT_ENTRY_ID, createCliAccess } from './cli-access.mjs';
@@ -686,13 +686,33 @@ export function apply(ctx, rawConfig = {}) {
       }
       const result = action === 'change.read' ? normalizeChangeFacts(admitted, requestedTarget) : admitted;
       // 只在读成功（envelope status=succeeded）时绑定：失败仍要能重试，不留下半绑定状态。
-      if (action === 'change.read' && result?.status === 'succeeded') bindChangeId(requestedTarget);
+      // 读回记录自报的号与请求号不符时（归一阶段判 `CONTEXT_REASONS.ID_MISMATCH`）同样不绑：绑定代表"会话读到的就是这条"，
+      // 信封说成功但记录是别的变更，绑上去等于把别人的变更当成本次目标。
+      //
+      // 这里的判据与 `context` / `startFromChange` 的 `cardReadyFor` **不同，且是有意为之**：
+      // 那两处拿到的是上下文卡，卡自带"就绪 + 自报号"可供 fail-closed 判定；`change.read` 是信封投影，
+      // 没有卡片状态可比，设计约定"读成功即绑定"（docs/design/plugins/forge-devops.md §5.1）。
+      // 因此：`normalize_error` 为其他原因码（如记录缺必填字段）时**仍然绑定**——解读不了不等于读到的是别的变更；
+      // 绑的是请求方给的号（`read` 路径只校验动作登记与非空 target，**不**校验 CHANGE_ID_PATTERN），
+      // 只有能确认记录自报号不同（ID_MISMATCH）时才收回。
+      if (
+        action === 'change.read' &&
+        result?.status === 'succeeded' &&
+        result?.facts?.normalize_error !== CONTEXT_REASONS.ID_MISMATCH
+      ) {
+        bindChangeId(requestedTarget);
+      }
       return result;
     },
-    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；卡片 ready 即绑定变更号。 */
+    /**
+     * 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）。
+     * 绑定判据与命令入口共用 `cardReadyFor`：卡片就绪且自报号匹配才绑定（issue #342）。
+     */
     context: async (input = {}) => {
+      // 目标号与 flow 共用同一实现（`requestedTargetOf`），不在这里再写一份取号规则。
+      const requestedTarget = requestedTargetOf(input);
       const result = await callFlow('change.context', 'context', input);
-      if (result?.status === 'ready') bindChangeId(result?.changeId);
+      if (cardReadyFor(result, requestedTarget)) bindChangeId(requestedTarget);
       return result;
     },
     /**
@@ -756,7 +776,7 @@ export function apply(ctx, rawConfig = {}) {
       return writeArtifact({ repoRoot, changeId: currentChangeId, kind, body, data, meta });
     },
     /**
-     * 入口：取回上下文卡并**只在成功时**绑定变更号（失败仍要能重试，不留下半绑定的状态）。
+     * 入口：取回上下文卡并**只在卡片就绪时**绑定变更号（阻塞、失败与空响应保留上一次绑定）。
      * 注入的协作者形状不完整时返回结构化拒绝，而不是让命令面显示 INTERNAL——原因必须可见。
      */
     startFromChange: async (changeId) => {
@@ -772,7 +792,7 @@ export function apply(ctx, rawConfig = {}) {
         };
       }
       const card = await flow.startFromChange({ changeId });
-      if (card?.ok !== false) bindChangeId(changeId);
+      if (cardReadyFor(card, changeId)) bindChangeId(changeId);
       return card;
     },
     config,
