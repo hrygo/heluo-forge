@@ -1103,3 +1103,21 @@ test('re-entry without an enterprise preset still offers the address field (issu
   assert.equal(inputs.length, 1, 'the address must be editable when no preset owns it');
   assert.equal(inputs[0].props.disabled, false);
 });
+
+test('the rebind banner names the actual reason (issue #226 review)', async t => {
+  const cases = [
+    ['issuer-changed', /签发方已变更/u],
+    ['address-changed', /网关地址已变更/u],
+    ['legacy-unbound', /旧版本且未记录目标地址/u],
+  ];
+  for (const [reason, pattern] of cases) {
+    const rebind = {
+      ...view,
+      gatewayCredential: { state: 'rebind-required', rebindReason: reason, matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+      modelAccess: { configured: true, state: 'ready', models: [] },
+    };
+    const panel = await mountPanel(async () => Response.json(rebind));
+    t.after(() => panel.close());
+    assert.match(panel.text(panel.render()), pattern, reason);
+  }
+});

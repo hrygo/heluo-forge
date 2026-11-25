@@ -266,3 +266,72 @@ test('without an enterprise preset the saved address is the anchor and still bin
   assert.equal(view.gatewayCredential.addressAuthoritative, false);
   assert.equal((await f.service.resolveGatewayConnection()).baseURL, gatewayA);
 });
+
+test('an enterprise preset makes the very first configuration address read-only (issue #226 review)', async (t) => {
+  const f = await serviceWith(t);
+  const view = await f.service.loadGatewayCredential({ force: true });
+  assert.equal(view.state, 'unconfigured');
+  // Before any record exists the UI must already know who owns the target.
+  assert.equal(view.addressAuthoritative, true);
+  assert.equal(view.baseURL, gatewayA);
+});
+
+test('without a preset the first configuration still owns its address (issue #226 review)', async (t) => {
+  const f = await serviceWith(t, { managedModels: null });
+  const view = await f.service.loadGatewayCredential({ force: true });
+  assert.equal(view.state, 'unconfigured');
+  assert.equal(view.addressAuthoritative, false);
+  assert.equal(view.baseURL, null);
+});
+
+test('a saved Key only inherits the address of the same account and issuer (issue #226 review)', async (t) => {
+  // Another person's record must not lend its target to this save.
+  const foreign = createAtomicGatewayFixture();
+  foreign.credentials.records.set(GATEWAY_RECORD_KEY, {
+    kind: 'grant',
+    payload: {
+      version: 3, ownerSubject: 'someone-else', issuer, baseURL: gatewayB,
+      enteredAt: '2030-01-01T00:00:00.000Z', writeOperationId: randomUUID(),
+      valueDigest: createHash('sha256').update(key).digest('hex'),
+    },
+  });
+  foreign.credentials.refs.set(GATEWAY_REF, key);
+  const foreignService = await serviceWith(t, { managedModels: null, fixture: foreign });
+  await assert.rejects(
+    () => foreignService.service.saveGatewayCredential({ key }),
+    (error) => error.code === 'IAM_GATEWAY_BINDING_INCOMPLETE',
+  );
+
+  // A legacy (v2) record is not a usable anchor either.
+  const legacy = createAtomicGatewayFixture();
+  legacy.credentials.records.set(GATEWAY_RECORD_KEY, {
+    kind: 'grant',
+    payload: {
+      version: 2, ownerSubject: 'synthetic-subject', baseURL: gatewayB,
+      enteredAt: '2030-01-01T00:00:00.000Z', writeOperationId: randomUUID(),
+      valueDigest: createHash('sha256').update(key).digest('hex'),
+    },
+  });
+  legacy.credentials.refs.set(GATEWAY_REF, key);
+  const legacyService = await serviceWith(t, { managedModels: null, fixture: legacy });
+  await assert.rejects(
+    () => legacyService.service.saveGatewayCredential({ key }),
+    (error) => error.code === 'IAM_GATEWAY_BINDING_INCOMPLETE',
+  );
+
+  // The same account rotating its Key at the same target may reuse that target.
+  const own = createAtomicGatewayFixture();
+  own.credentials.records.set(GATEWAY_RECORD_KEY, {
+    kind: 'grant',
+    payload: {
+      version: 3, ownerSubject: 'synthetic-subject', issuer, baseURL: gatewayB,
+      enteredAt: '2030-01-01T00:00:00.000Z', writeOperationId: randomUUID(),
+      valueDigest: createHash('sha256').update(key).digest('hex'),
+    },
+  });
+  own.credentials.refs.set(GATEWAY_REF, key);
+  const ownService = await serviceWith(t, { managedModels: null, fixture: own });
+  const view = await ownService.service.saveGatewayCredential({ key: `${key}-rotated` });
+  assert.equal(view.gatewayCredential.state, 'configured');
+  assert.equal(view.gatewayCredential.baseURL, gatewayB);
+});

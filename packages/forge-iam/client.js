@@ -1796,6 +1796,16 @@ window.__ModuleLoader__.load({
     }
 
     // §6 网关状态与徽章
+    // 每种重录原因对应一句具体指引；未知原因保留通用说法。
+    const REBIND_NOTICES = Object.freeze({
+      'address-changed': '网关地址已变更，请重新录入个人访问凭证。旧凭证不会发往新的网关地址。',
+      'issuer-changed': '企业身份签发方已变更，请重新录入个人访问凭证。旧凭证不会发往新的签发方。',
+      'legacy-unbound': '该凭证来自旧版本且未记录目标地址，请重新录入个人访问凭证。',
+      'address-missing': '该凭证未记录网关地址，请重新录入个人访问凭证。',
+      'issuer-missing': '该凭证未记录企业身份签发方，请重新录入个人访问凭证。',
+    });
+    const rebindNotice = reason => REBIND_NOTICES[reason]
+      ?? '网关地址或企业身份已变更，请重新录入个人访问凭证。旧凭证不会发往新的网关地址。';
     const GATEWAY_STATUS = {
       unknown: { label: '凭据状态尚未确认', badge: 'warn' },
       unconfigured: { label: '未保存', badge: 'idle' },
@@ -2407,7 +2417,7 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('span', { className: 'fiam-badge fiam-badge-warn' }, '网关已变更'),
               h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } },
-                '网关地址或企业身份已变更，请重新录入个人访问凭证。旧凭证不会发往新的网关地址。'),
+                rebindNotice(gatewayUi.rebindReason)),
             ),
           ) : null,
         // 企业配置拥有目标地址时不提供改地址入口：地址由 Host 读取，

@@ -28,34 +28,46 @@ export function createServiceGateway(env) {
   let summaryRead = null;
   let sessionSummaryRead = null;
 
-  /** Normalized enterprise address, or undefined when this deployment has no preset. */
+  /**
+   * Normalized enterprise address. `undefined` means this deployment has no
+   * preset; a preset that cannot be normalized is a configuration error, not a
+   * reason to fall back to an editable or inherited address (fail closed).
+   */
   function authoritativeBaseURL() {
     const configuredAddress = config.managedModels?.baseURL;
     if (typeof configuredAddress !== 'string' || configuredAddress.length === 0) return undefined;
-    try { return normalizeGatewayBaseURL(configuredAddress); } catch { return undefined; }
+    try {
+      return normalizeGatewayBaseURL(configuredAddress);
+    } catch {
+      throw new IamError('IAM_CONFIG_INVALID', '企业预置的网关地址无效，请联系管理员检查配置。');
+    }
   }
 
   async function read(targetGatewayStore, targetStore, isCurrent) {
     if (!isCurrent()) return null;
     const record = await targetGatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
     if (!isCurrent()) return null;
-    if (!record.ok) return { state: 'invalid' };
+    // The UI needs the address ownership before any record exists: with an
+    // enterprise preset the first configuration must already be read-only.
+    const preset = authoritativeBaseURL();
+    const ownership = { baseURL: preset ?? null, addressAuthoritative: preset !== undefined };
+    if (!record.ok) return { state: 'invalid', ...ownership };
     if (!record.credential) {
       const storage = await targetGatewayStore.describe().catch(() => null);
       if (!isCurrent()) return null;
-      return storage?.configured ? { state: 'invalid', matchesAccount: false } : { state: 'unconfigured' };
+      return storage?.configured ? { state: 'invalid', matchesAccount: false, ...ownership } : { state: 'unconfigured', ...ownership };
     }
     const resolved = await targetGatewayStore.resolve(record.credential).catch(() => undefined);
     if (!isCurrent()) return null;
     const credential = record.credential;
-    if (resolved?.invalid) return { state: 'invalid' };
-    if (!resolved?.value) return { state: 'unconfigured' };
+    if (resolved?.invalid) return { state: 'invalid', ...ownership };
+    if (!resolved?.value) return { state: 'unconfigured', ...ownership };
     const storage = await targetGatewayStore.describe().catch(() => null);
     if (!isCurrent()) return null;
     const signedInSubject = ctx.lastGrant && grants.ownerOf(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;
     const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
     // Which target does this Key belong to, and can the Host still prove it?
-    const authoritative = authoritativeBaseURL();
+    const authoritative = preset;
     const binding = evaluateGatewayBinding({
       credential: record.credential,
       expectedIssuer: ctx.knownIssuer(),
@@ -495,7 +507,17 @@ export function createServiceGateway(env) {
     const enteredAt = nowIso(now());
     const suggestedExpiry = addSeconds(now(), 90 * 24 * 60 * 60).slice(0, 10);
     const issuer = ctx.knownIssuer();
-    const targetAddress = baseURL ?? (await targetGatewayStore.read().catch(() => null))?.credential?.baseURL;
+    // Without a preset, falling back to the stored address is only safe for the
+    // same account and issuer: another person's or a stale issuer's target must
+    // not be inherited silently.
+    const previous = (await targetGatewayStore.read().catch(() => null))?.credential;
+    const inheritable = previous
+      && previous.version === 3
+      && previous.ownerSubject === subject
+      && previous.issuer === issuer
+      ? previous.baseURL
+      : undefined;
+    const targetAddress = baseURL ?? inheritable;
     // Without a trusted issuer and a concrete target there is nothing to bind,
     // so the Key is not stored rather than stored unbound.
     if (typeof issuer !== 'string' || issuer.length === 0 || typeof targetAddress !== 'string' || targetAddress.length === 0) {
