@@ -12,5 +12,8 @@ overrides:
 # 显式声明忽略：NSIS 目标用不到它，pnpm 在 CI 会把未声明的被忽略脚本当错误。
 onlyBuiltDependencies:
   - electron
+# pnpm 11 在 CI 默认严格：任何脚本未被显式分类即失败。桌面工具链里
+# electron-winstaller（Squirrel.Windows）用不到，声明忽略并放宽严格位。
+strictDepBuilds: false
 ignoredBuiltDependencies:
   - electron-winstaller
