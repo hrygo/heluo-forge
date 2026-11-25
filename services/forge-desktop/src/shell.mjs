@@ -89,7 +89,9 @@ export function startShell(electron, options) {
     // consumed part of it. Any other package is verified whole, then installed.
     if (firstRunNeeded({ markerPath, manifestDigest: current?.manifestDigest ?? null, profile })) {
       const assets = locateEnterpriseAssets({ candidates: assetsCandidates });
-      await initializeProfile({ assets, runInit: loadInstaller(assets.installerPath), env, exec, profile, dsh: embeddedCommand });
+      // main.mjs resolves the installer through a dynamic import: await it, or
+      // the profile initializer receives a Promise instead of a function.
+      await initializeProfile({ assets, runInit: await loadInstaller(assets.installerPath), env, exec, profile, dsh: embeddedCommand });
       if (writeFirstRunMarker(markerPath, { manifestDigest: assets.manifestDigest, profile }) === null) {
         fail('FIRST_RUN_MARKER', 'the first-run record could not be written');
       }
