@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildBundle, buildEnterpriseBundle } from '../scripts/build-enterprise-bundle.mjs';
+import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { auditReleaseClosure, auditTarball, execNpm } from '../scripts/lib/bundle-rules.mjs';
 
 // These fixtures test packaging failures only; the real product tarball and
@@ -101,6 +102,23 @@ test('buildBundle 以指定安装单元为根闭包构建，默认入口仍是�
   const umbrella = buildEnterpriseBundle({ root, destination: join(root, 'umbrella') });
   assert.equal(umbrella.manifest.name, '@heluo/forge-enterprise');
   assert.equal(umbrella.manifest.dependencies['@heluo/forge-member'], '0.1.0');
+});
+
+test('packed bins keep the executable bit through the deterministic rewrite', (t) => {
+  const root = fixture(t);
+  const pkgPath = join(root, 'packages/forge-member/package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  pkg.bin = { 'forge-member': './src/cli.mjs' };
+  writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  put(root, 'packages/forge-member/src/cli.mjs', '#!/usr/bin/env node\n');
+  chmodSync(join(root, 'packages/forge-member/src/cli.mjs'), 0o755);
+  const built = buildEnterpriseBundle({ root, destination: join(root, 'bin-release') });
+  const entries = readBundleEntries(built.tarball);
+  const cli = entries.find((entry) => entry.path === 'node_modules/@heluo/forge-member/src/cli.mjs');
+  assert.equal(cli.mode, '0755', 'the shipped bin carries the executable bit');
+  assert.deepEqual(auditTarball({ label: 'fixture', manifest: built.manifest, packed: built.packed }), [], 'the audit reads the final bytes');
+  const again = buildEnterpriseBundle({ root, destination: join(root, 'bin-release-2') });
+  assert.equal(digest(again.tarball), digest(built.tarball), 'the rewrite is reproducible');
 });
 
 test('build refuses source symlinks and accidentally declared test/cache resources', (t) => {

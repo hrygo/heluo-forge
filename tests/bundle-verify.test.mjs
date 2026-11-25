@@ -10,6 +10,7 @@ import test from 'node:test';
 import { buildEnterpriseBundle } from '../scripts/build-enterprise-bundle.mjs';
 import { readBundleEntries, summarizeBundle } from '../scripts/lib/bundle-archive.mjs';
 import { createBundleManifest, diffBundleManifest, parseBundleManifest, serializeBundleManifest, serializeSha256Sums } from '../scripts/lib/bundle-manifest.mjs';
+import { rewriteArchiveModes } from '../scripts/lib/bundle-write.mjs';
 import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 import { createReleaseTree, ENTRY } from './fixtures/release-tree.mjs';
 
@@ -236,6 +237,28 @@ test('structure rules catch workspace references, shipped tests and a non-execut
   // Without a manifest the structural rules still decide the verdict.
   assert.equal(verifyBundle(artifact(t, { manifest: false }).tarballPath).ok, true);
   assert.equal(verifyBundle(artifact(t, { manifest: false }).tarballPath).manifest, null);
+});
+
+test('a Windows-shaped pack (bins at 0644) is normalized to the mode the index decided', () => {
+  // `npm pack` copies the filesystem's stat mode: on NTFS nothing holds the
+  // executable bit, so a Windows build packs every bin as 0644 no matter what
+  // the git index says. The build re-emits the archive through the
+  // deterministic writer with the normalized mode, so the shipped bytes carry
+  // the index's decision.
+  const windowsShaped = tarStream(baseFiles({ binMode: 0o644 }));
+  const modes = new Map([['bin/cli.mjs', 0o755]]);
+  const normalized = rewriteArchiveModes(windowsShaped, modes);
+  const entries = readBundleEntries(normalized);
+  assert.equal(entries.find((entry) => entry.path === 'bin/cli.mjs').mode, '0755', 'bin mode comes from the map');
+  assert.equal(entries.find((entry) => entry.path === 'README.md').mode, '0644', 'untargeted entries keep their mode');
+  const shape = ({ path, size, sha256 }) => ({ path, size, sha256 });
+  assert.deepEqual(entries.map(shape), readBundleEntries(windowsShaped).map(shape), 'contents and paths are untouched');
+  assert.deepEqual(rewriteArchiveModes(windowsShaped, modes), normalized, 'the rewrite is deterministic');
+
+  // A mode for a path the archive does not carry is not a decision the writer
+  // can apply; missing bins stay the audit's own failure.
+  const untouched = rewriteArchiveModes(windowsShaped, new Map([['not-there.mjs', 0o755]]));
+  assert.equal(readBundleEntries(untouched).find((entry) => entry.path === 'bin/cli.mjs').mode, '0644');
 });
 
 test('archive reader rejects unsafe paths, duplicates, links and broken streams', (t) => {

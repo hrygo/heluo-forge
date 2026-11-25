@@ -20,6 +20,8 @@
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 
+import { readBundleEntries } from './bundle-archive.mjs';
+
 const BLOCK = 512;
 /** 1985-10-26T08:15:00Z: the fixed mtime `npm pack` has used for years. */
 export const FIXED_MTIME = 499_162_500;
@@ -159,4 +161,32 @@ export function tarballEntries(files) {
       mode: (file.mode ?? 0o644).toString(8).padStart(4, '0'),
     };
   });
+}
+
+/**
+ * Re-emit an existing archive with corrected entry modes.
+ *
+ * `npm pack` copies the filesystem's stat mode into the tar header, and NTFS
+ * cannot hold the executable bit: a Windows build packs every bin as 0644 no
+ * matter what the git index says. The shipped bytes must carry the index's
+ * decision, so the build reads the packed archive back through the verifier's
+ * own reader and re-emits it through the deterministic writer with the
+ * normalized modes. Entry set, bytes and untargeted modes are preserved; a
+ * mode for a path the archive does not carry is not this function's decision
+ * to report — the audits own missing-bin detection.
+ *
+ * @param {string | Uint8Array} source tarball path or raw gzip bytes
+ * @param {Map<string, number>} modes archive-relative paths (no `package/`
+ *   prefix) to the mode they must ship as
+ * @returns {Buffer} deterministic gzip bytes of the rewritten archive
+ */
+export function rewriteArchiveModes(source, modes, { prefix = PACKAGE_PREFIX } = {}) {
+  if (!(modes instanceof Map)) fail('modes must be a Map of archive-relative paths');
+  const entries = readBundleEntries(source, { withContent: true, prefix });
+  const files = entries.map(({ path, content, mode }) => ({
+    path,
+    body: content,
+    mode: modes.get(path) ?? Number.parseInt(mode, 8),
+  }));
+  return writeBundleTarball(files, { prefix });
 }
