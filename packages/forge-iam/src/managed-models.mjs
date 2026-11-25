@@ -382,7 +382,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // An enabled manual route this snapshot cannot see (a pending refresh) is
       // not a catalogue decision: keep it callable. Anything else without a
       // catalogue read is a gateway-side failure, not "never offered".
-      if (enabled(model) && manualModels.some(item => item.id === model)) return null;
+      // Only while the directory is still loading: once it has failed, the
+      // failure is what both entries must report, manual route or not.
+      if (!catalogError && enabled(model) && manualModels.some(item => item.id === model)) return null;
       if (!catalogueRead) {
         const code = catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
         return { code, message: MESSAGES[code] ?? MESSAGES.ENTERPRISE_MODELS_UNAVAILABLE };
@@ -586,7 +588,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (denied) return plain(denied);
     if (captured !== undefined && captured !== version) return plain('IAM_MODEL_CONTEXT_CHANGED');
     if (credentialRevoked()) return plain('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
-    if (!backend) return plain(adapterError ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
+    // Without an adapter, name the failure every entry sees: adapter
+    // initialization first, directory failure second (issue #380). A route that
+    // still has a locally built adapter keeps serving (manual routes are
+    // independent of the catalogue, see the same-account relogin case).
+    if (!backend) return plain(missingBackendCode() ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     const model = enabledModel(request.provider, request.model);
     if (!model) return denialFor(request.provider, request.model, { guard: true });
     if (!installed(model)) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
@@ -1284,6 +1290,20 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         }
         const mine = version;
         const subject = iam.getView()?.principal;
+        if (disposed) {
+          const cause = error('ENTERPRISE_MODELS_UNAVAILABLE');
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
+        // A directory or adapter failure is the gateway-side cause the direct
+        // entry must report too — but only for this provider, and only while the
+        // session itself is still usable; sign-in and revocation stay first.
+        const signInBlocked = permit(iam.getView());
+        if (route === provider && !signInBlocked && !backend && missingBackendCode()) {
+          const cause = error(missingBackendCode());
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
         // Even a saved selection after logout reaches an actionable sign-in error.
         if (!permit(iam.getView()) && !allowed(route, model)) {
           // `permit()` may be the real blocker (signed out, revoked); keep its
@@ -1322,6 +1342,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         };
       };
       if (key === 'resolveModel') return async (route, model, signal) => {
+        if (disposed) {
+          const cause = error('ENTERPRISE_MODELS_UNAVAILABLE');
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
+        // Same precedence as prepareCall and the stream guard: the shared
+        // no-adapter cause wins over the model-level denial, otherwise a
+        // directory model would report a different code than the other entries
+        // (issue #380 review).
+        const signInBlocked = permit(sample());
+        if (route === provider && !signInBlocked && !backend && missingBackendCode()) {
+          const cause = error(missingBackendCode());
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
         if (!permit(sample()) && !allowed(route, model)) {
           // `permit()` may be the real blocker (signed out, revoked); keep its
           // outcome when the model itself is fine, so nothing pretends the
@@ -1371,6 +1406,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ...prepareHeaders === undefined ? {} : { prepareHeaders },
     });
   }
+  /**
+   * Why nothing can serve a call right now. Adapter-initialization failure is the
+   * immediate reason, the directory failure is the next; every entry point and
+   * the stream guard resolve this the same way so one request is never described
+   * with two different causes (issue #380).
+   */
+  const missingBackendCode = () => adapterError ?? catalogError;
+
   function installAdapter(resolved, entries) {
     backend = resolved;
     installedModels = new Map(entries.map(model => [model.id, model]));
@@ -1660,6 +1703,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (disposed) return;
       disposed = true; clearTimeout(timer); stopRotationCheck(); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
       await observation; catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined; installedModels.clear();
+      // A closed runtime has no current failure: stale codes must not outlive it
+      // and make another entry report a different cause (issue #380 review).
+      catalogError = null; adapterError = null;
     }
   };
 }
