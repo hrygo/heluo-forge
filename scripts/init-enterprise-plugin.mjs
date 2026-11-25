@@ -55,7 +55,7 @@ export function isSupportedProfileName(name) {
  * `.dsh-version` 的确认基线一致（`scripts/dsh-version.mjs check` 会断言，升级基线须同步）。
  */
 export const HOST_PACKAGE = '@deepseek-ai/dsh';
-export const DEFAULT_HOST_VERSION = '0.2.1-rc.3';
+export const DEFAULT_HOST_VERSION = '0.2.2-rc.5';
 
 /** 私版交付 sidecar 的 schema；与 `scripts/lib/private-bundle.mjs` 同源。 */
 export const RELEASE_SCHEMA = 'heluo-private-release/1';

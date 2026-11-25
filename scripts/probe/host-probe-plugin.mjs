@@ -26,9 +26,7 @@ const parentAgentOf = (handle) => handle?.agent ?? handle;
 
 /**
  * 最小单次派发（AC-7）：`.dsh-version` 固定的目标宿主中，
- * `@deepseek-ai/dsh-tools` 的 `ToolExecutionInput` 接收
- * `{ callId, name, arguments, signal }`，`arguments` 是已解析的值，
- * 返回单个 `ToolExecutionResult`，而不是 `calls` / `results` 批次。
+ * `@deepseek-ai/dsh-tools` 接收原始工具调用批次，并按 callId 返回结果。
  * 返回形状不符合目标宿主契约时必须报错，不能把缺失结果当成成功。
  *
  * @param {{tools:{execute:Function}}} ctx 宿主上下文（探针或子代理的上下文均可）
@@ -40,12 +38,13 @@ const parentAgentOf = (handle) => handle?.agent ?? handle;
 export async function dispatchTool(ctx, toolName, args = {}, options = {}) {
   const { signal = new AbortController().signal, callId } = options ?? {};
   const id = typeof callId === 'string' && callId !== '' ? callId : `probe-${toolName}`;
-  const result = await ctx.tools.execute({
-    callId: id,
-    name: toolName,
-    arguments: args ?? {},
+  const batch = await ctx.tools.execute({
+    calls: [{ type: 'tool-call', id, name: toolName, arguments: JSON.stringify(args ?? {}) }],
     signal,
   });
+  const result = batch?.results?.length === 1 && batch.results[0]?.callId === id
+    ? batch.results[0].result
+    : undefined;
   if (typeof result?.isError !== 'boolean' || !Array.isArray(result.content)) {
     throw new Error(`tools.execute returned an invalid result for ${id}`);
   }
@@ -948,13 +947,15 @@ export function apply(ctx) {
     const agentHandle = agentFacts.handle;
     const agentCreateError = agentFacts.error;
     const subagents = ctx.get('subagents');
-    const providers =
-      subagents === undefined
-        ? 'service-absent'
-        : subagents.list().map((providerName) => {
-            const provider = subagents.getProvider(providerName);
-            return { providerName, inheritsParentContext: provider?.inheritsParentContext, capabilities: provider?.capabilities };
-          });
+    // The probe exercises the fork provider. The host exposes lookup by name,
+    // so record only that provider rather than assuming an enumeration API.
+    const forkProvider = subagents?.getProvider('fork');
+    const providers = subagents === undefined ? 'service-absent' : {
+      providerName: 'fork',
+      registered: forkProvider !== undefined,
+      inheritsParentContext: forkProvider?.inheritsParentContext,
+      capabilities: forkProvider?.capabilities,
+    };
     if (agentHandle === undefined) {
       blocked.push({
         id: 'subagent-restriction-inheritance',

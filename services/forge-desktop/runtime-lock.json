@@ -1,9 +1,9 @@
 {
   "schema": "heluo-desktop-runtime-lock/1",
   "dsh": {
-    "version": "0.2.1-rc.3",
-    "sha256": "9a8f9493bfab8218215a8ca38ab8821e76dff63dc4fcb65841ef87c0aa277141",
-    "bytes": 25130
+    "version": "0.2.2-rc.5",
+    "sha256": "67da5a3c458f46cd278e0eec6ad0e3a44e99fd13087c6f11a1b362268900a52c",
+    "bytes": 2201324
   },
   "pnpm": null,
   "notes": "dsh 制品自注册表获取并按本台账核验（版本随 .dsh-version 变更时同步更新本文件）。pnpm 与内置运行时分发包待 P2 第 4 项接入（依赖 P0 #9 探针结论）。"
