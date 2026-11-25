@@ -135,6 +135,9 @@ export function createExpertsHost(ports) {
     evaluatePolicy: ports.evaluatePolicy,
     openStorageDomain: ports.openStorageDomain,
     onCorrelationPersistError: ports.onCorrelationPersistError,
+    onTaskReconciled: (event) => {
+      routesRef?.broadcast({ type: 'task-reconciled', ...event });
+    },
     createDelegraTask: ports.createDelegraTask ?? (() => {
       throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task creation connector is not configured');
     }),
@@ -180,6 +183,8 @@ export function createExpertsHost(ports) {
     prepareSelection: (body) => selection.prepare(body),
     ...dispatchPorts,
     reconcileTaskByRequest: dispatchPorts.reconcileByRequest,
+    listPendingTasks: () => dispatch.listPendingRequests(),
+    reconcilePendingTasks: () => dispatch.reconcilePendingRequests(),
     getViewVersion: () => Math.max(catalog.getViewVersion(), preferences.getViewVersion(), mentions.getViewVersion()),
   });
   routesRef = routes;
