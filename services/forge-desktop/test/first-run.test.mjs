@@ -239,22 +239,34 @@ test('the installer is handed the package, the profile and the embedded runtime,
       : { code: 1, lines: ['init: 调用 dsh 失败（/some/host/path）'], warnings: [], result: { ok: false, error: { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', message: 'init: 调用 dsh 失败（/some/host/path）' } } };
   };
   const done = await initializeProfile({ assets, runInit, env, exec, profile: 'web', dsh: '/apps/electron' });
-  assert.equal(done.status, 'installed');
+  // A success returns the installer's whole outcome: the conclusion, and what it printed.
+  assert.deepEqual(done, { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } });
+  // The shell's dsh carries its own pnpm, so the installer is told not to look for one.
   assert.deepEqual(calls[0], {
-    argv: ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--json'],
+    argv: ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--json'],
     env,
     exec,
   });
-  // A failed verdict stops the first run, by the installer's code only.
-  await assert.rejects(
-    initializeProfile({ assets, runInit, env, exec, profile: 'web', dsh: '/apps/electron' }),
-    (error) => error instanceof ShellError && error.code === 'FIRST_RUN_FAILED'
-      && error.details.code === 'IAM_CLIENT_SECRET_PROVISION_FAILED'
-      && error.message.includes('IAM_CLIENT_SECRET_PROVISION_FAILED')
-      && !error.message.includes('/some/host/path'),
-  );
-  // No verdict at all is not success.
-  await assert.rejects(initializeProfile({ assets, runInit: async () => undefined, env, exec, profile: 'web', dsh: '/apps/electron' }), /UNKNOWN/);
+  // A failed verdict stops the first run, by the installer's code only; its text travels in the details,
+  // for the status page and the log to say which cause stopped the run.
+  const lines = ['企业插件初始化', 'profile：web'];
+  const warnings = ['warn: 一条警告'];
+  const stopped = await initializeProfile({
+    assets,
+    runInit: async () => ({ code: 1, lines, warnings, result: { ok: false, error: { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', message: 'init: 调用 dsh 失败（/some/host/path）', next: '修复凭据存储后重跑。' } } }),
+    env,
+    exec,
+    profile: 'web',
+    dsh: '/apps/electron',
+  }).catch((error) => error);
+  assert.ok(stopped instanceof ShellError);
+  assert.deepEqual(stopped.details, { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', reason: 'init: 调用 dsh 失败（/some/host/path）', next: '修复凭据存储后重跑。', lines, warnings });
+  assert.equal(stopped.message.includes('/some/host/path'), false, 'the message itself still repeats only the code');
+  // No verdict at all is not success, and nothing is invented in its place.
+  const blank = await initializeProfile({ assets, runInit: async () => undefined, env, exec, profile: 'web', dsh: '/apps/electron' }).catch((error) => error);
+  assert.ok(blank instanceof ShellError && blank.code === 'FIRST_RUN_FAILED');
+  assert.match(blank.message, /UNKNOWN/);
+  assert.deepEqual(blank.details, { code: 'UNKNOWN', reason: '', next: '', lines: [], warnings: [] });
   // Without the installer or the runtime there is nothing to run.
   for (const missing of [{ runInit: undefined }, { dsh: '' }, { dsh: undefined }]) {
     await assert.rejects(

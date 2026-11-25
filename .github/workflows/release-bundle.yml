@@ -142,11 +142,14 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-      - name: Fetch the locked dsh artifact
+      - name: Fetch the locked runtime artifacts
         run: |
-          VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
-          npm pack "@deepseek-ai/dsh@${VERSION}" --pack-destination "$RUNNER_TEMP"
+          DSH_VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
+          npm pack "@deepseek-ai/dsh@${DSH_VERSION}" --pack-destination "$RUNNER_TEMP"
           echo "DSH_TGZ=$(ls "$RUNNER_TEMP"/deepseek-ai-dsh-*.tgz | head -1)" >> "$GITHUB_ENV"
+          PNPM_VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').pnpm.version")
+          npm pack "pnpm@${PNPM_VERSION}" --pack-destination "$RUNNER_TEMP"
+          echo "PNPM_TGZ=$(ls "$RUNNER_TEMP"/pnpm-*.tgz | head -1)" >> "$GITHUB_ENV"
       - name: Build the employee package for embedding
         env:
           HELUO_PUBLIC_LICENSE: ${{ vars.HELUO_PUBLIC_LICENSE }}
@@ -185,6 +188,7 @@ jobs:
           node scripts/stage-desktop-payload.mjs \
             --output "$RUNNER_TEMP/staged" \
             --dsh-tgz "$DSH_TGZ" \
+            --pnpm-tgz "$PNPM_TGZ" \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
       - name: Build the desktop application bundle
         run: |
@@ -238,12 +242,15 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-      - name: Fetch the locked dsh artifact
+      - name: Fetch the locked runtime artifacts
         shell: bash
         run: |
-          VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
-          npm pack "@deepseek-ai/dsh@${VERSION}" --pack-destination "$RUNNER_TEMP"
+          DSH_VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
+          npm pack "@deepseek-ai/dsh@${DSH_VERSION}" --pack-destination "$RUNNER_TEMP"
           echo "DSH_TGZ=$(ls "$RUNNER_TEMP"/deepseek-ai-dsh-*.tgz | head -1)" >> "$GITHUB_ENV"
+          PNPM_VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').pnpm.version")
+          npm pack "pnpm@${PNPM_VERSION}" --pack-destination "$RUNNER_TEMP"
+          echo "PNPM_TGZ=$(ls "$RUNNER_TEMP"/pnpm-*.tgz | head -1)" >> "$GITHUB_ENV"
       - name: Build the employee package for embedding
         shell: bash
         env:
@@ -284,6 +291,7 @@ jobs:
           node scripts/stage-desktop-payload.mjs \
             --output "$RUNNER_TEMP/staged" \
             --dsh-tgz "$DSH_TGZ" \
+            --pnpm-tgz "$PNPM_TGZ" \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
       - name: Build the NSIS installer
         shell: bash

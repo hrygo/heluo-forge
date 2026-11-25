@@ -10,6 +10,13 @@
 /** The embedded runtime entry, relative to the resources root. */
 export const DSH_ENTRY_PARTS = ['dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'];
 
+/**
+ * The pnpm the app ships, relative to the resources root: the `bin/pnpm.mjs`
+ * of the locked npm package. Every dsh package operation runs it with the
+ * app's binary as Node, so none of them looks for a pnpm on PATH.
+ */
+export const PNPM_ENTRY_PARTS = ['pnpm', 'bin', 'pnpm.mjs'];
+
 /** The tray icon, relative to the resources root. */
 export const TRAY_ICON_PARTS = ['brand', 'tray.png'];
 

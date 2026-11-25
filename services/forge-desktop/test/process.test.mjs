@@ -5,9 +5,12 @@
  */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
-import { embeddedExec, MAX_CAPTURE, runCommand } from '../src/process.mjs';
+import { embeddedExec, embeddedScriptExec, MAX_CAPTURE, runCommand } from '../src/process.mjs';
 
 /** A stand-in for child_process.spawn: the test decides what each child does. */
 function fakeSpawn(script = () => {}) {
@@ -122,6 +125,68 @@ test('the embedded executor runs only the embedded runtime, as Node, with the ds
   const forced = await exec('/apps/electron', [], { env: { ELECTRON_RUN_AS_NODE: '0' }, spawn });
   assert.equal(forced.code, 0);
   assert.equal(calls[1].options.env.ELECTRON_RUN_AS_NODE, '1');
+});
+
+test('the script executor runs the plugin\'s own CLI as Node, with nothing in front of it', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'forge-script-exec-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const profileDir = join(root, 'profiles', 'web');
+  const cli = join(profileDir, 'node_modules', '@heluo', 'forge-enterprise', 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, 'export {};\n');
+  const { spawn, calls } = fakeSpawn((child) => prints(child, { out: 'stored', code: 0 }));
+  const exec = embeddedScriptExec({ command: '/apps/electron', profileDir, env: { HOME: '/profiles/someone' }, spawn });
+
+  const result = await exec([cli, 'client-secret', 'set', '--issuer', 'https://idp.corp.example'], { timeout: 5_000, input: 'the secret bytes', env: { HELUO_FORGE_STORE_DIRECTORY: '/store' } });
+  assert.deepEqual(result, { code: 0, stdout: 'stored', stderr: '' });
+  // The plugin's CLI is the first thing after the binary: no dsh entry, no profile name in front of it.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, '/apps/electron');
+  assert.deepEqual(calls[0].args, [cli, 'client-secret', 'set', '--issuer', 'https://idp.corp.example']);
+  assert.deepEqual(calls[0].options.env, { HOME: '/profiles/someone', HELUO_FORGE_STORE_DIRECTORY: '/store', ELECTRON_RUN_AS_NODE: '1' });
+  assert.equal(calls[0].child.stdin.ended, 'the secret bytes');
+  assert.equal(calls[0].options.shell, false);
+});
+
+test('反向：profile 之外的脚本、相对路径、目录与链接都拒绝，且不启动任何进程', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'forge-script-refuse-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const profileDir = join(root, 'profiles', 'web');
+  const cli = join(profileDir, 'node_modules', '@heluo', 'forge-enterprise', 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, 'export {};\n');
+  const outside = join(root, 'outside.mjs');
+  writeFileSync(outside, 'export {};\n');
+  const { spawn, calls } = fakeSpawn((child) => prints(child, { code: 0 }));
+  const exec = embeddedScriptExec({ command: '/apps/electron', profileDir, spawn });
+
+  const refused = [
+    [outside, 'client-secret'],
+    [join(profileDir, '..', 'outside.mjs'), 'client-secret'],
+    ['heluo-forge.mjs', 'client-secret'],
+    [profileDir, 'client-secret'],
+    [cli + '/..', 'client-secret'],
+    [],
+    ['client-secret'],
+    [123, 'client-secret'],
+    undefined,
+  ];
+  for (const args of refused) {
+    const outcome = await exec(args, {});
+    assert.equal(outcome.code, 1);
+    assert.match(outcome.stderr, /only a script of the profile/u);
+  }
+  assert.equal(calls.length, 0, 'nothing was started');
+  // A link where the script should be leaves the profile's control of what runs: refused like any other.
+  try {
+    symlinkSync(outside, join(profileDir, 'linked.mjs'));
+    const outcome = await exec([join(profileDir, 'linked.mjs'), 'client-secret'], {});
+    assert.equal(outcome.code, 1);
+    assert.match(outcome.stderr, /only a script of the profile/u);
+    assert.equal(calls.length, 0);
+  } catch (error) {
+    if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error;
+  }
 });
 
 test('what a command prints is kept up to a limit, the end first', async () => {

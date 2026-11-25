@@ -15,7 +15,9 @@ import {
   CLIENT_SECRET_SCHEMA,
   METADATA_FILE,
   PROFILE_NAMES,
+  PNPM_FROM_HOST_LINE,
   RELEASE_SCHEMA,
+  USAGE,
   dshHomeOf,
   inspectProfile,
   locateDsh,
@@ -28,6 +30,7 @@ import {
   provisionClientSecret,
   readEmbeddedClientSecret,
   readPrivateRelease,
+  reasonTail,
   resolveDshLaunch,
   runInit,
   sha256File,
@@ -524,6 +527,138 @@ test('缺 pnpm 时用 npm 补装，并把 pnpm 目录注入安装子进程 PATH'
   assert.ok(add !== undefined, '应执行 dsh plugin add');
   assert.ok(add.options.env.PATH.startsWith(`${bin}${process.platform === 'win32' ? ';' : ':'}`));
   assert.ok(outcome.lines.some((line) => line.includes('npm install -g pnpm')));
+});
+
+/** 一个既没有 pnpm 也没有 npm 的 PATH 目录：没有开发环境的员工机器就是这个样子。 */
+function writeBarePath(root) {
+  const dir = join(root, 'bare-bin');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+test('--pnpm-from-host：PATH 上没有 pnpm 也没有 npm 时照常安装，不查找、不补装', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writeBarePath(root) };
+  const base = ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath];
+
+  // The same machine without the flag: the installer stops for the missing tool, before any install.
+  const plain = fakeExec({ profileDir });
+  const stopped = await runInit({ argv: base, env, home, exec: plain.exec });
+  assert.equal(stopped.result.error.code, 'PNPM_REQUIRED');
+  assert.equal(existsSync(join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/'))), false, '缺工具时不得写入');
+
+  // With the flag the tool is the host's: nothing is looked up, nothing is installed, the plugin is.
+  const { exec, calls } = fakeExec({ profileDir });
+  const outcome = await runInit({ argv: [...base, '--pnpm-from-host'], env, home, exec });
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'installed');
+  assert.ok(calls.length > 0 && calls.every((call) => call.bin === dshPath), '只启动宿主，不启动任何补装命令');
+  assert.equal(calls.some((call) => call.args[0] === 'install'), false, '不得执行 npm install -g pnpm');
+  const add = calls.find((call) => call.args[0] === 'plugin');
+  assert.ok(add !== undefined, '应执行 dsh plugin add');
+  // PATH reaches dsh exactly as it was handed over: no directory is put in front of it.
+  assert.equal(add.options.env.PATH, env.PATH);
+  // The conclusion says where the tool came from, so the log does not read as if PATH had been searched.
+  assert.ok(outcome.lines.includes(PNPM_FROM_HOST_LINE), '结论须写明 pnpm 由宿主提供');
+});
+
+test('--pnpm-from-host 演练：写明工具来源，不执行安装，也不要求 PATH 上有 pnpm', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const { exec, calls } = fakeExec({ profileDir });
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath, '--pnpm-from-host', '--dry-run', '--json'],
+    env: { DSH_HOME: join(home, '.dsh'), PATH: writeBarePath(root) },
+    home,
+    exec,
+  });
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'dry-run');
+  assert.ok(outcome.lines.includes(PNPM_FROM_HOST_LINE));
+  assert.equal(calls.some((call) => call.args[0] === 'plugin'), false, '演练不得安装');
+});
+
+test('parseArgs：--pnpm-from-host 是布尔开关，缺省关闭，不带值', () => {
+  const base = ['--release', '/r', '--profile', 'web'];
+  assert.equal(parseArgs(base).pnpmFromHost, false);
+  assert.equal(parseArgs([...base, '--pnpm-from-host']).pnpmFromHost, true);
+  assert.throws(() => parseArgs([...base, '--pnpm-from-host=true']), (error) => error.code === 'BAD_ARGUMENT' && /未知参数/u.test(error.message));
+  assert.throws(() => parseArgs([...base, '--pnpm']), (error) => error.code === 'BAD_ARGUMENT' && /未知参数/u.test(error.message));
+  assert.ok(USAGE.includes('--pnpm-from-host'), '用法说明须列出该参数');
+});
+
+/** What Node prints when a child dies of an uncaught exception: source, caret, the error, then where it happened. */
+const CRASH = [
+  'file:///apps/Resources/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:547',
+  '\tif (name === "" || name.includes("/")) throw new Error(`dsh: invalid profile name ${JSON.stringify(name)}`);',
+  '\t                                                                                                                                ^',
+  '',
+  'Error: dsh: invalid profile name "/profiles/web/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs"',
+  '    at resolveProfileDir (file:///apps/Resources/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:547:130)',
+  '    at loadProfile (file:///apps/Resources/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1066:14)',
+  '    at async Module.runCli (file:///apps/Resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js:253:5)',
+  '',
+  'Node.js v24.21.0',
+].join('\n');
+
+test('reasonTail：子进程因异常退出时带回真正的报错行，而不是占满末尾的调用栈', () => {
+  const reason = reasonTail({ stdout: '', stderr: `${CRASH}\n` });
+  assert.ok(reason.includes('Error: dsh: invalid profile name "/profiles/web/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-iam/bin/heluo-forge.mjs"'), reason);
+  assert.equal(reason.includes('at resolveProfileDir'), false, '调用栈只说明代码位置，不是原因');
+  assert.equal(reason.includes('at async Module.runCli'), false);
+  assert.equal(reason.includes('index.js:547\n'), false, '源码位置与插入符同样不算');
+  assert.equal(reason.includes('Node.js v24.21.0'), false);
+  // The error line is last and whole: a long line before it is cut on its own instead of crowding it out.
+  assert.ok(reason.endsWith('"'), reason);
+  assert.ok(reason.split(' / ').length <= 3);
+
+  // An ordinary failure is repeated as it was, and a line that merely starts with "at" is not mistaken for a frame.
+  assert.equal(reasonTail({ stdout: '', stderr: 'dsh: pnpm was not found; install pnpm and make it available on PATH.\n' }), 'dsh: pnpm was not found; install pnpm and make it available on PATH.');
+  assert.equal(reasonTail({ stdout: 'added\n', stderr: 'warn: at least one warning\n' }), 'warn: at least one warning / added');
+  assert.equal(reasonTail({ stdout: '', stderr: ' \n\n' }), '');
+  const long = reasonTail({ stdout: `${'x'.repeat(400)}\n`, stderr: '' });
+  assert.equal(long.length, 160);
+  assert.ok(long.endsWith('…'));
+});
+
+test('失败的结论带上走到失败为止的回显（progress），供桌面壳写日志；终端回显不变', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const inner = fakeExec({ profileDir });
+  // The add step dies the way a crashing child does.
+  const exec = async (bin, args, options) => {
+    const result = await inner.exec(bin, args, options);
+    return args[0] === 'plugin' ? { ...result, code: 1, stdout: '', stderr: CRASH } : result;
+  };
+  const base = ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath, '--pnpm-from-host'];
+
+  const structured = await runInit({ argv: [...base, '--json'], env: { DSH_HOME: join(home, '.dsh'), PATH: writeBarePath(root) }, home, exec });
+  assert.equal(structured.result.error.code, 'INSTALL_FAILED');
+  // With --json nothing is printed as echo, before or now: what the run printed travels beside the verdict.
+  assert.deepEqual(structured.lines, []);
+  assert.ok(structured.progress[0] === '企业插件初始化');
+  assert.ok(structured.progress.includes(`命令：dsh plugin --profile desktop add ${release.tarballPath}`), '回显停在失败的那条命令上');
+  assert.equal(structured.progress.some((line) => line.startsWith('核验：')), false, '失败之后的步骤没有回显');
+  // The verdict itself now names the error line of the crash.
+  assert.match(structured.result.error.message, /Error: dsh: invalid profile name/u);
+
+  // Without --json the terminal sees the three lines it always saw; the same progress travels beside them.
+  // (A second profile: the first run's stand-in already recorded the plugin.)
+  const second = writeProfile(tempRoot(t));
+  const plainExec = async (bin, args, options) => {
+    const result = await fakeExec({ profileDir: second.profileDir }).exec(bin, args, options);
+    return args[0] === 'plugin' ? { ...result, code: 1, stdout: '', stderr: CRASH } : result;
+  };
+  const printed = await runInit({ argv: base, env: { DSH_HOME: join(second.home, '.dsh'), PATH: writeBarePath(root) }, home: second.home, exec: plainExec });
+  assert.deepEqual(printed.lines, [`失败：INSTALL_FAILED`, printed.result.error.message, `下一步：${printed.result.error.next}`]);
+  assert.deepEqual(printed.progress, structured.progress);
 });
 
 test('runInit 同版本幂等：只跑 dump-config，不调用 add', async (t) => {
@@ -1054,6 +1189,74 @@ test('provisionClientSecret 用 Discovery 的 issuer 写入凭据库并删除密
   assert.equal(cliCall.options.env.HELUO_FORGE_STORE_DIRECTORY, join(root, 'store'));
   assert.equal(existsSync(join(dir, file)), false, '预置成功后删除交付目录内的密钥文件');
   assert.match(lines.join('\n'), /已写入本机凭据库/u);
+});
+
+test('scriptExec：密钥预置经调用方的执行器运行插件 CLI（args[0] 即脚本路径），不再占用 exec', async (t) => {
+  const root = tempRoot(t);
+  const { dir, file, secret } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = readPrivateRelease(writeRelease(root, {
+    mutate: (metadata) => { metadata.config.secretEmbedded = true; },
+  }).dir);
+  release.secret = readEmbeddedClientSecret(dir);
+
+  const scriptCalls = [];
+  const execCalls = [];
+  const scriptExec = (args, options) => {
+    scriptCalls.push({ args, options });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const exec = (bin, args, options) => {
+    execCalls.push({ bin, args, options });
+    return Promise.resolve({ code: 0, stdout: '', stderr: '' });
+  };
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://iam.corp.example/oidc', token_endpoint_auth_methods_supported: ['client_secret_post'] }) });
+  const lines = [];
+  const status = await provisionClientSecret({ scriptExec, exec, profile, release, lines, fetchImpl, storeDirectory: join(root, 'store') });
+
+  assert.equal(status.status, 'provisioned');
+  // 桌面壳的契约：插件 CLI 的路径是第一条参数，前面没有 dsh 的入口，也没有 profile 名。
+  assert.equal(scriptCalls.length, 1);
+  assert.equal(scriptCalls[0].args[0], cli);
+  assert.deepEqual(scriptCalls[0].args.slice(1, 3), ['client-secret', 'set']);
+  assert.equal(scriptCalls[0].args[scriptCalls[0].args.indexOf('--issuer') + 1], 'https://iam.corp.example/oidc');
+  assert.deepEqual(scriptCalls[0].options.input, secret);
+  assert.equal(scriptCalls[0].options.env.HELUO_FORGE_STORE_DIRECTORY, join(root, 'store'));
+  // exec 只留给 dsh 的命令：密钥预置不再占用它，壳的执行器也就不会给 CLI 加 dsh 入口。
+  assert.equal(execCalls.length, 0);
+  assert.equal(existsSync(join(dir, file)), false);
+
+  // 缺省（终端形态）行为不变：不传 scriptExec 时以 exec 运行 process.execPath + 脚本路径。
+  const again = writeSecretBundle(join(root, 'release-again'));
+  const defaulted = await provisionClientSecret({
+    exec: async (bin, args) => {
+      assert.equal(bin, process.execPath, '缺省形态以当前 Node 运行插件 CLI');
+      assert.equal(args[0], cli);
+      return { code: 0, stdout: '', stderr: '' };
+    },
+    profile,
+    release: { secret: readEmbeddedClientSecret(again.dir) },
+    lines,
+    fetchImpl,
+    storeDirectory: join(root, 'store'),
+  });
+  assert.equal(defaulted.status, 'provisioned');
+  assert.equal(existsSync(join(again.dir, again.file)), false);
+
+  // 非 scriptExec 非函数：直接给出可读的拒绝，而不是跑到一半才 TypeError。
+  for (const invalid of [42, 'function', null]) {
+    await assert.rejects(
+      provisionClientSecret({ scriptExec: invalid, exec, profile, release, lines: [], fetchImpl, storeDirectory: join(root, 'store') }),
+      (error) => error.code === 'BAD_ARGUMENT' && /scriptExec/u.test(error.message),
+    );
+  }
+  const refused = await runInit({ argv: ['--release', release.dir, '--profile', 'web'], scriptExec: 42, env: {}, home: join(root, 'home') });
+  assert.equal(refused.code, 1);
+  assert.equal(refused.result.error.code, 'BAD_ARGUMENT');
+  assert.match(refused.result.error.message, /scriptExec/u);
 });
 
 test('readEmbeddedClientSecret 校验 previousIssuers 只接受 http(s) URL 数组', (t) => {

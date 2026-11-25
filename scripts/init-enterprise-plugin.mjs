@@ -81,6 +81,9 @@ export const HOST_INSTALL_TIMEOUT_MS = 600_000;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const HOST_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/u;
 
+/** `--pnpm-from-host` 的回显：工具来源写进结论，读日志的人才知道没有查过 PATH。 */
+export const PNPM_FROM_HOST_LINE = '工具：pnpm 由宿主提供（--pnpm-from-host），不在 PATH 查找，也不补装';
+
 export const USAGE = [
   '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto|名称>',
   '        [--sha256 <hex>] [--dsh <path>] [--install-host] [--host-version <ver>]',
@@ -93,6 +96,7 @@ export const USAGE = [
   '  --sha256 <hex>     调用方提供的摘要；脚本无法判断来源是否独立，交付包内启动器传入的',
   '                     是同一 tgz 的自算值（自证，只能发现损坏）',
   '  --dsh <path>       指定 dsh（原生可执行文件或 npm 的 .cmd/.bat shim）；缺省在 PATH 查找',
+  '  --pnpm-from-host   --dsh 指向的宿主自带 pnpm（如企业版桌面壳）；不在 PATH 查找 pnpm，也不补装',
   '  --install-host     找不到 dsh 时用 npm 全局安装官方宿主（需要 npm 与网络）',
   '  --host-version <v> 安装宿主时锁定的版本；缺省 ' + DEFAULT_HOST_VERSION,
   '  --dry-run          只打印将执行的命令与核验点，不写入',
@@ -193,6 +197,7 @@ export function parseArgs(argv) {
     dsh: undefined,
     installHost: false,
     hostVersion: DEFAULT_HOST_VERSION,
+    pnpmFromHost: false,
     dryRun: false,
     json: false,
     help: false,
@@ -220,6 +225,10 @@ export function parseArgs(argv) {
     }
     if (arg === '--install-host') {
       options.installHost = true;
+      continue;
+    }
+    if (arg === '--pnpm-from-host') {
+      options.pnpmFromHost = true;
       continue;
     }
     const separator = arg.indexOf('=');
@@ -708,10 +717,10 @@ export function ensureStoreDirectory(directory, { lines = [], platform = process
  * 用全新临时目录重跑同一条预置命令，用来区分「本机存储坏了」和「CLI 本身跑不通」。
  * 只写临时目录、随即删除，不碰既有凭据库。
  */
-async function diagnoseProvision({ exec, args, bytes }) {
+async function diagnoseProvision({ scriptExec, args, bytes }) {
   const scratch = mkdtempSync(join(tmpdir(), 'heluo-secret-probe-'));
   try {
-    const result = await exec(process.execPath, args, {
+    const result = await scriptExec(args, {
       timeout: PROVISION_TIMEOUT_MS,
       shell: false,
       input: bytes,
@@ -739,7 +748,7 @@ function canParseUrl(value) {
  * 保留的 scope 也读不回来（通用读取被 CRED_STORE_INVALID 拒绝），所以只能由制包人把旧
  * issuer 写进 client-secret.json，安装器逐个候选值试 replace；错的候选会被库拒绝，不会误改。
  */
-async function rebindClientSecret({ exec, cli, store, secret, issuer, lines }) {
+async function rebindClientSecret({ scriptExec, cli, store, secret, issuer, lines }) {
   const candidates = Array.isArray(secret.binding.previousIssuers) ? secret.binding.previousIssuers : [];
   const attempted = [];
   for (const previous of candidates) {
@@ -755,7 +764,7 @@ async function rebindClientSecret({ exec, cli, store, secret, issuer, lines }) {
     ];
     let result;
     try {
-      result = await exec(process.execPath, args, {
+      result = await scriptExec(args, {
         timeout: PROVISION_TIMEOUT_MS,
         shell: false,
         input: secret.bytes,
@@ -780,9 +789,23 @@ async function rebindClientSecret({ exec, cli, store, secret, issuer, lines }) {
  * 成功后删除交付目录里的密钥文件；失败保留并抛错——宁可安装报失败，也不要留下
  * “插件装好了但登录不了”的假成功。
  *
+ * 预置密钥的三条命令（set、replace、空目录诊断）都不经 dsh：它们以当前 Node 直接运行
+ * 已安装插件自带的 CLI（`args[0]` 即脚本路径）。终端形态下缺省就用同一 `exec` 运行
+ * `process.execPath`，行为与引入本参数之前逐字一致；桌面壳传入自己的执行器
+ * （应用二进制以 Node 运行该脚本），否则它的执行器会把 dsh 入口加在脚本路径前面。
+ *
+ * @param {{scriptExec?: Function, exec?: Function, profile: object, release: object, lines: string[], fetchImpl?: Function, storeDirectory?: string}} input
  * @returns {Promise<{status: 'provisioned'|'already-removed'|'absent'}>}
  */
-export async function provisionClientSecret({ exec, profile, release, lines, fetchImpl = fetch, storeDirectory }) {
+export async function provisionClientSecret({ scriptExec, exec, profile, release, lines, fetchImpl = fetch, storeDirectory }) {
+  if (scriptExec !== undefined && typeof scriptExec !== 'function') {
+    throw new InitError(
+      'BAD_ARGUMENT',
+      'init: scriptExec 须为 (args, options) => Promise 的函数',
+      '终端使用不需要它；桌面壳传入运行插件 CLI 的执行器。',
+    );
+  }
+  const runScript = scriptExec ?? ((args, options) => exec(process.execPath, args, options));
   const secret = release.secret;
   if (secret === null) return { status: 'absent' };
   if (secret.path === null) {
@@ -821,7 +844,7 @@ export async function provisionClientSecret({ exec, profile, release, lines, fet
   ];
   let result;
   try {
-    result = await exec(process.execPath, args, {
+    result = await runScript(args, {
       timeout: PROVISION_TIMEOUT_MS,
       shell: false,
       input: secret.bytes,
@@ -837,7 +860,7 @@ export async function provisionClientSecret({ exec, profile, release, lines, fet
   let reboundFrom;
   if (typeof result?.code === 'number' && result.code !== 0) {
     const reason = reasonTail(result);
-    const rebound = await rebindClientSecret({ exec, cli, store, secret, issuer, lines });
+    const rebound = await rebindClientSecret({ scriptExec: runScript, cli, store, secret, issuer, lines });
     if (rebound.ok) reboundFrom = rebound.previous;
     if (!rebound.ok) {
       if (rebound.attempted.length > 0) {
@@ -847,7 +870,7 @@ export async function provisionClientSecret({ exec, profile, release, lines, fet
           `本包声明的 issuer 是 ${issuer}，clientId ${secret.binding.clientId}，method ${secret.binding.clientAuthMethod}。若旧绑定来自历史交付，用 client-secret replace --old-issuer <旧 issuer> --old-client-id ${secret.binding.clientId} --old-method ${secret.binding.clientAuthMethod} 手工更正，或在制包时加 --previous-issuer <旧 issuer> 重出；密钥文件保留在交付目录。`,
         );
       }
-      const diagnostic = await diagnoseProvision({ exec, args, bytes: secret.bytes });
+      const diagnostic = await diagnoseProvision({ scriptExec: runScript, args, bytes: secret.bytes });
       if (diagnostic.ok) {
         throw new InitError(
           'IAM_SECRET_STORE_UNHEALTHY',
@@ -1119,19 +1142,31 @@ async function runStep(exec, launch, args, timeout, failureCode, { env, input } 
 }
 
 /**
+ * 只说明「代码走到哪儿」的行：调用栈的一帧、源码位置、源码下方的插入符，或 Node 的版本尾注。
+ * 进程因未捕获异常退出时，这些行占满输出末尾，真正的报错行排在它们前面。
+ */
+const WHERE_LINE = /^(?:at\s.*:\d+(?::\d+)?\)?|file:\/\/\S+:\d+(?::\d+)?|\^+|Node\.js v\d.*)$/u;
+
+/** 一行最多带走的字数。各行分别截断，末尾的报错行不会被前面较长的行挤掉。 */
+const REASON_LINE_LIMIT = 160;
+
+/**
  * 取子进程输出的最后几行有效文本。宿主自己知道失败原因（如 `'pnpm' is not
  * recognized`），只回退出码会让员工和排障者都看不出根因，这里把它带回结论里。
+ * 只说明代码位置的行不算有效文本。
  *
  * @param {{stdout: string, stderr: string}} result
  * @returns {string} 单行摘要；无输出时为空串
  */
-function reasonTail(result) {
+export function reasonTail(result) {
   const lines = `${result.stderr}\n${result.stdout}`
     .split(/\r?\n/u)
     .map((line) => line.trim())
-    .filter((line) => line !== '');
-  const tail = lines.slice(-3).join(' / ');
-  return tail.length > 300 ? `${tail.slice(0, 300)}…` : tail;
+    .filter((line) => line !== '' && !WHERE_LINE.test(line));
+  return lines
+    .slice(-3)
+    .map((line) => (line.length > REASON_LINE_LIMIT ? `${line.slice(0, REASON_LINE_LIMIT - 1)}…` : line))
+    .join(' / ');
 }
 
 /**
@@ -1256,13 +1291,22 @@ async function verifyInstall({ exec, launch, profile, lines }) {
  * 是 `--json` 的结构化版本（与回显同一结论）。`code` 0 = 安装/已安装/演练完成，1 = 任何
  * fail-closed 或核验失败。
  *
- * @param {{argv?: string[], env?: object, home?: string, exec?: Function|null}} [input]
+ * @param {{argv?: string[], env?: object, home?: string, exec?: Function|null, scriptExec?: Function, fetchImpl?: Function}} [input]
+ *   `scriptExec` 是运行已安装插件自带 CLI 的执行器（`args[0]` 为脚本路径）：桌面壳传入
+ *   （应用二进制以 Node 运行该脚本），终端形态缺省时等价于用 `exec` 运行 `process.execPath`。
  */
-export async function runInit({ argv = [], env = process.env, home = homedir(), exec = null, fetchImpl = fetch } = {}) {
+export async function runInit({ argv = [], env = process.env, home = homedir(), exec = null, scriptExec, fetchImpl = fetch } = {}) {
   const lines = [];
   const warnings = [];
   const requestedJson = argv.includes('--json');
   try {
+    if (scriptExec !== undefined && typeof scriptExec !== 'function') {
+      throw new InitError(
+        'BAD_ARGUMENT',
+        'init: scriptExec 须为 (args, options) => Promise 的函数',
+        '终端使用不需要它；桌面壳传入运行插件 CLI 的执行器。',
+      );
+    }
     const options = parseArgs(argv);
     if (options.help) {
       return { code: 0, lines: [USAGE], warnings, result: { ok: true, status: 'help', usage: USAGE } };
@@ -1403,7 +1447,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         return { code: 0, lines, warnings, result: { ...base, status: 'dry-run', command, verified: null } };
       }
       const verification = await verifyInstall({ exec: resolveExec(exec), launch, profile, lines });
-      const secret = await provisionClientSecret({ exec: resolveExec(exec), profile, release, lines, fetchImpl });
+      const secret = await provisionClientSecret({ scriptExec, exec: resolveExec(exec), profile, release, lines, fetchImpl });
       lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
       lines.push(nextStepLine(profile.name));
       return {
@@ -1424,6 +1468,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     lines.push(`命令：dsh ${command.join(' ')}`);
     if (options.dryRun) {
       lines.push(replacing === null ? 'dry-run：未执行安装，未写入 profile' : 'dry-run：未执行卸载与安装，未写入 profile');
+      if (options.pnpmFromHost) lines.push(PNPM_FROM_HOST_LINE);
       if (release.secret !== null) lines.push('dry-run：安装完成后会把交付目录内的 IAM 客户端密钥写入本机凭据库，并删除该密钥文件');
       lines.push(...verificationPoints(profile));
       return {
@@ -1444,7 +1489,10 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     if (profile.name === 'desktop') {
       await assertDesktopVerifiable({ exec: cli, launch, profile, lines });
     }
-    const pnpm = await ensurePnpm({ exec: cli, env, platform: process.platform, lines });
+    // 宿主自带 pnpm 时（企业版桌面壳把随包的那一份经宿主参数交给 dsh），既不在 PATH 找 pnpm，
+    // 也不补装：宿主的每次包操作都用自己的 pnpm，员工机器上有没有装都不影响安装。
+    const pnpm = options.pnpmFromHost ? { env, dir: null } : await ensurePnpm({ exec: cli, env, platform: process.platform, lines });
+    if (options.pnpmFromHost) lines.push(PNPM_FROM_HOST_LINE);
     if (replacing !== null) {
       const removal = await runStep(cli, launch, removeCommand, INSTALL_TIMEOUT_MS, 'UNINSTALL_FAILED', { env: pnpm.env });
       if (removal.code !== 0) {
@@ -1484,7 +1532,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       lines.push(`制品证据：已记录本次安装的 tgz 摘要与已安装目录摘要（profiles/${profile.name}/${INSTALL_RECORD_FILE}，自证）`);
     }
     const verification = await verifyInstall({ exec: cli, launch, profile, lines });
-    const secret = await provisionClientSecret({ exec: cli, profile, release, lines, fetchImpl });
+    const secret = await provisionClientSecret({ scriptExec, exec: cli, profile, release, lines, fetchImpl });
     lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
     lines.push(nextStepLine(profile.name));
     return {
@@ -1510,10 +1558,12 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         '检查上述原因后重跑；需要时用 --dry-run 查看将执行的命令。',
       );
     const failure = { ok: false, error: { code: known.code, message: known.message, next: known.next } };
+    // 走到失败为止的回显，按顺序留给读结论的调用方（桌面壳据此写日志）；终端模式下照旧不打印它们。
+    const progress = [...lines];
     if (requestedJson) {
-      return { code: 1, lines: [], warnings: [], result: failure };
+      return { code: 1, lines: [], warnings, result: failure, progress };
     }
-    return { code: 1, lines: [`失败：${known.code}`, known.message, `下一步：${known.next}`], warnings: [], result: failure };
+    return { code: 1, lines: [`失败：${known.code}`, known.message, `下一步：${known.next}`], warnings: [], result: failure, progress };
   }
 }
 

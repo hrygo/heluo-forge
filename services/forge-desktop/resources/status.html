@@ -7,12 +7,14 @@
 <style>
   :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* `main` is centred by its own margins: with more text than the window is tall, the page scrolls
+     from its top instead of losing the heading above the window (which centreing the box would do). */
   body {
-    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; display: flex; justify-content: center;
     background: #070C16; color: #FFFFFF;
     font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   }
-  main { max-width: 560px; padding: 48px 40px; text-align: center; }
+  main { max-width: 600px; margin: auto; padding: 48px 40px; text-align: center; }
   .mark {
     font-size: 30px; font-weight: 700; letter-spacing: 1px;
     background: linear-gradient(90deg, #1D4ED8, #00D2FE, #00F5FF);
@@ -25,6 +27,12 @@
     display: inline-block; margin-top: 18px; padding: 4px 14px; border: 1px solid #1D4ED8;
     border-radius: 999px; color: #00D2FE; font: 12px/1.6 ui-monospace, monospace;
   }
+  /* Why the setup stopped and what to do about it: the installer's own words, shown as text. */
+  .facts { margin: 24px auto 0; max-width: 520px; text-align: left; font-size: 13px; line-height: 1.75; color: #CBD5E1; }
+  .fact { margin-top: 10px; }
+  .fact dt { display: inline; margin-right: 8px; color: #64748B; }
+  .fact dd { display: inline; word-break: break-word; }
+  .fact dd.path { font: 12px/1.7 ui-monospace, monospace; word-break: break-all; }
   .steps { margin: 26px auto 0; text-align: left; max-width: 420px; color: #94A3B8; }
   .steps li { margin: 8px 0 8px 1.4em; }
   footer { margin-top: 44px; font-size: 12px; color: #64748B; }
@@ -36,26 +44,45 @@
   <h1 id="title">正在初始化企业配置</h1>
   <p id="detail">首次启动需要完成企业插件安装，请稍候。</p>
   <span class="code" id="code" hidden></span>
+  <dl class="facts" id="facts" hidden>
+    <div class="fact" id="reason-fact" hidden><dt>原因</dt><dd id="reason"></dd></div>
+    <div class="fact" id="remedy-fact" hidden><dt>处理</dt><dd id="remedy"></dd></div>
+    <div class="fact" id="log-fact" hidden><dt>日志</dt><dd id="log" class="path"></dd></div>
+  </dl>
   <ol class="steps" id="steps" hidden>
-    <li>确认本机已接入<b>企业网络</b>（或可解析内网域名的 VPN）</li>
+    <li>确认本机已接入<b>企业网络</b>（或可解析内网域名的 VPN），并按上方「处理」排除原因</li>
     <li>点击屏幕右上角托盘图标，选择<b>「重试企业配置」</b></li>
-    <li>仍然失败时，联系管理员并提供上方错误码</li>
+    <li>仍然失败时，联系管理员并提供上方错误码与日志文件</li>
   </ol>
   <footer>企业内部使用 · 河洛 Forge 企业版</footer>
 </main>
 <script>
   const query = new URLSearchParams(location.search);
   const state = query.get('state') ?? 'initializing';
-  const code = query.get('code');
   const title = document.getElementById('title');
   const detail = document.getElementById('detail');
   const steps = document.getElementById('steps');
   const codeBox = document.getElementById('code');
+  // One line of the account: shown only when the shell sent it, and only ever as text.
+  function fact(factId, textId, text) {
+    if (!text) return;
+    document.getElementById(textId).textContent = text;
+    document.getElementById(factId).hidden = false;
+    document.getElementById('facts').hidden = false;
+  }
   if (state === 'failed') {
     title.textContent = '企业配置未完成';
-    detail.textContent = '初始化未能完成；应用已就绪，回到企业网络后重试即可续跑，已完成步骤不会重复。';
+    detail.textContent = '初始化未能完成；应用已就绪，排除下方原因后重试即可续跑，已完成步骤不会重复。';
     steps.hidden = false;
-    if (code) { codeBox.textContent = '错误码 ' + code; codeBox.hidden = false; }
+    const code = query.get('code');
+    const installer = query.get('installer');
+    if (code) {
+      codeBox.textContent = '错误码 ' + code + (installer ? '（安装器 ' + installer + '）' : '');
+      codeBox.hidden = false;
+    }
+    fact('reason-fact', 'reason', query.get('reason'));
+    fact('remedy-fact', 'remedy', query.get('remedy'));
+    fact('log-fact', 'log', query.get('log'));
   }
 </script>
 </body>
