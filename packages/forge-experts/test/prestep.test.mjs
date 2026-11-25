@@ -280,3 +280,79 @@ test('apply() registers prestep guard with agentHooks when dispatchEnabled is tr
   assert.equal(routeDisposed, true);
   assert.equal(toolsDisposed, 6);
 });
+
+test('active turns are never evicted by capacity; expired turns are pruned by TTL and capacity overflow returns EXPERT_RATE_LIMITED with draft preserved', async () => {
+  let clock = 1_700_000_000_000;
+  const activeScope = makeScope();
+  const selection = createSelectionService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => activeScope,
+    assertScopeCurrent: () => {},
+    resolveSessionScope: async (sessionId) => ({ delegationScope: `dsh:session:${sessionId}` }),
+    getMentionVersion: () => 1,
+    now: () => clock,
+    selectionTtlMs: 300_000,
+  });
+
+  const finalizedEvents = [];
+  const prestep = createPreStepGuard({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => activeScope,
+    inspectSelection: (params) => selection.inspect(params),
+    discardSelection: (token) => selection.discard(token),
+    onTurnFinalized: (evt) => finalizedEvents.push(evt),
+    now: () => clock,
+    turnTtlMs: 10_000,
+    maxActiveTurns: 1,
+  });
+
+  const p1 = await selection.prepare({ expertId: 'exp-1', sessionId: 'sess-1', scopeEpoch: 1, viewVersion: 1, taskText: 'First active task', draftVersion: 1 });
+  const t1 = await prestep.prepareTurn({ sessionId: 'sess-1', selectionToken: p1.selectionToken, taskText: 'First active task', draftVersion: 1 });
+  assert.equal(t1.allowed, true);
+
+  // Second concurrent turn hits maxActiveTurns=1 -> rejected fail-closed with EXPERT_RATE_LIMITED,
+  // while t1 remains intact and usable!
+  const p2 = await selection.prepare({ expertId: 'exp-1', sessionId: 'sess-2', scopeEpoch: 1, viewVersion: 1, taskText: 'Second task', draftVersion: 1 });
+  const t2 = await prestep.prepareTurn({ sessionId: 'sess-2', selectionToken: p2.selectionToken, taskText: 'Second task', draftVersion: 1 });
+  assert.equal(t2.allowed, false);
+  assert.equal(t2.code, 'EXPERT_RATE_LIMITED');
+  assert.equal(t2.preserveDraft, true);
+  assert.equal(t2.draft.taskText, 'Second task');
+
+  // First turn is still active and passes beforeToolCall.
+  assert.equal(
+    prestep.beforeToolCall({ turnId: t1.turnId, toolName: 'forge_experts.delegate', toolInput: { selectionToken: p1.selectionToken, expertId: 'exp-1', sessionId: 'sess-1' } }).allowed,
+    true,
+  );
+
+  // Finalizing without delegatedTaskId fires onTurnFinalized with non-sensitive metadata (no raw taskText).
+  const f1 = prestep.finalizeTurn({ turnId: t1.turnId });
+  assert.equal(f1.status, 'model_did_not_delegate');
+  assert.equal(finalizedEvents.length, 1);
+  assert.equal(finalizedEvents[0].sessionId, 'sess-1');
+  assert.equal(finalizedEvents[0].preserveDraft, true);
+  assert.equal(Object.hasOwn(finalizedEvents[0], 'draft'), false, 'SSE metadata must not broadcast raw draft text');
+
+  // After TTL expires, an unfinalized turn is automatically pruned and frees capacity.
+  const t3 = await prestep.prepareTurn({ sessionId: 'sess-2', selectionToken: p2.selectionToken, taskText: 'Second task', draftVersion: 1 });
+  assert.equal(t3.allowed, true);
+  clock += 15_000;
+  assert.equal(prestep.activeTurnCount(), 0);
+  assert.equal(selection.pendingCount(), 0, 'expired turn pruning must also discard its unused token');
+});
+
+test('apply() logs warn when dispatchEnabled is true and agentHooks.registerPreStep is unavailable', async () => {
+  const warnings = [];
+  const ctx = {
+    get(serviceName) {
+      if (serviceName === 'webServer') return { register: () => () => {} };
+      if (serviceName === 'tools') return { register: () => () => {} };
+      return undefined;
+    },
+    provide() {},
+    effect() {},
+    logger: { warn(msg) { warnings.push(msg); } },
+  };
+  await apply(ctx, { managementEnabled: true, dispatchEnabled: true });
+  assert.ok(warnings.some((m) => m.includes('agentHooks.registerPreStep unavailable')));
+});

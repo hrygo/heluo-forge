@@ -189,6 +189,11 @@ export function createExpertsHost(ports) {
     resolveScope: () => scope.resolveForRequest(),
     inspectSelection: (params) => selection.inspect(params),
     discardSelection: (token) => selection.discard(token),
+    onTurnFinalized: (event) => {
+      routesRef?.broadcast({ type: 'turn-finalized', ...event });
+    },
+    now: ports.now,
+    turnTtlMs: ports.turnTtlMs,
     maxActiveTurns: ports.maxActiveTurns,
   });
 
@@ -388,19 +393,25 @@ export async function apply(ctx, config = {}) {
 
   const agentHooks = readService(ctx, 'agentHooks');
   let unregisterPreStep = null;
-  if (host.dispatchEnabled && agentHooks && typeof agentHooks.registerPreStep === 'function') {
-    try {
-      const dispose = agentHooks.registerPreStep(host.prestep);
-      if (typeof dispose === 'function') unregisterPreStep = dispose;
-    } catch (error) {
-      for (const dispose of unregisterTools) {
-        try { dispose(); } catch { /* best-effort rollback */ }
+  if (host.dispatchEnabled) {
+    if (!agentHooks || typeof agentHooks.registerPreStep !== 'function') {
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] agentHooks.registerPreStep unavailable; pre-step turn guard not registered');
       }
-      if (typeof unregisterRoute === 'function') {
-        try { unregisterRoute(); } catch { /* best-effort rollback */ }
+    } else {
+      try {
+        const dispose = agentHooks.registerPreStep(host.prestep);
+        if (typeof dispose === 'function') unregisterPreStep = dispose;
+      } catch (error) {
+        for (const dispose of unregisterTools) {
+          try { dispose(); } catch { /* best-effort rollback */ }
+        }
+        if (typeof unregisterRoute === 'function') {
+          try { unregisterRoute(); } catch { /* best-effort rollback */ }
+        }
+        await host.close().catch(() => {});
+        throw error;
       }
-      await host.close().catch(() => {});
-      throw error;
     }
   }
 
