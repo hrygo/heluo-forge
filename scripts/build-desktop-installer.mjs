@@ -9,7 +9,7 @@
  *
  * 用法：
  *   node scripts/build-desktop-installer.mjs --identity <app-identity.json> \
- *     --resources <staged resources dir> --version <x.y.z> --output <dir> \
+ *     --resources <staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
  *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] [--target dir|mac|win] [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
@@ -36,6 +36,20 @@ export class InstallerBuildError extends Error {
 const fail = (code, message) => {
   throw new InstallerBuildError(code, message);
 };
+
+/**
+ * The application version the installer carries, without the tag's leading `v`.
+ *
+ * The release lanes hand over the tag itself (`vX.Y.Z`). NSIS derives the
+ * Windows numeric version from the application version and refuses a leading
+ * `v` ("Invalid major number"), while the macOS `dir` target never looks — so
+ * the tag form is accepted here and normalized once, for every target.
+ */
+export function normalizeVersion(version) {
+  const match = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(version ?? '');
+  if (match === null) fail('BAD_ARGUMENT', '--version must be v<semver> or <semver>, for example v1.2.3');
+  return match[1];
+}
 
 export function parseArguments(argv) {
   const options = { identity: undefined, resources: undefined, version: undefined, output: undefined, appDir: undefined, brandDir: undefined, target: 'dir', configOnly: false, json: false };
@@ -152,11 +166,12 @@ async function main() {
   verifiedIcons(brandDir);
   const appDir = resolve(options.appDir ?? join(repoRoot, DEFAULT_APP_DIR));
   const outputDir = resolve(options.output);
+  const version = normalizeVersion(options.version);
   mkdirSync(outputDir, { recursive: true });
 
   const config = builderConfig({
     identity,
-    version: options.version,
+    version,
     resourcesDir: options.resources,
     iconsDir: join(brandDir, 'icons'),
     appDir,
@@ -168,7 +183,7 @@ async function main() {
   const summary = {
     schema: 'heluo-desktop-installer/1',
     identity: { appId: identity.appId, productName: identity.productName, executableName: identity.executableName, guid: identity.upgradeGuid, displayName: identity.displayName },
-    version: options.version,
+    version,
     target: options.target,
     config: configPath,
   };
