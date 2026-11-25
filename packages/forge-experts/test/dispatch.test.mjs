@@ -688,3 +688,67 @@ test('followupTask fails closed (404 EXPERT_TASK_NOT_FOUND) when task context is
     await h2.host.close();
   }
 });
+
+test('startup/reconnect by-request reconciliation recovers pending_delivery/unknown requests from durable pending_index with zero duplicate dispatches (#247)', async () => {
+  const sharedStorage = createMemoryStorage();
+  const sharedBackend = { tasksByRequest: new Map(), tasksById: new Map() };
+  const h1 = makeHarness({ dispatchEnabled: true, storage: sharedStorage, backend: sharedBackend });
+  await h1.host.open();
+  try {
+    await h1.enableExpert();
+    h1.setCreateBehavior('unknown');
+    const sel = await invokeRoute(h1.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Wire-drop recovery task' },
+    });
+    const res = await invokeRoute(h1.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-1', taskText: 'Wire-drop recovery task' },
+    });
+    assert.equal(res.status, 503);
+    assert.equal(res.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+  } finally {
+    await h1.host.close();
+  }
+
+  // Reopen after restart (even with dispatchEnabled: false per §9.2):
+  // GET /tasks/pending lists the unresolved requestId without raw taskText,
+  // and POST /tasks/reconcile reconciles via by-request without calling createDelegraTask.
+  const h2 = makeHarness({ dispatchEnabled: false, storage: sharedStorage, backend: sharedBackend });
+  await h2.host.open();
+  try {
+    const pendingBefore = await invokeRoute(h2.host, { path: `${API_PREFIX}/tasks/pending` });
+    assert.equal(pendingBefore.status, 200);
+    assert.equal(pendingBefore.body.items.length, 1);
+    assert.equal(pendingBefore.body.items[0].requestId, 'req-0001');
+    assert.equal(pendingBefore.body.items[0].status, 'unknown');
+    assert.equal('taskText' in pendingBefore.body.items[0], false);
+
+    // POST /tasks/reconcile enforces CSRF header
+    const noHeader = await invokeRoute(h2.host, { method: 'POST', path: `${API_PREFIX}/tasks/reconcile` });
+    assert.equal(noHeader.status, 403);
+    assert.equal(noHeader.body.error.code, 'EXPERT_REQUEST_HEADER_REQUIRED');
+
+    const reconciled = await invokeRoute(h2.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    assert.equal(reconciled.status, 200);
+    assert.equal(reconciled.body.reconciled.length, 1);
+    assert.equal(reconciled.body.reconciled[0].requestId, 'req-0001');
+    assert.equal(reconciled.body.reconciled[0].taskId, 'task-lost-1');
+    assert.equal(h2.getCreateCalls(), 0, 'startup reconciliation must never blindly re-send createDelegraTask');
+
+    // Pending list is now empty after convergence
+    const pendingAfter = await invokeRoute(h2.host, { path: `${API_PREFIX}/tasks/pending` });
+    assert.equal(pendingAfter.status, 200);
+    assert.deepEqual(pendingAfter.body.items, []);
+  } finally {
+    await h2.host.close();
+  }
+});

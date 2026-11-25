@@ -20,6 +20,22 @@ window.__ModuleLoader__.load({
       unavailable: '暂不可用',
     }));
 
+    const TASK_STATUS_LABELS = Object.freeze(Object.assign(Object.create(null), {
+      accepted: '已受理（尚未完成）',
+      queued: '排队中（尚未完成）',
+      running: '执行中',
+      waiting_user: '等待补充输入',
+      completed: '已完成',
+      succeeded: '已完成',
+      failed: '执行失败',
+      cancelling: '取消请求已提交',
+      cancelled: '已取消',
+      pending_delivery: '受理状态未知（请对账）',
+      unknown: '受理状态未知（请对账）',
+    }));
+
+    const TERMINAL_TASK_STATUSES = new Set(['completed', 'succeeded', 'failed', 'cancelled']);
+
     const ERROR_NOTICE = Object.freeze(Object.assign(Object.create(null), {
       EXPERT_MANAGEMENT_DISABLED: '专家智能体管理入口当前未开放。',
       EXPERT_MENTIONS_DISABLED: '专家 @ 候选投影当前未开放。',
@@ -108,6 +124,51 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
+    async function fetchTaskStatus(taskId) {
+      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    async function fetchTaskResult(taskId) {
+      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/result`);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    async function reconcileTaskByRequest(requestId) {
+      const response = await fetch(`${API_BASE}/tasks/by-request/${encodeURIComponent(requestId)}`);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    async function postReconcilePending() {
+      const response = await fetch(`${API_BASE}/tasks/reconcile`, {
+        method: 'POST',
+        headers: REQUEST_HEADERS,
+        body: JSON.stringify({}),
+      });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    async function postTaskFollowup(taskId, { taskText, reuseRefs = [] }) {
+      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/followups`, {
+        method: 'POST',
+        headers: REQUEST_HEADERS,
+        body: JSON.stringify({
+          taskText,
+          ...(Array.isArray(reuseRefs) && reuseRefs.length > 0 ? { reuseRefs } : {}),
+        }),
+      });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    async function postTaskCancel(taskId) {
+      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/cancel`, {
+        method: 'POST',
+        headers: REQUEST_HEADERS,
+        body: JSON.stringify({}),
+      });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
     function openEventStream(onMessage, onError) {
       if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return () => {};
       const source = new window.EventSource(`${API_BASE}/events`);
@@ -151,8 +212,204 @@ window.__ModuleLoader__.load({
       return enabled ? '停用' : '启用';
     }
 
-    // §5 管理页视图
-    function ExpertsManagementPanel() {
+    function filterAuthorizedCardItems(items) {
+      if (!Array.isArray(items)) return [];
+      return items.filter((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item) && item.authorized === true);
+    }
+
+    function deriveTaskCardModel(task) {
+      const status = typeof task?.status === 'string' && TASK_STATUS_LABELS[task.status]
+        ? task.status
+        : 'unknown';
+      const taskId = typeof task?.taskId === 'string' && task.taskId.trim() ? task.taskId.trim() : null;
+      const requestId = typeof task?.requestId === 'string' && task.requestId.trim() ? task.requestId.trim() : null;
+      const isTerminal = TERMINAL_TASK_STATUSES.has(status);
+      const isCompleted = status === 'completed' || status === 'succeeded';
+      const isWaitingUser = status === 'waiting_user';
+      const isUnknown = status === 'unknown' || status === 'pending_delivery';
+      const isCancelled = status === 'cancelled' || status === 'cancelling' || task?.cancelRequested === true;
+      const authorizedSources = filterAuthorizedCardItems(task?.sources);
+      const authorizedArtifacts = filterAuthorizedCardItems(task?.artifacts);
+      const waitingNotice = isWaitingUser
+        ? (task?.waitingUserNotice?.message ?? '该任务正在等待您的补充输入（只读提示），请显式发送追问后继续。')
+        : null;
+      const cancellationNotice = isCancelled
+        ? '取消请求已提交；专家已经执行的外部动作不会被自动撤销。'
+        : null;
+      return {
+        taskId,
+        requestId,
+        expertName: typeof task?.expertName === 'string' && task.expertName.trim() ? task.expertName.trim() : (task?.expertId ?? '专家智能体'),
+        status,
+        statusLabel: TASK_STATUS_LABELS[status] ?? TASK_STATUS_LABELS.unknown,
+        completed: isCompleted,
+        isTerminal,
+        isUnknown,
+        isWaitingUser,
+        cancelRequested: isCancelled,
+        canReconcile: Boolean(requestId && (isUnknown || !taskId)),
+        showReconcileAction: Boolean(requestId && (isUnknown || !taskId)),
+        canRefresh: Boolean(taskId),
+        showFollowupInput: Boolean(isWaitingUser && taskId),
+        canCancel: Boolean(taskId && !isTerminal && !isCancelled),
+        showCancelAction: Boolean(taskId && !isTerminal && !isCancelled),
+        runId: typeof task?.runId === 'string' ? task.runId : null,
+        runGeneration: Number.isInteger(task?.runGeneration) ? task.runGeneration : null,
+        resultVersion: Number.isInteger(task?.resultVersion) ? task.resultVersion : null,
+        waitingNotice,
+        waitingUserNotice: waitingNotice,
+        cancellationNotice,
+        rawResultCollapsedDefault: true,
+        rawResult: typeof task?.rawResult === 'string' && task.rawResult.length > 0 ? task.rawResult : null,
+        summary: typeof task?.summary === 'string' && task.summary.length > 0 ? task.summary : null,
+        result: task?.result ?? null,
+        sources: authorizedSources,
+        artifacts: authorizedArtifacts,
+        authorizedSources,
+        authorizedArtifacts,
+      };
+    }
+
+    // §5 管理页与异步任务状态/恢复卡片视图（#246 / #247）
+    function ExpertTaskStatusCard(props = {}) {
+      const initial = props.initialTask ?? props.task ?? null;
+      const [task, setTask] = React.useState(initial);
+      const [rawExpanded, setRawExpanded] = React.useState(false);
+      const [followupText, setFollowupText] = React.useState('');
+      const [busy, setBusy] = React.useState(false);
+      const [notice, setNotice] = React.useState(null);
+      const model = deriveTaskCardModel(task ?? initial);
+
+      const handleReconcile = async () => {
+        if (!model.requestId || busy) return;
+        setBusy(true);
+        setNotice(null);
+        try {
+          const res = await reconcileTaskByRequest(model.requestId);
+          if (!res.ok) {
+            setNotice(resultNotice(res));
+            return;
+          }
+          setTask((prev) => ({ ...(prev ?? {}), ...(res.body ?? {}) }));
+          setNotice('已按原请求号完成权威状态对账。');
+        } catch {
+          setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const handleRefresh = async () => {
+        if (!model.taskId || busy) return;
+        setBusy(true);
+        setNotice(null);
+        try {
+          const statusRes = await fetchTaskStatus(model.taskId);
+          if (!statusRes.ok) {
+            setNotice(resultNotice(statusRes));
+            return;
+          }
+          let merged = { ...(task ?? {}), ...(statusRes.body ?? {}) };
+          if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'running' || merged.status === 'waiting_user') {
+            const resultRes = await fetchTaskResult(model.taskId).catch(() => null);
+            if (resultRes?.ok && resultRes.body) {
+              merged = { ...merged, ...resultRes.body };
+            }
+          }
+          setTask(merged);
+        } catch {
+          setNotice(ERROR_NOTICE.EXPERT_DIRECTORY_UNAVAILABLE);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const handleFollowup = async () => {
+        if (!model.showFollowupInput || busy || !followupText.trim()) return;
+        setBusy(true);
+        setNotice(null);
+        try {
+          const res = await postTaskFollowup(model.taskId, { taskText: followupText });
+          if (!res.ok) {
+            setNotice(resultNotice(res));
+            return;
+          }
+          setFollowupText('');
+          setTask((prev) => ({ ...(prev ?? {}), ...(res.body ?? {}) }));
+        } catch {
+          setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const handleCancel = async () => {
+        if (!model.taskId || !model.canCancel || busy) return;
+        setBusy(true);
+        setNotice(null);
+        try {
+          const res = await postTaskCancel(model.taskId);
+          if (!res.ok) {
+            setNotice(resultNotice(res));
+            return;
+          }
+          setTask((prev) => ({ ...(prev ?? {}), ...(res.body ?? {}) }));
+          setNotice('取消请求已提交；专家已经执行的外部动作不会被自动撤销。');
+        } catch {
+          setNotice(ERROR_NOTICE.EXPERT_REQUEST_FAILED);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      return h('div', {
+        className: 'fexp-task-card',
+        'data-testid': 'fexp-task-card',
+        'data-task-status': model.status,
+      },
+        h('div', { className: 'fexp-task-card-header' },
+          h('strong', null, model.expertName),
+          h('span', { 'data-testid': 'fexp-task-status-badge' }, model.statusLabel),
+        ),
+        h('div', { className: 'fexp-task-card-meta' },
+          model.taskId ? h('span', null, `任务号：${model.taskId}`) : null,
+          model.requestId ? h('span', null, `请求号：${model.requestId}`) : null,
+          model.runGeneration !== null ? h('span', null, `代次：g${model.runGeneration}`) : null,
+        ),
+        model.summary ? h('div', { 'data-testid': 'fexp-task-summary' }, model.summary) : null,
+        model.waitingNotice ? h('div', { role: 'status', 'data-testid': 'fexp-task-waiting-notice' }, model.waitingNotice) : null,
+        model.cancellationNotice ? h('div', { role: 'status', 'data-testid': 'fexp-task-cancel-notice' }, model.cancellationNotice) : null,
+        notice ? h('div', { role: 'status', 'data-testid': 'fexp-task-notice' }, notice) : null,
+        model.result !== null ? h('div', { 'data-testid': 'fexp-task-result' }, typeof model.result === 'string' ? model.result : JSON.stringify(model.result)) : null,
+        model.sources.length > 0 ? h('ul', { 'data-testid': 'fexp-task-sources' },
+          ...model.sources.map((src, idx) => h('li', { key: src?.id ?? idx }, src?.title ?? src?.uri ?? '已授权来源')),
+        ) : null,
+        model.artifacts.length > 0 ? h('ul', { 'data-testid': 'fexp-task-artifacts' },
+          ...model.artifacts.map((art, idx) => h('li', { key: art?.id ?? idx }, art?.label ?? art?.name ?? art?.id ?? '产物')),
+        ) : null,
+        model.rawResult ? h('div', { 'data-testid': 'fexp-raw-drawer' },
+          h('button', {
+            type: 'button',
+            'data-testid': 'fexp-raw-toggle',
+            'aria-expanded': rawExpanded,
+            onClick: () => setRawExpanded((prev) => !prev),
+          }, rawExpanded ? '收起专家原文' : '展开专家原文'),
+          rawExpanded ? h('pre', { 'data-testid': 'fexp-raw-content' }, model.rawResult) : null,
+        ) : null,
+        model.showFollowupInput ? h('div', { 'data-testid': 'fexp-followup-box' },
+          h('input', { type: 'text', value: followupText, placeholder: '输入补充说明…', onChange: (e) => setFollowupText(e.target.value) }),
+          h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-followup-btn', onClick: handleFollowup }, '发送追问'),
+        ) : null,
+        h('div', { className: 'fexp-task-card-actions' },
+          model.canReconcile ? h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-task-reconcile', onClick: handleReconcile }, '按原请求号对账') : null,
+          model.canRefresh ? h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-task-refresh', onClick: handleRefresh }, '刷新状态') : null,
+          model.canCancel ? h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-task-cancel', onClick: handleCancel }, '请求取消') : null,
+        ),
+      );
+    }
+
+    function ExpertsManagementPanel(props = {}) {
+      const dispatchEnabled = props?.dispatchEnabled === true;
       const [view, setView] = React.useState('callable');
       const [query, setQuery] = React.useState('');
       const [state, setState] = React.useState({
@@ -284,8 +541,9 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'forge-experts-ui', 'data-testid': 'forge-experts-panel' },
         h('div', { className: 'fexp-header' },
           h('h2', null, '专家智能体'),
-          // Stage 3A 管理页暂不开放聊天 @ 委派发起入口；上方预置的委派/策略类错误文案供 Stage 3B 委派交互接入后直接消费。
-          h('p', { 'data-testid': 'fexp-dispatch-notice' }, '聊天 @ 专家委派尚未开放，当前可在管理页提前维护个人启用列表。'),
+          h('p', { 'data-testid': 'fexp-dispatch-notice' }, dispatchEnabled
+            ? '聊天 @ 专家委派已开放，可在此维护个人启用列表；未启用的专家不会出现在聊天 @ 候选中。'
+            : '聊天 @ 专家委派尚未开放，当前可在管理页提前维护个人启用列表。'),
         ),
         h('div', { className: 'fexp-toolbar' },
           h('button', { type: 'button', onClick: () => setView('callable'), 'aria-pressed': view === 'callable' }, '可调用'),
@@ -443,6 +701,10 @@ window.__ModuleLoader__.load({
         (payload) => {
           if (payload.type === 'ready') {
             activeHooks = registerGroup() ?? activeHooks;
+            if (enableSelectionBinding) {
+              // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）。
+              postReconcilePending().catch(() => {});
+            }
             return;
           }
           if (payload.type === 'turn-finalized' && enableSelectionBinding && payload.preserveDraft === true) {
@@ -496,16 +758,30 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      deriveTaskCardModel,
+      deriveTaskCardState: deriveTaskCardModel,
+      ExpertTaskStatusCard,
       apply(ctx, options = {}) {
         const disposers = [];
         if (ctx.slots && typeof ctx.slots.inject === 'function') {
+          const dispatchEnabled = options?.dispatchEnabled === true;
+          const BoundManagementPanel = (props) => h(ExpertsManagementPanel, { ...(props ?? {}), dispatchEnabled });
           const disposeSection = ctx.slots.inject('settings.section', () => ctx.slots.register({
             name: 'settings.section',
             id: 'forge-experts',
             order: 25,
             label: () => '专家智能体',
-          }, ExpertsManagementPanel));
+          }, BoundManagementPanel));
           if (typeof disposeSection === 'function') disposers.push(disposeSection);
+
+          // 异步任务状态与恢复卡片（#247）：按 §9.2 即使停用新委派也保持存量任务权威回查、对账与取消可用。
+          const disposeTaskCard = ctx.slots.inject('chat.taskCard', () => ctx.slots.register({
+            name: 'chat.taskCard',
+            id: 'forge-experts-task-card',
+            order: 25,
+            label: () => '专家任务状态',
+          }, ExpertTaskStatusCard));
+          if (typeof disposeTaskCard === 'function') disposers.push(disposeTaskCard);
         }
         if (options?.isolatedMentionsPreview === true) {
           disposers.push(mountIsolatedMentionsSource(ctx));

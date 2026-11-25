@@ -43,7 +43,7 @@ function loadClientModule({ eventSources = [], fetchImpl = null } = {}) {
     if (dep === 'react') {
       return {
         createElement: (type, props, ...children) => ({ type, props, children }),
-        useState: (init) => [init, () => {}],
+        useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
         useRef: (init) => ({ current: init }),
         useCallback: (fn) => fn,
         useEffect: () => {},
@@ -95,14 +95,17 @@ test('client single bundle registers settings.section, keeps production @ trigge
     };
 
     exported.apply(ctx);
-    assert.equal(registeredSections.length, 1);
+    assert.equal(registeredSections.length, 2);
     assert.equal(registeredSections[0].meta.name, 'settings.section');
     assert.equal(registeredSections[0].meta.id, 'forge-experts');
     assert.equal(registeredSections[0].meta.label(), '专家智能体');
+    assert.equal(registeredSections[1].meta.name, 'chat.taskCard');
+    assert.equal(registeredSections[1].meta.id, 'forge-experts-task-card');
+    assert.equal(registeredSections[1].meta.label(), '专家任务状态');
     assert.equal(triggerCalled, false, 'production @ trigger must remain closed by default');
 
     for (const fn of disposers) fn();
-    assert.equal(disposedCount, 1, 'section registration must be released through the Cordis effect');
+    assert.equal(disposedCount, 2, 'all slot registrations must be released through the Cordis effect');
   } finally {
     restore();
   }
@@ -343,6 +346,141 @@ test('production dispatchEnabled mounts @ source with disambiguated homonymous l
 
     for (const fn of disposeCallbacks) fn();
     assert.equal(registeredSpec, null);
+  } finally {
+    restore();
+  }
+});
+
+test('ExpertTaskStatusCard & deriveTaskCardState distinguish queued/succeeded/waiting_user/cancelled/unknown, collapse rawResult by default, and trigger reconnect reconcile (#247)', async () => {
+  const eventSources = [];
+  const reconcileCalls = [];
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/tasks/reconcile') && init?.method === 'POST') {
+      reconcileCalls.push(url);
+      return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+    }
+    return { ok: true, status: 200, async json() { return { candidates: [] }; } };
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    // 1. queued != completed
+    const queued = exported.deriveTaskCardState({ taskId: 't-1', status: 'queued' });
+    assert.equal(queued.completed, false);
+    assert.equal(queued.showCancelAction, true);
+    assert.match(queued.statusLabel, /尚未完成/u);
+
+    // 2. succeeded: fail-closed sources/artifacts & collapsed raw output by default
+    const succeeded = exported.deriveTaskCardState({
+      taskId: 't-2',
+      status: 'succeeded',
+      summary: 'Q4 growth 18%',
+      rawResult: 'Full transcript',
+      sources: [{ title: 'OK', authorized: true }, { title: 'Hidden' }, { title: 'Denied', authorized: false }],
+      artifacts: [{ name: 'out.md', authorized: true }, { name: 'secret.json', authorized: false }],
+    });
+    assert.equal(succeeded.completed, true);
+    assert.equal(succeeded.rawResultCollapsedDefault, true);
+    assert.equal(succeeded.authorizedSources.length, 1);
+    assert.equal(succeeded.authorizedArtifacts.length, 1);
+
+    const cardTree = exported.ExpertTaskStatusCard({
+      task: {
+        taskId: 't-2',
+        status: 'succeeded',
+        summary: 'Q4 growth 18%',
+        rawResult: 'Full transcript',
+        sources: [{ title: 'OK', authorized: true }],
+      },
+    });
+    const renderedJson = JSON.stringify(cardTree);
+    assert.match(renderedJson, /展开专家原文/u);
+    assert.doesNotMatch(renderedJson, /Full transcript/u, 'rawResult must remain collapsed by default');
+
+    // 3. waiting_user: read-only notice + explicit followup box
+    const waiting = exported.deriveTaskCardState({
+      taskId: 't-3',
+      status: 'waiting_user',
+      waitingUserNotice: { readOnly: true, message: '请确认目标区域' },
+    });
+    assert.equal(waiting.showFollowupInput, true);
+    assert.equal(waiting.waitingUserNotice, '请确认目标区域');
+
+    // 4. cancelled: explicitly states external actions are not reverted
+    const cancelled = exported.deriveTaskCardState({ taskId: 't-4', status: 'cancelled' });
+    assert.match(cancelled.cancellationNotice, /外部动作不会被自动撤销/u);
+
+    // 5. unknown: shows reconcile button
+    const unknown = exported.deriveTaskCardState({ requestId: 'req-9', status: 'unknown' });
+    assert.equal(unknown.isUnknown, true);
+    assert.equal(unknown.showReconcileAction, true);
+
+    // 6. SSE ready in dispatchEnabled mode triggers POST /tasks/reconcile
+    const ctx = {
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      inputTriggers: { registerSource() { return () => {}; } },
+      effect() {},
+    };
+    exported.apply(ctx, { dispatchEnabled: true });
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 1, viewVersion: 1 });
+    await Promise.resolve();
+    assert.equal(reconcileCalls.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('Stage C4-B async task status & recovery card renders reconcile, refresh, cancel, waiting_user read-only notice, and artifacts (#247)', () => {
+  const { exported, restore } = loadClientModule();
+  try {
+    const registered = [];
+    const ctx = {
+      slots: {
+        inject(_slotName, fn) { fn(); return () => {}; },
+        register(meta, component) { registered.push({ meta, component }); return () => {}; },
+      },
+      effect() {},
+    };
+
+    exported.apply(ctx, { dispatchEnabled: true });
+    const cardEntry = registered.find((r) => r.meta.id === 'forge-experts-task-card');
+    assert.ok(cardEntry, 'chat.taskCard slot must be registered');
+
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    const unknownTree = cardEntry.component({
+      initialTask: { requestId: 'req-unknown-1', status: 'unknown', expertName: '财务分析专家' },
+    });
+    assert.equal(unknownTree.props['data-task-status'], 'unknown');
+    assert.equal(findNodes(unknownTree, (n) => n.props?.['data-testid'] === 'fexp-task-reconcile').length, 1);
+    assert.equal(findNodes(unknownTree, (n) => n.props?.['data-testid'] === 'fexp-task-cancel').length, 0);
+
+    const waitingTree = cardEntry.component({
+      initialTask: { taskId: 'task-wait-1', requestId: 'req-2', status: 'waiting_user', runGeneration: 2, expertName: '法务专家' },
+    });
+    assert.equal(waitingTree.props['data-task-status'], 'waiting_user');
+    assert.equal(findNodes(waitingTree, (n) => n.props?.['data-testid'] === 'fexp-task-waiting-notice').length, 1);
+    assert.equal(findNodes(waitingTree, (n) => n.props?.['data-testid'] === 'fexp-task-refresh').length, 1);
+    assert.equal(findNodes(waitingTree, (n) => n.props?.['data-testid'] === 'fexp-task-cancel').length, 1);
+
+    const doneTree = cardEntry.component({
+      initialTask: {
+        taskId: 'task-done-1',
+        status: 'completed',
+        runGeneration: 1,
+        result: 'Q4 营收同比增长 18%',
+        artifacts: [{ id: 'art-1', label: '经营分析简报.pdf', authorized: true }],
+      },
+    });
+    assert.equal(doneTree.props['data-task-status'], 'completed');
+    assert.equal(findNodes(doneTree, (n) => n.props?.['data-testid'] === 'fexp-task-result').length, 1);
+    assert.equal(findNodes(doneTree, (n) => n.props?.['data-testid'] === 'fexp-task-artifacts').length, 1);
+    assert.equal(findNodes(doneTree, (n) => n.props?.['data-testid'] === 'fexp-task-cancel').length, 0);
   } finally {
     restore();
   }
