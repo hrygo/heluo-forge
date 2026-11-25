@@ -1352,7 +1352,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         // directory model would report a different code than the other entries
         // (issue #380 review).
         const signInBlocked = permit(sample());
-        if (route === provider && !signInBlocked && !catalogueRead && missingBackendCode()) {
+        if (route === provider && !signInBlocked && !backend && missingBackendCode()) {
           const cause = error(missingBackendCode());
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;

@@ -1982,13 +1982,15 @@ test('a manual route and the stream guard agree when the directory failed (issue
   const fromCall = prepared.error
     ? { code: prepared.error.code }
     : { code: (await chunks(prepared.call.stream({ provider: 'enterprise', model: 'manual-enabled', messages: [] }))).at(-1)?.reason?.failure?.code ?? null };
+  const resolvedError = await f.adapter.resolveModel('enterprise', 'manual-enabled').then(() => null, error => error);
   const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'manual-enabled', messages: [] }, async function* () {
     yield { type: 'text', text: 'ok' };
   }));
   const fromGuard = streamed.at(-1)?.reason?.failure?.code ?? null;
   // A manual route with a locally built adapter stays callable even when the
-  // directory failed (see `same-account relogin`); both entries agree on that.
+  // directory failed (see `same-account relogin`); all three entries agree.
   assert.equal(fromCall.code, null);
+  assert.equal(resolvedError, null, 'resolveModel must serve the manual route too');
   assert.equal(fromGuard, null);
 });
 
@@ -2022,9 +2024,9 @@ test('adapter-init failure plus a directory 403 reports one reason on every entr
   assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_FORBIDDEN');
   const request = { ...options, model: 'manual-enabled' };
   const prepared = await f.adapter.prepareCall('enterprise', 'manual-enabled').then(() => null, error => error);
-  const resolved = await f.adapter.resolveModel('enterprise', 'manual-enabled').then(() => null, error => error);
+  const resolvedError = await f.adapter.resolveModel('enterprise', 'manual-enabled').then(() => null, error => error);
   const streamed = await chunks(f.guard(request, async function* () { dispatch += 1; yield { type: 'text', text: 'leak' }; }));
-  const codes = [prepared?.code, resolved?.code, streamed.at(-1)?.reason?.failure?.code];
+  const codes = [prepared?.code, resolvedError?.code, streamed.at(-1)?.reason?.failure?.code];
   // Nothing can serve the call, so all three entries must name the same cause.
   assert.deepEqual([...new Set(codes)], ['ENTERPRISE_MODELS_UNAVAILABLE'], `entries disagreed: ${codes.join(' / ')}`);
   assert.equal(dispatch, 0, 'a refused call must not reach the transport');
@@ -2043,9 +2045,9 @@ test('a catalogue model keeps the shared no-adapter cause across all three entri
   await assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_FORBIDDEN' });
   const request = { ...options, model: 'enterprise-chat' };
   const prepared = await f.adapter.prepareCall('enterprise', 'enterprise-chat').then(() => null, error => error);
-  const resolved = await f.adapter.resolveModel('enterprise', 'enterprise-chat').then(() => null, error => error);
+  const resolvedError = await f.adapter.resolveModel('enterprise', 'enterprise-chat').then(() => null, error => error);
   const streamed = await chunks(f.guard(request, async function* () { yield { type: 'text', text: 'leak' }; }));
-  const codes = [prepared?.code, resolved?.code, streamed.at(-1)?.reason?.failure?.code];
+  const codes = [prepared?.code, resolvedError?.code, streamed.at(-1)?.reason?.failure?.code];
   // No adapter was ever built here, so the directory failure is the only cause;
   // what matters is that all three entries name that same cause.
   assert.deepEqual([...new Set(codes)], ['ENTERPRISE_GATEWAY_FORBIDDEN'], `entries disagreed: ${codes.join(' / ')}`);
