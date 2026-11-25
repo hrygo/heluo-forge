@@ -172,6 +172,12 @@ function createHarness(options = {}) {
 
   const service = {
     provider: 'gitee',
+    git: () => ({
+      async resolveCommit(commit) {
+        if (commit === 'aaaaaaa') throw new Error('ambiguous');
+        return commit === 'aaaaaaaa' ? REVIEW_PUBLISH.commit : commit;
+      },
+    }),
     async execute(request) {
       return guard.execute(request);
     },
@@ -350,6 +356,35 @@ test('AC-16 回归：review.publish 与 review.record 同变更同提交，目�
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('评审发布以完整提交去重，拒绝歧义短标识', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12#note_1'),
+    read: () => ({ ok: true, object: { number: 12, user_notes_count: 1 } }),
+  });
+  const publish = (commit) => runTool(harness.service, 'forge_gitee_review_publish', { ...REVIEW_PUBLISH, commit });
+  assert.equal((await publish(REVIEW_PUBLISH.commit)).status, 'done');
+  assert.equal((await publish('aaaaaaaa')).reused, true);
+  const second = await publish(`aaaaaaa${'b'.repeat(33)}`);
+  assert.equal(second.status, 'done');
+  assert.notEqual(second.reused, true);
+  assert.equal((await publish('aaaaaaa')).status, 'denied');
+  assert.equal(harness.counters.invoke, 2);
+  assert.equal(harness.counters.read, 2);
+});
+
+test('评审发布回读不明时只阻断同一提交的重放', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12#note_1'),
+    read: () => ({ ok: true, object: { number: 12 } }),
+  });
+  const publish = (commit) => runTool(harness.service, 'forge_gitee_review_publish', { ...REVIEW_PUBLISH, commit });
+  assert.equal((await publish(REVIEW_PUBLISH.commit)).status, 'unknown');
+  assert.equal((await publish('aaaaaaaa')).reason, ACTION_REASONS.REPLAY_BLOCKED);
+  assert.equal((await publish(`aaaaaaa${'b'.repeat(33)}`)).status, 'unknown');
+  assert.equal(harness.counters.invoke, 2);
+  assert.equal(harness.counters.read, 2);
 });
 
 test('评审正文进内容闸，且页脚满足 review-ai-source 硬规则', async () => {

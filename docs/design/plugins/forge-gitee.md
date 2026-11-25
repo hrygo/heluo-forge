@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-010 |
 | 文档名称 | Gitee 接入详细设计 |
-| 版本 | V0.6.0 |
+| 版本 | V0.6.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-16 |
+| 最后更新 | 2026-11-25 |
 | 门禁 | G1 |
 | 模块状态 | 可用（离线用例全绿；设置页与配置端点为 r15 新增，企业 CLI 未联调，见 §12） |
 
@@ -332,6 +332,8 @@ flowchart LR
 **与 `@heluo/forge-devops` 的分流与受控重复（R-2）**：r10 按平台切库之后，同一个事实只有一份实现——提交信息校验在 `src/git-message.mjs`、关闭就绪判定在 `src/gitee-delivery.mjs`、仓库/Issue/PR 的读写都在本包；devops 的 `commit-message`/`report`/`review`/`gh-adapter`/`actions`/`repo-ref`/`repository-resolver` 七个模块连同其用例一起删除（删除清单与理由逐条登记在交付说明与 `delivery-selfcheck.test.mjs` 的文件清单里，不静默减少覆盖）。**刻意保留**的受控重复只有两条：失败面脱敏（devops 的 `failure-face.mjs` 与本包出口的 `scrubSecrets`）与策略目标准入（`policy-guard` 与本包 `gitee-guard`）——两者 egress/confirm 语义不同，合并会把两类平台的写语义搅在一起；AGENTS.md §4 也要求包间不跨源码导入。守门：`test/adapter.test.mjs` 断言 `src/` 零 GitHub 语义标识与字段分表、`test/cli.test.mjs` 断言出口唯一性（`execFile` 只出现在 `gitee-cli.mjs`，git 复用同文件的 `runGit` 而不是新起一个出口）、`test/session.test.mjs` 断言幂等键逐字一致（`sha256(changeId|action|objectType|target|title)` 前 16 位）；`test/actions.test.mjs` 另断言 `review.publish` 与 `review.record` 同变更同提交时键不同，防止跨对象误判 `reused`。
 
 ## 实现与验证记录
+
+**AI 评审发布去重**（[issue #343](https://github.com/hrygo/heluo-forge/issues/343)）：发布前在本地 Git 仓库校验提交对象，将输入解析为唯一的完整 OID。台账按变更号、动作、对象类型、PR 与完整 OID 区分；无法唯一解析或不是提交对象时拒绝发布。同一提交的短、长写法共享回执，未知结果阻断该提交的重放；不同提交独立发布和回读。短 SHA 仅用于评论展示，不作为去重依据。离线回归覆盖共用七位前缀的不同提交、同一提交重试及未知结果隔离；不据此认定企业 Gitee 评论回读已验收。
 
 **实现边界**：独立 CLI 接入包（单安装单元）：11 个 `forge_gitee_*` 工具（3 读 + 4 受控写 + 1 只读判定 + 1 版本快照 + 2 git；判定是读动作、按 out-of-scope 出闸可用，六条写随包登记但按分类受控（研发/评审写需身份与前置审计、push 与 DOP 回写在开关开启后弹卡片、review.record 恒拒））、`gitee.*` 动作命名空间、`GITEE_*` 白名单字段子集（`GITEE_PLATFORM`）、唯一 `execFile` 出口（`run()`/`runGit()` 共用）、幂等台账、`review.md` 渲染与关闭条件判定；14 个源模块 + `cordis.patch.yml`（策略行 `heluo-policy` + 插件行 `forge-gitee`，与 devops 补丁层同 id、目录逐字相同、无 `isolate`）。
 

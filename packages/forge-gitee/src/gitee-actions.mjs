@@ -868,7 +868,7 @@ export function publishReview() {
   const spec = { tool: TOOL_NAMES.REVIEW_PUBLISH, action: GITEE_ACTIONS.REVIEW_PUBLISH };
   return Object.freeze({
     ...spec,
-    async run(args = {}, service, exec) {
+    async run(args = {}, service, exec, resolveCwd = async () => undefined) {
       requireService(service);
       const input = isPlainObject(args) ? args : {};
       const shape = assertTargetShape(input.target, spec);
@@ -880,8 +880,8 @@ export function publishReview() {
       }
       const change = assertChangeId(input.changeId, spec);
       if (change.error !== undefined) return change.error;
-      const commit = text(input.commit).toLowerCase();
-      if (!SHA_PATTERN.test(commit)) {
+      const revision = text(input.commit).toLowerCase();
+      if (!SHA_PATTERN.test(revision)) {
         return denyInput(spec, ACTION_REASONS.INVALID_ARGUMENT, 'commit 必须是 7..40 位十六进制 sha', {
           target: shape.target,
         });
@@ -890,6 +890,16 @@ export function publishReview() {
       if (body.error !== undefined) return body.error;
       if (isPlainObject(input.human)) {
         return denyInput(spec, ACTION_REASONS.HUMAN_CONFIRMATION_FORBIDDEN, '人工结论只能人工自己写，模型不得代填（human 不入参）', {
+          target: shape.target,
+        });
+      }
+
+      let commit;
+      try {
+        commit = await service.git().resolveCommit(revision, await resolveCwd(exec));
+        if (!/^[0-9a-f]{40}$/u.test(commit) || !commit.startsWith(revision)) throw new Error('无效提交对象');
+      } catch {
+        return denyInput(spec, ACTION_REASONS.INVALID_ARGUMENT, '无法在本地仓库唯一解析 commit；请确认对象存在且为提交，并提供完整 OID', {
           target: shape.target,
         });
       }
@@ -905,7 +915,7 @@ export function publishReview() {
         change: change.changeId,
         target: shape.target,
         objectType: GITEE_OBJECT_TYPES.REVIEW,
-        title: `${change.changeId}@${commit.slice(0, 7)}`,
+        title: `${change.changeId}@${commit}`,
         confirm: input.confirm,
         command: 'prComment',
         params: { target: shape.ref, body: `${body.body}${footer}` },
@@ -1296,7 +1306,7 @@ const PARAMETERS = Object.freeze({
  * @param {object} service 插件服务端口
  * @returns {Array<object>} 工具定义
  */
-export function writeToolDefinitions(service) {
+export function writeToolDefinitions(service, resolveCwd) {
   requireService(service);
   const issueWrite = createIssueWrite();
   const prWrite = createPrWrite();
@@ -1365,7 +1375,7 @@ export function writeToolDefinitions(service) {
         additionalProperties: false,
       },
       output: WRITE_TOOL_OUTPUT,
-      execute: async (args, exec) => json(await reviewPublish.run(args ?? {}, service, exec)),
+      execute: async (args, exec) => json(await reviewPublish.run(args ?? {}, service, exec, resolveCwd)),
     },
     {
       name: reviewRecord.tool,

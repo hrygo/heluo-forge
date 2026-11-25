@@ -500,7 +500,25 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     return Object.freeze({ sha: resolved.trim(), commits: Object.freeze(commits), redactions: Object.freeze(redactions) });
   }
 
+  async function resolveCommit(commit, cwd = root) {
+    if (!/^[0-9a-f]{7,40}$/u.test(commit)) throw new Error('无效提交标识');
+    const read = async (args) => {
+      const result = await runner.runGit({ args, purpose: 'git.review-commit', cwd });
+      if (result.exitCode !== 0 || result.truncated || result.redacted || result.timedOut) {
+        throw new Error('无法读取提交对象');
+      }
+      return result.stdout.trim();
+    };
+    const oid = await read(['rev-parse', `--disambiguate=${commit}`]);
+    if (!/^[0-9a-f]{40}$/u.test(oid) || !oid.startsWith(commit)
+      || await read(['cat-file', '-t', oid]) !== 'commit') {
+      throw new Error('提交标识不存在、存在歧义或不是提交对象');
+    }
+    return oid;
+  }
+
   return Object.freeze({
+    resolveCommit,
     commit,
     push,
     readRange,
