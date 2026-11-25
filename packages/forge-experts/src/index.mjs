@@ -269,13 +269,26 @@ export async function apply(ctx, config = {}) {
 
   const evaluatePolicy = typeof config?.evaluatePolicy === 'function'
     ? config.evaluatePolicy
-    : (() => {
-      const policy = readService(ctx, 'forgePolicy');
-      if (policy && typeof policy.decideEgress === 'function') {
-        return (params) => policy.decideEgress(params);
+    : async (params) => {
+      const customPolicy = readService(ctx, 'forgePolicy');
+      if (customPolicy && typeof customPolicy.decideEgress === 'function') {
+        return customPolicy.decideEgress(params);
       }
-      return undefined;
-    })();
+      const policy = readService(ctx, 'policy');
+      if (policy && typeof policy.decide === 'function') {
+        const verdict = await policy.decide({
+          action: params.action,
+          target: params.expertId ?? params.taskId ?? 'expert',
+        });
+        const decision = verdict?.action ?? verdict?.decision ?? 'deny';
+        return {
+          decision,
+          reason: verdict?.reason,
+          ...(decision === 'confirm' ? { confirmationScope: params.action } : {}),
+        };
+      }
+      throw new ExpertsError('EXPERT_POLICY_DENIED', 'Forge Policy egress gate is not configured; dispatch is fail-closed');
+    };
 
   const host = createExpertsHost({
     config,

@@ -75,14 +75,33 @@ export function createScopeManager(ports) {
     }
   }
 
+function normalizeIamSession(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn !== false);
+  const issuer = isNonEmptyString(raw.issuer)
+    ? raw.issuer.trim()
+    : (isNonEmptyString(raw.principal?.issuer) ? raw.principal.issuer.trim() : null);
+  const subject = isNonEmptyString(raw.subject)
+    ? raw.subject.trim()
+    : (isNonEmptyString(raw.principal?.subject) ? raw.principal.subject.trim() : null);
+  if (!ready || !issuer || !subject) return null;
+  return Object.freeze({
+    state: 'ready',
+    issuer,
+    subject,
+    ...(isNonEmptyString(raw.orgId) ? { orgId: raw.orgId.trim() } : {}),
+  });
+}
+
   async function resolveForRequest() {
-    let session;
+    let rawSession;
     try {
-      session = await ports.getIamSession();
+      rawSession = await ports.getIamSession();
     } catch {
       throw new ExpertsError('EXPERT_UNAUTHENTICATED', 'Unable to read active IAM session', { retryable: true });
     }
-    if (!session || session.state !== 'ready' || !isNonEmptyString(session.issuer) || !isNonEmptyString(session.subject)) {
+    const session = normalizeIamSession(rawSession);
+    if (!session) {
       if (currentScope !== null) advanceEpoch(null);
       throw new ExpertsError('EXPERT_UNAUTHENTICATED', 'Employee sign-in is required');
     }
