@@ -14,9 +14,11 @@ import { ExpertsError } from './errors.mjs';
 export const REQUEST_CORRELATIONS_DOMAIN_NAME = 'forge_experts_requests';
 export const REQUEST_CORRELATIONS_DOMAIN_VERSION = 1;
 export const REQUEST_CORRELATIONS_TABLE = 'correlations';
+export const REQUEST_PENDING_INDEX_TABLE = 'pending_index';
 
 const MAX_TASK_TEXT_CHARS = 32_000;
 const MAX_REUSE_REFS = 20;
+const MAX_PENDING_INDEX_IDS = 100;
 const VALID_CORRELATION_STATUSES = new Set([
   'pending_delivery',
   'accepted',
@@ -53,6 +55,12 @@ function computeDispatchDigest({ expertId, delegationScope, taskText, reuseRefs 
 export function deriveCorrelationKey({ instanceId, orgId, issuer, subject, requestId }) {
   return createHash('sha256')
     .update(JSON.stringify(['request_correlation', instanceId, orgId, issuer, subject, requestId]))
+    .digest('hex');
+}
+
+export function derivePendingIndexKey({ instanceId, orgId, issuer, subject }) {
+  return createHash('sha256')
+    .update(JSON.stringify(['request_pending_index', instanceId, orgId, issuer, subject]))
     .digest('hex');
 }
 
@@ -128,12 +136,28 @@ function parseCorrelationRecord(value) {
   return parsed.data;
 }
 
+function parsePendingIndexRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== 1 || !Array.isArray(value.requestIds)) {
+    const error = new Error('Invalid pending request index record');
+    error.code = 'invalid-record';
+    throw error;
+  }
+  const ids = [];
+  for (const id of value.requestIds) {
+    if (isNonEmptyString(id) && ids.length < MAX_PENDING_INDEX_IDS) ids.push(id.trim());
+  }
+  return Object.freeze({ schemaVersion: 1, requestIds: Object.freeze(ids) });
+}
+
 export const REQUEST_CORRELATIONS_DOMAIN_SPEC = Object.freeze({
   name: REQUEST_CORRELATIONS_DOMAIN_NAME,
   version: REQUEST_CORRELATIONS_DOMAIN_VERSION,
   tables: Object.freeze({
     [REQUEST_CORRELATIONS_TABLE]: Object.freeze({
       valueSchema: Object.freeze({ parse: parseCorrelationRecord }),
+    }),
+    [REQUEST_PENDING_INDEX_TABLE]: Object.freeze({
+      valueSchema: Object.freeze({ parse: parsePendingIndexRecord }),
     }),
   }),
 });
@@ -253,6 +277,7 @@ export function createDispatchService(ports) {
 
   let domainHandle = null;
   let table = null;
+  let pendingIndexTable = null;
   let closed = false;
   // Bounded in-memory taskId -> { originSessionRef, expertId, delegationScope } index
   // populated by local dispatches/reconciliations so follow-ups reuse full preference
@@ -289,9 +314,11 @@ export function createDispatchService(ports) {
     try {
       domainHandle = await ports.openStorageDomain(REQUEST_CORRELATIONS_DOMAIN_SPEC);
       table = domainHandle.table(REQUEST_CORRELATIONS_TABLE);
+      pendingIndexTable = domainHandle.table(REQUEST_PENDING_INDEX_TABLE);
     } catch {
       domainHandle = null;
       table = null;
+      pendingIndexTable = null;
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Request correlation storage domain is unavailable', {
         retryable: true,
       });
@@ -305,7 +332,38 @@ export function createDispatchService(ports) {
       const closing = domainHandle;
       domainHandle = null;
       table = null;
+      pendingIndexTable = null;
       await closing.close?.();
+    }
+  }
+
+  async function readPendingIndex(scope) {
+    if (closed || !pendingIndexTable) return [];
+    try {
+      const raw = await pendingIndexTable.get(derivePendingIndexKey(scope));
+      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.requestIds)) return [];
+      return raw.requestIds.filter((id) => isNonEmptyString(id)).map((id) => id.trim());
+    } catch {
+      return [];
+    }
+  }
+
+  async function syncPendingIndex(scope, requestId, status) {
+    if (closed || !pendingIndexTable) return;
+    try {
+      const existing = await readPendingIndex(scope);
+      const isPending = status === 'pending_delivery' || status === 'unknown';
+      const filtered = existing.filter((id) => id !== requestId);
+      if (isPending) {
+        filtered.push(requestId);
+        while (filtered.length > MAX_PENDING_INDEX_IDS) filtered.shift();
+      }
+      await pendingIndexTable.put(derivePendingIndexKey(scope), {
+        schemaVersion: 1,
+        requestIds: filtered,
+      });
+    } catch {
+      // Index sync is best-effort and must not override primary correlation writes.
     }
   }
 
@@ -327,6 +385,7 @@ export function createDispatchService(ports) {
         retryable: true,
       });
     }
+    await syncPendingIndex(scope, validated.data.requestId, validated.data.status);
     return validated.data;
   }
 
@@ -751,11 +810,75 @@ export function createDispatchService(ports) {
     return ports.cancelDelegraTask({ scope, taskId: taskId.trim() });
   }
 
+  async function listPendingRequests() {
+    const scope = await ports.resolveScope();
+    const requestIds = await readPendingIndex(scope);
+    const items = [];
+    for (const requestId of requestIds) {
+      const record = await readCorrelation(scope, requestId);
+      if (!record) continue;
+      if (record.status !== 'pending_delivery' && record.status !== 'unknown') continue;
+      items.push(Object.freeze({
+        requestId: record.requestId,
+        originSessionRef: record.originSessionRef,
+        expertId: record.expertId,
+        status: record.status,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      }));
+    }
+    return Object.freeze({ scopeEpoch: scope.scopeEpoch, items: Object.freeze(items) });
+  }
+
+  // Startup/reconnect recovery (#247): reconciles pending_delivery/unknown requestIds
+  // against Delegra via by-request without ever blindly re-sending createDelegraTask.
+  async function reconcilePendingRequests() {
+    const scope = await ports.resolveScope();
+    const requestIds = await readPendingIndex(scope);
+    const reconciled = [];
+    const notFound = [];
+    const stillPending = [];
+
+    for (const requestId of requestIds) {
+      const record = await readCorrelation(scope, requestId);
+      if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
+        await syncPendingIndex(scope, requestId, 'accepted');
+        continue;
+      }
+      try {
+        const result = await reconcileByRequest({ requestId });
+        const entry = Object.freeze({
+          requestId,
+          taskId: result.taskId ?? record.taskId ?? null,
+          status: result.status ?? 'queued',
+          originSessionRef: record.originSessionRef,
+          expertId: record.expertId,
+        });
+        reconciled.push(entry);
+        try { ports.onTaskReconciled?.(entry); } catch { /* best effort */ }
+      } catch (error) {
+        if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
+          notFound.push(requestId);
+        } else {
+          stillPending.push(requestId);
+        }
+      }
+    }
+
+    return Object.freeze({
+      reconciled: Object.freeze(reconciled),
+      notFound: Object.freeze(notFound),
+      stillPending: Object.freeze(stillPending),
+    });
+  }
+
   return Object.freeze({
     open,
     close,
     dispatchTask,
     reconcileByRequest,
+    listPendingRequests,
+    reconcilePendingRequests,
     getTask,
     getTaskResult,
     followupTask,

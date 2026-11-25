@@ -249,6 +249,31 @@ export function createExpertsRoutes(ports) {
         return true;
       }
 
+      if (url.pathname === `${API_PREFIX}/tasks/pending`) {
+        const listPendingTasks = requireRoutePort(req, res, {
+          method: 'GET',
+          portFn: ports.listPendingTasks,
+          disabledCode: 'EXPERT_STORAGE_UNAVAILABLE',
+          disabledMessage: 'Pending task listing is unavailable',
+        });
+        if (!listPendingTasks) return true;
+        sendJson(res, 200, await listPendingTasks());
+        return true;
+      }
+
+      if (url.pathname === `${API_PREFIX}/tasks/reconcile`) {
+        const reconcilePendingTasks = requireRoutePort(req, res, {
+          method: 'POST',
+          mutation: true,
+          portFn: ports.reconcilePendingTasks,
+          disabledCode: 'EXPERT_STORAGE_UNAVAILABLE',
+          disabledMessage: 'Pending task reconciliation is unavailable',
+        });
+        if (!reconcilePendingTasks) return true;
+        sendJson(res, 200, await reconcilePendingTasks());
+        return true;
+      }
+
       if (url.pathname.startsWith(`${API_PREFIX}/tasks/by-request/`)) {
         const reconcileTaskByRequest = requireRoutePort(req, res, {
           method: 'GET',
