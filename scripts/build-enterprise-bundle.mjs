@@ -7,8 +7,9 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
+import { rewriteArchiveModes } from './lib/bundle-write.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
-import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, execNpm } from './lib/bundle-rules.mjs';
 import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,6 +58,10 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
   const members = new Map();
   const sources = new Map();
   const nativeRecords = [];
+  // Archive-relative paths of every member bin entry: NTFS cannot hold the
+  // executable bit and `npm pack` copies the stat mode, so the packed bytes are
+  // normalized to the index's 0755 after packing (see rewriteArchiveModes).
+  const binPaths = new Set();
   let pendingOutput;
   try {
     for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
@@ -69,6 +74,10 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
       const manifest = readManifest(source);
       if (members.has(name)) return;
       members.set(name, manifest.version);
+      for (const binTarget of Object.values(manifest.bin ?? {})) {
+        if (typeof binTarget !== 'string' || binTarget.includes('*')) continue;
+        binPaths.add(`${name === entry ? '' : `node_modules/${name}/`}${binTarget.replace(/^\.\//u, '')}`);
+      }
       // 宿主 peer（浏览器半只 require('react')）允许留在清单里，其余 peer 与
       // optionalDependencies 仍算"没闭合"：终端装出来的东西必须自洽（TECHNICAL §9）。
       const peerErrors = peerDependencyErrors(name, manifest, { prefix: '' });
@@ -117,9 +126,24 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     if (closureErrors.length > 0) fail(closureErrors.join('; '));
     const packedDir = join(work, 'packed');
     mkdirSync(packedDir);
-    const stdout = execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    const packed = parsePackOutput(stdout);
-    if (packed === null) fail('npm returned no packed file list');
+    execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
+    if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
+    const packedTarball = join(packedDir, tarballs[0]);
+    // NTFS cannot hold the executable bit and `npm pack` copies the stat mode,
+    // so a Windows build packs every bin as 0644 no matter what the git index
+    // says. The index is the truth: re-emit the shipped bytes through the
+    // deterministic writer with the bins' normalized mode, so every platform
+    // produces the same archive for the same content.
+    const normalized = rewriteArchiveModes(
+      packedTarball,
+      new Map([...binPaths].map((path) => [path, 0o755])),
+    );
+    const pendingTarball = join(packedDir, `.${tarballs[0]}.modes.${basename(work)}.tmp`);
+    writeFileSync(pendingTarball, normalized, { flag: 'wx' });
+    renameSync(pendingTarball, packedTarball);
+    // The audit list is the archive's own bytes, never npm's stdout claim.
+    const packed = readBundleEntries(packedTarball).map(({ path, mode }) => ({ path, mode: Number.parseInt(mode, 8) }));
     const errors = auditTarball({ label: manifest.name, manifest, packed });
     for (const name of members.keys()) {
       if (name === manifest.name) continue;
@@ -130,12 +154,10 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
       errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })) }));
     }
     if (errors.length > 0) fail(errors.join('; '));
-    const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
-    if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
     if (requireNativeResources && nativeRecords.length > 0) {
       // npm may exclude files after preflight. Judge the archive's actual bytes
       // against the staged record before creating anything in the destination.
-      const files = new Map(readBundleEntries(join(packedDir, tarballs[0]), { withContent: true }).map((item) => [item.path, item.content]));
+      const files = new Map(readBundleEntries(packedTarball, { withContent: true }).map((item) => [item.path, item.content]));
       for (const { name, content } of nativeRecords) {
         const vendorPrefix = `${name === entry ? '' : `node_modules/${name}/`}vendor/`;
         const packedRecord = files.get(`${vendorPrefix}CHECKSUMS.json`);
