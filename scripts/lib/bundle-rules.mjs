@@ -152,6 +152,27 @@ function checkFileList(label, base, pkg, errors) {
   }
 }
 
+/**
+ * Executability of a bin entry as git recorded it. NTFS cannot hold the
+ * executable bit, so a Windows checkout answers from the index instead of the
+ * filesystem: the bit the registry tarball is built from is the index's.
+ */
+export function binIsExecutable(base, target, { platform = process.platform, gitStatus } = {}) {
+  if (platform === 'win32') {
+    const status = typeof gitStatus === 'function' ? gitStatus(base, target) : gitIndexStatus(base, target);
+    return /^100755 /u.test(status ?? '');
+  }
+  return (statSync(join(base, target)).mode & 0o100) !== 0;
+}
+
+function gitIndexStatus(base, target) {
+  try {
+    return execFileSync('git', ['ls-files', '-s', '--', target], { cwd: base, encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
 function checkEntryPoints(label, base, pkg, errors) {
   const requireTarget = (value, where) => {
     if (typeof value !== 'string') return;
@@ -168,7 +189,7 @@ function checkEntryPoints(label, base, pkg, errors) {
     requireTarget(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
       const full = join(base, target);
-      if (existsSync(full) && (statSync(full).mode & 0o100) === 0) {
+      if (existsSync(full) && !binIsExecutable(base, target)) {
         errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
       }
     }
