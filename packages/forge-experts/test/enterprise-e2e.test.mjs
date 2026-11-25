@@ -678,3 +678,51 @@ test('Stage C4-C wire-drop unknown acceptance + dispatchEnabled: false kill-swit
     await iam.dispose();
   }
 });
+
+test('Stage C4-C policy.decide unknown verdict string fails closed as EXPERT_POLICY_DENIED (#484)', async () => {
+  const storage = createMemoryStorage();
+  const backend = createMockDelegraBackend();
+  const iam = await createSignedInIam({ fetchImpl: backend.fetchImpl });
+  const host = createSyntheticCordisHost({ storage, iam });
+
+  try {
+    // Provide a custom policy service returning an unrecognized verdict string ('audit').
+    host.ctx.provide('policy', {
+      decide: () => ({ action: 'audit', reason: 'unexpected-verdict' }),
+    });
+    await applyExperts(host.ctx, {
+      managementEnabled: true,
+      dispatchEnabled: true,
+      delegraTarget: 'delegra',
+      delegraOrgId: 'org-alpha',
+      resolveSessionScope: async () => ({ delegationScope: 'proj-fin' }),
+    });
+
+    const cat = await host.invokeHttp({ path: `${API_PREFIX}/catalog?view=callable` });
+    await host.invokeHttp({
+      method: 'PUT',
+      path: `${API_PREFIX}/preferences/exp-fin-1`,
+      headers: mutationHeaders(),
+      body: { enabled: true, editToken: cat.body.items[0].preference.editToken },
+    });
+    const mentions = await host.invokeHttp({ path: `${API_PREFIX}/mentions?sessionId=sess-e2e-3` });
+    const sel = await host.invokeHttp({
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-e2e-3', scopeEpoch: mentions.body.scopeEpoch, taskText: 'Unknown verdict test' },
+    });
+    const res = await host.invokeHttp({
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-e2e-3', taskText: 'Unknown verdict test' },
+    });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.error.code, 'EXPERT_POLICY_DENIED');
+    assert.equal(backend.getCreateTaskCalls(), 0);
+  } finally {
+    await host.disposeAll();
+    await iam.dispose();
+  }
+});

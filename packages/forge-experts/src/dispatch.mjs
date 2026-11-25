@@ -279,6 +279,11 @@ export function createDispatchService(ports) {
   let table = null;
   let pendingIndexTable = null;
   let closed = false;
+  let pendingIndexQueue = Promise.resolve();
+  const reconcileTimeoutMs = Number.isInteger(ports.reconcileTimeoutMs) && ports.reconcileTimeoutMs > 0
+    ? ports.reconcileTimeoutMs
+    : 10_000;
+  const RECONCILE_CONCURRENCY = 5;
   // Bounded in-memory taskId -> { originSessionRef, expertId, delegationScope } index
   // populated by local dispatches/reconciliations so follow-ups reuse full preference
   // and scope re-verification without reading raw task payloads.
@@ -338,33 +343,51 @@ export function createDispatchService(ports) {
   }
 
   async function readPendingIndex(scope) {
-    if (closed || !pendingIndexTable) return [];
+    if (closed || !pendingIndexTable) {
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Pending request index storage is unavailable', {
+        retryable: true,
+      });
+    }
     try {
       const raw = await pendingIndexTable.get(derivePendingIndexKey(scope));
-      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.requestIds)) return [];
+      if (raw === undefined || raw === null) return [];
+      if (typeof raw !== 'object' || !Array.isArray(raw.requestIds)) return [];
       return raw.requestIds.filter((id) => isNonEmptyString(id)).map((id) => id.trim());
-    } catch {
-      return [];
+    } catch (error) {
+      if (error instanceof ExpertsError) throw error;
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to read pending request index', {
+        retryable: true,
+      });
     }
   }
 
-  async function syncPendingIndex(scope, requestId, status) {
-    if (closed || !pendingIndexTable) return;
-    try {
-      const existing = await readPendingIndex(scope);
-      const isPending = status === 'pending_delivery' || status === 'unknown';
-      const filtered = existing.filter((id) => id !== requestId);
-      if (isPending) {
-        filtered.push(requestId);
-        while (filtered.length > MAX_PENDING_INDEX_IDS) filtered.shift();
+  function syncPendingIndex(scope, requestId, status) {
+    if (closed || !pendingIndexTable) return Promise.resolve();
+    const run = async () => {
+      if (closed || !pendingIndexTable) return;
+      try {
+        const existing = await readPendingIndex(scope);
+        const isPending = status === 'pending_delivery' || status === 'unknown';
+        const filtered = existing.filter((id) => id !== requestId);
+        if (isPending) {
+          filtered.push(requestId);
+          while (filtered.length > MAX_PENDING_INDEX_IDS) filtered.shift();
+        }
+        const unchanged = existing.length === filtered.length
+          && existing.every((id, idx) => id === filtered[idx]);
+        if (unchanged) return;
+        await pendingIndexTable.put(derivePendingIndexKey(scope), {
+          schemaVersion: 1,
+          requestIds: filtered,
+        });
+      } catch {
+        // Index sync is best-effort and must not override primary correlation writes
+        // or overwrite existing entries when readPendingIndex fails.
       }
-      await pendingIndexTable.put(derivePendingIndexKey(scope), {
-        schemaVersion: 1,
-        requestIds: filtered,
-      });
-    } catch {
-      // Index sync is best-effort and must not override primary correlation writes.
-    }
+    };
+    const next = pendingIndexQueue.then(run, run);
+    pendingIndexQueue = next.catch(() => {});
+    return next;
   }
 
   async function persistCorrelation(scope, record) {
@@ -830,8 +853,21 @@ export function createDispatchService(ports) {
     return Object.freeze({ scopeEpoch: scope.scopeEpoch, items: Object.freeze(items) });
   }
 
+  function withTimeout(promise, ms) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Pending task reconciliation timed out', { retryable: true }));
+      }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
   // Startup/reconnect recovery (#247): reconciles pending_delivery/unknown requestIds
-  // against Delegra via by-request without ever blindly re-sending createDelegraTask.
+  // against Delegra via by-request with bounded concurrency and per-call timeout,
+  // without ever blindly re-sending createDelegraTask.
   async function reconcilePendingRequests() {
     const scope = await ports.resolveScope();
     const requestIds = await readPendingIndex(scope);
@@ -839,14 +875,14 @@ export function createDispatchService(ports) {
     const notFound = [];
     const stillPending = [];
 
-    for (const requestId of requestIds) {
+    const reconcileOne = async (requestId) => {
       const record = await readCorrelation(scope, requestId);
       if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
         await syncPendingIndex(scope, requestId, 'accepted');
-        continue;
+        return;
       }
       try {
-        const result = await reconcileByRequest({ requestId });
+        const result = await withTimeout(reconcileByRequest({ requestId }), reconcileTimeoutMs);
         const entry = Object.freeze({
           requestId,
           taskId: result.taskId ?? record.taskId ?? null,
@@ -859,10 +895,16 @@ export function createDispatchService(ports) {
       } catch (error) {
         if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
           notFound.push(requestId);
+          await syncPendingIndex(scope, requestId, 'not_found');
         } else {
           stillPending.push(requestId);
         }
       }
+    };
+
+    for (let idx = 0; idx < requestIds.length; idx += RECONCILE_CONCURRENCY) {
+      const batch = requestIds.slice(idx, idx + RECONCILE_CONCURRENCY);
+      await Promise.all(batch.map((requestId) => reconcileOne(requestId)));
     }
 
     return Object.freeze({

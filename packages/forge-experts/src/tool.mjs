@@ -80,6 +80,13 @@ function normalizeOptionalInteger(value) {
   return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+function pickFirstString(candidates, fallback = null) {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string') return candidate;
+  }
+  return fallback;
+}
+
 /**
  * Fail-closed projection filter for `sources` and `artifacts` (#247):
  * only plain objects explicitly marked `authorized === true` are exposed to the
@@ -121,21 +128,17 @@ export function projectExpertResultEnvelope(rawResult) {
   const runId = isNonEmptyString(rawResult.runId) ? rawResult.runId.trim() : null;
   const runGeneration = normalizeOptionalInteger(rawResult.runGeneration);
   const resultVersion = normalizeOptionalInteger(rawResult.resultVersion);
+  // Support both top-level fields and Delegra Stage B2 nested `result` envelopes
+  // (a bare string `result` serves as both concise summary and collapsed raw output).
   const nestedResult = isPlainObject(rawResult.result) ? rawResult.result : null;
-  const summary = typeof rawResult.summary === 'string'
-    ? rawResult.summary
-    : (typeof nestedResult?.summary === 'string'
-      ? nestedResult.summary
-      : (typeof rawResult.result === 'string' ? rawResult.result : ''));
-  const rawOutput = typeof rawResult.rawResult === 'string'
-    ? rawResult.rawResult
-    : (typeof rawResult.content === 'string'
-      ? rawResult.content
-      : (typeof nestedResult?.rawResult === 'string'
-        ? nestedResult.rawResult
-        : (typeof nestedResult?.content === 'string'
-          ? nestedResult.content
-          : (typeof rawResult.result === 'string' ? rawResult.result : null))));
+  const summary = pickFirstString([rawResult.summary, nestedResult?.summary, rawResult.result], '');
+  const rawOutput = pickFirstString([
+    rawResult.rawResult,
+    rawResult.content,
+    nestedResult?.rawResult,
+    nestedResult?.content,
+    rawResult.result,
+  ], null);
 
   const waitingUserNotice = status === 'waiting_user'
     ? Object.freeze({

@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
       EXPERT_MANAGEMENT_DISABLED: '专家智能体管理入口当前未开放。',
       EXPERT_MENTIONS_DISABLED: '专家 @ 候选投影当前未开放。',
       EXPERT_DISPATCH_DISABLED: '专家任务委派入口当前未开放。',
+      EXPERT_RATE_LIMITED: '当前专家确认请求过多，请稍后重试，草稿已保留。',
       EXPERT_UNAUTHENTICATED: '请先登录企业账号后再查看专家目录。',
       EXPERT_AUTH_INVALID: '企业登录状态无效，请重新登录。',
       EXPERT_AUTH_REVOKED: '企业授权已撤销，请重新登录。',
@@ -115,58 +116,43 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
-    async function postSelectionPrepare(payload) {
-      const response = await fetch(`${API_BASE}/selections`, {
-        method: 'POST',
-        headers: REQUEST_HEADERS,
-        body: JSON.stringify(payload),
+    async function requestJson(method, path, body) {
+      const init = body === undefined
+        ? undefined
+        : { method, headers: REQUEST_HEADERS, body: JSON.stringify(body) };
+      const response = await fetch(`${API_BASE}${path}`, init);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    function postSelectionPrepare(payload) {
+      return requestJson('POST', '/selections', payload);
+    }
+
+    function fetchTaskStatus(taskId) {
+      return requestJson('GET', `/tasks/${encodeURIComponent(taskId)}`);
+    }
+
+    function fetchTaskResult(taskId) {
+      return requestJson('GET', `/tasks/${encodeURIComponent(taskId)}/result`);
+    }
+
+    function reconcileTaskByRequest(requestId) {
+      return requestJson('GET', `/tasks/by-request/${encodeURIComponent(requestId)}`);
+    }
+
+    function postReconcilePending() {
+      return requestJson('POST', '/tasks/reconcile', {});
+    }
+
+    function postTaskFollowup(taskId, { taskText, reuseRefs = [] }) {
+      return requestJson('POST', `/tasks/${encodeURIComponent(taskId)}/followups`, {
+        taskText,
+        ...(Array.isArray(reuseRefs) && reuseRefs.length > 0 ? { reuseRefs } : {}),
       });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
-    async function fetchTaskStatus(taskId) {
-      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`);
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
-    }
-
-    async function fetchTaskResult(taskId) {
-      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/result`);
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
-    }
-
-    async function reconcileTaskByRequest(requestId) {
-      const response = await fetch(`${API_BASE}/tasks/by-request/${encodeURIComponent(requestId)}`);
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
-    }
-
-    async function postReconcilePending() {
-      const response = await fetch(`${API_BASE}/tasks/reconcile`, {
-        method: 'POST',
-        headers: REQUEST_HEADERS,
-        body: JSON.stringify({}),
-      });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
-    }
-
-    async function postTaskFollowup(taskId, { taskText, reuseRefs = [] }) {
-      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/followups`, {
-        method: 'POST',
-        headers: REQUEST_HEADERS,
-        body: JSON.stringify({
-          taskText,
-          ...(Array.isArray(reuseRefs) && reuseRefs.length > 0 ? { reuseRefs } : {}),
-        }),
-      });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
-    }
-
-    async function postTaskCancel(taskId) {
-      const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/cancel`, {
-        method: 'POST',
-        headers: REQUEST_HEADERS,
-        body: JSON.stringify({}),
-      });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    function postTaskCancel(taskId) {
+      return requestJson('POST', `/tasks/${encodeURIComponent(taskId)}/cancel`, {});
     }
 
     function openEventStream(onMessage, onError) {
@@ -271,9 +257,25 @@ window.__ModuleLoader__.load({
     }
 
     // §5 管理页与异步任务状态/恢复卡片视图（#246 / #247）
+    function pickTaskResultFields(body) {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return {};
+      const picked = {};
+      for (const key of ['summary', 'rawResult', 'result', 'sources', 'artifacts', 'runId', 'runGeneration', 'resultVersion', 'waitingUserNotice']) {
+        if (body[key] !== undefined) picked[key] = body[key];
+      }
+      return picked;
+    }
+
     function ExpertTaskStatusCard(props = {}) {
       const initial = props.initialTask ?? props.task ?? null;
       const [task, setTask] = React.useState(initial);
+      const initialRef = React.useRef(initial);
+      React.useEffect(() => {
+        if (initial && initial !== initialRef.current) {
+          initialRef.current = initial;
+          setTask(initial);
+        }
+      }, [initial]);
       const [rawExpanded, setRawExpanded] = React.useState(false);
       const [followupText, setFollowupText] = React.useState('');
       const [busy, setBusy] = React.useState(false);
@@ -310,10 +312,11 @@ window.__ModuleLoader__.load({
             return;
           }
           let merged = { ...(task ?? {}), ...(statusRes.body ?? {}) };
-          if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'running' || merged.status === 'waiting_user') {
+          if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'waiting_user') {
             const resultRes = await fetchTaskResult(model.taskId).catch(() => null);
             if (resultRes?.ok && resultRes.body) {
-              merged = { ...merged, ...resultRes.body };
+              // Only merge allowlisted presentation fields so /result never clobbers authoritative status/taskId.
+              merged = { ...merged, ...pickTaskResultFields(resultRes.body) };
             }
           }
           setTask(merged);
@@ -570,6 +573,9 @@ window.__ModuleLoader__.load({
       let generation = 0;
       let activeEpoch = 0;
       let activeVersion = 0;
+      // Hoisted to mountMentionsSource closure so SSE reconnect/invalidation never drops buffered user drafts (#245/#246).
+      const pendingDrafts = new Map();
+      let draftRecoveryListener = null;
 
       const dropGroup = () => {
         generation += 1;
@@ -625,9 +631,6 @@ window.__ModuleLoader__.load({
             return { accepted: true, expertId: picked.expertId, scopeEpoch: picked.scopeEpoch, viewVersion: picked.viewVersion };
           },
         };
-
-        const pendingDrafts = new Map();
-        let draftRecoveryListener = null;
 
         if (enableSelectionBinding) {
           // 生产 @ 选择绑定：仅在用户显式点选且未失效时向 Host 申请单次 selectionToken；
@@ -703,18 +706,26 @@ window.__ModuleLoader__.load({
             activeHooks = registerGroup() ?? activeHooks;
             if (enableSelectionBinding) {
               // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）。
-              postReconcilePending().catch(() => {});
+              postReconcilePending().then((res) => {
+                if (res && !res.ok && typeof console !== 'undefined') {
+                  console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
+                }
+              }).catch(() => {
+                if (typeof console !== 'undefined') {
+                  console.warn('[forge-experts] pending task reconciliation failed');
+                }
+              });
             }
             return;
           }
           if (payload.type === 'turn-finalized' && enableSelectionBinding && payload.preserveDraft === true) {
             const sessionKey = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
-            const recoveredDraft = sessionKey ? (activeHooks?.pendingDrafts?.get(sessionKey) ?? null) : null;
-            if (sessionKey) activeHooks?.pendingDrafts?.delete(sessionKey);
+            const recoveredDraft = sessionKey ? (pendingDrafts.get(sessionKey) ?? null) : null;
+            if (sessionKey) pendingDrafts.delete(sessionKey);
             const notice = typeof payload.notice === 'string' && payload.notice
               ? payload.notice
               : (ERROR_NOTICE[payload.code] ?? ERROR_NOTICE.EXPERT_SELECTION_INVALID);
-            const listener = activeHooks?.getRecoveryListener?.();
+            const listener = activeHooks?.getRecoveryListener?.() ?? draftRecoveryListener;
             if (typeof listener === 'function') {
               try {
                 listener({
@@ -732,7 +743,7 @@ window.__ModuleLoader__.load({
           }
           if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {
             dropGroup();
-            activeHooks = registerGroup();
+            activeHooks = registerGroup() ?? activeHooks;
           }
         },
         () => {
@@ -743,7 +754,8 @@ window.__ModuleLoader__.load({
 
       return () => {
         closeStream();
-        activeHooks?.pendingDrafts?.clear();
+        pendingDrafts.clear();
+        draftRecoveryListener = null;
         dropGroup();
       };
     }

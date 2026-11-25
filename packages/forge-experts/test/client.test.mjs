@@ -485,3 +485,93 @@ test('Stage C4-B async task status & recovery card renders reconcile, refresh, c
     restore();
   }
 });
+
+test('buffered pendingDraft survives SSE scope-changed and disconnect/ready reconnect before turn-finalized recovery (#481/#483)', async () => {
+  const eventSources = [];
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/mentions')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            scopeEpoch: 5,
+            viewVersion: 7,
+            candidates: [{ expertId: 'exp-fin-1', displayName: '经营分析专家', scopeEpoch: 5, viewVersion: 7 }],
+          };
+        },
+      };
+    }
+    if (url.includes('/selections') && init?.method === 'POST') {
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return {
+            selectionToken: 'sel-reconnect-1',
+            expertId: 'exp-fin-1',
+            sessionId: 'sess-reconnect',
+            draftDigest: 'sha256:rec',
+            expiresAt: '2030-01-01T00:02:00.000Z',
+          };
+        },
+      };
+    }
+    if (url.includes('/tasks/reconcile')) {
+      return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    let registeredSpec = null;
+    const disposeCallbacks = [];
+    const ctx = {
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          registeredSpec = spec;
+          return () => { registeredSpec = null; };
+        },
+      },
+      effect(register) {
+        const d = register();
+        if (typeof d === 'function') disposeCallbacks.push(d);
+      },
+    };
+
+    exported.apply(ctx, { dispatchEnabled: true });
+    const rows = await registeredSpec.query('', { sessionId: 'sess-reconnect' });
+    const recovered = [];
+    registeredSpec.onDraftRecovery((evt) => recovered.push(evt));
+
+    const prep = await registeredSpec.prepareSubmit({
+      picked: rows[0],
+      sessionId: 'sess-reconnect',
+      taskText: 'Draft preserved across SSE reconnect',
+      draftVersion: 9,
+    });
+    assert.equal(prep.ok, true);
+
+    eventSources[0].emit({ type: 'scope-changed', scopeEpoch: 6, viewVersion: 8 });
+    eventSources[0].fail();
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 6, viewVersion: 8 });
+    eventSources[0].emit({
+      type: 'turn-finalized',
+      sessionId: 'sess-reconnect',
+      expertId: 'exp-fin-1',
+      status: 'model_did_not_delegate',
+      code: 'EXPERT_RATE_LIMITED',
+      preserveDraft: true,
+    });
+
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].draft?.taskText, 'Draft preserved across SSE reconnect');
+    assert.match(recovered[0].notice, /请求过多/u);
+
+    for (const fn of disposeCallbacks) fn();
+  } finally {
+    restore();
+  }
+});
