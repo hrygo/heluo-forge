@@ -207,7 +207,7 @@ export function buildGiteeTools(service, options = {}) {
   const resolveGitCwd = typeof options?.resolveGitCwd === 'function' ? options.resolveGitCwd : undefined;
   const collected = [
     ...collect(readToolDefinitions, service, '只读'),
-    ...collect(writeToolDefinitions, service, '受控动作'),
+    ...collect((port) => writeToolDefinitions(port, resolveGitCwd), service, '受控动作'),
     ...collect((port) => snapshotToolDefinitions(port, resolveGitCwd), service, '快照'),
     ...collect((port) => gitToolDefinitions(port, resolveGitCwd), service, 'git'),
   ];

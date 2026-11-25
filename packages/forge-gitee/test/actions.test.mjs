@@ -16,6 +16,7 @@
  * 于是"零子进程"是一条可复核的计数，而不是一句保证。
  */
 import test from 'node:test';
+import { GiteeGitError, GIT_REASONS } from '../src/gitee-git.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +33,7 @@ import {
 } from '../src/gitee-actions.mjs';
 import { CONFIRM_REQUIRED_ACTIONS, GITEE_AUDIT_SUBJECT, GUARD_REASONS, createGiteeGuard } from '../src/gitee-guard.mjs';
 import { createGiteeSession } from '../src/gitee-session.mjs';
-import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
+import { buildGiteeTools, GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
 import { evaluateProcessRules } from '@heluo/forge-policy/process-rules';
 import { createGate } from '@heluo/forge-policy/gate';
 import { compileCatalog } from '@heluo/forge-policy/catalog';
@@ -145,9 +146,10 @@ function createHarness(options = {}) {
     preflight: preflightOverride,
     invoke: invokeOverride,
     read: readOverride,
+    resolveCommit,
   } = options;
 
-  const counters = { decide: 0, operations: 0, invoke: 0, read: 0, execFile: 0 };
+  const counters = { decide: 0, operations: 0, invoke: 0, read: 0, execFile: 0, resolveCommit: 0 };
   const decided = [];
   const invoked = [];
   const seen = [];
@@ -172,6 +174,14 @@ function createHarness(options = {}) {
 
   const service = {
     provider: 'gitee',
+    git: () => ({
+      async resolveCommit(commit, cwd) {
+        counters.resolveCommit += 1;
+        if (resolveCommit !== undefined) return resolveCommit(commit, cwd);
+        if (commit === 'aaaaaaa') throw new GiteeGitError('ambiguous', { reason: GIT_REASONS.INVALID_ARGUMENT });
+        return commit === 'aaaaaaaa' ? REVIEW_PUBLISH.commit : commit;
+      },
+    }),
     async execute(request) {
       return guard.execute(request);
     },
@@ -326,6 +336,7 @@ test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则
   }
 
   assert.equal(harness.counters.decide, 5, '每个动作都问过目录（拒绝是裁决，不是短路）');
+  assert.equal(harness.counters.resolveCommit, 0);
   assert.equal(harness.counters.operations, 0);
   assert.equal(harness.counters.invoke, 0);
   assert.equal(harness.counters.read, 0);
@@ -333,13 +344,12 @@ test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则
 });
 
 test('AC-16 回归：review.publish 与 review.record 同变更同提交，目标不同则幂等键不同（不跨对象复用）', async () => {
-  const harness = createHarness({ admit: false });
+  const harness = createHarness();
   const repoRoot = mkdtempSync(join(tmpdir(), 'forge-gitee-cross-object-'));
   try {
     const published = await runTool(harness.service, 'forge_gitee_review_publish', REVIEW_PUBLISH);
     const recorded = await runTool(harness.service, 'forge_gitee_review_record', reviewRecordArgs(repoRoot));
-    assert.equal(published.status, 'denied');
-    assert.equal(recorded.status, 'denied');
+    assert.ok(harness.counters.resolveCommit > 0);
     assert.match(published.idempotency_key, HEX16);
     assert.match(recorded.idempotency_key, HEX16);
     assert.notEqual(
@@ -350,6 +360,53 @@ test('AC-16 回归：review.publish 与 review.record 同变更同提交，目�
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('评审发布在准入后传递会话目录，Git 故障不记作参数拒绝', async () => {
+  const harness = createHarness({
+    resolveCommit: (_commit, cwd) => {
+      assert.equal(cwd, '/workspace/review');
+      throw new GiteeGitError('Git 超时', { reason: GIT_REASONS.COMMAND_TIMEOUT });
+    },
+  });
+  const service = { ...harness.service, read: async () => ({}), snapshot: async () => ({}) };
+  const definitions = buildGiteeTools(service, { resolveGitCwd: async () => '/workspace/review' });
+  const tool = definitions.find(({ name }) => name === 'forge_gitee_review_publish');
+  const body = JSON.parse((await tool.execute(REVIEW_PUBLISH)).content[0].text);
+  assert.equal(body.status, 'failed');
+  assert.equal(body.reason, GIT_REASONS.COMMAND_TIMEOUT);
+  assert.equal(harness.counters.resolveCommit, 1);
+  assert.equal(harness.counters.invoke, 0);
+  assert.equal(harness.session.size(), 0);
+});
+
+test('评审发布以完整提交去重，拒绝歧义短标识', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12#note_1'),
+    read: () => ({ ok: true, object: { number: 12, user_notes_count: 1 } }),
+  });
+  const publish = (commit) => runTool(harness.service, 'forge_gitee_review_publish', { ...REVIEW_PUBLISH, commit });
+  assert.equal((await publish(REVIEW_PUBLISH.commit)).status, 'done');
+  assert.equal((await publish('aaaaaaaa')).reused, true);
+  const second = await publish(`aaaaaaa${'b'.repeat(33)}`);
+  assert.equal(second.status, 'done');
+  assert.notEqual(second.reused, true);
+  assert.equal((await publish('aaaaaaa')).status, 'denied');
+  assert.equal(harness.counters.invoke, 2);
+  assert.equal(harness.counters.read, 2);
+});
+
+test('评审发布回读不明时只阻断同一提交的重放', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12#note_1'),
+    read: () => ({ ok: true, object: { number: 12 } }),
+  });
+  const publish = (commit) => runTool(harness.service, 'forge_gitee_review_publish', { ...REVIEW_PUBLISH, commit });
+  assert.equal((await publish(REVIEW_PUBLISH.commit)).status, 'unknown');
+  assert.equal((await publish('aaaaaaaa')).reason, ACTION_REASONS.REPLAY_BLOCKED);
+  assert.equal((await publish(`aaaaaaa${'b'.repeat(33)}`)).status, 'unknown');
+  assert.equal(harness.counters.invoke, 2);
+  assert.equal(harness.counters.read, 2);
 });
 
 test('评审正文进内容闸，且页脚满足 review-ai-source 硬规则', async () => {

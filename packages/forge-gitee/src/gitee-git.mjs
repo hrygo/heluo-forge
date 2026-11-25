@@ -500,7 +500,45 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     return Object.freeze({ sha: resolved.trim(), commits: Object.freeze(commits), redactions: Object.freeze(redactions) });
   }
 
+  async function resolveCommit(commit, cwd) {
+    const failure = (reason, message) => new GiteeGitError(message, { reason, detail: { mayHaveSideEffect: false } });
+    const invalid = () => failure(GIT_REASONS.INVALID_ARGUMENT, '提交标识不存在、存在歧义或不是提交对象');
+    if (typeof commit !== 'string' || !SHA_PATTERN.test(commit)) throw invalid();
+    const dir = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
+    const read = async (args) => {
+      let result;
+      try {
+        result = await runner.runGit({ args, purpose: 'git.review-commit', cwd: dir });
+      } catch {
+        throw failure(GIT_REASONS.SPAWN_FAILED, '无法启动本地 Git 提交解析');
+      }
+      if (result?.timedOut === true) throw failure(GIT_REASONS.COMMAND_TIMEOUT, '本地 Git 提交解析超时');
+      if (!isPlainObject(result) || !Number.isInteger(result.exitCode)) {
+        throw failure(GIT_REASONS.INVALID_OUTPUT, '本地 Git 执行器返回无效结果');
+      }
+      if (result.exitCode !== 0) {
+        throw failure(GIT_REASONS.COMMAND_FAILED, '本地 Git 提交解析失败；请检查会话工作目录与仓库可读性');
+      }
+      if (typeof result.stdout !== 'string' || result.truncated || result.redacted) {
+        throw failure(GIT_REASONS.INVALID_OUTPUT, '本地 Git 提交解析输出不完整');
+      }
+      return result.stdout.trim();
+    };
+    const output = await read(['rev-parse', `--disambiguate=${commit}`]);
+    const oids = output === '' ? [] : output.split(/\r?\n/u);
+    if (oids.some((oid) => !/^[0-9a-f]{40}$/u.test(oid) || !oid.startsWith(commit))) {
+      throw failure(GIT_REASONS.INVALID_OUTPUT, '本地 Git 返回了不匹配的提交标识');
+    }
+    if (oids.length !== 1) throw invalid();
+    const [oid] = oids;
+    const type = await read(['cat-file', '-t', oid]);
+    if (['blob', 'tree', 'tag'].includes(type)) throw invalid();
+    if (type !== 'commit') throw failure(GIT_REASONS.INVALID_OUTPUT, '本地 Git 返回了无效的对象类型');
+    return oid;
+  }
+
   return Object.freeze({
+    resolveCommit,
     commit,
     push,
     readRange,

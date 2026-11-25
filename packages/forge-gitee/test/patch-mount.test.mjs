@@ -218,6 +218,7 @@ test('AC-3: 默认目录下 4 个写工具逐个 denied（登记不等于放行�
     const { body } = await invokeTool(host, toolName, WRITE_CALLS[toolName]);
     assert.notEqual(body?.ok, true, `${toolName} 不得返回空成功（ok:true）`);
     assert.equal(body?.status, 'denied', `${toolName} 应为 denied（实际：${body?.status}/${body?.reason}）`);
+    assert.notEqual(body?.rule, 'argument-invalid', `${toolName} 必须由策略门禁拒绝`);
     assert.equal(typeof body?.rule, 'string', `${toolName} 的 denied 必须带 rule`);
     assert.ok(body.rule.length > 0, `${toolName} 的 rule 不能为空`);
     assert.ok(typeof body?.reason === 'string' && body.reason.length > 0, `${toolName} 必须说明原因`);

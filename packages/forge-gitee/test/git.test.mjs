@@ -654,6 +654,49 @@ test('静态：gitee-git.mjs 不直接起进程，也不依赖 CLI 出口实现'
 
 /* ------------------------------------------------------------ 离线端到端 */
 
+test('评审 OID 解析区分歧义、读取故障与目录回落', async () => {
+  const oid = 'a'.repeat(40);
+  const calls = [];
+  let result;
+  const adapter = createGiteeGitAdapter({
+    cwd: '/workspace/default',
+    runner: { async runGit(request) { calls.push(request); return result; } },
+  });
+  for (const [output, reason] of [
+    [{ exitCode: 0, stdout: `${oid}\n${'a'.repeat(7)}${'b'.repeat(33)}` }, GIT_REASONS.INVALID_ARGUMENT],
+    [{ exitCode: 1, stdout: '' }, GIT_REASONS.COMMAND_FAILED],
+    [{ exitCode: null, timedOut: true }, GIT_REASONS.COMMAND_TIMEOUT],
+    [{ exitCode: 0, stdout: oid, truncated: true }, GIT_REASONS.INVALID_OUTPUT],
+    [{ exitCode: 0, stdout: null }, GIT_REASONS.INVALID_OUTPUT],
+  ]) {
+    result = output;
+    await assert.rejects(adapter.resolveCommit('aaaaaaa', '  '), { name: 'GiteeGitError', reason });
+    assert.equal(calls.at(-1).cwd, '/workspace/default');
+  }
+  await assert.rejects(adapter.resolveCommit('aaaaaaa', '/workspace/review'), { reason: GIT_REASONS.INVALID_OUTPUT });
+  assert.equal(calls.at(-1).cwd, '/workspace/review');
+});
+
+test('评审 OID 只接受唯一的实际提交对象', { skip: !GIT_AVAILABLE }, async () => {
+  const work = mkdtempSync(join(tmpdir(), 'forge-gitee-review-oid-'));
+  const git = (...args) => execFileSync(GIT_BIN, ['-C', work, ...args], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  try {
+    git('init', '--object-format=sha1');
+    git('-c', 'user.name=Reviewer', '-c', 'user.email=fixture',
+      'commit', '--allow-empty', '-m', 'Synthetic review');
+    const oid = git('rev-parse', 'HEAD');
+    const adapter = createGiteeGitAdapter({ runner: { runGit: runGitReal() }, cwd: work });
+    assert.equal(await adapter.resolveCommit(oid), oid);
+    assert.equal(await adapter.resolveCommit(oid.slice(0, 12)), oid);
+    await assert.rejects(adapter.resolveCommit(git('rev-parse', 'HEAD^{tree}')));
+    await assert.rejects(adapter.resolveCommit('0'.repeat(40)));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('离线 e2e：真 git 临时工作仓 + 本地 bare 仓，commit → push 到终态', { skip: !GIT_AVAILABLE }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'forge-gitee-git-'));
   const bare = join(root, 'origin.git');
