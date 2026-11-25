@@ -215,7 +215,7 @@ function webProfile() {
 }
 
 /** A whole shell world: package, marker, installer, web profile and the Electron stand-in. */
-function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs } = {}) {
+function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller } = {}) {
   const fx = fakeElectron(electron);
   const root = temp(t);
   // `assets` reuses a package that already exists (typically one a first run consumed).
@@ -232,11 +232,11 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
     embeddedCommand: '/apps/electron',
     env: { PATH: '/usr/bin' },
     exec,
-    loadInstaller: () => installer ?? (async (input) => {
+    loadInstaller: loadInstaller ?? (() => installer ?? (async (input) => {
       installs.push(input);
       pkg.consumeSecret();
       return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } };
-    }),
+    })), 
     createRuntime,
     spawnProfile: spawnProfile ?? (() => {
       const process = webProfile();
@@ -308,6 +308,23 @@ test('the first run installs the package, then a window shows the local service 
   assert.equal(window.loads[0].includes(TOKEN), true);
   assert.equal(shownAndOpened(fx).includes(TOKEN), false);
   assert.deepEqual(fx.processes[0].kills, []);
+});
+
+test('a loader that hands back a promise (the main.mjs wiring) is awaited before the first run', async (t) => {
+  // main.mjs wires `loadInstaller: (path) => import(path).then((m) => m.runInit)`:
+  // the shell must await it, or the first run sees a Promise instead of the
+  // installer function and dies with BAD_ARGUMENT (issue #463 follow-up).
+  const invoked = [];
+  const fx = world(t, {
+    loadInstaller: async () => (input) => {
+      invoked.push(input);
+      return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } };
+    },
+  });
+  const outcome = await fx.shell.outcome;
+  assert.equal(outcome.started, true, `the shell must start, not report ${outcome.code}`);
+  assert.equal(invoked.length, 1, 'the promised installer must have run exactly once');
+  assert.equal(existsSync(fx.markerPath ?? join(fx.root, 'userData', 'first-run.json')), true);
 });
 
 test('a package whose first run is done is not installed again; a changed one is', async (t) => {
