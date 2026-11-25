@@ -6,6 +6,36 @@
 
 本地技能管理与 Nacos 只读发现；开发联调在 profile 修改配置，装配本插件的正式制包必须提供地址、命名空间、只读账号与密码并写入包内配置；Nacos 专项规则集中于独立模块，预检与最终生成共用，说明随工具链交付，HTTP/HTTPS 均可，无 Nacos HTTP 开关。回执明确标记内嵌 Nacos 密码，安装器接受该限定例外；源码及中性公版无部署值，页面与错误不回显凭据。旧环境变量方式兼容开发使用，不实现 IAM 换票。凭据可由解包读取，仅内部交付；企业权限与目标平台仍待验。
 
+## 2026-11-25 主线集成复核
+
+集成基线为 `aac6077`，18 个分支提交通过 `git rebase --force-rebase origin/main` 回放并由 `post-rewrite` 重新扫描、签名。保留主线品牌插件、图标资产、员工包品牌材料与发布上传修复；企业底座同时装配凭据、策略、IAM、品牌与技能管理五项成员，与研发套件按 id 合并为九行。Nacos 密码声明与 IAM client secret 声明保持独立，主线品牌回执未丢失。
+
+修正冲突处理中测试期望的包名；安装演练的八行旧判据同步为九行，检查品牌与技能管理都属于底座且不串入研发层。用实际两层补丁执行原判据，两条检查均失败；修正后均通过。新增回归直接执行演练中的检查，缺少品牌、缺少技能管理、重复行、缺失研发行及两层串包均拒绝。独立工具链的既有闭包用例另发现制包说明链接到未随包交付的开发文档，改为标明源码位置；该用例修复前失败、修复后通过，未放宽断言或扩大归档内容。
+
+本轮环境为 Windows，固定 Node 24.21.0 / pnpm 11.28.5，子进程 PATH 同步使用固定 Node。证据均为本地实现、合成配置及离线测试，不作为真实企业联调结论。
+
+| 命令或范围 | 结果与耗时 |
+|---|---|
+| `pnpm install --frozen-lockfile --ignore-scripts` | 通过，约 4.5 秒 |
+| `pnpm --filter @heluo/forge-skills-manager verify` | 142 项通过，无失败或跳过；测试约 97.1 秒、整体约 105.7 秒 |
+| `node --run check:skills-manager` | 25 个生成文件与源码一致、类型检查通过，约 8.9 秒 |
+| `node --test --test-reporter=spec packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-enterprise/test/package-shape.test.mjs packages/forge-enterprise/test/reflow.test.mjs tests/bundle-install-rehearsal.test.mjs` | 20 通过、2 跳过，约 1.0 秒；跳过 sdk/web 完整安装演练，本机测试入口未识别可执行 DSH |
+| `node --test --test-reporter=spec --test-name-pattern='standalone toolchain includes Nacos rules runtime and packaging instructions' tests/release-public.test.mjs` | 原失败用例修复后通过，约 0.8 秒 |
+| `node scripts/check-docs.mjs` / `node scripts/dsh-version.mjs check` | 通过；221 文件、94 份受控文档，约 1.7 / 1.3 秒 |
+| `node scripts/check-repo.mjs` | 失败，仅 IAM bin 执行位检查报错，约 2.8 秒 |
+| `node --run check` | 首步创建工作区符号链接因 Windows `EPERM` 停止，约 0.3 秒；不记全库通过 |
+
+以下范围在 `aac6077` 的隔离源码归档中以相同工具链对照，逐项比较失败用例名称：
+
+| `node --test --test-reporter=spec` 后的文件列表 | 本分支 | 主线基线 |
+|---|---|---|
+| `tests/build-employee-package.test.mjs tests/release-delivery.test.mjs tests/derive-brand-icons.test.mjs tests/upload-draft-release.test.mjs tests/desktop-shell-contract.test.mjs` | 73 项：43 通过、27 失败、3 跳过，约 5.5 秒 | 69 项：39 通过、相同 27 失败、3 跳过，约 4.3 秒 |
+| `packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-enterprise/test/package-shape.test.mjs packages/forge-enterprise/test/reflow.test.mjs packages/forge-brand/test/config.test.mjs packages/forge-brand/test/package-shape.test.mjs tests/dsh-version.test.mjs` | 56 项：55 通过、1 失败，约 6.0 秒 | 55 项：54 通过、相同 1 失败，约 6.0 秒 |
+| `tests/bundle-build.test.mjs tests/bundle-closure.test.mjs tests/bundle-verify.test.mjs tests/bundle-install-rehearsal.test.mjs`（增加演练判据回归前） | 81 项：75 通过、4 失败、2 跳过，约 26.8 秒 | 81 项：75 通过、相同 4 失败、2 跳过，约 25.3 秒 |
+| `tests/private-bundle.test.mjs tests/private-bundle-boundary.test.mjs tests/init-enterprise-plugin.test.mjs tests/release-public.test.mjs`（说明链接修复后） | 141 项：104 通过、36 失败、1 跳过，约 45.0 秒 | 130 项：93 通过、相同 36 失败、1 跳过，约 61.3 秒 |
+
+上述失败涉及 Windows 模式位、符号链接权限、缺少 `zip`、POSIX 路径夹具及品牌测试动态导入绝对路径的 ESM URL 格式；只确认所列范围未新增失败，不推断全库或其他平台通过。未重验真实 IAM/Nacos、宿主 SDK 兼容、完整桌面 GUI、员工 zip 及国产目标平台；main 的历史发布记录不作为本分支交付验收。设计与制包说明同步当前组合及归档边界，根 README 的产品受众职责不变。
+
 ## 2026-11-24 主线集成复核
 
 最终集成基线为 `d96ab50`，在本地 rebase 保留新增桌面壳与统一员工包构建。统一构建的配置清单与发布 Environment 映射接入 Nacos 四项必填及可选超时，凭据首尾空格与字面引号保留；缺项及非法值拒绝，预览与元数据不含凭据值。`node --test --test-reporter=spec tests/build-employee-package.test.mjs tests/desktop-shell-contract.test.mjs tests/check-repo.test.mjs` 共 39 项，32 通过、7 失败（约 10.8 秒）；同基线隔离检出 37 项，30 通过、相同 7 失败（约 10.6 秒），逐项比对失败名称一致。失败为缺少 `zip` 及 Windows 配置文件模式位，不记员工 zip/桌面端验收通过。检查器单独回归 23 项通过（约 11.6 秒）。下列 `96fe261` 阶段所验插件及制包/安装实现、用例在第二次 rebase 后逐文件比对无变化，不重复计算其验证次数。

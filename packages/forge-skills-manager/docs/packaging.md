@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-SKILLS-002 |
 | 文档名称 | 技能管理器企业制包说明 |
-| 版本 | V0.1.1 |
+| 版本 | V0.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-24 |
+| 最后更新 | 2026-11-25 |
 | 门禁 | 离线规则与工具闭包验证；macOS 完整交付及企业联调待验 |
 
 本说明随独立工具链交付，面向制包人员；命令从工具链根目录执行，有源码时从仓库根执行。通用步骤遵循[公共打包 Skill](../../../.agents/skills/heluo-forge-release-bundle/SKILL.md)，公共 Skill 与 SOP 保持原样。本说明补充技能管理器部署字段，不表示真实 IAM、Nacos 或目标平台验收已完成。
@@ -26,7 +26,7 @@
 
 开发联调需要包含 IAM 的企业组合包；独立 Skill Manager 包不包含 IAM。开发构建和安装步骤见源码仓库的包 README；仅下载制作工具链不能代替源码构建环境。测试环境私版与正式环境私版均走正式交付流程，四项 Nacos 字段同样必填。
 
-仓库的统一员工包构建入口为 `scripts/build-employee-package.mjs`，发布流程见[开发约定 §7](../../../docs/engineering/development-conventions.md#7-ci-与发布)。`--config-from-env` 从发布 Environment 映射本说明的 Nacos 四项必填及可选超时；账号密码保留原值，仍须通过正式制包校验。以下公版加专用文件的两段式命令保留用于独立工具链与回退流程。
+仓库的统一员工包构建入口为 `scripts/build-employee-package.mjs`，发布流程见源码仓库的 `docs/engineering/development-conventions.md` §7；该开发文档不随独立工具链交付。`--config-from-env` 从发布 Environment 映射本说明的 Nacos 四项必填及可选超时；账号密码保留原值，仍须通过正式制包校验。以下公版加专用文件的两段式命令保留用于独立工具链与回退流程。
 
 ## 配置文件
 

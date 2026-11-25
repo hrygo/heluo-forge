@@ -146,11 +146,11 @@ async function activateInstalled(label, host) {
       ids.push(await ctx.loader.create({ id: row.id, name: row.name, config }));
     }
     await ctx.loader.await();
-    // 底座四行（凭据/策略/IAM/品牌）与研发套件五行按 id 合并，
-    // 仅共享策略行 `heluo-policy` 重合。
+    // 底座五行（凭据/策略/IAM/品牌/技能管理）＋研发套件五行（共享策略/容器/Skill/DevOps/Gitee），
+    // 按 id 去重合并为 9 行，仅共享策略行 `heluo-policy` 重合。
     record(
       `${label}-patch-mounts-base-and-overlay`,
-      patch.inserted.length === 8 && new Set(patch.inserted.map((row) => row.id)).size === 8 && resolved.length === 8,
+      patch.inserted.length === 9 && new Set(patch.inserted.map((row) => row.id)).size === 9 && resolved.length === 9,
       { ids: patch.inserted.map((row) => row.id) },
     );
     // 分包隔离要被证明：底座不得偷带研发成员，研发套件不得携带 IAM/凭据行，仅共享 heluo-policy。
@@ -161,7 +161,7 @@ async function activateInstalled(label, host) {
     const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam', 'heluo-brand', 'heluo-skills-manager'];
     record(
       `${label}-layers-are-disjoint`,
-      baseIds.length === 4
+      baseIds.length === 5
         && engineeringIdsAll.length === 5
         && sharedIds.length === 1
         && sharedIds[0] === 'heluo-policy'
