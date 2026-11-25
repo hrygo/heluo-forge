@@ -286,3 +286,33 @@ keychain 提供该服务即生效，服务始终缺席即不判定。补丁层�
 2026-11-24 实测：企业单装 13/13、engineering→enterprise 13/13、enterprise→engineering 13/13、
 engineering 单装 4/4（closed）、目录错配 4/4（fingerprint）。
 记录见 [docs/design/verification/iam-store-access-p1.md](../../docs/design/verification/iam-store-access-p1.md)。
+
+## `run-task-acceptance.mjs`（任务级：测试专用 profile + mock 模型）
+
+P0/P1 由探针插件直接派发工具调用。本脚本再往前一步：起一个临时的 headless profile，
+用本地 OpenAI 兼容 SSE 服务冒充模型，让模型按脚本自己发出四次工具调用，跑完真实会话循环。
+
+```sh
+node scripts/probe/run-task-acceptance.mjs            # 临时目录，结束即清理
+node scripts/probe/run-task-acceptance.mjs --keep     # 保留 profile 与会话事件
+node scripts/probe/run-task-acceptance.mjs --out /tmp/task-accept.json
+```
+
+装配：`DSH_HOME` 指向临时目录，从 `headless` 模板引导 `forge-task`；复制仓库内的
+`forge-policy`、`forge-credentials-keychain` 到 profile；overlay 禁用官方 `credentials`、
+插入 keychain（合成目录）与 policy（企业同款写动作目录 + 内存审计）、把默认模型指向
+`mock-local`。凭据库由 keychain 包自己初始化，再追加 `records`、`future_table` 两张扩展表。
+
+| 断言 | 含义 |
+|---|---|
+| `tool-calls-dispatched` | 模型真的发出 4 次调用，而不是脚本直派 |
+| `deny-read-store-db` / `deny-bash-sqlite` | `read` 与 `bash sqlite3` 都得到「只能经公开接口访问」 |
+| `deny-bash-auth-token` | 取票命令得到「不得直接调用」 |
+| `allow-benign-read` | 仓库内普通读取不受影响 |
+| `store-unchanged` | 拒绝后 `records`、`future_table` 与 canary 均未变 |
+| `no-canary-in-events` | 事件流不含 canary 明文 |
+| `cli-never-started` | 取票被拒时哨兵文件未生成，CLI 未启动 |
+| `final-message` | 会话以最终文本结束 |
+
+2026-11-25 实测：连续三次 11/11，退出码 0，单次约 20 秒。
+记录见 [docs/design/verification/iam-store-access-task.md](../../docs/design/verification/iam-store-access-task.md)。

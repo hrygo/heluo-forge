@@ -6,19 +6,21 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-027 |
 | 文档名称 | 禁止 Agent 直连 IAM 凭据库：策略拦截实施方案 |
-| 版本 | V0.1.9 |
-| 文档状态 | 评审稿（2026-11-24 用户裁决落定；步骤 0 的 P0-A/B/C 与 P1-A…E 探针全部执行并落盘；处置见 §14、执行记录见 §5 步骤 0） |
+| 版本 | V0.1.10 |
+| 文档状态 | 评审稿（2026-11-24 用户裁决落定；步骤 0 的 P0-A/B/C 与 P1-A…E 探针全部执行并落盘；处置见 §14、执行记录见 §5 步骤 0；另有一轮本机任务级验收，见 §17） |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-24 |
+| 最后更新 | 2026-11-25 |
 | 适用范围 | 仓内实现与离线验收口径。宿主探针结论先于实现（§5 步骤 0）；目标宿主实机验收、企业环境取证按 §8 另行取证 |
 | 门禁 | `pnpm check` 离线闭环。三道条件分离（§8.2）：**实现**以探针 P0-A 为门禁（已于 2026-11-24 通过，见 §5 步骤 0 执行记录）；**默认启用**以企业装配探针（P1-A/B/C/D/E，含叠装两方向启用、装载失败可阻断、取票拒绝在 CLI 启动前生效）与公开 API 授权验收（§8.4）通过为门禁；**#434 第 4 项勾选**另需执行环境隔离证据，不因前两道通过而自动获得 |
 
 > 编制依据：issue [#375](https://github.com/hrygo/heluo-forge/issues/375) 正文与完成标准、2026-11-23 作者「并入 #434」的处置意见，以及对本仓库 `packages/forge-policy`、`packages/forge-credentials-keychain`、`packages/forge-iam` 源码与宿主 `tools/pre-execute` 事件面的只读核验。当前只有源码级结论与离线用例计划，**没有**目标宿主实机拦截证据，也不代表生产可用。
 >
 > 关联文档：[策略与审计设计](<../design/plugins/forge-policy.md>)、[受控写最小门禁实施计划](<2026-11-19-policy-minimal-gates.md>)、[IAM 身份、令牌与业务凭据接入指南](<../../packages/forge-iam/docs/credential-access.md>)、[SQLite 存储扩展与使用规范](<../engineering/sqlite-storage-conventions.md>)、[DSH 插件高阶规范](<../engineering/dsh-plugin-conventions.md>)。
+
+**修订说明（V0.1.10）**：补一轮**本机任务级验收**——测试专用 headless profile（`forge-task`）+ 本地 mock 模型服务，模型在真实会话循环里自己发出读取、`sqlite3` 查询、取票与仓库内普通读取四次调用，11 项断言连续三次全通过；记录见 [任务级验收](../design/verification/iam-store-access-task.md)，处置见 §17。本记录是辅助证据，不替代 §8.4 授权验收与执行环境隔离证据。
 
 **修订说明（V0.1.9）**：补齐位置服务装载回滚与替换、按工作目录解析命令路径、同名文件放行及取票命令位置判定的离线回归。修复版在本机 DSH 上复跑企业单装和双向叠装，三组均为 13/13，见 [P1 探针记录](../design/verification/iam-store-access-p1.md#评审修复复验)。
 
@@ -765,6 +767,8 @@ tools/pre-execute (waterfall)
 | 默认启用 | P1-A/B/C/D/E 已全部通过（2026-11-24）；**§8.4 待验收** | 无需改补丁：守卫随 keychain 的位置服务自动生效（§5 步骤 6） |
 | #434 勾选 | 上述两项 **且** 执行环境隔离（或等价证据）覆盖运行期自算路径 | 勾选第 4 项两条判据（§8.3） |
 
+本机任务级验收（`scripts/probe/run-task-acceptance.mjs`，**已执行 3 轮 11/11**）在三道门禁之外补一层：模型经真实会话循环自己发工具调用，用来证明守卫不只在探针直派下生效。记录见 [任务级验收](../design/verification/iam-store-access-task.md)。
+
 探针记录随 PR 附上（脱敏：不含用户名、不含库内容）。**P0-A 未通过则步骤 1–8 不启动；P1-A/B/C/D/E 任一未通过则企业装配不宣称守卫生效。**
 
 ### 8.3 issue #375 判据状态（交付后仍不勾选）
@@ -827,8 +831,8 @@ tools/pre-execute (waterfall)
 
 **已裁决（2026-11-24，用户）**：
 
-1. **D90 最小范围扩展：批准**——允许 `forge-policy` 在 catalog 解析前检查 Agent 工具调用中可判定的路径，范围仅限凭据后端实际使用的库目录及密钥目录，覆盖读、写、删；D22 的写动作 catalog 继续沿用；规则定位为**显式路径防误触**；默认启用须通过企业装配与授权验收；#434 第 4 项勾选仍需执行环境隔离或等价证据。落地为 `denyIamStoreAccess`（§4、§5）。
-2. **`auth token` 授权：Agent 默认拒绝，不提供逐次确认放行**——`auth whoami` 可供 Agent 查询身份；`auth token` 保留给用户与已授权受信集成，Agent 工具调用默认拒绝；Agent 需要执行获准业务操作时，由受信组件取用令牌并发起请求，只向 Agent 返回业务结果。落地为 `denyIamTokenAccess`（§3.1 第 4 条、§5），验收须确认拒绝发生在 CLI 启动前，并区分「已拒绝经工具分发的调用」与「已约束任意子进程取票」两类证据；宿主无法执行前者时该项保持待验收。
+1. **D90 最小范围扩展：批准**——允许 `forge-policy` 在 catalog 解析前检查 Agent 工具调用中可判定的路径，范围仅限凭据后端实际使用的库目录及密钥目录，覆盖读、写、删；D22 的写动作 catalog 继续沿用；规则定位为**显式路径防误触**；默认启用须通过企业装配与授权验收；#434 第 4 项勾选仍需执行环境隔离或等价证据。落地为 `denyIamStoreAccess`（§4、§5；V0.1.8 起改为守卫随位置服务生效、开关取消，见 §15）。
+2. **`auth token` 授权：Agent 默认拒绝，不提供逐次确认放行**——`auth whoami` 可供 Agent 查询身份；`auth token` 保留给用户与已授权受信集成，Agent 工具调用默认拒绝；Agent 需要执行获准业务操作时，由受信组件取用令牌并发起请求，只向 Agent 返回业务结果。落地为 `denyIamTokenAccess`（§3.1 第 4 条、§5；V0.1.8 起同一条守卫随位置服务生效，见 §15），验收须确认拒绝发生在 CLI 启动前，并区分「已拒绝经工具分发的调用」与「已约束任意子进程取票」两类证据；宿主无法执行前者时该项保持待验收。
 
 **仍待裁决**：
 
@@ -904,7 +908,7 @@ tools/pre-execute (waterfall)
 | 裁决项 | 原话口径 | 本稿落地 |
 |---|---|---|
 | ① D90 范围扩展 | 「允许 `forge-policy` 在 catalog 解析前检查 Agent 工具调用中可判定的路径，范围仅限凭据后端实际使用的库目录及密钥目录，覆盖读、写、删。D22 的写动作 catalog 继续沿用。规则定位为显式路径防误触，默认启用须通过企业装配和授权验收。勾选 #434 第 4 项仍需执行环境隔离或等价证据。」 | `store-access` 阶段置于 `resolve` 之前（§4.3）；判定对象仅 `<dir>` 与 `<dir>.keys` 两个根（§6.1）；目录来自 `credentials-store-location`，不设被保护根配置面（§4.5）；守卫随位置服务生效、不绑定开关（V0.1.8，裁决 C）；企业装配门禁见 §8.2；#434 勾选独立门禁（§8.3） |
-| ② `auth token` 授权 | 「`auth whoami` 可供 Agent 查询身份。`auth token` 保留给用户和已授权的受信集成，Agent 工具调用默认拒绝。Agent 需要执行获准的业务操作时，由受信组件取用令牌并发起请求，只向 Agent 返回业务结果。」「`auth token` 会把可复用的访问令牌写到 stdout。一次确认无法约束令牌进入工具输出后的用途，因此需要把授权放在**具体业务操作**上。验收时应确认拒绝发生在 CLI 启动前，并区分『已拒绝经工具分发的调用』和『已约束任意子进程取票』两类证据。若宿主暂时无法执行前者，Agent 授权项保持待验收。」 | 新增独立开关 `rules.denyIamTokenAccess` 与 `judgeTokenInvocation`（§3.1 第 4 条、§5 步骤 1–3）；**不设确认通道**；拒绝码 `POLICY_IAM_TOKEN_DENIED`、审计 `iam.token.invoke`（§6.2）；验收含 P1-E「CLI 未启动」与两类证据分列（§8.2、§8.4）；运行期拼装取票明确记为不覆盖（§4.4、§3.3） |
+| ② `auth token` 授权 | 「`auth whoami` 可供 Agent 查询身份。`auth token` 保留给用户和已授权的受信集成，Agent 工具调用默认拒绝。Agent 需要执行获准的业务操作时，由受信组件取用令牌并发起请求，只向 Agent 返回业务结果。」「`auth token` 会把可复用的访问令牌写到 stdout。一次确认无法约束令牌进入工具输出后的用途，因此需要把授权放在**具体业务操作**上。验收时应确认拒绝发生在 CLI 启动前，并区分『已拒绝经工具分发的调用』和『已约束任意子进程取票』两类证据。若宿主暂时无法执行前者，Agent 授权项保持待验收。」 | 新增 `judgeTokenInvocation`（当时为独立开关 `rules.denyIamTokenAccess`，V0.1.8 起改随位置服务生效）（§3.1 第 4 条、§5 步骤 1–3）；**不设确认通道**；拒绝码 `POLICY_IAM_TOKEN_DENIED`、审计 `iam.token.invoke`（§6.2）；验收含 P1-E「CLI 未启动」与两类证据分列（§8.2、§8.4）；运行期拼装取票明确记为不覆盖（§4.4、§3.3） |
 | 设计后果（需知会） | — | V0.1.4 曾为裁决②新增第九个开关；**V0.1.8 按裁决 C 全部撤回**：两条守卫都不绑定开关，`RULE_KEYS` 回到七项，`STAGE.STORE` 恒装配。取票守卫与存档守卫同随 `credentials-store-location` 生效，因此没有内置凭据后端的装配（engineering 单装）两条都不判定 |
 | 范围确认 | 「直接拒绝一些 bash 命令对 sqlite 文件的操作」是否已足够 | 2026-11-24 用户确认接受当前范围：命令/参数中可判定的存档路径、命令文本点名的存档与取票调用均在 `tools/pre-execute` 拒绝；运行期拼装路径按不覆盖处理，不追加命令名黑名单（误伤仓库自身 SQLite 工具，且可换 `read`/`cp`/`python3 -c` 绕过），不先做执行环境隔离；#434 第 4 项仍以隔离或等价证据为勾选前提（§3.1、§3.3、§8.3） |
 
@@ -932,3 +936,16 @@ tools/pre-execute (waterfall)
 | [P3] 旧装配结果未标注历史 | P1 判据表按裁决 C 改写（不再要求开关与缺席拒装）；P1 执行记录标明为当前证据，旧开关方案的 2/13 归入 V0.1.7 历史；§10 执行项改为「拒绝已取消开关」 | §5 步骤 0、§10、§15 |
 
 **复验**：修复后在 darwin-arm64、DSH `0.2.1-rc.5`、Node `v24.13.0` 上以隔离 profile 与合成数据复跑 P1——企业单装 13/13、`engineering→enterprise` 13/13、`enterprise→engineering` 13/13、engineering 单装 4/4（closed）、目录错配 4/4（fingerprint），全部退出码 0；`node --test packages/forge-policy/test/*.test.mjs` 459/459。真实企业 IAM、Windows/Linux 宿主与执行环境隔离仍待验收。
+
+---
+
+## 17. 本机任务级验收（V0.1.10）
+
+| 项 | 内容 |
+|---|---|
+| 目的 | 在三道门禁之外补一层证据：守卫在**真实会话循环**里生效，而不只是在探针插件直派下生效 |
+| 装配 | 临时 `DSH_HOME` 引导 `forge-task`（headless 模板）；mock 模型服务按脚本发四次工具调用；仓库内 keychain + policy；合成库含 `records`、`future_table` 与 canary |
+| 断言 | 11 项，含 4 次调用确实由模型发出、三类拒绝、仓库内读取放行、库未改动、事件不含 canary、取票被拒时哨兵未生成 |
+| 结果 | 连续三次 11/11、退出码 0，单次约 20 秒 |
+| 记录 | [iam-store-access-task.md](../design/verification/iam-store-access-task.md)；复跑 `node scripts/probe/run-task-acceptance.mjs` |
+| 边界 | mock 模型只按脚本发固定调用；仅 darwin-arm64；未接企业 IAM/网关；运行期拼装路径与 `run_code` 仍不覆盖 |
