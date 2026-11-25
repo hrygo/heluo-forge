@@ -19,12 +19,12 @@
  *   node scripts/stage-desktop-payload.mjs --output <dir> --dsh-tgz <path.tgz> \
  *     [--brand-dir <dir>] [--employee-assets <dir>] [--lock <runtime-lock.json>] [--json]
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { execNpm } from './lib/bundle-rules.mjs';
 import { ASSETS_DIR, DSH_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
@@ -86,11 +86,15 @@ function sha256Hex(bytes) {
  * bytes are the registry artifact the lock pinned, and the closure comes from
  * the registry in npm's own tree layout. The installer is injectable so the
  * offline tests can stage a fixture tree without the network.
+ *
+ * npm is launched through `execNpm`: on Windows `npm` is a `.cmd` shim that a
+ * bare `execFileSync('npm', …)` cannot start, so the CLI script runs under the
+ * current Node instead, on every platform.
  */
 function installDshClosure(tgz, destination, { installer } = {}) {
   mkdirSync(destination, { recursive: true });
   const install = installer ?? ((tgzPath, dest) => {
-    execFileSync('npm', ['install', '--no-save', '--omit=dev', '--no-audit', '--no-fund', '--loglevel', 'error', tgzPath, '--prefix', dest], { stdio: ['ignore', 'ignore', 'pipe'] });
+    execNpm(['install', '--no-save', '--omit=dev', '--no-audit', '--no-fund', '--loglevel', 'error', tgzPath, '--prefix', dest], { stdio: ['ignore', 'ignore', 'pipe'] });
   });
   install(tgz, destination);
 }

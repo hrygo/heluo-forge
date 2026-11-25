@@ -8,6 +8,7 @@
  * the repository checker applies, not by a second, weaker regex list.
  */
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -155,6 +156,31 @@ export function atomicWrite(path, bytes) {
 }
 
 export const stableJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
+
+/**
+ * Zip one directory of a staging tree with the platform's native archiver.
+ *
+ * POSIX keeps Info-ZIP `zip`: it records Unix permissions, which the employee
+ * package's launchers need after extraction. Windows ships no `zip`; its native
+ * archiver is the bsdtar build in System32, which selects the zip container from
+ * the `.zip` suffix. That one is addressed by its absolute path on purpose:
+ * under Git Bash the bare name `tar` resolves to MSYS's GNU tar, which cannot
+ * write zip.
+ *
+ * `zipCommand` is the test seam. It receives the exact Info-ZIP invocation
+ * (`zip -r -q <archive> <name>`), so the failure and race cases keep exercising
+ * the "nothing is published" contract against a misbehaving external archiver.
+ *
+ * @param {{staging: string, name: string, archive: string, zipCommand?: string,
+ *   platform?: NodeJS.Platform, windowsTar?: string}} input
+ */
+export function zipDirectory({ staging, name, archive, zipCommand, platform = process.platform, windowsTar } = {}) {
+  if (zipCommand !== undefined || platform !== 'win32') {
+    execFileSync(zipCommand ?? 'zip', ['-r', '-q', archive, name], { cwd: staging });
+    return;
+  }
+  execFileSync(windowsTar ?? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['--auto-compress', '--create', '--file', archive, name], { cwd: staging });
+}
 
 export function readJsonFile(path, label = 'JSON file') {
   let text;

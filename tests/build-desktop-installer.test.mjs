@@ -7,14 +7,14 @@
  * the plugin brand can never drift apart.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { APP_IDENTITY } from '../scripts/release-delivery.mjs';
-import { builderConfig, parseArguments, readAppIdentity } from '../scripts/build-desktop-installer.mjs';
+import { builderConfig, builderEntry, parseArguments, readAppIdentity } from '../scripts/build-desktop-installer.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -77,4 +77,29 @@ test('图标与品牌 manifest 账本一致；参数解析限定目标', () => {
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win']).target, 'win');
   assert.throws(() => parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'zip']), (error) => error.code === 'BAD_ARGUMENT');
   assert.throws(() => parseArguments(['--identity', 'i']), (error) => error.code === 'BAD_ARGUMENT');
+});
+
+test('构建器入口取自包自身声明的 bin：任何平台都由当前 Node 直接执行，不经 .cmd 或 sh 垫片', (t) => {
+  const root = temp(t);
+  const builderDir = join(root, 'node_modules', 'electron-builder');
+  // 未安装：目录、清单、bin 字段、入口文件任一缺失都报 null，由调用方给出 BUILDER_MISSING。
+  assert.equal(builderEntry(builderDir), null, 'no package at all');
+  mkdirSync(builderDir, { recursive: true });
+  assert.equal(builderEntry(builderDir), null, 'no manifest');
+  writeFileSync(join(builderDir, 'package.json'), 'not json');
+  assert.equal(builderEntry(builderDir), null, 'unreadable manifest');
+  writeFileSync(join(builderDir, 'package.json'), JSON.stringify({ name: 'electron-builder', version: '0.0.0' }));
+  assert.equal(builderEntry(builderDir), null, 'no bin declared');
+  writeFileSync(join(builderDir, 'package.json'), JSON.stringify({ name: 'electron-builder', bin: { 'electron-builder': './cli.js' } }));
+  assert.equal(builderEntry(builderDir), null, 'declared entry file is missing');
+  writeFileSync(join(builderDir, 'cli.js'), '#!/usr/bin/env node\n');
+  assert.equal(builderEntry(builderDir), join(builderDir, 'cli.js'), 'object bin form resolves the declared entry');
+  writeFileSync(join(builderDir, 'package.json'), JSON.stringify({ name: 'electron-builder', bin: './cli.js' }));
+  assert.equal(builderEntry(builderDir), join(builderDir, 'cli.js'), 'string bin form resolves too');
+
+  // 真实安装布局：pnpm 把包链到 app 的 node_modules 下，入口仍是包内相对路径。
+  const installed = join(REPO_ROOT, 'services', 'forge-desktop', 'node_modules', 'electron-builder');
+  if (existsSync(join(installed, 'package.json'))) {
+    assert.equal(existsSync(builderEntry(installed) ?? ''), true);
+  }
 });

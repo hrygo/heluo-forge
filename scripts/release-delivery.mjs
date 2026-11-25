@@ -24,7 +24,6 @@
  *     --config <enterprise.env> --version <x.y.z> --output <dir>
  *     [--confirm <digest 前 8+ 位>] [--dry-run] [--tool-root <repo>] [--json]
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -55,7 +54,7 @@ import {
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
-import { assertOutsideDirectory, sha256 } from './lib/release-support.mjs';
+import { assertOutsideDirectory, sha256, zipDirectory } from './lib/release-support.mjs';
 
 const INSTALLER_SCRIPT = 'init-enterprise-plugin.mjs';
 
@@ -627,7 +626,7 @@ export function buildDelivery(input) {
 
     // 交付物齐了才打包；zip 缺失或失败时不留半成品目录，重跑不会被 OUTPUT_EXISTS 挡住。
     try {
-      execFileSync(zipCommand, ['-r', '-q', partialArchive, basename(output)], { cwd: staging });
+      zipDirectory({ staging, name: basename(output), archive: partialArchive, zipCommand });
     } catch (error) {
       const reason = typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN');
       fail('ARCHIVE_FAILED', `zip failed (${reason}) while packaging ${basename(output)} with ${zipCommand}; nothing was published`);

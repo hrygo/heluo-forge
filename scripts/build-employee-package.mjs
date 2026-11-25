@@ -66,7 +66,7 @@ import {
   SUPPORTED_PLATFORMS,
 } from './lib/private-bundle.mjs';
 import { configTextFromEnv } from './lib/release-config.mjs';
-import { sha256, stableJson } from './lib/release-support.mjs';
+import { sha256, stableJson, zipDirectory } from './lib/release-support.mjs';
 
 export const EMPLOYEE_PACKAGE_SCHEMA = 'heluo-employee-package/1';
 export const EMPLOYEE_MANIFEST_FILE = 'employee-manifest.json';
@@ -348,7 +348,7 @@ export function buildEmployeePackage(input) {
 
     const partial = join(staging, 'archive.zip');
     try {
-      execFileSync(input.zipCommand ?? 'zip', ['-r', '-q', partial, basename(content)], { cwd: staging });
+      zipDirectory({ staging, name: basename(content), archive: partial, zipCommand: input.zipCommand });
     } catch (error) {
       fail('ARCHIVE_FAILED', `zip failed (${error?.code ?? error?.status ?? 'UNKNOWN'}); nothing was published`);
     }

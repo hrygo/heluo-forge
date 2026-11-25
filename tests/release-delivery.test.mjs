@@ -7,9 +7,9 @@
  * behaviour that keeps a half-built delivery from being mistaken for a release.
  */
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -20,6 +20,7 @@ import { APP_IDENTITY, buildDelivery, parseArguments, writeBrandingAssets } from
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { buildConfig, parseEnvConfig, PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
+import { zipDirectory } from '../scripts/lib/release-support.mjs';
 
 const TOOL_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -702,6 +703,81 @@ test(
     assert.equal(existsSync(output), false);
     assert.deepEqual(warnings, [], '自己的产物不需要告警');
     assert.deepEqual(stagingLeftovers(root), []);
+  },
+);
+
+/** 假的归档器：只记录工作目录与参数，用来断言各平台归档器的调用契约。 */
+function recordingArchiver(root, record) {
+  const path = join(root, 'archiver-recorder.sh');
+  writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "$PWD" "$@" > '${record}'\nexit 0\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+const ZIP_MAGIC = 'PK\u0003\u0004';
+
+test(
+  'each platform hands its archiver the same job: one directory, zipped from the staging tree',
+  { skip: process.platform === 'win32' ? 'needs a POSIX shell to fake the archiver' : false },
+  (t) => {
+    const root = temp(t, 'forge-zip-contract-');
+    const staging = join(root, 'staging');
+    mkdirSync(join(staging, 'package'), { recursive: true });
+    writeFileSync(join(staging, 'package', 'INSTALL.md'), '# guide\n');
+    const archive = join(root, 'package.zip');
+
+    // POSIX keeps Info-ZIP: the injected zipCommand still receives the exact
+    // Info-ZIP invocation, so the failure and race cases above stay honest.
+    // (The shell reports its physical working directory: /var is a symlink on macOS.)
+    const invoked = (record) => {
+      const [cwd, ...args] = readFileSync(record, 'utf8').trimEnd().split('\n');
+      return { cwd, args };
+    };
+    const zipRecord = join(root, 'zip.args');
+    zipDirectory({ staging, name: 'package', archive, zipCommand: recordingArchiver(root, zipRecord) });
+    assert.deepEqual(invoked(zipRecord), { cwd: realpathSync(staging), args: ['-r', '-q', archive, 'package'] });
+
+    // Windows ships no zip: System32's bsdtar picks the zip container from the
+    // .zip suffix and must be addressed as the archiver of that platform.
+    const tarRecord = join(root, 'tar.args');
+    zipDirectory({ staging, name: 'package', archive, platform: 'win32', windowsTar: recordingArchiver(root, tarRecord) });
+    assert.deepEqual(invoked(tarRecord), { cwd: realpathSync(staging), args: ['--auto-compress', '--create', '--file', archive, 'package'] });
+
+    // An explicit zipCommand wins over the platform default.
+    const explicit = join(root, 'explicit.args');
+    zipDirectory({ staging, name: 'package', archive, platform: 'win32', zipCommand: recordingArchiver(root, explicit) });
+    assert.deepEqual(invoked(explicit), { cwd: realpathSync(staging), args: ['-r', '-q', archive, 'package'] });
+  },
+);
+
+test('the default archiver of this platform writes a real zip', (t) => {
+  const root = temp(t, 'forge-zip-default-');
+  const staging = join(root, 'staging');
+  mkdirSync(join(staging, 'package', 'installer'), { recursive: true });
+  writeFileSync(join(staging, 'package', 'INSTALL.md'), '# guide\n');
+  writeFileSync(join(staging, 'package', 'installer', 'run.sh'), '#!/bin/sh\n');
+  const archive = join(root, 'package.zip');
+  zipDirectory({ staging, name: 'package', archive });
+  assert.equal(readFileSync(archive).subarray(0, 4).toString('latin1'), ZIP_MAGIC);
+});
+
+const BSDTAR = process.platform === 'win32' ? '' : (spawnSync('/usr/bin/tar', ['--version'], { encoding: 'utf8' }).stdout ?? '');
+
+test(
+  'the Windows archiver syntax is one a real bsdtar accepts',
+  { skip: /bsdtar/u.test(BSDTAR) ? false : 'needs a bsdtar (the libarchive tar Windows ships) to exercise the Windows syntax' },
+  (t) => {
+    const root = temp(t, 'forge-zip-bsdtar-');
+    const staging = join(root, 'staging');
+    mkdirSync(join(staging, 'package', 'installer'), { recursive: true });
+    writeFileSync(join(staging, 'package', 'INSTALL.md'), '# guide\n');
+    writeFileSync(join(staging, 'package', 'installer', 'run.sh'), '#!/bin/sh\n');
+    const archive = join(root, 'package.zip');
+    zipDirectory({ staging, name: 'package', archive, platform: 'win32', windowsTar: '/usr/bin/tar' });
+    assert.equal(readFileSync(archive).subarray(0, 4).toString('latin1'), ZIP_MAGIC);
+    const listing = execFileSync('/usr/bin/tar', ['-tf', archive], { encoding: 'utf8' });
+    assert.match(listing, /package\/INSTALL\.md/u);
+    assert.match(listing, /package\/installer\/run\.sh/u);
   },
 );
 
