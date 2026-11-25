@@ -16,6 +16,13 @@ import { CATEGORY, classifyAction } from './classify.mjs';
 import { collectPathCandidates } from './path-sources.mjs';
 import { redactPath } from './audit.mjs';
 import { canonicalize, judgeProtectedPath } from './paths.mjs';
+import { STAGE } from './pipeline.mjs';
+import {
+  judgeStoreAccess,
+  judgeTokenInvocation,
+  storeDeniedCopy,
+  tokenDeniedCopy,
+} from './store-protection.mjs';
 import {
   compileContentRules,
   digestContent,
@@ -306,8 +313,10 @@ export function createGate({
   timeoutMs = DEFAULT_CONFIRMATION_TIMEOUT_MS,
   maxContentBytes,
   protectedRoots = [],
+  storeGuard = { available: false, roots: [] },
 } = {}) {
   const stages = Object.freeze([...(pipeline ?? [])]);
+  const storeStage = stages.some((entry) => entry.stage === STAGE.STORE);
   // 内置规则集随包编译一次；v1 不接受自定义规则（D49），组织规则留到后续阶段。
   const contentRules = compileContentRules().rules;
   const clock = now ?? (() => Date.now());
@@ -887,6 +896,40 @@ export function createGate({
   }
 
   async function preExecute(ctx, exec, next) {
+    // IAM 存档与取票通道先于目录解析：`read`/`glob`/`grep`/`bash` 没有 catalog action，
+    // 走不到受控写门禁；这两条判定只看调用参数，因此必须在早退之前完成。
+    if (storeStage && !disposed && storeGuard?.available === true) {
+      const kind = agentKindOf(exec);
+      const operationId = exec?.callId === undefined ? undefined : String(exec.callId);
+      const meta = { actor: undefined, kind, operationId };
+      const token = judgeTokenInvocation(exec);
+      if (token.hit) {
+        return denyWithEvidence(
+          semanticFields(exec, 'iam.token.invoke', token.executable, meta, {
+            rule: 'token-access',
+            ruleIds: ['token-access'],
+            summary: `工具 ${exec?.name} 试图调用 IAM 取票命令，已拒绝`,
+          }),
+          tokenDeniedCopy(exec?.name),
+          'POLICY_IAM_TOKEN_DENIED',
+        );
+      }
+      {
+        const roots = Array.isArray(storeGuard.roots) ? storeGuard.roots : [];
+        const verdict = judgeStoreAccess(exec, roots);
+        if (verdict.hit) {
+          return denyWithEvidence(
+            semanticFields(exec, 'iam.store.access', verdict.artifact, meta, {
+              rule: 'store-access',
+              ruleIds: ['store-access'],
+              summary: `工具 ${exec?.name} 试图直接访问凭据存档（${verdict.reason}），已拒绝`,
+            }),
+            storeDeniedCopy(exec?.name, verdict),
+            'POLICY_STORE_ACCESS_DENIED',
+          );
+        }
+      }
+    }
     const action = actionFor(exec?.name);
     if (action === undefined || !requiresGate(action)) {
       return typeof next === 'function' ? next() : Object.freeze({ kind: 'allow' });

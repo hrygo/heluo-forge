@@ -26,6 +26,7 @@
     "./locale/*.json": "./locale/*.json",
     "./org-policy": "./src/org-policy.mjs",
     "./paths": "./src/paths.mjs",
+    "./store-protection": "./src/store-protection.mjs",
     "./pipeline": "./src/pipeline.mjs",
     "./process-rules": "./src/process-rules.mjs",
     "./reuse": "./src/reuse.mjs"

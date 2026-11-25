@@ -260,7 +260,8 @@ export function apply(ctx, rawConfig = {}) {
   if (!builtinBackend && result.value.allowEphemeral !== true) {
     throw new KeychainProviderError('KEYCHAIN_EPHEMERAL_REFUSED', 'an injected test backend requires allowEphemeral=true');
   }
-  const registered = builtinBackend ? createDefaultBackend({ directory: storeDirectory(result.value.storeDirectory) }) : undefined;
+  const resolvedDirectory = builtinBackend ? storeDirectory(result.value.storeDirectory) : undefined;
+  const registered = builtinBackend ? createDefaultBackend({ directory: resolvedDirectory }) : undefined;
   const backend = registered?.backend ?? result.value.backend;
   if (backend.available === false) {
     throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', backend.reason ?? 'keychain backend is unavailable');
@@ -315,27 +316,57 @@ export function apply(ctx, rawConfig = {}) {
   });
 
   let closed = false;
-  let disposeProvide;
-  let disposeTrust;
-  let disposeClientSecret;
+  const disposers = [];
+  const unpublish = () => {
+    const errors = [];
+    for (const dispose of disposers.splice(0).reverse()) {
+      try { dispose?.(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'credential services could not be fully removed');
+  };
   const teardown = async () => {
     if (closed) return;
     closed = true;
     try {
       await provider.close();
     } finally {
-      // Unprovide even when the backend fails to close: leaving a provider that
-      // points at a half-closed backend behind is worse than the close error.
-      disposeClientSecret?.();
-      disposeTrust?.();
-      disposeProvide?.();
+      unpublish();
     }
   };
-  ctx.effect(() => {
-    disposeProvide = ctx.provide('credentials', provider);
-    if (trust) disposeTrust = ctx.provide(JOINT_STORE_SERVICE, trust);
-    if (clientSecretPort) disposeClientSecret = ctx.provide('iam-client-secret-source', clientSecretPort);
-    return teardown;
-  }, 'forge-credentials-keychain');
+  const rollback = (error) => {
+    try {
+      unpublish();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'credential service setup and rollback failed');
+    } finally {
+      void teardown().catch(() => ctx.logger?.warn?.('credential provider cleanup failed during setup'));
+    }
+    throw error;
+  };
+  const publish = () => {
+    try {
+      disposers.push(ctx.provide('credentials', provider));
+      if (trust) disposers.push(ctx.provide(JOINT_STORE_SERVICE, trust));
+      if (clientSecretPort) disposers.push(ctx.provide('iam-client-secret-source', clientSecretPort));
+      // 注入的测试后端没有稳定目录。内置后端最后发布位置，标志全部服务就绪。
+      if (resolvedDirectory !== undefined) {
+        const isDefault = (result.value.storeDirectory ?? '') === '';
+        disposers.push(ctx.provide('credentials-store-location', Object.freeze({
+          directory: resolvedDirectory,
+          keyDirectory: resolvedDirectory + '.keys',
+          isDefault,
+          source: isDefault ? 'platform-default' : 'config',
+        })));
+      }
+      return teardown;
+    } catch (error) {
+      return rollback(error);
+    }
+  };
+  try {
+    ctx.effect(publish, 'forge-credentials-keychain');
+  } catch (error) {
+    return rollback(error);
+  }
   return teardown;
 }

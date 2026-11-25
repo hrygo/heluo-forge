@@ -28,6 +28,17 @@ export { DECISION_CACHE_LIMIT, createDecisionCache, reuseKeyOf } from './reuse.m
 export { createGate } from './gate.mjs';
 export { ORG_ENVELOPE_SCHEMA, effectiveDecision, loadOrgPolicy, verifyEnvelope } from './org-policy.mjs';
 export { STAGE, activeRules, buildPipeline, isObserveOnly } from './pipeline.mjs';
+export {
+  CLI_NAMES,
+  STORE_ARTIFACT,
+  extractStoreTargets,
+  judgeStoreAccess,
+  judgeTokenInvocation,
+  parseCommandTargets,
+  storeDeniedCopy,
+  storeRootsFrom,
+  tokenDeniedCopy,
+} from './store-protection.mjs';
 export { evaluateProcessRules } from './process-rules.mjs';
 export { buildAuditRecord, createAuditBarrier, createFileSink, createMemorySink } from './audit.mjs';
 export {

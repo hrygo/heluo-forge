@@ -12,6 +12,7 @@
 import { IMPLEMENTED_RULES } from './config.mjs';
 
 export const STAGE = Object.freeze({
+  STORE: 'store-access',
   RESOLVE: 'resolve',
   IDENTITY: 'identity',
   UNKNOWN_ACTION: 'unknown-action',
@@ -34,7 +35,10 @@ export const STAGE_RULES = Object.freeze({
   [STAGE.CONFIRMATION]: Object.freeze(['confirmPush', 'confirmDopWrite']),
 });
 
+// IAM 存档/取票阶段不绑定开关：守卫随 `credentials-store-location` 服务出现而生效
+// （engineering 单装没有内置凭据后端，服务缺席即关闭）。
 const ORDER = Object.freeze([
+  STAGE.STORE,
   STAGE.RESOLVE,
   STAGE.IDENTITY,
   STAGE.HUMAN_RECORD,

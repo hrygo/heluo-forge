@@ -13,17 +13,14 @@ import {
 
 const WRITE = { action: 'gitee.issue.write', target: 'issue', category: 'dev-write' };
 
-test('the seven rule keys are all off by default; P3 implements all seven', () => {
+test('the seven rule keys are all off by default; every key is implemented', () => {
   assert.deepEqual([...RULE_KEYS].sort(), [
-    'confirmDopWrite', 'confirmPush', 'contentGate',
-    'denyHumanRecord', 'denyUnknownAction', 'enforceProcessRules', 'protectPaths',
-  ]);
-  assert.equal(RULE_KEYS.length, 7);
-  for (const key of RULE_KEYS) assert.equal(DEFAULT_RULES[key], false, `${key} defaults to off`);
-  assert.deepEqual([...IMPLEMENTED_RULES].sort(), [
     'confirmDopWrite', 'confirmPush', 'contentGate', 'denyHumanRecord',
     'denyUnknownAction', 'enforceProcessRules', 'protectPaths',
   ]);
+  assert.equal(RULE_KEYS.length, 7);
+  for (const key of RULE_KEYS) assert.equal(DEFAULT_RULES[key], false, `${key} defaults to off`);
+  assert.deepEqual([...IMPLEMENTED_RULES].sort(), [...RULE_KEYS].sort());
   assert.equal(DEFAULT_CONFIRMATION_TIMEOUT_MS, 120_000);
 });
 
@@ -205,4 +202,13 @@ test('已删除的开关在装载期点名迁移说明，而不是静默忽略�
     () => resolveConfig({ rules: { denyDelegatedWrites: true } }),
     (error) => error.code === 'POLICY_CONFIG_INVALID',
   );
+});
+
+test('IAM 存档/取票开关已取消：装载期点名迁移说明，避免配置静默失效', () => {
+  for (const key of ['denyIamStoreAccess', 'denyIamTokenAccess']) {
+    const { issues } = validateConfig({ rules: { [key]: true } });
+    assert.equal(issues.length, 1);
+    assert.match(issues[0], new RegExp(`rules\\.${key}: unknown rule switch`, 'u'));
+    assert.match(issues[0], /该开关已取消.*credentials-store-location/u);
+  }
 });
