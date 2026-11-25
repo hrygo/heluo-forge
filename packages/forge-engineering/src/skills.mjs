@@ -273,6 +273,54 @@ export function selectClauses({ pack, systems = [], budgetTokens }) {
   });
 }
 
+function normalizeSkillIdentifier(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9-]/gu, '-');
+}
+
+function skillNameOf(clause, namePrefix = 'enterprise') {
+  return normalizeSkillIdentifier(`${namePrefix}-${clause.id}`);
+}
+
+/**
+ * 为待注册硬条款计算归一化 Skill 名，并在任何宿主注册调用前检查名称唯一性。
+ * Provider 与直接注册共用本规划入口，避免两条路径对归一化或冲突诊断出现分叉。
+ *
+ * @param {{hard: readonly object[]}} selection
+ * @param {string} [namePrefix]
+ * @returns {readonly {clause: object, name: string}[]}
+ */
+function planEnterpriseSkillRegistrations(selection, namePrefix = 'enterprise') {
+  const byName = new Map();
+  const entries = [];
+  for (const clause of selection.hard) {
+    const name = skillNameOf(clause, namePrefix);
+    const group = byName.get(name);
+    if (group === undefined) byName.set(name, [clause]);
+    else group.push(clause);
+    entries.push(Object.freeze({ clause, name }));
+  }
+  const conflicts = [];
+  for (const [name, group] of byName) {
+    if (group.length > 1) {
+      conflicts.push(Object.freeze({
+        name,
+        clauses: Object.freeze(group.map((clause) => clause.id)),
+      }));
+    }
+  }
+  if (conflicts.length > 0) {
+    const summary = conflicts
+      .map((entry) => `"${entry.name}" (clauses: ${entry.clauses.map((id) => `"${id}"`).join(', ')})`)
+      .join('; ');
+    throw new EnterpriseSkillError(
+      `skill name conflict before registration: ${summary}`,
+      'ENTERPRISE_SKILL_NAME_CONFLICT',
+      Object.freeze({ conflicts: Object.freeze(conflicts) }),
+    );
+  }
+  return Object.freeze(entries);
+}
+
 /**
  * Register the selected clauses as readonly, user-invocable enterprise skills.
  * Registration performs no writes and never claims compliance.
@@ -280,18 +328,18 @@ export function selectClauses({ pack, systems = [], budgetTokens }) {
  * @param {{skills: object}} ctx host context providing `skills`
  * @param {{selection: object, namePrefix?: string, invocation?: object, root?: string}} input
  */
-export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterprise', invocation, root }) {
+export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterprise', invocation, root } = {}) {
   const skills = ctx?.skills;
   if (skills === undefined || typeof skills.register !== 'function') {
     throw new EnterpriseSkillError('host has no skills service to register enterprise skills on', 'ENTERPRISE_HOST_UNAVAILABLE');
   }
+  const entries = planEnterpriseSkillRegistrations(selection, namePrefix);
   const policy = Object.freeze({
     modelInvocable: invocation?.modelInvocable ?? false,
     userInvocable: invocation?.userInvocable ?? true,
   });
   const registered = [];
-  for (const clause of selection.hard) {
-    const name = `${namePrefix}-${clause.id}`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
+  for (const { clause, name } of entries) {
     const dispose = skills.register({
       name,
       description: clause.summary.length > 0 ? clause.summary : clause.title,
@@ -336,19 +384,19 @@ export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix
   if (skills === undefined || typeof skills.registerProvider !== 'function') {
     throw new EnterpriseSkillError('host has no skills provider entry for enterprise skills', 'ENTERPRISE_PROVIDER_UNAVAILABLE');
   }
+  const entries = planEnterpriseSkillRegistrations(selection, namePrefix);
   const policy = Object.freeze({
     modelInvocable: invocation?.modelInvocable ?? false,
     userInvocable: invocation?.userInvocable ?? true,
   });
-  const providerName = `${namePrefix}-clauses`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
-  const skillName = (clause) => `${namePrefix}-${clause.id}`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
-  const byName = new Map(selection.hard.map((clause) => [skillName(clause), clause]));
-  const byClauseId = new Map(selection.hard.map((clause) => [clause.id, clause]));
+  const providerName = normalizeSkillIdentifier(`${namePrefix}-clauses`);
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  const byClauseId = new Map(entries.map((entry) => [entry.clause.id, entry]));
   const hasRoot = typeof root === 'string' && root.length > 0;
   // 发现面与正文面共用同一个候选构造：宿主拿 `list()` 的候选去 `get()`，
   // 两处字段一旦分叉，`get(候选)` 就会按另一个名字查不到正文（r12 的 D-2）。
-  const candidateFor = (clause) => ({
-    name: skillName(clause),
+  const candidateFor = ({ clause, name }) => ({
+    name,
     description: clause.summary.length > 0 ? clause.summary : clause.title,
     whenToUse: `当任务涉及 ${clause.appliesTo.map((target) => target.system).join('、') || '企业规范'} 时按需加载；由用户显式触发`,
     provider: providerName,
@@ -364,26 +412,39 @@ export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix
       : {}),
     metadata: { owner: clause.owner, level: clause.level, references: clause.references },
   });
-  const clauseOf = (request) => {
+  const entryOf = (request) => {
     // 宿主 `get()` 交来的是 **candidate**；历史调用方直接传 name 字符串。两种都要认，
     // 未命中一律返回 undefined，交给宿主报 `SKILL_NOT_FOUND`，不抛自己的错误类型。
-    const key = typeof request === 'string' ? request : request?.locator?.clause ?? request?.name;
-    if (typeof key !== 'string' || key.length === 0) return undefined;
-    return byName.get(key) ?? byClauseId.get(key);
+    if (typeof request === 'string') {
+      if (request.length === 0) return undefined;
+      return byName.get(request) ?? byClauseId.get(request);
+    }
+    const clauseId = request?.locator?.clause;
+    if (typeof clauseId === 'string' && clauseId.length > 0) {
+      const matched = byClauseId.get(clauseId);
+      if (matched === undefined) return undefined;
+      if (typeof request.name === 'string' && request.name.length > 0 && request.name !== matched.name) {
+        return undefined;
+      }
+      return matched;
+    }
+    const name = request?.name;
+    if (typeof name === 'string' && name.length > 0) return byName.get(name);
+    return undefined;
   };
   const dispose = skills.registerProvider(() => ({
     name: providerName,
-    list: async () => [...byName.values()].map(candidateFor),
+    list: async () => entries.map(candidateFor),
     get: async (request) => {
-      const clause = clauseOf(request);
-      if (clause === undefined) return undefined;
-      return { ...candidateFor(clause), content: clause.body };
+      const entry = entryOf(request);
+      if (entry === undefined) return undefined;
+      return { ...candidateFor(entry), content: entry.clause.body };
     },
   }));
   return Object.freeze({
     invocation: policy,
     provider: providerName,
-    registered: Object.freeze([...byName.keys()].map((name, index) => ({ id: selection.hard[index].id, name }))),
+    registered: Object.freeze(entries.map(({ clause, name }) => ({ id: clause.id, name }))),
     dispose: () => dispose?.(),
   });
 }
