@@ -277,9 +277,11 @@ test('production dispatchEnabled mounts @ source with disambiguated homonymous l
     const rows = await registeredSpec.query('', { sessionId: 'sess-1' });
     assert.equal(rows.length, 2);
     assert.equal(rows[0].label, '经营分析专家 · 华东区');
-    assert.equal(rows[1].label, '经营分析专家 (exp-fin-2)', 'homonymous experts without disambiguation must fall back to stable expertId');
+    assert.equal(rows[1].label, '经营分析专家 · 集团汇总', 'homonymous experts without disambiguation prefer human-readable responsibility over internal expertId');
 
-    // Valid pick -> prepareSubmit returns selectionToken
+    // Valid pick -> prepareSubmit returns selectionToken and buffers draft for SSE recovery
+    const recoveredEvents = [];
+    registeredSpec.onDraftRecovery((evt) => recoveredEvents.push(evt));
     const ok = await registeredSpec.prepareSubmit({
       picked: rows[1],
       sessionId: 'sess-1',
@@ -293,6 +295,19 @@ test('production dispatchEnabled mounts @ source with disambiguated homonymous l
     assert.equal(postBodies.length, 1);
     assert.equal(postBodies[0].expertId, 'exp-fin-2');
     assert.equal(postBodies[0].draftVersion, 4);
+
+    // SSE turn-finalized with preserveDraft: true restores buffered draft & surfaces notice
+    eventSources[0].emit({
+      type: 'turn-finalized',
+      sessionId: 'sess-1',
+      expertId: 'exp-fin-2',
+      status: 'model_did_not_delegate',
+      preserveDraft: true,
+      notice: '主助手未调用所选专家，已保留草稿。',
+    });
+    assert.equal(recoveredEvents.length, 1);
+    assert.equal(recoveredEvents[0].draft.taskText, 'Summarize group revenue');
+    assert.equal(recoveredEvents[0].notice, '主助手未调用所选专家，已保留草稿。');
 
     // Server revocation/conflict -> draft preserved with clear notice
     nextSelectionResponse = {

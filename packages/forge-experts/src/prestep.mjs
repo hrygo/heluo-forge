@@ -3,13 +3,15 @@
  *
  * Independent axis (P2): zero cross-axis imports. Binds a verified single-use
  * selectionToken to an active agent turn before model execution, blocks forged or
- * swapped expert delegations in `beforeToolCall`, discards unused tokens and preserves
- * the user's draft when the model fails to delegate or the binding fails.
+ * swapped expert delegations in `beforeToolCall`, expires stale turns via TTL without
+ * evicting active in-flight bindings, and discards unused tokens while preserving the
+ * user's draft when the model fails to delegate or the binding fails.
  */
 import { randomBytes } from 'node:crypto';
 import { ExpertsError } from './errors.mjs';
 
 const DEFAULT_MAX_ACTIVE_TURNS = 128;
+const DEFAULT_TURN_TTL_MS = 5 * 60 * 1000;
 const MODEL_DID_NOT_DELEGATE_NOTICE =
   '主助手未调用所选专家，未发起远端任务；已保留您的草稿，可重新确认后发送。';
 
@@ -35,6 +37,9 @@ function snapshotDraft({ taskText, draftVersion, reuseRefs }) {
  *   resolveScope: () => Promise<object>,
  *   inspectSelection: (params: object) => object,
  *   discardSelection?: (selectionToken: string) => void,
+ *   onTurnFinalized?: (event: object) => void,
+ *   now?: () => number,
+ *   turnTtlMs?: number,
  *   maxActiveTurns?: number,
  * }} ports
  */
@@ -43,22 +48,24 @@ export function createPreStepGuard(ports) {
     throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'prestep guard requires scope and selection inspection ports');
   }
 
+  const now = typeof ports.now === 'function' ? ports.now : () => Date.now();
+  const turnTtlMs = Number.isInteger(ports.turnTtlMs) && ports.turnTtlMs > 0
+    ? ports.turnTtlMs
+    : DEFAULT_TURN_TTL_MS;
   const maxActiveTurns = Number.isInteger(ports.maxActiveTurns) && ports.maxActiveTurns > 0
     ? ports.maxActiveTurns
     : DEFAULT_MAX_ACTIVE_TURNS;
 
   const activeTurns = new Map();
 
-  function storeTurn(turnId, state) {
-    activeTurns.delete(turnId);
-    activeTurns.set(turnId, state);
-    while (activeTurns.size > maxActiveTurns) {
-      const oldest = activeTurns.keys().next().value;
-      if (oldest === undefined) break;
-      const evicted = activeTurns.get(oldest);
-      activeTurns.delete(oldest);
-      if (evicted?.selectionToken) {
-        try { ports.discardSelection?.(evicted.selectionToken); } catch { /* best effort */ }
+  function pruneExpiredTurns() {
+    const at = now();
+    for (const [id, entry] of activeTurns.entries()) {
+      if (at >= entry.expiresAt) {
+        activeTurns.delete(id);
+        if (entry?.selectionToken) {
+          try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
+        }
       }
     }
   }
@@ -79,6 +86,10 @@ export function createPreStepGuard(ports) {
    * - A submit carrying a `selectionToken` is verified against the active scope, session,
    *   `draftVersion`, and `taskText`/`reuseRefs` digest. Any mismatch fails closed and
    *   preserves the user's draft so nothing is silently lost or re-routed.
+   *
+   * Lifecycle contract: once `prepareTurn` returns `{ allowed: true, expertBound: true, turnId }`,
+   * callers MUST invoke `finalizeTurn({ turnId, delegatedTaskId, error })` when the turn ends
+   * (success or failure); as a safety net, unfinalized turns expire automatically after `turnTtlMs`.
    */
   async function prepareTurn(rawInput) {
     if (!isPlainObject(rawInput)) {
@@ -110,6 +121,18 @@ export function createPreStepGuard(ports) {
         allowed: false,
         expertBound: false,
         code: 'EXPERT_SELECTION_INVALID',
+        preserveDraft: true,
+        draft,
+      });
+    }
+
+    // Reclaim expired turns first; never evict a still-active in-flight turn by capacity.
+    pruneExpiredTurns();
+    if (activeTurns.size >= maxActiveTurns) {
+      return Object.freeze({
+        allowed: false,
+        expertBound: false,
+        code: 'EXPERT_RATE_LIMITED',
         preserveDraft: true,
         draft,
       });
@@ -152,7 +175,8 @@ export function createPreStepGuard(ports) {
     }
 
     const turnId = randomBytes(16).toString('hex');
-    storeTurn(turnId, {
+    const createdAt = now();
+    activeTurns.set(turnId, {
       turnId,
       selectionToken: binding.selectionToken,
       expertId: binding.expertId,
@@ -161,6 +185,8 @@ export function createPreStepGuard(ports) {
       draft,
       delegateAttempted: false,
       delegatedTaskId: null,
+      createdAt,
+      expiresAt: createdAt + turnTtlMs,
     });
 
     return Object.freeze({
@@ -182,12 +208,13 @@ export function createPreStepGuard(ports) {
     if (toolName !== 'forge_experts.delegate') {
       return Object.freeze({ allowed: true });
     }
+    pruneExpiredTurns();
     if (!isNonEmptyString(turnId)) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Expert delegation requires a bound user @-mention turn');
     }
     const turn = activeTurns.get(turnId.trim());
     if (!turn) {
-      throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Active expert turn binding not found or already finalized');
+      throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Active expert turn binding not found, expired, or already finalized');
     }
     if (!isPlainObject(toolInput) || toolInput.selectionToken !== turn.selectionToken) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Delegate tool call selectionToken does not match bound user selection');
@@ -210,6 +237,7 @@ export function createPreStepGuard(ports) {
    *   and returns `preserveDraft: true` with the original draft and an explicit notice (#245/#247).
    */
   function finalizeTurn({ turnId, delegatedTaskId = null, error = null } = {}) {
+    pruneExpiredTurns();
     if (!isNonEmptyString(turnId)) {
       return Object.freeze({ status: 'unbound', expertParticipated: false, completed: false, preserveDraft: false });
     }
@@ -228,6 +256,7 @@ export function createPreStepGuard(ports) {
         completed: false,
         taskId: turn.delegatedTaskId,
         expertId: turn.expertId,
+        sessionId: turn.sessionId,
         preserveDraft: false,
       });
     }
@@ -235,28 +264,41 @@ export function createPreStepGuard(ports) {
     // Ensure unused single-use selectionToken cannot be replayed after a failed or skipped turn.
     try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
 
-    if (error) {
-      const code = error instanceof ExpertsError ? error.code : 'EXPERT_INTERNAL_ERROR';
-      return Object.freeze({
+    const outcome = error
+      ? Object.freeze({
         status: 'failed',
-        code,
+        code: error instanceof ExpertsError ? error.code : 'EXPERT_INTERNAL_ERROR',
         expertParticipated: false,
         completed: false,
         expertId: turn.expertId,
+        sessionId: turn.sessionId,
         preserveDraft: true,
         draft: turn.draft,
+      })
+      : Object.freeze({
+        status: 'model_did_not_delegate',
+        expertParticipated: false,
+        completed: false,
+        expertId: turn.expertId,
+        sessionId: turn.sessionId,
+        preserveDraft: true,
+        draft: turn.draft,
+        notice: MODEL_DID_NOT_DELEGATE_NOTICE,
       });
-    }
 
-    return Object.freeze({
-      status: 'model_did_not_delegate',
-      expertParticipated: false,
-      completed: false,
-      expertId: turn.expertId,
-      preserveDraft: true,
-      draft: turn.draft,
-      notice: MODEL_DID_NOT_DELEGATE_NOTICE,
-    });
+    // Notify host event stream with minimal non-sensitive metadata (never broadcast raw draft text).
+    try {
+      ports.onTurnFinalized?.({
+        sessionId: turn.sessionId,
+        expertId: turn.expertId,
+        status: outcome.status,
+        ...(outcome.code ? { code: outcome.code } : {}),
+        preserveDraft: true,
+        ...(outcome.notice ? { notice: outcome.notice } : {}),
+      });
+    } catch { /* best effort */ }
+
+    return outcome;
   }
 
   return Object.freeze({
@@ -264,6 +306,9 @@ export function createPreStepGuard(ports) {
     beforeToolCall,
     finalizeTurn,
     clear,
-    activeTurnCount: () => activeTurns.size,
+    activeTurnCount: () => {
+      pruneExpiredTurns();
+      return activeTurns.size;
+    },
   });
 }
