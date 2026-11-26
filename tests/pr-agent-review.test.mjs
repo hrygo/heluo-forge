@@ -328,6 +328,37 @@ test('automatic summaries use low effort, smaller budgets and skip review-only c
   assert.match(workflow, /^ {6}PR_DESCRIPTION__MAX_AI_CALLS: "2"$/mu);
 });
 
+test('manual describe commands select only the summary action', async () => {
+  const actions = ['Run PR-Agent summary', 'Run PR-Agent'];
+  const canRun = actions.map((name) => {
+    const condition = /^ {8}if: \$\{\{ (.+) \}\}$/mu.exec(stepDefinition(name))?.[1];
+    assert.ok(condition, `missing workflow condition for ${name}`);
+    return new Function('github', 'steps', 'cancelled', `return Boolean(${condition});`);
+  });
+  const cases = [
+    ['pull_request', '', [true, true]],
+    ['issue_comment', '/describe', [true, false]],
+    ['issue_comment', '/describe\u00a0', [true, false]],
+    ['issue_comment', '  /DESCRIBE_PR\n--pr_description.enable_help_text=true', [true, false]],
+    ['issue_comment', '/review --pr_reviewer.inline_key_issues=true', [false, true]],
+    ['issue_comment', '/ask what does /describe do?', [false, true]],
+    ['issue_comment', '/describe_extra', [false, true]],
+  ];
+  await withGitHub(async ({ env }) => {
+    for (const [event, body, expected] of cases) {
+      const revision = await capture({
+        ...env,
+        EVENT_NAME: event,
+        EVENT_HEAD: event === 'pull_request' ? head : '',
+        COMMENT_BODY: body,
+      });
+      const github = { event_name: event, event: { comment: { body } } };
+      const steps = { revision: { outcome: 'success', outputs: revision } };
+      assert.deepEqual(canRun.map((matches) => matches(github, steps, () => false)), expected, body || event);
+    }
+  });
+});
+
 test('large reviews use bounded chunking and show coverage gaps', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   const action = stepDefinition('Run PR-Agent');
