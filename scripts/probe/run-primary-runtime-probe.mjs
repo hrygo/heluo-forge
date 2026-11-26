@@ -15,8 +15,12 @@
  *   node scripts/probe/run-primary-runtime-probe.mjs --resources <暂存好的 resources 目录> \
  *     [--electron <应用二进制：以 Node 模式运行 dsh>] [--bundle <heluo-forge-enterprise-*.tgz>] \
  *     [--keep] [--out <path>]
+ *   node scripts/probe/run-primary-runtime-probe.mjs --app <打出来的 .app> \
+ *     [--bundle <heluo-forge-enterprise-*.tgz>] [--keep] [--out <path>]
  *   resources 由 scripts/stage-desktop-payload.mjs 与 scripts/stage-primary-runtime.mjs 暂存，
- *   其中已有 `dsh/node_modules` 与 `primary-runtime/runtime.json`。
+ *   其中已有 `dsh/node_modules` 与 `primary-runtime/runtime.json`。给出 `--app` 时以打出来的应用包为准：
+ *   dsh 闭包与载荷取自包内，并用应用自己的 Electron（Node 模式）与 app.asar 里的壳入口运行，
+ *   与桌面壳的启动方式一致；目前只认 macOS 的 .app。
  * 退出码：0 全部通过；1 有失败项；2 前置条件不具备。
  *
  * 不外联：不接真实模型或网关；web 服务器只绑 127.0.0.1 上的空闲端口。
@@ -56,8 +60,8 @@ function rowsOf(text, ids) {
 }
 
 function parseArguments(argv) {
-  const options = { resources: undefined, electron: undefined, bundle: undefined, keep: false, out: undefined };
-  const valued = new Map([['--resources', 'resources'], ['--electron', 'electron'], ['--bundle', 'bundle'], ['--out', 'out']]);
+  const options = { resources: undefined, app: undefined, electron: undefined, bundle: undefined, keep: false, out: undefined };
+  const valued = new Map([['--resources', 'resources'], ['--app', 'app'], ['--electron', 'electron'], ['--bundle', 'bundle'], ['--out', 'out']]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--keep') {
@@ -91,16 +95,43 @@ const fileCount = (directory) => readdirSync(directory, { withFileTypes: true })
 const textOf = (hit) => [hit?.text, hit?.error?.message].filter((part) => typeof part === 'string').join(' ');
 
 const options = parseArguments(process.argv.slice(2));
-if (typeof options.resources !== 'string') {
-  console.error('probe: 需要 --resources <暂存好的 resources 目录>');
+if (options.app !== undefined && options.electron !== undefined) {
+  console.error('probe: --app 与 --electron 不能同用：应用包用自己的 Electron');
   process.exit(2);
 }
-const resources = resolve(options.resources);
-const dsh = join(resources, ...DSH_ENTRY_PARTS);
+if (options.app === undefined && typeof options.resources !== 'string') {
+  console.error('probe: 需要 --resources <暂存好的 resources 目录> 或 --app <打出来的 .app>');
+  process.exit(2);
+}
+
+/** 以打出来的应用包为准时的各个位置：可执行文件名取自 Info.plist。 */
+function packagedApp(appPath) {
+  if (process.platform !== 'darwin') {
+    console.error('probe: --app 目前只支持 macOS 的 .app');
+    process.exit(2);
+  }
+  const contents = join(resolve(appPath), 'Contents');
+  const plist = join(contents, 'Info.plist');
+  if (!existsSync(plist)) {
+    console.error(`probe: 不是 macOS 的 .app（没有 ${plist}）`);
+    process.exit(2);
+  }
+  const executable = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/u.exec(readFileSync(plist, 'utf8'))?.[1];
+  if (executable === undefined) {
+    console.error('probe: Info.plist 里没有 CFBundleExecutable');
+    process.exit(2);
+  }
+  return { command: join(contents, 'MacOS', executable), resources: join(contents, 'Resources'), archive: join(contents, 'Resources', 'app.asar') };
+}
+
+const packaged = options.app === undefined ? undefined : packagedApp(options.app);
+const resources = packaged?.resources ?? resolve(options.resources);
+// 在应用包里，壳的入口在 app.asar 之内；普通 Node 进程看不到归档内部，所以只核对归档本身在不在。
+const dsh = packaged === undefined ? join(resources, ...DSH_ENTRY_PARTS) : join(resources, 'app.asar', 'src', 'embedded-cli.mjs');
 const payload = join(resources, PRIMARY_RUNTIME_DIR);
-const command = options.electron ?? process.execPath;
+const command = packaged?.command ?? options.electron ?? process.execPath;
 const missing = [
-  [dsh, 'dsh 入口（先跑 scripts/stage-desktop-payload.mjs）'],
+  ...(packaged === undefined ? [[dsh, 'dsh 入口（先跑 scripts/stage-desktop-payload.mjs）']] : [[packaged.archive, '应用包里的 app.asar']]),
   [join(payload, 'runtime.json'), '内置运行时载荷（先跑 scripts/stage-primary-runtime.mjs）'],
   [enterprisePatch, '通用底座补丁层'],
   ...(!existsSync(command) ? [[command, '运行 dsh 的可执行文件']] : []),
@@ -226,6 +257,11 @@ async function scenario({ unlocked, label }) {
 }
 
 const stagedFiles = fileCount(payload);
+if (packaged !== undefined) {
+  // 壳以应用二进制作 Node 运行一切；它自己得先能这样启动。
+  const asNode = spawnSync(command, ['-p', 'process.version'], { encoding: 'utf8', env: { ...process.env, ...nodeMode } });
+  record('应用二进制可作为 Node 运行', asNode.status === 0 && /^v\d+\.\d+\.\d+$/u.test(asNode.stdout?.trim() ?? ''), `${asNode.status} ${(asNode.stderr ?? '').slice(-200)}`.trim());
+}
 await scenario({ unlocked: true, label: 'unlocked' });
 await scenario({ unlocked: false, label: 'baseline' });
 record('暂存的载荷没有被写入，也没有变大', fileCount(payload) === stagedFiles, `${stagedFiles} -> ${fileCount(payload)}`);
@@ -234,7 +270,7 @@ const failed = checks.filter((check) => !check.ok).length;
 const summary = {
   probe: 'forge-primary-runtime-probe',
   mode: options.bundle === undefined ? 'patch' : 'bundle',
-  runner: options.electron === undefined ? 'node' : 'electron',
+  runner: packaged !== undefined ? 'packaged-app' : options.electron === undefined ? 'node' : 'electron',
   env: { node: process.version, platform: `${process.platform}-${process.arch}` },
   checks,
   passed: checks.length - failed,

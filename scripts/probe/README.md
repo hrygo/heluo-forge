@@ -334,16 +334,22 @@ node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources
 node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources --electron <应用二进制>
 node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources \
   --bundle <heluo-forge-enterprise-*.tgz> --keep --out /tmp/primary-runtime-probe.json
+
+# 以打出来的应用包为准：包内的 dsh 闭包与载荷，应用自己的 Electron 与 app.asar 里的壳入口（目前只认 macOS 的 .app）。
+node scripts/probe/run-primary-runtime-probe.mjs --app <staged 以外打出来的 .app> \
+  --bundle <heluo-forge-enterprise-*.tgz>
 ```
 
 解锁的两种交付方式都要成立：默认由 `--patch` 覆盖层携带两行（原文取自
 `packages/forge-enterprise/cordis.patch.yml`）；给出 `--bundle` 时改为安装该企业底座包，由它的补丁层
-交付这两行。`--electron` 让 dsh 以 Electron 的 Node 模式运行，与桌面壳一致。退出码：0 全部通过；
+交付这两行。`--electron` 让 dsh 以 Electron 的 Node 模式运行，与桌面壳一致。给出 `--app` 时以打出来的应用包为准，
+与桌面壳的启动方式一致。退出码：0 全部通过；
 1 有失败项；2 前置条件不具备。
 
 | 断言 | 含义 |
 |---|---|
 | `探针在宿主内运行` | 探针插件在真实 `web` profile 进程内跑完并写出结果 |
+| `应用二进制可作为 Node 运行`（仅 `--app`） | 应用自己的 Electron 能以 Node 模式启动，壳的入口与 dsh 都靠它 |
 | `建出带默认 preset 的真实 agent 会话` | 按 web 会话控制器的方式组装：解析默认 preset，在 agent 的 setup 里挂载 |
 | `Loader 对这两行没有告警` | 两行按 id 命中，没有 `not found` 或 `name` 不匹配 |
 | `工具在宿主层注册`、`工具对 agent 可见` | `ctx.tools.get` 在宿主层与 agent 作用域都取得到 |
@@ -356,5 +362,5 @@ node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources 
 | `暂存的载荷没有被写入，也没有变大` | 工具运行期间暂存目录的文件数不变 |
 
 2026-11-26 实测（macOS arm64，DSH 0.2.2-rc.5 的闭包与 mac-arm64 载荷）：`--patch` 配 Electron 44.7.0
-运行器 23/23；企业底座包配 Node 24.21.0 运行器 27/27；单次约 60 秒。
+运行器 23/23；企业底座包配 Node 24.21.0 运行器 27/27；`--app` 配企业底座包 28/28；单次约 60 秒。
 记录见 [docs/design/verification/desktop-primary-runtime.md](../../docs/design/verification/desktop-primary-runtime.md)。
