@@ -4,11 +4,11 @@
 
 ## 当前实现
 
-本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间和固定凭据引用；账号密码写入包内 `private/nacos-credentials.json`，Host 运行时读取，不写回配置对象，安装后无需填写连接配置。中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。本机 DSH 0.2.2-rc.2 三包离线安装、装配与 manager HTTP 启动通过；企业权限、完整三包装卸及目标平台仍待验。
+本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间和固定凭据引用；账号密码写入包内 `private/nacos-credentials.json`，Host 运行时读取，不写回配置对象，安装后无需填写连接配置。中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。独立预置 TGZ 在目标 DSH 0.2.2-rc.5 的隔离 profile 装载与诊断脱敏通过；三包离线装配的历史实测宿主为 0.2.2-rc.2；企业权限、完整三包装卸及目标平台仍待验。
 
 ## 2026-11-26 PR 465 冲突与宿主基线集成
 
-分支以本地 rebase 集成主线 `b4e393a`，保留主线 `DSH_PRIMARY_RUNTIME` 两行条件装配、Windows bin 模式归一化与发布文件名处理；保留 enterprise 四插件、engineering 五行与独立 Skill Manager 一行的分层，按 id 合并为九行。Skill Manager 的运行时代码、凭据隔离及自身补丁与集成前逐字一致。24 个分支提交由 `post-rewrite` 重新扫描并签名。开发 SDK 与安装下限同步根基线 `0.2.2-rc.5`，锁文件随依赖重建；构建后 26 个生成文件未变化。
+分支以本地 rebase 集成主线 `b4e393a`，保留主线 `DSH_PRIMARY_RUNTIME` 两行条件装配、Windows bin 模式归一化与发布文件名处理；保留 enterprise 四插件、engineering 五行与独立 Skill Manager 一行的分层，按 id 合并为九行。Skill Manager 的运行时代码、凭据隔离及自身补丁与集成前逐字一致。24 个分支提交由 `post-rewrite` 重新扫描并签名。随后集成主线 `cb8c4dd`（新增的 PR 审查配置、CI 分类白名单与桌面载荷预算调整），25 个分支提交再次由钩子扫描、签名，未引入 merge commit。开发 SDK 与安装下限同步根基线 `0.2.2-rc.5`，锁文件随依赖重建；构建后 26 个生成文件未变化。
 
 集成检查发现打包脚本重复声明 tarballs，既有制包测试因 SyntaxError 失败；删除重复声明后，脚本与主线一致、原入口可执行。独立发布工具说明新增的 README 链接不在归档内，既有闭包断言失败；改为源码位置说明后同一断言通过，不扩大发布工具内容。企业设计中的策略目录口径统一为补丁实际登记的六条受控写动作，运行时两行与品牌四插件同时保留。根 README 未增加内部开发内容。
 
@@ -21,6 +21,8 @@
 | `verify-runtime.mjs <installed-dsh-dir>`（包内脚本） | 官方目标 DSH 及四个 dsh SDK 精确版本核验通过；真实 Scope/SkillRegistry/skill.execute 禁用与恢复回归通过，约 2.8 秒 |
 | `verify-preset-host.mjs <installed-dsh-cli.js>`（包内脚本） | 3 项通过，约 39.8 秒；最终预置 TGZ、新 HOME/profile/空缓存、合成账号登录成功；安装 stdout/stderr、启动前后配置诊断、HTTP/Host 输出及排障分类无凭据原值；删除凭据文件后拒绝缓存远端访问、本地管理可用 |
 | enterprise 补丁、演练断言、独立包、员工包边界、IAM 同 Host、公共发布及组合构建/校验定向八文件 | 初轮 79 项中 73 通过、4 失败、2 跳过，约 92.0 秒；其中说明链接失败已修复，同一断言重跑通过，约 1.0 秒。另三项为 Windows 文件 symlink EPERM 与 POSIX mkdir 缺失；在 `cb8c4dd` 隔离源码归档以相同工具链逐项复现 3 项同名失败，约 3.5 秒 |
+| 最新 main 集成后：enterprise 补丁、演练断言、独立 TGZ、同 Host IAM 与员工包边界五文件 | 21 项中 19 通过、2 项完整 sdk/web 演练跳过，无失败，约 28.6 秒 |
+| 最新 main 的 CI 分类、PR 审查配置与桌面载荷暂存三文件；与 `cb8c4dd` 隔离副本逐项对照 | 两侧均为 164 项中 142 通过、21 失败、1 跳过，约 175.9 / 175.8 秒；失败名称逐项一致，涉及 Windows 不可移植路径及缺少 POSIX 工具；相关源码与 main 逐字一致 |
 | `node scripts/check-docs.mjs`、`check-repo.mjs`、`dsh-version.mjs check` | 通过，合计约 7 秒；提交前重新核验 |
 | 根目录 `pnpm check`（b4e393a 集成后） | 静态检查与全部 12 个产品归档审计通过（618 文件）；全库 5450 项中 5280 通过、106 失败、64 跳过，整体约 391.7 秒、测试约 346.4 秒。失败涉及未修改的 IAM 锁等待、品牌/研发用例及 Windows 权限、路径和缺少 POSIX 工具等；仅对上行三项做了主线对照，不推断其余全部为既有失败，不记全库通过 |
 
