@@ -8,7 +8,7 @@ run-name: '洛神 · PR #${{ github.event.pull_request.number || github.event.is
 #
 # One-time setup per repository:
 #   1. Settings > Secrets and variables > Actions > New repository secret:
-#      `OPENCODE_GO_API_KEY` = the OpenCode Go subscription key (opencode.ai).
+#      `OPENAI_API_KEY` = an OpenAI project key with Chat Completions access.
 #   2. Merge this workflow and `.pr_agent.toml` to the PR's base branch. The
 #      Action loads repository settings from that branch on subsequent runs.
 #
@@ -76,19 +76,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      # OpenCode Go gateway. These host-only settings belong in the workflow.
-      OPENAI__API_BASE: "https://opencode.ai/inference/go/openai/v1"
-      # Go requires a session header and a client-identifying User-Agent.
-      LITELLM__EXTRA_HEADERS: '{"x-opencode-session":"pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}","User-Agent":"pr-agent/0.50.0"}'
-      # Mirror the model chain and budget in .pr_agent.toml for base branches
-      # that do not have the file. The pinned runner also accepts a comma-separated
-      # fallback list when Dynaconf auto-casting is disabled.
-      CONFIG__MODEL: "openai/muse-spark-1.3-contributor"
-      CONFIG__FALLBACK_MODELS: "openai/deepseek-v4.1-flash"
-      CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"
+      # Native OpenAI endpoint with the runner's API key preflight.
+      # Mirror the model and budget so runs also work with older base settings.
+      # v0.50.0's bundled model table predates GPT-6.2.
+      CONFIG__MODEL: "openai/gpt-6.2-sol"
+      CONFIG__FALLBACK_MODELS: '[]'
+      CONFIG__CUSTOM_MODEL_MAX_TOKENS: "922000"
+      CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS: "gpt-6.2-sol"
+      CONFIG__NO_TEMPERATURE_MODELS: "gpt-6.2-sol"
+      CONFIG__REASONING_EFFORT: "medium"
       CONFIG__MAX_MODEL_TOKENS: "64000"
+      CONFIG__MAX_OUTPUT_TOKENS: "12000"
+      CONFIG__MAX_COMMITS_TOKENS: "200"
       CONFIG__AI_TIMEOUT: "180"
+      CONFIG__NUM_RETRIES: "1"
       CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"
+      CONFIG__OUTPUT_RUN_DETAILS: "true"
       # A partial review can publish successful chunks before propagating exhaustion.
       CONFIG__PROPAGATE_TOOL_ERRORS: "true"
       GITHUB_ACTION_CONFIG__FAIL_ON_TOOL_ERRORS: "true"
@@ -102,6 +105,7 @@ jobs:
       PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"
       PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT_PERSISTENT: "true"
       PR_DESCRIPTION__ENABLE_PR_DIAGRAM: "true"
+      PR_DESCRIPTION__MAX_AI_CALLS: "2"
     steps:
       - name: Capture PR revision
         id: revision
@@ -122,6 +126,10 @@ jobs:
           const response = await githubGet(`${api}/pulls/${PR_NUMBER}`);
           if (!response.ok) throw new Error(`Cannot read PR revision (HTTP ${response.status})`);
           const pr = await response.json();
+          if (pr.head?.repo?.full_name !== GITHUB_REPOSITORY) {
+            console.log('Skipping a fork or deleted head repository before running PR-Agent.');
+            process.exit(0);
+          }
           const head = pr.head?.sha;
           const baseRef = pr.base?.ref;
           if (typeof head !== 'string' || !/^[a-f0-9]{40}$/.test(head) ||
@@ -178,7 +186,13 @@ jobs:
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: &pr_agent_summary_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI__KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENAI__KEY: ${{ secrets.OPENAI_API_KEY }}
+          # The summary uses the diff and PR description. Review gets the repository policy.
+          CONFIG__REASONING_EFFORT: "low"
+          CONFIG__MAX_MODEL_TOKENS: "32000"
+          CONFIG__MAX_OUTPUT_TOKENS: "6000"
+          CONFIG__MAX_COMMITS_TOKENS: "-1"
+          CONFIG__REPO_CONTEXT_FILES: '[]'
           GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "true"
           GITHUB_ACTION_CONFIG__AUTO_REVIEW: "false"
           GITHUB_ACTION_CONFIG__PUSH_COMMANDS: "/describe"
@@ -190,12 +204,13 @@ jobs:
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: &pr_agent_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI__KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENAI__KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "false"
           GITHUB_ACTION_CONFIG__AUTO_REVIEW: "true"
           GITHUB_ACTION_CONFIG__PUSH_COMMANDS: "/review"
           PR_REVIEWER__REQUIRE_MERGE_RECOMMENDATION: "true"
           PR_REVIEWER__REQUIRE_SECURITY_REVIEW: "true"
+          PR_REVIEWER__REQUIRE_PRIORITY_FILES: "true"
           PR_REVIEWER__REQUIRE_TICKET_ANALYSIS_REVIEW: "false"
           PR_REVIEWER__PERSISTENT_COMMENT: "true"
           PR_REVIEWER__PERSISTENT_FINDING_STATE: "false"
