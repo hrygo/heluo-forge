@@ -300,7 +300,7 @@
 | CONF-IAM-20 | 多因素认证（MFA）强制策略与 Step-up | 支持（许可待确认） | 支持 | — | — | 厂商 6.0.3/6.3 支持按应用、用户组/组织/岗位/属性、风险等级强制 MFA；MFA 为独立模块，许可待商务确认。OIDC acr_values/max_age 协议层 step-up 文档未确认；内部 18 项回函未覆盖 | 厂商回函 / 待商务确认 |
 | CONF-IAM-21 | 登录与授权审计事件、保留期与 SIEM 对接 | 支持 | 支持 | — | — | 厂商 6.0.3/6.3 支持登录/授权/会话审计，输出控制台、Syslog、REST API、数据库视图、SNMP、文件导出；字段清单、保留期默认/上限、SIEM 格式待对接文档。内部 18 项回函未覆盖 | 厂商回函 |
 
-> **2026-10-28 答复与本表的关系**：本表依据 2026-10-26 内部校验回函，其中 CONF-IAM-06（多端策略）、CONF-IAM-08（固定端口精确匹配）、CONF-IAM-10（UserInfo 工号／姓名字段）标为冲突或未确认。2026-10-28 的书面答复另给结论，逐题原文见 §4.5.8；两者不一致处以 §4.5.8 记明的答复原文为准，未联调前不改契约或实现。
+> **2026-10-28 答复与本表的关系**：本表依据 2026-10-26 内部校验回函，其中 CONF-IAM-06（多端策略）、CONF-IAM-08（固定端口精确匹配）、CONF-IAM-10（UserInfo 工号／姓名字段）标为冲突或未确认。2026-10-28 的书面答复另给结论，逐题原文见 §4.5.8；两者不一致处以 §4.5.8 记明的答复原文为准，未联调前不改契约或实现。**CONF-IAM-10 的字段口径已于 2026-11-24 由 IAM 统一确认（工号 `employeeNumber`、姓名 `displayName`、OA 账号 `giveName`），本表取值以该确认为准；§4.5.8 的 `work_no`／`pinyin` 原文转为历史记录。**
 
 如某项能力现有系统暂不具备且无规划，请直接说明边界及可用的既有替代，我们将据此限定技术接入范围并评审等效方案；关键要求不能满足时不开放对应路径，无需承诺非规划内开发。回函与测试资源准备不等于生产开通或安全评审通过。
 
@@ -328,7 +328,7 @@ DSH 平台组（代拟）
 | Issuer URL | `http://<corp-iam-host>/esc-sso/oidc` | 固定 Issuer，作为 ID Token 的 `iss` 校验基线 | CONF-IAM-01/09 |
 | Authorization Endpoint | `http://<corp-iam-host>/esc-sso/oidc/authorize` | GET 请求；`response_type=code`，必须携带 `client_id`、`redirect_uri`、`state`（≥32字节）、`nonce`；授权码有效期可配置（内部样例 5 分钟）、一次性 | CONF-IAM-01/02 |
 | Token Endpoint | `http://<corp-iam-host>/esc-sso/oidc/accessToken` | POST 表单；`grant_type=authorization_code`，返回 `access_token`、`refresh_token`、`expires_in`、`id_token`；重复使用返回 `invalid_grant` | CONF-IAM-01/08 |
-| UserInfo Endpoint | `http://<corp-iam-host>/esc-sso/oidc/profile` | GET 请求；Bearer Token 鉴权；返回人员工号（`sub` 与 `employeeNumber`）、姓名（`name`）与 OA 账号（`givenName`）；失效返回 401 `expired_accessToken`。**2026-10-28 答复将工号、姓名字段写作 `work_no`、`pinyin`，与本节记录不一致，见 §4.5.8** | CONF-IAM-01/10 |
+| UserInfo Endpoint | `http://<corp-iam-host>/esc-sso/oidc/profile` | GET 请求；Bearer Token 鉴权；返回人员工号（`sub` 与 `employeeNumber`）、姓名（`displayName`）与 OA 账号（`giveName`）；失效返回 401 `expired_accessToken`。**2026-11-24 确认答复以此为准**（工号 `employeeNumber`、姓名 `displayName`、OA 账号 `giveName`）；2026-10-28 答复的 `work_no`/`pinyin` 写法作废，见 §4.5.8 | CONF-IAM-01/10 |
 | JWKS URI | `http://<corp-iam-host>/esc-sso/oidc/jwks` | GET 请求；分发 RSA 2048 位公钥；实测 `kid="iamsso"`；**明确不支持动态密钥轮换** | CONF-IAM-09 |
 | Registration Endpoint | `http://<corp-iam-host>/esc-sso/oidc/register` | 动态客户端注册端点（是否开放 public 注册待核实） | CONF-IAM-08 |
 | End Session Endpoint | `http://<corp-iam-host>/esc-sso/logout` | RP-Initiated Logout 注销端点；不强制 `id_token_hint`；是否彻底终结系统浏览器全局 SSO、是否撤销已发 AT/RT，回函未明确 | CONF-IAM-14 |
@@ -486,7 +486,7 @@ DSH 平台组（代拟）
 | 2.3 | 是否提供 API 或管理台；最坏生效时延；多节点／缓存／异步队列如何计算 | 有管理后台；这个指的是？redis共享 | 只记原文：有管理后台、节点经 Redis 共享。“这个指的是？”为反问，未作答；最坏生效时延未答复 |
 | 2.4 | 若只能全局 SSO 登出、只能撤销单个 Access Token 或无法覆盖刷新后代，请直接说明 | 说明哪些？ | 反问，未作答；退出流程以 §4.5.7 D1 的既有登记为准 |
 | 3.1 | `sub` 在改名、转正、离职再入职、账号删除后重建时是否变化 | 不会删除 | 仅称账号不会被删除，未逐场景说明 `sub` 是否变化；该问题由 2026-11-03 C8 另行答复（§4.5.6） |
-| 3.2 | 是否提供独立稳定的 `employee_id`；ID Token 或 UserInfo 中工号、姓名的字段名 | UserInfo 中工号、姓名的字段分别是work_no、pinyin | UserInfo 工号字段为 `work_no`，姓名字段为 `pinyin`；未说明是否另有独立稳定 `employee_id` |
+| 3.2 | 是否提供独立稳定的 `employee_id`；ID Token 或 UserInfo 中工号、姓名的字段名 | UserInfo 中工号、姓名的字段分别是work_no、pinyin | **已被 2026-11-24 确认答复取代**：工号 `employeeNumber`、姓名 `displayName`、OA 账号 `giveName`，无独立稳定 `employee_id`（`sub` 即工号）。该条原文仅作历史记录保留 |
 | 3.3 | 同一员工多台电脑登录策略：允许并存、后登踢前登，还是先登排斥后登 | 支持 | 答复为“支持”，未列明对应哪一档 |
 | 3.4 | 多进程同时刷新的服务端行为：首个成功、其余 `invalid_grant`，还是其他；客户端 single-flight 是否安全 | 其余 `invalid_grant` | 并发刷新首个成功，其余返回 `invalid_grant` |
 
@@ -494,7 +494,7 @@ DSH 平台组（代拟）
 
 **落库影响**：
 
-1. **UserInfo 字段口径冲突（未闭环）**：本函答复工号为 `work_no`、姓名为 `pinyin`；§4.5.1 依 2026-10-26 内部校验回函记录为 `employeeNumber`（工号）、`name`（姓名）、`givenName`（OA 账号）。两口径不一致，联调确认前不把任一字段名写入契约或实现，差异登记在[设计 §12.1](../design/plugins/forge-iam.md#121-待决技术事项清单)。
+1. **UserInfo 字段口径冲突（已闭环）**：本函答复工号为 `work_no`、姓名为 `pinyin`；§4.5.1 依 2026-10-26 内部校验回函记录为 `employeeNumber`（工号）、`name`（姓名）、`givenName`（OA 账号）。**2026-11-24 IAM 确认口径为：工号 `employeeNumber`、姓名 `displayName`、OA 账号 `giveName`**，2026-10-28 的 `work_no`/`pinyin` 写法作废。确认样例映射 `workNo=employeeNumber,name=displayName` 已写入私版 env 样例与[设计 §5.5.4](../design/plugins/forge-iam.md#554-userinfo-身份投影契约)；仍缺一份脱敏响应样例留证，待实机联调补齐。
 2. **回调地址**：答复支持固定端口预登记与精确匹配、支持多端口登记；2026-11-06 补充确认端口可以随机、管理台按前缀登记 `http://127.0.0.1`。生产形态改用系统分配端口，路径与端口不由服务端约束，客户端自校验为主。前缀匹配的边界仍无负面用例。
 3. **生产 HTTP loopback**：答复无额外白名单、终端管控或审批要求；未附配置项与适用范围。
 4. **D1—D3 以 §4.5.7 的既有登记为准**：本函 2.1—2.4 的答复早于 2026-11-04 的 D1—D3，只作历史记录，不回写为新的能力结论。撤销、退出、轮换的口径一律引用 §4.5.6、§4.5.7，本节不复述其结论。
@@ -552,7 +552,7 @@ DSH 平台组（代拟）
 |---|---|---|---|---|
 | 1 | CONF-IAM-01/02/08/09：OIDC 协议、目标客户端登记与认证、Loopback 端口与 Discovery 端点 | IAM 认证架构岗 | G0 方案评审前 | 历史厂商和内部材料口径不同。目标 IAM 须确认机密客户端的 `token_endpoint_auth_method`（Basic 或 POST），验证授权码换票、刷新和 S256。2026-10-28 答复支持固定端口预登记与精确匹配、支持多端口登记，生产 HTTP loopback 无额外要求，但未附配置样例与相似路径／未登记端口的拒绝用例（§4.5.8） |
 | 2 | CONF-IAM-03/11/15：资源隔离、Audience 约束与模型网关令牌验证机制（本轮包含模型网关） | 厂商 IAM/网关产品团队，企业内实施团队汇总 | G1 网关联调前 | 待补充确认，恢复为本轮前置 |
-| 3 | CONF-IAM-10：ID Token Claims 规范、员工工号字段与组织角色映射 | IAM 目录与认证岗 | G1 接口联调前 | 内部项目组提取部分答复（待最终核实：当前 sub=工号，转正新账号会更换 sub；用户类型未在 ID Token/UserInfo 暴露，字段契约待补）。2026-10-28 答复 UserInfo 工号／姓名字段为 `work_no`／`pinyin`，与 2026-10-26 内部回函的 `employeeNumber`／`name` 冲突，待书面统一（§4.5.8） |
+| 3 | CONF-IAM-10：ID Token Claims 规范、员工工号字段与组织角色映射 | IAM 目录与认证岗 | G1 接口联调前 | 内部项目组提取部分答复（待最终核实：当前 sub=工号，转正新账号会更换 sub；用户类型未在 ID Token/UserInfo 暴露，字段契约待补）。**UserInfo 字段口径已于 2026-11-24 书面统一**：工号 `employeeNumber`、姓名 `displayName`、OA 账号 `giveName`，`work_no`／`pinyin` 作废；仍缺脱敏响应样例留证（§4.5.8） |
 | 4 | CONF-IAM-05/06/12：令牌有效期、并发刷新与 Refresh Token 轮换/重用检测 | IAM 运行与安全岗 | G1 接口联调前 | 2026-11-03 CONF-006 C9—C11 记录轮换、旧 RT 即时作废、重用返回 401 `invalid_grant`、仅拒绝本次刷新；AT 7200 秒、RT 7300 秒。2026-11-20 已确认目标部署刷新缺少客户端认证会先于刷新令牌校验返回 401；机密客户端正常计划续期仍待联调。2026-11-04 D3 记录 RT 滑动续期、无绝对有效期；多端登录策略与并发行为仍待验证 |
 | 5 | CONF-IAM-13/14：RFC 7009 撤销端点能力与 RP-Initiated Logout 支持 | IAM 认证服务维护岗 | G2 运行控制前 | 2026-11-03 CONF-006 C3—C7 已明确后台手动停用与浏览器会话级登出、令牌立即作废；2026-11-04 D1 已确认按访问令牌撤销接口（不校验调用方、幂等、实时；仅 AT，RT 不可撤销）。DSH 已实现 D1 请求，企业端点尚未联调，五分钟闭环仍待网关证据 |
 | 6 | CONF-IAM-04/16：目录同步时延、令牌阻断、错误码映射、限流与重试规范 | IAM 运维与目录支持岗 | G2 运行控制前 | 内部项目组提取部分答复（内部称 HR 最坏 ≤90 分钟、供应商 MQ 实时、禁用 AT/RT 作废；厂商把已发 AT 阻断列为按不具备规划；错误码全表、限流与超时行为待补） |
