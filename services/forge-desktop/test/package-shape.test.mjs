@@ -83,10 +83,15 @@ export function entryProblems(main, cli, layout) {
   if (!/embeddedExec\(\{ command: process\.execPath, entry: EMBEDDED_ENTRY, env \}\)/u.test(main)) problems.push('the installer executor must start EMBEDDED_ENTRY');
   if (/\[DSH_ENTRY,/u.test(main)) problems.push('dsh entry must not be started directly: it would look for pnpm on PATH');
   // The entries' paths are the layout's, never spelled out here.
-  if (!/\{ ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS \} from '\.\/layout\.mjs'/u.test(main)) {
+  if (!/\{ ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS \} from '\.\/layout\.mjs'/u.test(main)) {
     problems.push('main.mjs must read the resource paths from layout.mjs');
   }
   if (/'pnpm', 'bin'|'node_modules', '@deepseek-ai'/u.test(`${main}\n${cli}`)) problems.push('resource paths must come from layout.mjs, not be inlined');
+  // The title bar page is a staged resource like the others; its bridge is app code, read from beside main.mjs.
+  if (!/titleBarPage: join\(process\.resourcesPath, \.\.\.TITLE_BAR_PARTS\)/u.test(main)) problems.push('main.mjs must read the title bar page path from layout.mjs');
+  if (!/titleBarPreload: TITLE_BAR_PRELOAD/u.test(main)) problems.push('main.mjs must hand the shell the title bar bridge');
+  // A window whose bridge did not load has buttons that do nothing: said before anything is touched, like the runtime.
+  if (!/existsSync\(TITLE_BAR_PRELOAD\)\) fail\('TITLE_BAR_MISSING'/u.test(main)) problems.push('main.mjs must check the title bar bridge is there before starting');
   return problems;
 }
 
@@ -95,13 +100,18 @@ test('布局契约：main.mjs 消费 layout.mjs 的导出，不内联资源路�
   assert.match(main, /from '\.\/layout\.mjs'/u);
   assert.doesNotMatch(main, /'node_modules', '@deepseek-ai'/u, 'dsh 入口路径必须来自 layout.mjs，不得内联');
   assert.doesNotMatch(main, /'brand', 'tray\.png'/u, '托盘图标路径必须来自 layout.mjs，不得内联');
+  assert.doesNotMatch(main, /'brand', 'titlebar\.html'/u, '标题栏页面路径必须来自 layout.mjs，不得内联');
   const layout = await readFile(join(PKG_ROOT, 'src', 'layout.mjs'), 'utf8');
   assert.match(layout, /export const DSH_ENTRY_PARTS/u);
   assert.match(layout, /export const TRAY_ICON_PARTS/u);
   assert.match(layout, /export const BIN_DIR/u);
   assert.match(layout, /export const ASSETS_DIR/u);
   assert.match(layout, /export const STATUS_PAGE_PARTS/u);
+  assert.match(layout, /export const TITLE_BAR_PARTS/u);
   assert.match(main, /STATUS_PAGE_PARTS/u, 'main.mjs must read the setup page path from layout.mjs');
+  // The bridge ships in the app itself (`files` carries `src`), not in the staged resources.
+  assert.match(main, /join\(dirname\(fileURLToPath\(import\.meta\.url\)\), 'window-chrome\.preload\.cjs'\)/u, 'the title bar bridge must be app code beside main.mjs');
+  assert.equal(await readFile(join(PKG_ROOT, 'src', 'window-chrome.preload.cjs'), 'utf8').then((source) => source.length > 0), true);
 });
 
 test('入口契约：dsh 只经壳的入口启动（随包 pnpm 由此交给 dsh），两处入口路径都取自 layout.mjs', async () => {
@@ -119,6 +129,10 @@ test('入口契约反向：绕过壳的入口、内联路径、入口内引用 e
     [main, cli.replace('{ DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS }', '{ DSH_ENTRY_PARTS }'), layout, /must read both entries from layout\.mjs/],
     [main, cli.replace('join(resources, ...PNPM_ENTRY_PARTS)', "join(resources, 'pnpm', 'bin', 'pnpm.mjs')"), layout, /not be inlined/],
     [main, cli, layout.replace('export const PNPM_ENTRY_PARTS', 'export const PACKAGE_MANAGER_PARTS'), /must export PNPM_ENTRY_PARTS/],
+    [main.replace(', TITLE_BAR_PARTS', ''), cli, layout, /must read the resource paths from layout\.mjs/],
+    [main.replace('titleBarPage: join(process.resourcesPath, ...TITLE_BAR_PARTS)', "titleBarPage: join(process.resourcesPath, 'brand', 'titlebar.html')"), cli, layout, /must read the title bar page path/],
+    [main.replace('titleBarPreload: TITLE_BAR_PRELOAD', 'titleBarPreload: PRELOAD'), cli, layout, /must hand the shell the title bar bridge/],
+    [main.replace("existsSync(TITLE_BAR_PRELOAD)) fail('TITLE_BAR_MISSING'", "existsSync(TITLE_BAR_PRELOAD)) fail('OTHER'), false && fail('TITLE_BAR_MISSING'"), cli, layout, /must check the title bar bridge/],
   ];
   for (const [variantMain, variantCli, variantLayout, pattern] of variants) {
     const problems = entryProblems(variantMain, variantCli, variantLayout);

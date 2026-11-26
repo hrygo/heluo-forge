@@ -14,7 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { parseArguments, StageError, stagePayload, unpackPnpm } from '../scripts/stage-desktop-payload.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -132,8 +132,31 @@ test('暂存布局与 layout.mjs 双向契约：dsh 入口与托盘图标落在 
     true,
     'the setup page is byte-identical to the shell source',
   );
+  // The title bar sits beside them, where main.mjs opens it: a window without it has no controls.
+  assert.equal(existsSync(join(resources, ...TITLE_BAR_PARTS)), true, 'the title bar must sit where main.mjs reads it');
+  assert.equal(
+    readFileSync(join(resources, ...TITLE_BAR_PARTS)).equals(readFileSync(join(REPO_ROOT, 'services/forge-desktop/resources/titlebar.html'))),
+    true,
+    'the title bar is byte-identical to the shell source',
+  );
+  assert.equal(record.titleBar.source, TITLE_BAR_PARTS.join('/'));
   assert.equal(record.dsh.version, '0.0.0-test');
   assert.equal(record.assets, null);
+});
+
+test('反向：仓库缺标题栏页面即拒绝暂存，不发布台账', (t) => {
+  const root = temp(t);
+  const artifact = fixtureTgz(root);
+  const pnpm = fixturePnpm(root);
+  // A checkout with the setup page but without the title bar: the shell would open a window nothing can be closed from.
+  const bare = temp(t, 'forge-stage-nobar-');
+  const pages = ['services', 'forge-desktop', 'resources', ...STATUS_PAGE_PARTS.slice(1)];
+  mkdirSync(join(bare, ...pages.slice(0, -1)), { recursive: true });
+  writeFileSync(join(bare, ...pages), readFileSync(join(REPO_ROOT, ...pages)));
+  const valid = stageArgs(root, artifact, pnpm);
+  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  assert.throws(() => stagePayload({ ...valid, repoRoot: bare }), refused('TITLE_BAR_MISSING'));
+  assert.equal(existsSync(join(valid.output, 'staging-manifest.json')), false);
 });
 
 test('pnpm 按 PNPM_ENTRY_PARTS 暂存：入口、嵌套文件与执行位原样落地，台账记录摘要', { skip: !POSIX }, (t) => {

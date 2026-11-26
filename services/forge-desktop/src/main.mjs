@@ -12,13 +12,13 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as electron from 'electron';
 
 import { diagnosticLogPath } from './diagnostic.mjs';
 import { fail } from './errors.mjs';
 import { EMBEDDED_ENTRY } from './embedded-cli.mjs';
-import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
+import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
 import { embeddedExec, embeddedScriptExec, runCommand } from './process.mjs';
 import { createRuntime } from './runtime.mjs';
 import { startShell } from './shell.mjs';
@@ -29,6 +29,8 @@ const BIND_HOST = '127.0.0.1';
 const DSH_ENTRY = join(process.resourcesPath, ...DSH_ENTRY_PARTS);
 const PNPM_ENTRY = join(process.resourcesPath, ...PNPM_ENTRY_PARTS);
 const TRAY_ICON = join(process.resourcesPath, ...TRAY_ICON_PARTS);
+// The title bar's bridge is app code, not a staged resource: it ships beside this file.
+const TITLE_BAR_PRELOAD = join(dirname(fileURLToPath(import.meta.url)), 'window-chrome.preload.cjs');
 
 /** The user's login shell, asked for its environment the way a terminal has it. */
 async function environmentForChildren() {
@@ -88,6 +90,7 @@ async function main() {
     preflight: () => {
       if (!existsSync(DSH_ENTRY)) fail('EMBEDDED_RUNTIME_MISSING', 'the embedded runtime entry is missing');
       if (!existsSync(PNPM_ENTRY)) fail('EMBEDDED_RUNTIME_MISSING', 'the bundled pnpm entry is missing');
+      if (!existsSync(TITLE_BAR_PRELOAD)) fail('TITLE_BAR_MISSING', 'the title bar bridge is missing');
     },
     embeddedCommand: process.execPath,
     env,
@@ -102,6 +105,8 @@ async function main() {
     spawnProfile: spawnProfile(env),
     trayIcon: TRAY_ICON,
     statusPage: join(process.resourcesPath, ...STATUS_PAGE_PARTS),
+    titleBarPage: join(process.resourcesPath, ...TITLE_BAR_PARTS),
+    titleBarPreload: TITLE_BAR_PRELOAD,
   }).outcome;
 }
 

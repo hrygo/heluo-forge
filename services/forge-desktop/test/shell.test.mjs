@@ -67,43 +67,66 @@ function employeePackage(directory, { version = '1.2.3' } = {}) {
 }
 
 /** A stand-in for the Electron interface that records what the shell does with it. */
-function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails = false } = {}) {
+function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails = false, titleBarFails = false } = {}) {
   const log = [];
   const handlers = {};
   const windows = [];
+  const views = [];
   const trays = [];
   const messages = [];
   const externals = [];
+  const ipc = {};
   let answers = [];
-  class Window {
-    constructor(options) {
-      this.options = options;
-      this.loads = [];
-      this.visible = false;
-      this.hidden = 0;
-      this.destroyed = false;
+
+  /** What the shell uses of a page's web contents: what it loads, what it is told, and what it asks for. */
+  class Page {
+    constructor({ failLoads = false, failFiles = false } = {}) {
+      this.failLoads = failLoads;
+      this.failFiles = failFiles;
       this.own = {};
-      this.webContents = {
-        own: {},
-        on: (event, handler) => {
-          this.webContents.own[event] = handler;
-        },
-        setWindowOpenHandler: (handler) => {
-          this.open = handler;
-        },
-      };
+      this.sent = [];
+      this.loads = [];
+      this.mainFrame = { page: this };
     }
     on(event, handler) {
       this.own[event] = handler;
     }
+    send(channel, state) {
+      this.sent.push({ channel, state });
+    }
+    focus() {
+      this.focusCount = (this.focusCount ?? 0) + 1;
+    }
+    setWindowOpenHandler(handler) {
+      this.open = handler;
+    }
     loadURL(url) {
       this.loads.push(url);
-      return loadFails ? Promise.reject(new Error('ERR_CONNECTION_REFUSED')) : Promise.resolve();
+      return this.failLoads ? Promise.reject(new Error('ERR_CONNECTION_REFUSED')) : Promise.resolve();
     }
     loadFile(path, { query } = {}) {
       this.fileLoads ??= [];
       this.fileLoads.push({ path, query });
-      return Promise.resolve();
+      return this.failFiles ? Promise.reject(new Error('ERR_FILE_NOT_FOUND')) : Promise.resolve();
+    }
+  }
+  class Window {
+    constructor(options) {
+      this.options = options;
+      this.visible = false;
+      this.hidden = 0;
+      this.destroyed = false;
+      this.own = {};
+      this.size = [1280, 800];
+      // The window's own page (the title bar, where there is one), and the views laid out over it.
+      this.webContents = new Page({ failFiles: titleBarFails });
+      this.contentView = { children: [], addChildView: (view) => this.contentView.children.push(view) };
+    }
+    on(event, handler) {
+      this.own[event] = handler;
+    }
+    loadFile(path, { query } = {}) {
+      return this.webContents.loadFile(path, { query });
     }
     show() {
       this.visible = true;
@@ -123,6 +146,38 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
       this.own.close?.(event);
       if (!event.prevented) this.destroyed = true;
       return event;
+    }
+    getContentSize() {
+      return this.size;
+    }
+    setWindowButtonVisibility(visible) {
+      this.systemButtons = visible;
+    }
+    minimize() {
+      this.minimized = true;
+    }
+    maximize() {
+      this.maximized = true;
+    }
+    unmaximize() {
+      this.maximized = false;
+    }
+    isMaximized() {
+      return this.maximized === true;
+    }
+    /** The view the work is in: the first view laid over the window. */
+    get page() {
+      return this.contentView.children[0];
+    }
+  }
+  class View {
+    constructor(options) {
+      this.options = options;
+      this.webContents = new Page({ failLoads: loadFails });
+      views.push(this);
+    }
+    setBounds(bounds) {
+      this.bounds = bounds;
     }
   }
   class Tray {
@@ -170,6 +225,12 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
         windows.push(this);
       }
     },
+    WebContentsView: View,
+    ipcMain: {
+      handle: (channel, handler) => {
+        ipc[channel] = handler;
+      },
+    },
     Tray,
     Menu: { buildFromTemplate: (template) => template },
     nativeImage: { createFromPath: (path) => ({ path }) },
@@ -189,7 +250,7 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
       },
     },
   };
-  return { electron, log, handlers, windows, trays, messages, externals, session, answerNext: (...values) => { answers = values; } };
+  return { electron, log, handlers, windows, views, trays, messages, externals, session, ipc, answerNext: (...values) => { answers = values; } };
 }
 
 /** A web profile process that announces at once and exits only when told. */
@@ -251,6 +312,8 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
     runtimeOptions: { startTimeoutMs: 60_000, stopGraceMs: 5_000 },
     trayIcon: '/apps/tray.png',
     statusPage: '/brand/status.html',
+    titleBarPage: '/brand/titlebar.html',
+    titleBarPreload: '/apps/window-chrome.preload.cjs',
     ...(preflight === undefined ? {} : { preflight }),
     failureStopWaitMs,
     ...(diagnosticLog === undefined ? {} : { diagnosticLog }),
@@ -276,18 +339,18 @@ test('the first run installs the package, then a window shows the local service 
     manifestDigest: sha256Of(readFileSync(join(fx.pkg.directory, 'employee-manifest.json'))),
     profile: 'web',
   });
-  // The window is the hardened shell of a page, and the page is the launch address.
+  // The page is the hardened shell of a page, and the page is the launch address.
   const [window] = fx.windows;
-  assert.deepEqual(window.options.webPreferences, { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true });
-  assert.equal(Object.hasOwn(window.options.webPreferences, 'preload'), false);
-  assert.deepEqual(window.loads, [LAUNCH]);
+  assert.deepEqual(window.page.options.webPreferences, { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true });
+  assert.equal(Object.hasOwn(window.page.options.webPreferences, 'preload'), false);
+  assert.deepEqual(window.page.webContents.loads, [LAUNCH]);
   assert.equal(window.visible, true);
   assert.equal(fx.trays.length, 1);
   assert.deepEqual(fx.trays[0].menu.map((item) => item.label), ['显示窗口', '退出']);
   // Only the local service is loaded; other web addresses go out; the rest is stopped.
   const navigated = (target) => {
     const event = { prevented: false, preventDefault: () => { event.prevented = true; } };
-    window.webContents.own['will-navigate'](event, target);
+    window.page.webContents.own['will-navigate'](event, target);
     return event.prevented;
   };
   assert.equal(navigated(`${ORIGIN}/session/1`), false);
@@ -296,15 +359,15 @@ test('the first run installs the package, then a window shows the local service 
   // A redirect is stopped, and nothing is opened in its place: it did not come
   // from anything done on the user's behalf. A redirect inside the service goes on.
   const redirected = { prevented: false, preventDefault: () => { redirected.prevented = true; } };
-  window.webContents.own['will-redirect'](redirected, 'https://example.corp.example/');
+  window.page.webContents.own['will-redirect'](redirected, 'https://example.corp.example/');
   assert.equal(redirected.prevented, true);
   const inside = { prevented: false, preventDefault: () => { inside.prevented = true; } };
-  window.webContents.own['will-redirect'](inside, `${ORIGIN}/next`);
+  window.page.webContents.own['will-redirect'](inside, `${ORIGIN}/next`);
   assert.equal(inside.prevented, false);
   assert.deepEqual(fx.externals, ['https://example.corp.example/help']);
   // New windows are never allowed, whichever address asked for one.
-  assert.deepEqual(window.open({ url: 'https://example.corp.example/doc' }), { action: 'deny' });
-  assert.deepEqual(window.open({ url: 'file:///etc/passwd' }), { action: 'deny' });
+  assert.deepEqual(window.page.webContents.open({ url: 'https://example.corp.example/doc' }), { action: 'deny' });
+  assert.deepEqual(window.page.webContents.open({ url: 'file:///etc/passwd' }), { action: 'deny' });
   assert.equal(fx.externals.includes('file:///etc/passwd'), false);
   // No permission request and no permission check is ever granted.
   const granted = [];
@@ -313,7 +376,7 @@ test('the first run installs the package, then a window shows the local service 
   assert.deepEqual(granted, [false, false]);
   assert.equal(fx.session.defaultSession.check({}, 'notifications'), false);
   // The process token reached the window, which needs it, and nothing else.
-  assert.equal(window.loads[0].includes(TOKEN), true);
+  assert.equal(window.page.webContents.loads[0].includes(TOKEN), true);
   assert.equal(shownAndOpened(fx).includes(TOKEN), false);
   assert.deepEqual(fx.processes[0].kills, []);
 });
@@ -353,13 +416,13 @@ test('the tray retry finishes the setup later and moves the window onto the work
   fx.trays[0].menu.find((item) => item.label === '重试企业配置').click();
   await new Promise((resolve) => {
     const timer = setInterval(() => {
-      if (window.loads.length > 0 && fx.processes.length === 1) { clearInterval(timer); resolve(); }
+      if (window.page.webContents.loads.length > 0 && fx.processes.length === 1) { clearInterval(timer); resolve(); }
     }, 5);
     timer.unref?.();
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 2, 'the retry re-ran the idempotent installer');
-  assert.equal(window.loads.length, 1, 'the workspace address replaced the status page');
+  assert.equal(window.page.webContents.loads.length, 1, 'the workspace address replaced the status page');
   assert.equal(fx.trays[0].menu.some((item) => item.label === '重试企业配置'), false, 'the retry entry leaves once setup is done');
   assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), true);
 });
@@ -390,11 +453,11 @@ test('a failed first run keeps the window on the status page with a tray retry, 
   assert.equal(fx.processes.length, 0);
   assert.equal(fx.windows.length, 1, 'the interface exists from the first moment');
   const [window] = fx.windows;
-  assert.equal(window.loads.length, 0, 'no workspace address without a completed setup');
-  assert.ok(window.fileLoads.length >= 2, 'initializing, then the failure state');
-  assert.equal(window.fileLoads[0].query.state, 'initializing');
+  assert.equal(window.page.webContents.loads.length, 0, 'no workspace address without a completed setup');
+  assert.ok(window.page.webContents.fileLoads.length >= 2, 'initializing, then the failure state');
+  assert.equal(window.page.webContents.fileLoads[0].query.state, 'initializing');
   // The page names the installer's code and repeats its reason: one text for every cause said nothing about which one stopped the run.
-  assert.deepEqual({ ...window.fileLoads.at(-1).query }, {
+  assert.deepEqual({ ...window.page.webContents.fileLoads.at(-1).query }, {
     state: 'failed',
     code: 'FIRST_RUN_FAILED',
     installer: 'IAM_CLIENT_SECRET_PROVISION_FAILED',
@@ -433,7 +496,7 @@ test('a failed first run is written to the log whole: the installer\'s code, rea
   assert.match(entry, /^回显：\n  企业插件初始化\n  profile：web\n  命令：dsh plugin --profile web add \/packages\/enterprise\.tgz$/mu);
   assert.match(entry, /^警告：\n  warn: 一条警告$/mu);
   // The installer's remedy is shown in its own words, and the page names the log.
-  const query = { ...fx.windows[0].fileLoads.at(-1).query };
+  const query = { ...fx.windows[0].page.webContents.fileLoads.at(-1).query };
   assert.equal(query.installer, 'IAM_DISCOVERY_FAILED');
   assert.equal(query.remedy, '确认这台机器能访问企业 IAM 后重试；密钥文件仍保留。');
   assert.equal(query.log, log);
@@ -452,7 +515,7 @@ test('a completed first run is written to the log with the installer\'s conclusi
   const entry = readFileSync(log, 'utf8');
   assert.match(entry, /^=== 2026-11-25T12:30:00\.000Z 企业配置初始化：完成 ===\n安装器结论：already-installed（退出码 0）\n回显：\n  状态：已安装同版本 1\.2\.3-corp\.1，本次不写入\n  核验：L1 退出码 0$/mu);
   // A workspace that started shows no failure, so the page never carries the log's path.
-  assert.equal(fx.windows[0].fileLoads.some((load) => load.query.log !== undefined), false);
+  assert.equal(fx.windows[0].page.webContents.fileLoads.some((load) => load.query.log !== undefined), false);
 });
 
 test('a retry appends to the same log; a log that cannot be written is not a failure of the application', async (t) => {
@@ -486,9 +549,9 @@ test('a retry appends to the same log; a log that cannot be written is not a fai
     deadline.unref?.();
   });
   fx.trays[0].menu.find((item) => item.label === '重试企业配置').click();
-  await settled(() => window.fileLoads.at(-1)?.query.installer === 'PNPM_REQUIRED');
+  await settled(() => window.page.webContents.fileLoads.at(-1)?.query.installer === 'PNPM_REQUIRED');
   fx.trays[0].menu.find((item) => item.label === '重试企业配置').click();
-  await settled(() => window.loads.length === 1 && fx.processes.length === 1);
+  await settled(() => window.page.webContents.loads.length === 1 && fx.processes.length === 1);
   await new Promise((resolve) => setImmediate(resolve));
   const entries = readFileSync(log, 'utf8').split('\n=== ').filter(Boolean);
   assert.equal(entries.length, 3, 'one entry per attempt, the failed ones and the completed one');
@@ -501,7 +564,7 @@ test('a retry appends to the same log; a log that cannot be written is not a fai
   writeFileSync(blocked, 'occupied');
   const silent = world(t, { installer: stoppedInstaller, diagnosticLog: join(blocked, 'logs', 'first-run.log') });
   assert.deepEqual(await silent.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED', retryable: true });
-  assert.equal(silent.windows[0].fileLoads.at(-1).query.reason, 'init: 读取 IAM Discovery 失败（fetch failed）：https://idp.corp.example/x');
+  assert.equal(silent.windows[0].page.webContents.fileLoads.at(-1).query.reason, 'init: 读取 IAM Discovery 失败（fetch failed）：https://idp.corp.example/x');
 });
 
 test('a refused employee package and a failure that ends the application are written to the log too', async (t) => {
@@ -515,7 +578,7 @@ test('a refused employee package and a failure that ends the application are wri
   assert.match(refused, /^=== [^\n]+ 企业配置初始化：失败 ===\n错误码：ASSETS_INVALID\n说明：the employee package is not intact\n问题：\n  .+does not match its digest$/mu);
   assert.equal(refused.includes('安装器'), false);
   // The page has no installer verdict to show: the shell's guidance for the code stands in.
-  assert.deepEqual({ ...tampered.windows[0].fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID', remedy: guidanceFor('ASSETS_INVALID'), log });
+  assert.deepEqual({ ...tampered.windows[0].page.webContents.fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID', remedy: guidanceFor('ASSETS_INVALID'), log });
 
   const fatal = world(t, { diagnosticLog: join(root, 'fatal.log'), preflight: () => { throw Object.assign(new Error('the embedded runtime entry is missing'), { code: 'EMBEDDED_RUNTIME_MISSING' }); } });
   assert.deepEqual(await fatal.shell.outcome, { started: false, code: 'EMBEDDED_RUNTIME_MISSING' });
@@ -529,12 +592,12 @@ test('without a package, with a broken one, or with a forbidden bind address, no
   assert.equal(tampered.processes.length, 0);
   assert.equal(tampered.messages.length, 0, 'a retryable state is shown in the window, not a dialog');
   // No installer ran, so the shell's guidance for the code is what the page says to do.
-  assert.deepEqual({ ...tampered.windows[0].fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID', remedy: guidanceFor('ASSETS_INVALID') });
+  assert.deepEqual({ ...tampered.windows[0].page.webContents.fileLoads.at(-1).query }, { state: 'failed', code: 'ASSETS_INVALID', remedy: guidanceFor('ASSETS_INVALID') });
 
   const none = world(t, { candidates: [join(temp(t), 'absent')] });
   assert.deepEqual(await none.shell.outcome, { started: false, code: 'ASSETS_NOT_FOUND', retryable: true });
   assert.equal(none.installs.length, 0);
-  assert.ok(none.windows[0].fileLoads.at(-1).query.code === 'ASSETS_NOT_FOUND');
+  assert.ok(none.windows[0].page.webContents.fileLoads.at(-1).query.code === 'ASSETS_NOT_FOUND');
 
   const elsewhere = world(t, { bindHost: '0.0.0.0' });
   assert.deepEqual(await elsewhere.shell.outcome, { started: false, code: 'BIND_HOST_REJECTED' });
@@ -710,4 +773,159 @@ test('quitting is confirmed first, then waits for the web profile to exit', asyn
   const again = { prevented: false, preventDefault: () => { again.prevented = true; } };
   beforeQuit(again);
   assert.equal(again.prevented, false);
+});
+
+/** The platforms that drop the system title bar for the shell's own, and how tall that bar is. */
+const FRAMELESS = [['darwin', 28], ['win32', 32]];
+
+for (const [platform, bar] of FRAMELESS) {
+  test(`on ${platform} the window's own page is the title bar, and the work sits below it without a bridge`, async (t) => {
+    const fx = world(t, { electron: { platform } });
+    assert.equal((await fx.shell.outcome).started, true);
+    const [window] = fx.windows;
+    const [content] = fx.views;
+    assert.equal(fx.windows.length, 1);
+    // The system title bar is gone. On macOS its lights go with it: the bar draws its own.
+    assert.equal(window.options.titleBarStyle, 'hidden');
+    assert.equal(window.systemButtons, platform === 'darwin' ? false : undefined);
+    assert.deepEqual(window.contentView.children, [content]);
+    // The title bar is the window's own page, told which buttons to draw and what to call the window.
+    assert.deepEqual(window.webContents.fileLoads, [
+      { path: '/brand/titlebar.html', query: { platform, bar: String(bar), title: '河洛 Forge 企业版' } },
+    ]);
+    // It is the one page with a bridge to the shell, and hardened like every other.
+    assert.equal(window.options.webPreferences.preload, '/apps/window-chrome.preload.cjs');
+    assert.equal(window.options.webPreferences.sandbox, true);
+    assert.equal(window.options.webPreferences.contextIsolation, true);
+    // The content is what it always was — no Node, no preload, an isolated context — on the launch address.
+    assert.deepEqual(content.options.webPreferences, { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true });
+    assert.equal(Object.hasOwn(content.options.webPreferences, 'preload'), false);
+    assert.deepEqual(content.webContents.loads, [LAUNCH]);
+    // It sits below the bar, and follows the window.
+    assert.deepEqual(content.bounds, { x: 0, y: bar, width: 1280, height: 800 - bar });
+    window.size = [900, 600];
+    window.own.resize();
+    assert.deepEqual(content.bounds, { x: 0, y: bar, width: 900, height: 600 - bar });
+    // The launch address is the content's alone: the title bar is never told it.
+    assert.equal(JSON.stringify(window.webContents.fileLoads).includes(TOKEN), false);
+    assert.equal(window.visible, true);
+    // The keyboard starts in the content, not in the title bar over it: once the status page is up, once the workspace is.
+    assert.equal(content.webContents.focusCount, 2);
+  });
+}
+
+test('a window action is done for the title bar, and for nothing else that asks', async (t) => {
+  const fx = world(t, { electron: { platform: 'darwin' } });
+  await fx.shell.outcome;
+  const [window] = fx.windows;
+  const [content] = fx.views;
+  const ask = (sender, frame, action) => fx.ipc['forge:window-action']({ sender, senderFrame: frame }, action);
+  const fromTitleBar = (action) => ask(window.webContents, window.webContents.mainFrame, action);
+  const state = () => JSON.stringify([window.minimized, window.maximized, window.hidden, window.destroyed, fx.log.includes('quit')]);
+
+  // Another page, another frame, or an action the title bar was not given: nothing happens.
+  ask(content.webContents, content.webContents.mainFrame, 'minimize');
+  ask(content.webContents, content.webContents.mainFrame, 'close');
+  ask(window.webContents, content.webContents.mainFrame, 'toggle-maximize');
+  ask(window.webContents, {}, 'close');
+  ask(undefined, undefined, 'minimize');
+  for (const action of ['destroy', 'show', 'load', '', 'MINIMIZE', undefined, null, 0, {}, ['minimize']]) fromTitleBar(action);
+  // The window as it started: not minimized, not zoomed, never hidden, never closed.
+  assert.equal(state(), JSON.stringify([undefined, undefined, 0, false, false]));
+
+  // The window came up with the keyboard in the content. Only an action that
+  // leaves it on screen hands the keyboard back: asking for focus into a window
+  // that was just minimized or hidden brings it straight back.
+  const { focusCount } = content.webContents;
+  fromTitleBar('minimize');
+  assert.equal(window.minimized, true);
+  assert.equal(content.webContents.focusCount, focusCount);
+  fromTitleBar('toggle-maximize');
+  assert.equal(window.isMaximized(), true);
+  assert.equal(content.webContents.focusCount, focusCount + 1);
+  fromTitleBar('toggle-maximize');
+  assert.equal(window.isMaximized(), false);
+  assert.equal(content.webContents.focusCount, focusCount + 2);
+  // Close is the window's own close: with a tray behind it the window hides, and the web profile keeps running.
+  fromTitleBar('close');
+  assert.equal(window.hidden, 1);
+  assert.equal(window.destroyed, false);
+  assert.deepEqual(fx.processes[0].kills, []);
+  assert.equal(content.webContents.focusCount, focusCount + 2);
+  // Coming back from the tray puts the keyboard in the content again.
+  fx.trays[0].menu[0].click();
+  assert.equal(window.visible, true);
+  assert.equal(content.webContents.focusCount, focusCount + 3);
+});
+
+test('the title bar is told what the window came to, and full screen takes the bar away', async (t) => {
+  const fx = world(t, { electron: { platform: 'win32' } });
+  await fx.shell.outcome;
+  const [window] = fx.windows;
+  const [content] = fx.views;
+  const told = () => window.webContents.sent.map((message) => message.state);
+  // It is told the state it starts in, so the bar never has to guess.
+  assert.deepEqual(window.webContents.sent, [{ channel: 'forge:window-state', state: { maximized: false, fullscreen: false, focused: true } }]);
+  window.own.maximize();
+  window.own.blur();
+  assert.deepEqual(told().slice(-2), [
+    { maximized: true, fullscreen: false, focused: true },
+    { maximized: true, fullscreen: false, focused: false },
+  ]);
+  window.own.unmaximize();
+  window.own.focus();
+  assert.deepEqual(told().at(-1), { maximized: false, fullscreen: false, focused: true });
+  // A window that comes to the front would start with the keyboard in the title bar: it is handed to the content.
+  const focused = content.webContents.focusCount;
+  window.own.focus();
+  assert.equal(content.webContents.focusCount, focused + 1);
+  // Full screen has no title bar: the content takes the whole window, then gives the bar its place back.
+  window.own['enter-full-screen']();
+  assert.deepEqual(content.bounds, { x: 0, y: 0, width: 1280, height: 800 });
+  assert.equal(told().at(-1).fullscreen, true);
+  window.own['leave-full-screen']();
+  assert.deepEqual(content.bounds, { x: 0, y: 32, width: 1280, height: 768 });
+  assert.equal(told().at(-1).fullscreen, false);
+});
+
+test('nothing navigates the title bar and nothing opens from it: it is the page that carries the bridge', async (t) => {
+  const fx = world(t, { electron: { platform: 'darwin' } });
+  await fx.shell.outcome;
+  const [window] = fx.windows;
+  const navigated = { prevented: false, preventDefault: () => { navigated.prevented = true; } };
+  window.webContents.own['will-navigate'](navigated, 'https://example.corp.example/');
+  assert.equal(navigated.prevented, true);
+  // Even an address of the local service is not the title bar's to go to.
+  const redirected = { prevented: false, preventDefault: () => { redirected.prevented = true; } };
+  window.webContents.own['will-redirect'](redirected, `${ORIGIN}/next`);
+  assert.equal(redirected.prevented, true);
+  assert.deepEqual(window.webContents.open({ url: 'https://example.corp.example/doc' }), { action: 'deny' });
+  // Not even the system browser: nothing there is a link the user followed.
+  assert.deepEqual(fx.externals, []);
+});
+
+test('a platform that keeps its system title bar gets none of this: the work has the whole window, and there is no bridge at all', async (t) => {
+  const fx = world(t);
+  assert.equal((await fx.shell.outcome).started, true);
+  const [window] = fx.windows;
+  assert.equal(Object.hasOwn(window.options, 'titleBarStyle'), false);
+  assert.equal(Object.hasOwn(window.options.webPreferences, 'preload'), false);
+  assert.equal(window.webContents.fileLoads, undefined);
+  assert.equal(window.systemButtons, undefined);
+  assert.deepEqual(fx.views[0].bounds, { x: 0, y: 0, width: 1280, height: 800 });
+  // No title bar to tell, and nothing that answers the bridge.
+  window.own.maximize();
+  assert.deepEqual(window.webContents.sent, []);
+  assert.deepEqual(fx.ipc, {});
+});
+
+test('a title bar that cannot be loaded is said before anything is shown or started', async (t) => {
+  const fx = world(t, { electron: { platform: 'darwin', titleBarFails: true } });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'TITLE_BAR_MISSING' });
+  assert.match(fx.messages[0].message, /窗口组件缺失/);
+  assert.equal(fx.windows[0].visible, false, 'a window without controls is never shown');
+  // Not a state the tray can retry: no installer runs and no service starts.
+  assert.equal(fx.installs.length, 0);
+  assert.equal(fx.processes.length, 0);
+  assert.equal(fx.log.at(-1), 'quit');
 });

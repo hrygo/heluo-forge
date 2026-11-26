@@ -28,3 +28,6 @@ export const ASSETS_DIR = 'enterprise-assets';
 
 /** The shell's own setup page, resources-relative: no preload, no links, no values. */
 export const STATUS_PAGE_PARTS = ['brand', 'status.html'];
+
+/** The shell's own title bar, resources-relative. Which buttons it draws, its height and the title arrive via the query string. */
+export const TITLE_BAR_PARTS = ['brand', 'titlebar.html'];

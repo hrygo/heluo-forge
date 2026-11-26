@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ArchiveError, readBundleEntries } from './lib/bundle-archive.mjs';
 import { execNpm } from './lib/bundle-rules.mjs';
-import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const TRAY_ICON_SOURCE = 'sizes/app-icon-256.png';
@@ -204,6 +204,12 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
   mkdirSync(join(resources, ...STATUS_PAGE_PARTS.slice(0, -1)), { recursive: true });
   writeFileSync(join(resources, ...STATUS_PAGE_PARTS), readFileSync(statusSource));
 
+  // The shell's own title bar travels the same way: one local file, no links.
+  // Which buttons it draws and the title it shows arrive via the query string.
+  const titleBarSource = join(repoRoot, 'services', 'forge-desktop', 'resources', ...TITLE_BAR_PARTS.slice(1));
+  if (!existsSync(titleBarSource)) fail('TITLE_BAR_MISSING', `shell title bar not found: ${titleBarSource}`);
+  writeFileSync(join(resources, ...TITLE_BAR_PARTS), readFileSync(titleBarSource));
+
   let assets = null;
   if (employeeAssets !== undefined) {
     const source = resolve(employeeAssets);
@@ -218,6 +224,7 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
     pnpm: { version: pnpm.entry.version, sha256: pnpm.entry.sha256, bytes: pnpm.entry.bytes, artifact: basename(pnpm.path) },
     tray: { source: TRAY_ICON_SOURCE, bytes: trayBytes.length, sha256: sha256Hex(trayBytes) },
     statusPage: { source: STATUS_PAGE_PARTS.join('/'), bytes: readFileSync(join(resources, ...STATUS_PAGE_PARTS)).length },
+    titleBar: { source: TITLE_BAR_PARTS.join('/'), bytes: readFileSync(join(resources, ...TITLE_BAR_PARTS)).length },
     assets,
     layout: { dshEntry: DSH_ENTRY_PARTS.join('/'), pnpmEntry: PNPM_ENTRY_PARTS.join('/'), trayIcon: TRAY_ICON_PARTS.join('/') },
   };
