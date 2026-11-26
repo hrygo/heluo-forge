@@ -278,10 +278,21 @@ function verifiedPnpm(pnpmTgz, entry) {
   return { path, bytes, version: entry.version };
 }
 
+/**
+ * The tar options the host platform's `tar` needs to read the absolute archive
+ * paths this script hands it. Windows paths start with a drive letter, and GNU
+ * tar reads `C:` as a remote host it must connect to (v0.1.16: `Cannot connect
+ * to C: resolve failed`), so the archive stays local only with --force-local;
+ * the macOS and Linux readers are BSD tar, which knows no such option.
+ */
+export function tarPlatformOptions(platform = process.platform) {
+  return platform === 'win32' ? ['--force-local'] : [];
+}
+
 /** The members a tarball carries, as `tar` lists them. */
 function tarMembers(file, name) {
   try {
-    const listing = execFileSync('tar', ['-tzf', file], { encoding: 'utf8', maxBuffer: TAR_LISTING_BYTES, stdio: ['ignore', 'pipe', 'pipe'] });
+    const listing = execFileSync('tar', [...tarPlatformOptions(), '-tzf', file], { encoding: 'utf8', maxBuffer: TAR_LISTING_BYTES, stdio: ['ignore', 'pipe', 'pipe'] });
     return listing.split(/\r?\n/u).filter((member) => member !== '');
   } catch (error) {
     return fail('ARCHIVE_INVALID', `${name} is not a tarball: ${tail(error?.stderr ?? error?.message)}`);
@@ -297,7 +308,7 @@ function safeMember(member) {
 
 function tarExtract(file, name, destination, members) {
   try {
-    execFileSync('tar', ['-xzf', file, '-C', destination, '-p', ...members], { stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('tar', [...tarPlatformOptions(), '-xzf', file, '-C', destination, '-p', ...members], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     fail('ARCHIVE_INVALID', `${name} was not unpacked: ${tail(error?.stderr ?? error?.message)}`);
   }
