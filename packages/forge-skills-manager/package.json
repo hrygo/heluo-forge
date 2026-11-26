@@ -5,7 +5,7 @@
   "type": "module",
   "description": "技能管理 — 本地技能管理与 Nacos 企业公共库",
   "engines": {
-    "dsh": ">=0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.5"
   },
   "main": "./lib/index.js",
   "exports": {
@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.5",
     "@types/node": "22.20.4",
     "@types/react": "18.3.31",
     "@types/yauzl": "3.4.0",

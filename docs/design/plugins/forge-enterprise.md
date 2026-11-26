@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.10.4 |
+| 版本 | V1.10.5 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -25,7 +25,7 @@
 
 `@heluo/forge-enterprise`（**企业账号与模型**）作为面向全体企业员工的通用底座组合包，只回答一个问题：企业登录、凭证安全存储与模型访问由哪些基础能力、在什么前提下一起出现。
 
-边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 12 动作默认目录，不使用 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-brand`，不实现其中任何一个；不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee。研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
+边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 6 动作默认目录，不使用 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-brand`，不实现其中任何一个；不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee。研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
 
 O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key、官方账户 UI、通用模型配置与自由模型设置六行**，以及官方明文凭据提供方一行，使企业 IAM 成为唯一登录，并让 `DEEPSEEK_API_KEY` 与自填网关都不构成旁路。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
 
@@ -156,7 +156,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-通用底座的 `insert:` 段挂四个 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 12 动作目录、无 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-brand`。
+通用底座的 `insert:` 段挂四个 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 6 动作目录、无 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-brand`。
 
 **双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装并由宿主装配通用企业登录与模型管理；实际使用仍受配置、存储和宿主能力门禁约束。本包不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
 
@@ -387,7 +387,7 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 装配 | 底座包 `forge-enterprise`（4 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于 12 条并集（6 读 + 6 写）、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| 装配 | 底座包 `forge-enterprise`（4 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录为 6 条受控写动作（只读不登记）、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
 | Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-engineering/test/issue-delivery-skill.test.mjs` |
 | 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |
