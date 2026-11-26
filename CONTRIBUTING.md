@@ -139,6 +139,6 @@ OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启�
 
 同仓非草稿 PR 的有效推送刷新持久摘要和审查评论。审查使用 `medium`，每次请求的上下文预算为 64,000 token（含输出预留）、生成上限为 12,000 token，超长审查最多处理五个分块并显示覆盖缺口。手动摘要接受无参数的 `/describe` 或 `/describe_pr`。自动和手动摘要均使用 `low`，上下文预算为 32,000 token、生成上限为 6,000 token，最多两次模型调用。遇到可重试的提供方错误时，每次请求最多重试一次，超时直接失败。
 
-[仓库审查配置](.pr_agent.toml)随 PR 的目标分支生效。审查给出按风险排序的可操作发现和人工审查优先文件，合入建议供维护者参考。评论折叠区展示实际返回的 token 数与调用次数，账单以 OpenAI 项目用量为准。以 2026-11-26 的标准价估算，累计消耗 20,000 个未缓存输入 token 和 2,000 个输出 token（含推理）约为 US$0.06。[OpenAI API 定价](https://developers.openai.com/api/docs/pricing)
+[仓库审查配置](.pr_agent.toml)从默认分支加载，合并后对后续运行生效。审查给出按风险排序的可操作发现和人工审查优先文件，合入建议供维护者参考。评论折叠区展示实际返回的 token 数与调用次数，账单以 OpenAI 项目用量为准。以 2026-11-26 的标准价估算，累计消耗 20,000 个未缓存输入 token 和 2,000 个输出 token（含推理）约为 US$0.06。[OpenAI API 定价](https://developers.openai.com/api/docs/pricing)
 
-维护者可在开放的 PR 留言 `/review --pr_reviewer.inline_key_issues=true`。能定位并发布到差异行的发现会随 GitHub `COMMENT` 审查提交，其余发现保留在审查摘要。合入决定由维护者作出。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)
+维护者可在开放的 PR 直接留言 `/review`。自动和手动审查都会以 GitHub `COMMENT` 审查发布定位到差异行的评论。无法定位或发布的发现保留在审查摘要。合入决定由维护者作出。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)

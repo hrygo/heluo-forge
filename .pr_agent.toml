@@ -1,8 +1,7 @@
 # PR-Agent settings for hrygo/heluo-forge.
 #
-# The GitHub Action loads this file from the pull request's base branch, so a
-# change here applies on later runs after it reaches the PR's base branch. Only overrides
-# are listed; the full default set lives in
+# The GitHub Action loads this file from the repository's default branch.
+# Changes apply to later runs after merge. The full default set lives in
 # pr_agent/settings/configuration.toml of the PR-Agent release pinned in
 # .github/workflows/pr-agent.yml.
 
@@ -45,12 +44,14 @@ require_risk_assessment = true
 require_priority_files = true
 # Keep actionable risk and remove the numeric effort estimate and its label.
 require_estimate_effort_to_review = false
-# Recommendations are advisory and do not create or dismiss formal reviews.
+# Include an advisory merge recommendation in the review.
 require_merge_recommendation = true
 # A reference to a larger or completed issue is not a promise to finish it here.
 # The PR description still provides the scope; full ticket bodies are not fetched.
 require_ticket_analysis_review = false
-# Update one review comment per PR instead of posting a new comment per run.
+# Submit anchored findings as inline comments in GitHub COMMENT reviews.
+inline_key_issues = true
+# Keep one persistent review summary per PR.
 persistent_comment = true
 # Disappearance from an AI review alone does not prove an old finding was fixed.
 persistent_finding_state = false
