@@ -33,6 +33,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../../services/forge-desktop/src/layout.mjs';
+import { RUNTIME_ROWS } from '../../packages/forge-enterprise/src/reflow.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -43,7 +44,6 @@ const INSTALL_ROOT = ['dsh-runtimes', 'dsh-primary-runtime'];
 const TIMEOUT_MS = 180_000;
 const TOOL = 'load_workspace_dependencies';
 
-const UNLOCK_ROWS = ['workspace-dependencies', 'skill-office'];
 
 /** 通用底座补丁层里的顶层行，按 id 原文取出：探针测的就是随包交付的那两行。 */
 function rowsOf(text, ids) {
@@ -142,9 +142,10 @@ if (missing.length > 0) {
   process.exit(2);
 }
 const nodeMode = command === process.execPath ? {} : { ELECTRON_RUN_AS_NODE: '1' };
-const unlock = rowsOf(readFileSync(enterprisePatch, 'utf8'), UNLOCK_ROWS);
-if (unlock.length !== UNLOCK_ROWS.length) {
-  console.error(`probe: 通用底座补丁层里找不到 ${UNLOCK_ROWS.join('、')} 两行`);
+// 两个 id 取自检测器模块，与通用底座的守护用例同源。
+const unlock = rowsOf(readFileSync(enterprisePatch, 'utf8'), RUNTIME_ROWS);
+if (unlock.length !== RUNTIME_ROWS.length) {
+  console.error(`probe: 通用底座补丁层里找不到 ${RUNTIME_ROWS.join('、')} 两行`);
   process.exit(2);
 }
 

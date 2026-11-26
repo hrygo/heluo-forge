@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { RUNTIME_ROWS } from '../src/reflow.mjs';
+
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = join(here, '..', '..');
 const read = (file) => readFile(join(here, file), 'utf8');
@@ -42,7 +44,7 @@ const isDisabledRow = (body) => body.length === 1 && body[0] === 'disabled: true
  * 内置运行时的两行，逐行写明桌面壳与上游工具所依赖的形态（CORP-DSH-DESIGN-025）。
  * 改动其中任何一处都必须同时改这里：两行是通用底座里唯一"启用"官方能力的补丁。
  */
-const RUNTIME_ROWS = Object.freeze({
+const RUNTIME_ROW_TEXT = Object.freeze({
   'workspace-dependencies': [
     "name: '@deepseek-ai/dsh-tool-workspace-dependencies'",
     'disabled: !!js "!process.env.DSH_PRIMARY_RUNTIME"',
@@ -60,7 +62,7 @@ const RUNTIME_ROWS = Object.freeze({
 /** 内置运行时行为什么不是上面写明的形态；空列表表示两行逐行一致。保持纯函数，以便对变体复用。 */
 function runtimeRowProblems(rows) {
   const problems = [];
-  for (const [id, expected] of Object.entries(RUNTIME_ROWS)) {
+  for (const [id, expected] of Object.entries(RUNTIME_ROW_TEXT)) {
     const body = rows.get(id) ?? [];
     if (body.length !== expected.length) problems.push(`${id}: carries ${body.length} lines, not ${expected.length}`);
     expected.forEach((line, index) => {
@@ -115,6 +117,7 @@ test('the local credentials row is disabled rather than removed or re-enabled', 
 test('内置运行时两行只在桌面壳交出载荷时生效，否则与上游默认行为一致', async () => {
   const rows = topRows(await read(BASE_PATCH));
   assert.deepEqual(runtimeRowProblems(rows), []);
+  assert.deepEqual(Object.keys(RUNTIME_ROW_TEXT), [...RUNTIME_ROWS], 'the rows whose text is pinned here are exactly the two the detector module names');
   const tool = 'workspace-dependencies';
   const disabled = expressionOf(rows, tool, 'disabled');
   const source = expressionOf(rows, tool, 'source');
@@ -129,8 +132,8 @@ test('内置运行时两行只在桌面壳交出载荷时生效，否则与上�
   assert.deepEqual(evaluate(root, PAYLOAD), { value: '/harness/dsh-runtimes/dsh-primary-runtime', home: [['dsh-runtimes', 'dsh-primary-runtime']] });
   assert.equal(evaluate(python, PAYLOAD).value, 'workspace-dependencies');
   // Both rows name the upstream package they override, so a replaced package is skipped, not patched.
-  assert.equal(rows.get(tool)[0], RUNTIME_ROWS[tool][0]);
-  assert.equal(rows.get('skill-office')[0], RUNTIME_ROWS['skill-office'][0]);
+  assert.equal(rows.get(tool)[0], RUNTIME_ROW_TEXT[tool][0]);
+  assert.equal(rows.get('skill-office')[0], RUNTIME_ROW_TEXT['skill-office'][0]);
   // The Office skills are never switched off by this patch, whichever way the variable is set.
   assert.equal(rows.get('skill-office').some((line) => line.startsWith('disabled:')), false);
 });
@@ -138,13 +141,13 @@ test('内置运行时两行只在桌面壳交出载荷时生效，否则与上�
 test('反向：内置运行时两行的任何一处改动都被识别，并说出它造成的后果（变异证明）', async () => {
   const rows = topRows(await read(BASE_PATCH));
   const replace = (id, from, to) => (variant) => variant.set(id, variant.get(id).map((line) => (line === from ? to : line)));
-  const disabledLine = RUNTIME_ROWS['workspace-dependencies'][1];
-  const pythonLine = RUNTIME_ROWS['skill-office'][2];
+  const disabledLine = RUNTIME_ROW_TEXT['workspace-dependencies'][1];
+  const pythonLine = RUNTIME_ROW_TEXT['skill-office'][2];
   const variants = [
     ['工具行失去停用条件', (variant) => variant.set('workspace-dependencies', variant.get('workspace-dependencies').filter((line) => !line.startsWith('disabled:')))],
     ['工具行无条件启用', replace('workspace-dependencies', disabledLine, 'disabled: false')],
-    ['工具行换个包也照命中', replace('workspace-dependencies', RUNTIME_ROWS['workspace-dependencies'][0], "name: '@deepseek-ai/dsh-tool-other'")],
-    ['载荷装到 Harness home 之外', replace('workspace-dependencies', RUNTIME_ROWS['workspace-dependencies'][4], "root: !!js '/tmp/elsewhere'")],
+    ['工具行换个包也照命中', replace('workspace-dependencies', RUNTIME_ROW_TEXT['workspace-dependencies'][0], "name: '@deepseek-ai/dsh-tool-other'")],
+    ['载荷装到 Harness home 之外', replace('workspace-dependencies', RUNTIME_ROW_TEXT['workspace-dependencies'][4], "root: !!js '/tmp/elsewhere'")],
     ['Office 技能无条件用内置依赖', replace('skill-office', pythonLine, "pythonEnvironment: 'workspace-dependencies'")],
     ['Office 技能被整体停用', (variant) => variant.set('skill-office', ['disabled: true'])],
     ['去掉 name 守卫', (variant) => variant.set('skill-office', variant.get('skill-office').slice(1))],
