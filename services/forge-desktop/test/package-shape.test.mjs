@@ -66,6 +66,64 @@ test('钉版反向：浮动范围、未知版本与运行时依赖各自被拒�
 });
 
 /**
+ * The profile the shell owns, and how it is started. `main.mjs` is not run
+ * offline (it needs Electron), so the entry is read as text, the same way the
+ * entry checks below read it. Kept pure so the mutation cases prove each guard
+ * fails.
+ *
+ * The name is checked by what it must not be rather than by its spelling: `web`
+ * is the terminal CLI's profile and `desktop` is reserved by the dsh command
+ * line for the official Desktop. Whether the installer accepts the name is the
+ * repository's contract test, which knows the installer's own rule.
+ *
+ * The port is checked the same way (see `portProblem`): the entry must declare
+ * one, and it must pass it to the profile.
+ */
+export function profileProblems(main) {
+  const problems = [];
+  const declared = /^const PROFILE = '([^']+)';$/mu.exec(main);
+  if (declared === null) {
+    problems.push("main.mjs must name the profile it owns: `const PROFILE = '<name>'`");
+  } else if (declared[1] === 'web' || declared[1] === 'desktop') {
+    problems.push(`the shell must own its profile: "${declared[1]}" is the terminal CLI's or the official Desktop's`);
+  }
+  const port = /^const PORT = '([^']+)';$/mu.exec(main);
+  if (port === null) {
+    problems.push("main.mjs must name the port it listens on: `const PORT = '<port>'`");
+  } else {
+    const problem = portProblem(port[1]);
+    if (problem !== null) problems.push(`the shell needs a fixed port of its own: ${problem}`);
+  }
+  // The profile starts on the loopback host, on the shell's own port, and opens no browser.
+  if (!/'--profile', PROFILE, '--host', BIND_HOST, '--port', PORT, '--no-open'/u.test(main)) {
+    problems.push('the profile must start with --host BIND_HOST, --port PORT and --no-open');
+  }
+  return problems;
+}
+
+/** The terminal's default port (`dsh web`): the shell must not listen on it, the two run at once. */
+export const TERMINAL_WEB_PORT = 3080;
+
+/**
+ * Why `value` cannot be the shell's port, or null when it can. The port must be
+ * fixed, above the privileged range, below the lowest default ephemeral range
+ * (Linux starts at 32768), and not the terminal's default. `0` is refused: the
+ * system then hands out a port on every start, and the window, whose storage is
+ * keyed by origin, changes origin each time.
+ *
+ * @param {string} value
+ * @returns {string|null}
+ */
+export function portProblem(value) {
+  if (!/^\d{1,5}$/u.test(value)) return `not a port number: "${value}"`;
+  const port = Number(value);
+  if (port === 0) return '0 has the system pick a port, so the window changes origin on every start';
+  if (port < 1024 || port > 32767) return `${value} is outside 1024–32767`;
+  if (port === TERMINAL_WEB_PORT) return `${value} is the terminal's default (dsh web)`;
+  return null;
+}
+
+/**
  * dsh is started only through the shell's own entry, which hands it the bundled
  * pnpm; and both entries come from layout.mjs. Kept pure so the mutation cases
  * below prove each guard fails.
@@ -79,7 +137,7 @@ export function entryProblems(main, cli, layout) {
   if (/from 'electron'|import\('electron'\)/u.test(cli)) problems.push('embedded-cli.mjs runs as Node and must not import electron');
   // main.mjs starts the entry for the profile and for the installer, never dsh's own file.
   if (!/\{ EMBEDDED_ENTRY \} from '\.\/embedded-cli\.mjs'/u.test(main)) problems.push("main.mjs must import EMBEDDED_ENTRY from './embedded-cli.mjs'");
-  if (!/spawn\(process\.execPath, \[EMBEDDED_ENTRY, /u.test(main)) problems.push('the web profile must be started through EMBEDDED_ENTRY');
+  if (!/spawn\(process\.execPath, \[EMBEDDED_ENTRY, /u.test(main)) problems.push('the shell profile must be started through EMBEDDED_ENTRY');
   if (!/embeddedExec\(\{ command: process\.execPath, entry: EMBEDDED_ENTRY, env \}\)/u.test(main)) problems.push('the installer executor must start EMBEDDED_ENTRY');
   if (/\[DSH_ENTRY,/u.test(main)) problems.push('dsh entry must not be started directly: it would look for pnpm on PATH');
   // The entries' paths are the layout's, never spelled out here.
@@ -136,6 +194,44 @@ test('入口契约反向：绕过壳的入口、内联路径、入口内引用 e
   ];
   for (const [variantMain, variantCli, variantLayout, pattern] of variants) {
     const problems = entryProblems(variantMain, variantCli, variantLayout);
+    assert.ok(problems.length > 0, 'a mutated source must produce at least one problem');
+    assert.match(problems.join('\n'), pattern);
+  }
+});
+
+test('profile 契约：壳独占自己的 profile，不与终端的 web、官方 Desktop 的 desktop 同名；监听自己的固定端口', async () => {
+  const main = await readFile(join(PKG_ROOT, 'src', 'main.mjs'), 'utf8');
+  assert.deepEqual(profileProblems(main), []);
+});
+
+test('端口规则：系统分配、终端默认端口、特权与临时端口范围、非数字各自被拒', () => {
+  assert.equal(portProblem('30810'), null);
+  assert.equal(portProblem('1024'), null);
+  assert.equal(portProblem('32767'), null);
+  assert.match(portProblem('0'), /changes origin on every start/u);
+  assert.match(portProblem('3080'), /terminal's default/u);
+  assert.match(portProblem('80'), /outside 1024–32767/u);
+  assert.match(portProblem('32768'), /outside 1024–32767/u);
+  assert.match(portProblem('http'), /not a port number/u);
+});
+
+test('profile 契约反向：共用 web、占用 desktop、不声明 profile、系统分配端口、终端默认端口、不声明端口、去掉启动参数各自被拒（变异证明）', async () => {
+  const main = await readFile(join(PKG_ROOT, 'src', 'main.mjs'), 'utf8');
+  const declared = /^const PROFILE = '([^']+)';$/mu.exec(main);
+  assert.notEqual(declared, null, 'main.mjs names its profile');
+  const port = /^const PORT = '([^']+)';$/mu.exec(main);
+  assert.notEqual(port, null, 'main.mjs names its port');
+  const variants = [
+    [main.replace(declared[0], "const PROFILE = 'web';"), /must own its profile.*"web"/],
+    [main.replace(declared[0], "const PROFILE = 'desktop';"), /must own its profile.*"desktop"/],
+    [main.replace(declared[0], ''), /must name the profile it owns/],
+    [main.replace(port[0], "const PORT = '0';"), /fixed port of its own.*changes origin on every start/],
+    [main.replace(port[0], "const PORT = '3080';"), /fixed port of its own.*terminal's default/],
+    [main.replace(port[0], ''), /must name the port it listens on/],
+    [main.replace("'--host', BIND_HOST, '--port', PORT, '--no-open'", "'--host', BIND_HOST, '--no-open'"), /--host BIND_HOST, --port PORT/],
+  ];
+  for (const [variant, pattern] of variants) {
+    const problems = profileProblems(variant);
     assert.ok(problems.length > 0, 'a mutated source must produce at least one problem');
     assert.match(problems.join('\n'), pattern);
   }

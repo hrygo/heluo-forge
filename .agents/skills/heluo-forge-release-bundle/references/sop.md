@@ -67,7 +67,7 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。启动器把同一份
 1. 员工机器只需有 Node.js LTS（自带 npm）。DSH 可以已安装，也可以完全没装。
 2. macOS 双击 `installer/install-macos.command`；Windows 双击 `installer/install-windows.cmd`；麒麟/Linux 运行 `sh installer/install-linux.sh`。
 3. 启动器会：检查 Node.js → 缺 dsh 时执行 `npm install -g @deepseek-ai/dsh@<锁定版本>` → 用 `dsh --profile web --dump-config` 创建 web profile（若已有 desktop/web 则复用）→ 校验插件摘要 → 只调用 `dsh plugin --profile <p> add <tgz>`。
-4. 在终端运行 `dsh web`，打开它打印的本机地址，在「设置 → 插件」确认已加载（默认安装写入的是 web profile）；登录后录入个人网关 Key。不要用「打开 Desktop」代替这一步：Desktop 是另一个 profile，看不到本次安装。
+4. 在终端运行 `dsh web`，打开它打印的本机地址，在「设置 → 插件」确认已加载（默认安装写入的是 web profile）；登录后录入个人网关 Key。不要用「打开 Desktop」代替这一步：Desktop 是另一个 profile，看不到本次安装。河洛 Forge 企业版桌面应用（`heluo-desktop` profile）同理，它由应用首启自行安装。
 
 官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理（锁定基线版实测：`profile "desktop" is managed exclusively by the Electron application`）。Desktop 用户须在应用完全退出后于应用内插件设置中安装同一份 tgz，并在应用内确认挂载；`--profile desktop --dump-config` 可能被拒绝，不能作为核验依据。显式指定 desktop 时启动器会先探测该核验是否可用，不支持就在写入前拒绝；仅检测到 Desktop profile 时也会报 `DESKTOP_PROFILE_UNSUPPORTED`。
 

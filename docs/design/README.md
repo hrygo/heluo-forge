@@ -99,7 +99,7 @@ Delegra 侧的专家执行面横跨运行时镜像与 Kubernetes 沙箱，同属
 |---|---|---|---|---|
 | DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设，当前不建设 | CLI 前提不成立时先评审形态变更、范围与成本，批准后才启动 |
 | 索引契约与校验 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 评审稿；只读校验器可用 | AIHUB 索引 URL/JSON/更新 SLA、Artifactory 终端认证与三目标安装待验 |
-| 河洛 Forge 企业版桌面壳 | `services/forge-desktop/` | [services/desktop-shell.md](services/desktop-shell.md) | 草案；模块、用例与清单已具备（状态：可用），Electron 运行与打包链未验证 | 锁定版 launch URL 形态、Electron 内嵌 Node 下的凭据存储、`web` profile 并发与三平台打包链以计划 CORP-DSH-PLAN-026 的 P0 探针为准 |
+| 河洛 Forge 企业版桌面壳 | `services/forge-desktop/` | [services/desktop-shell.md](services/desktop-shell.md) | 草案；模块、用例与清单已具备（状态：可用），Electron 运行与打包链未验证 | 锁定版 launch URL 形态、Electron 内嵌 Node 下的凭据存储、独占 profile `heluo-desktop` 与固定端口的真机冒烟、三平台打包链以计划 CORP-DSH-PLAN-026 的 P0 探针为准 |
 
 [ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 为唯一 npm 源与 AIHUB 原生索引；企业私版也可经内部文件交付；007/012 为评审稿，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。部署与运维边界见[部署说明](../../deploy/README.md)。
 

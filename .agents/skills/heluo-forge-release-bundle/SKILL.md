@@ -125,7 +125,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 - `INSTALL.md` — 安装前、安装、安装后、回滚；
 - `SHA256SUMS` — 整包校验和。
 
-员工安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件。装好后在终端运行 `dsh web` 打开本机地址确认（默认安装写入 web profile）；Desktop 是独立 profile，不能代替这一步。官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理：Desktop 用户需在应用完全退出后于应用内插件设置中安装同一份 tgz，`--profile desktop --dump-config` 可能被拒绝；启动器在只有 Desktop profile 时明确拒绝，显式指定 desktop 时也会先探测核验能力、不支持就在写入前停止。终端管理员按 [SOP §5.1](references/sop.md#51-终端管理员预置与轮换)预置密钥后，员工进行新登录并首次录入个人网关 Key。
+员工安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件。装好后在终端运行 `dsh web` 打开本机地址确认（默认安装写入 web profile）；Desktop 是独立 profile，不能代替这一步。河洛 Forge 企业版桌面应用同样使用独立 profile（`heluo-desktop`），由应用首启自行安装企业插件，也不代替这一步；两者与 web profile 各自安装、各自升级。官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理：Desktop 用户需在应用完全退出后于应用内插件设置中安装同一份 tgz，`--profile desktop --dump-config` 可能被拒绝；启动器在只有 Desktop profile 时明确拒绝，显式指定 desktop 时也会先探测核验能力、不支持就在写入前停止。终端管理员按 [SOP §5.1](references/sop.md#51-终端管理员预置与轮换)预置密钥后，员工进行新登录并首次录入个人网关 Key。
 
 ## 失败处理
 

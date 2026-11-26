@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,7 @@ import {
   METADATA_FILE,
   PROFILE_NAMES,
   PNPM_FROM_HOST_LINE,
+  REINSTALL_LINE,
   RELEASE_SCHEMA,
   USAGE,
   dshHomeOf,
@@ -26,12 +27,15 @@ import {
   parseArgs,
   credentialStoreDirectory,
   ensureStoreDirectory,
+  pnpmErrorCode,
   probeStoreDirectory,
   provisionClientSecret,
   readEmbeddedClientSecret,
   readPrivateRelease,
+  recordedStoreDirectory,
   reasonTail,
   resolveDshLaunch,
+  resetProfileNodeModules,
   runInit,
   sha256File,
   shimEntryOf,
@@ -590,6 +594,234 @@ test('parseArgs：--pnpm-from-host 是布尔开关，缺省关闭，不带值', 
   assert.throws(() => parseArgs([...base, '--pnpm-from-host=true']), (error) => error.code === 'BAD_ARGUMENT' && /未知参数/u.test(error.message));
   assert.throws(() => parseArgs([...base, '--pnpm']), (error) => error.code === 'BAD_ARGUMENT' && /未知参数/u.test(error.message));
   assert.ok(USAGE.includes('--pnpm-from-host'), '用法说明须列出该参数');
+});
+
+test('parseArgs：--reinstall-on-store-mismatch 是布尔开关，缺省关闭，不带值', () => {
+  const base = ['--release', '/r', '--profile', 'web'];
+  assert.equal(parseArgs(base).reinstallOnStoreMismatch, false);
+  assert.equal(parseArgs([...base, '--reinstall-on-store-mismatch']).reinstallOnStoreMismatch, true);
+  assert.throws(() => parseArgs([...base, '--reinstall-on-store-mismatch=true']), (error) => error.code === 'BAD_ARGUMENT' && /未知参数/u.test(error.message));
+  assert.ok(USAGE.includes('--reinstall-on-store-mismatch'), '用法说明须列出该参数');
+  assert.ok(USAGE.includes('PROFILE_STORE_MISMATCH'), '用法说明须写明不带该参数时的结论');
+});
+
+/**
+ * pnpm 在「由另一个 store 链接的 node_modules」上拒绝继续安装时的输出：错误码在输出前部，
+ * 末尾几行只剩通用提示。结论若只看末尾，员工看到的就是「换一个 store 或重装依赖」，
+ * 看不出是哪一个 profile 出的问题。
+ */
+const STORE_MISMATCH_STDERR = [
+  'Error: ERR_PNPM_UNEXPECTED_STORE',
+  '  × adding a new package',
+  '  ╰─▶ Unexpected store location',
+  '  help: The dependencies at "/dsh/profiles/p/node_modules" are currently linked from the store at "/storeA/v11".',
+  '        If you want to use the new store location, reinstall your dependencies with "pnpm install".',
+  '        (This error may happen if the node_modules was installed with a different major version of pnpm)',
+].join('\n');
+
+const OWNED_PROFILE = 'heluo-desktop';
+const anotherStore = (root) => join(root, 'another-pnpm', 'store', 'v10');
+
+/**
+ * 一个「被另一个 pnpm 装过」的 profile：node_modules 里留着那份 pnpm 的记录和别的插件。
+ * `installedVersion` 给出时，profile 的清单已登记旧版本的企业插件（升级走卸载那一步）。
+ */
+function seedForeignProfile(root, { installedVersion = null } = {}) {
+  const seeded = writeProfile(root, {
+    profile: OWNED_PROFILE,
+    ...(installedVersion === null
+      ? {}
+      : { installedVersion, dependencies: { [ENTRY_PACKAGE]: 'file:/old/forge-enterprise-0.0.9.tgz' }, bundles: [ENTRY_PACKAGE] }),
+  });
+  const modules = join(seeded.profileDir, 'node_modules');
+  mkdirSync(modules, { recursive: true });
+  writeFileSync(
+    join(modules, '.modules.yaml'),
+    JSON.stringify({ layoutVersion: 5, nodeLinker: 'hoisted', packageManager: 'pnpm@10.0.0', storeDir: anotherStore(root) }),
+  );
+  mkdirSync(join(modules, 'other-plugin'), { recursive: true });
+  writeFileSync(join(modules, 'other-plugin', 'package.json'), '{"name":"other-plugin"}');
+  mkdirSync(join(modules, '.pnpm', 'other-plugin@1.0.0', 'node_modules', 'other-plugin'), { recursive: true });
+  writeFileSync(join(modules, '.pnpm', 'other-plugin@1.0.0', 'node_modules', 'other-plugin', 'index.js'), 'module.exports = 1;');
+  // pnpm 的布局里链接可以指向 profile 之外：清空 node_modules 不得进入它的目标。
+  const outside = join(root, 'outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'keep.txt'), 'keep');
+  symlinkSync(outside, join(modules, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  return { ...seeded, modules, outside };
+}
+
+/**
+ * 宿主替身：见到别的 pnpm 留下的记录，就对 `actions` 里的包操作报 store 不一致
+ * （`forever` 时清空之后也照报），其余交给 `fakeExec`。
+ */
+function hostOverForeignStore({ profileDir, actions = ['add'], forever = false }) {
+  const inner = fakeExec({ profileDir });
+  const record = join(profileDir, 'node_modules', '.modules.yaml');
+  const calls = [];
+  const exec = async (bin, args, options) => {
+    calls.push({ bin, args, options });
+    const refused = args[0] === 'plugin' && actions.includes(args[3]) && (forever || existsSync(record));
+    return refused ? { code: 1, stdout: '', stderr: STORE_MISMATCH_STDERR } : inner.exec(bin, args, options);
+  };
+  const packageActions = () => calls.filter((call) => call.args[0] === 'plugin').map((call) => call.args[3]);
+  return { exec, calls, packageActions };
+}
+
+const ownedRun = (release, dshPath, home, extra, exec) => runInit({
+  argv: ['--release', release.dir, '--profile', OWNED_PROFILE, '--dsh', dshPath, '--pnpm-from-host', ...extra],
+  env: { DSH_HOME: join(home, '.dsh'), PATH: writeBarePath(home) },
+  home,
+  exec,
+});
+
+test('pnpm store 不一致且未获修复授权：PROFILE_STORE_MISMATCH 带出 profile 与记录的 store，不重试、不动 node_modules', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, modules, outside } = seedForeignProfile(root);
+  const host = hostOverForeignStore({ profileDir });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--json'], host.exec);
+
+  assert.equal(outcome.code, 1);
+  // 不是笼统的 INSTALL_FAILED：错误码本身说出是哪一类问题。
+  assert.equal(outcome.result.error.code, 'PROFILE_STORE_MISMATCH');
+  assert.ok(outcome.result.error.message.includes(`profile「${OWNED_PROFILE}」的 node_modules 由另一个 pnpm store 装入`), outcome.result.error.message);
+  assert.ok(outcome.result.error.message.includes(`（记录的 store：${anotherStore(root)}）`), '带出这份 node_modules 当初链接的 store');
+  assert.match(outcome.result.error.next, new RegExp(`删除 profiles[/\\\\]${OWNED_PROFILE}[/\\\\]node_modules 后重跑`, 'u'));
+  // 没有授权就只试这一次：不清空，不重试。
+  assert.deepEqual(host.packageActions(), ['add']);
+  assert.equal(existsSync(join(modules, '.modules.yaml')), true, '未获授权不得动 node_modules');
+  assert.equal(existsSync(join(modules, 'other-plugin', 'package.json')), true);
+  assert.equal(existsSync(join(modules, 'linked')), true);
+  assert.equal(readFileSync(join(outside, 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('--reinstall-on-store-mismatch：清空 node_modules 后重试一次装上；链接只删链接，不进入目标', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, modules, outside } = seedForeignProfile(root);
+  const host = hostOverForeignStore({ profileDir });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--json'], host.exec);
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'installed');
+  // 同一条命令试了两次：第一次被拒，清空后第二次通过。
+  assert.deepEqual(host.packageActions(), ['add', 'add']);
+  assert.equal(existsSync(join(modules, '.modules.yaml')), false);
+  assert.equal(existsSync(join(modules, 'other-plugin')), false, '别的 pnpm 留下的插件随 node_modules 一起清掉');
+  assert.equal(existsSync(join(modules, '.pnpm')), false, '嵌套目录逐层删除');
+  assert.equal(existsSync(join(modules, 'linked')), false, '链接本身被删除');
+  assert.equal(readFileSync(join(outside, 'keep.txt'), 'utf8'), 'keep', '链接的目标原样保留');
+  assert.equal(existsSync(join(modules, ...ENTRY_PACKAGE.split('/'), 'package.json')), true, '重试后插件装上了');
+  // 结论写明修复发生过：读日志的人能看出 node_modules 被清过。
+  assert.ok(outcome.lines.includes(REINSTALL_LINE));
+  assert.ok(outcome.lines.includes(`已清空 profiles/${OWNED_PROFILE}/node_modules`), outcome.lines.join('\n'));
+  assert.ok(
+    outcome.warnings.some((line) => line.startsWith(`warn: 已按 --reinstall-on-store-mismatch 清空 profiles/${OWNED_PROFILE}/node_modules`)),
+    outcome.warnings.join('\n'),
+  );
+});
+
+test('--reinstall-on-store-mismatch：卸载旧版本时遇到 store 不一致，清空后重试卸载，再安装', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = seedForeignProfile(root, { installedVersion: '0.0.9' });
+  const host = hostOverForeignStore({ profileDir, actions: ['remove'] });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--json'], host.exec);
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'installed');
+  assert.equal(outcome.result.previousVersion, '0.0.9');
+  assert.deepEqual(host.packageActions(), ['remove', 'remove', 'add']);
+});
+
+test('--reinstall-on-store-mismatch：清空后重试仍报 store 不一致，以 PROFILE_STORE_MISMATCH 停止，不再修复第二次', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, modules } = seedForeignProfile(root);
+  const host = hostOverForeignStore({ profileDir, forever: true });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--json'], host.exec);
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'PROFILE_STORE_MISMATCH');
+  assert.match(outcome.result.error.message, /清空 profiles\/heluo-desktop\/node_modules 重试后 pnpm 仍报 store 不一致/u);
+  assert.match(outcome.result.error.next, /pnpm 配置（store-dir、PNPM_HOME）/u);
+  assert.deepEqual(host.packageActions(), ['add', 'add'], '只修复一次');
+  assert.equal(existsSync(join(modules, 'other-plugin')), false, '修复那一次确实清空了');
+});
+
+test('--reinstall-on-store-mismatch：node_modules 本身是链接时不清空，链接与它指向的内容都原样', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root, { profile: OWNED_PROFILE });
+  const foreign = join(root, 'foreign-node-modules');
+  mkdirSync(foreign, { recursive: true });
+  writeFileSync(join(foreign, '.modules.yaml'), JSON.stringify({ storeDir: anotherStore(root) }));
+  writeFileSync(join(foreign, 'keep.txt'), 'keep');
+  const link = join(profileDir, 'node_modules');
+  symlinkSync(foreign, link, 'dir');
+  const host = hostOverForeignStore({ profileDir });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--json'], host.exec);
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'PROFILE_RESET_FAILED');
+  assert.match(outcome.result.error.message, /node_modules 是链接或不是目录，未清空/u);
+  assert.deepEqual(host.packageActions(), ['add'], '清不了就不重试');
+  assert.equal(lstatSync(link).isSymbolicLink(), true, '链接本身未被删除');
+  assert.equal(existsSync(join(foreign, '.modules.yaml')), true);
+  assert.equal(readFileSync(join(foreign, 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('--reinstall-on-store-mismatch 演练：写明修复已获准，不执行任何命令', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home } = writeProfile(root, { profile: OWNED_PROFILE });
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--dry-run', '--json'], async () => assert.fail('演练不得调用 exec'));
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'dry-run');
+  assert.ok(outcome.lines.includes(REINSTALL_LINE));
+});
+
+test('recordedStoreDirectory 与 resetProfileNodeModules：两种记录格式都读得出，目录不存在时无事可做', (t) => {
+  const root = tempRoot(t);
+  assert.equal(recordedStoreDirectory(root), null, '没有 node_modules 就没有记录');
+  assert.equal(resetProfileNodeModules(root), 'absent');
+  mkdirSync(join(root, 'node_modules'));
+  const record = join(root, 'node_modules', '.modules.yaml');
+  // 现行 pnpm 写的是 JSON。
+  writeFileSync(record, JSON.stringify({ layoutVersion: 5, storeDir: '/store/a' }));
+  assert.equal(recordedStoreDirectory(root), '/store/a');
+  // 逐行的写法也读：路径里的反斜杠与两端的引号不被改动。
+  writeFileSync(record, 'layoutVersion: 5\nstoreDir: "C:\\corp\\store\\v10"\n');
+  assert.equal(recordedStoreDirectory(root), 'C:\\corp\\store\\v10');
+  writeFileSync(record, 'layoutVersion: 5\n');
+  assert.equal(recordedStoreDirectory(root), null, '没有 storeDir 就不猜');
+});
+
+test('包操作失败时结论带出 pnpm 的错误码：错误码在输出前部，只看末尾几行看不出原因', async (t) => {
+  assert.equal(pnpmErrorCode({ stdout: '', stderr: STORE_MISMATCH_STDERR }), 'ERR_PNPM_UNEXPECTED_STORE');
+  assert.equal(pnpmErrorCode({ stdout: 'added\n', stderr: 'warn: something\n' }), null);
+
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const inner = fakeExec({ profileDir });
+  const refused = async (bin, args, options) => (args[0] === 'plugin'
+    ? { code: 1, stdout: '', stderr: 'Error: ERR_PNPM_FETCH_404\n  help: request failed with status 404\n' }
+    : inner.exec(bin, args, options));
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', writeDsh(root), '--pnpm-from-host', '--json'],
+    env: { DSH_HOME: join(home, '.dsh') },
+    home,
+    exec: refused,
+  });
+  assert.equal(outcome.result.error.code, 'INSTALL_FAILED', '不是 store 不一致，仍是原有分类');
+  assert.ok(outcome.result.error.message.includes('：ERR_PNPM_FETCH_404：'), outcome.result.error.message);
 });
 
 /** What Node prints when a child dies of an uncaught exception: source, caret, the error, then where it happened. */

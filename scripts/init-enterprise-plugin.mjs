@@ -6,13 +6,16 @@
  * 只依赖 `node:` 内置模块，不 import 仓库内任何模块，也不依赖源码工作区结构。把本文件
  * 与私版交付目录一起拷到员工机即可运行。
  *
- * 写入面只有三处：`dsh plugin --profile <p> remove <包名>`（仅当 profile 里已装的是另一个
- * 版本时，先卸载再安装）、`dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、
- * shell:false、固定 argv），以及安装成功后在本 profile 目录下写一份制品证据
- * （`profiles/<p>/.heluo-enterprise-install.json`：本次 tgz 摘要 + 已安装目录摘要），
- * 供下次同版本重跑判断"已安装的是不是这份交付"。同版本重跑保持零写入；版本不同时按交付
- * 包升级或回退，命令都经官方 CLI 转发 pnpm。脚本不创建 profile、不启动或重启宿主、
- * 不直接编辑 profile 清单、不改 plugin_manager 权限、不删除用户文件。
+ * 写入面有四处：`dsh plugin --profile <p> remove <包名>`（仅当 profile 里已装的是另一个版本时，
+ * 先卸载再安装）、`dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、shell:false、固定 argv）、
+ * 安装成功后在本 profile 目录下写一份制品证据（`profiles/<p>/.heluo-enterprise-install.json`：
+ * 本次 tgz 摘要 + 已安装目录摘要），供下次同版本重跑判断"已安装的是不是这份交付"；以及
+ * pnpm 报 store 不一致（node_modules 由另一个 pnpm 的 store 链接）且调用方以
+ * `--reinstall-on-store-mismatch` 声明拥有该 profile 时，清空 `profiles/<p>/node_modules`
+ * 后重试一次。同版本重跑保持零写入；版本不同时按交付包升级或回退，命令都经官方 CLI
+ * 转发 pnpm。缺失的 profile 只经官方宿主的 web 模板创建。脚本不启动或重启宿主、不直接
+ * 编辑 profile 清单、不改 plugin_manager 权限、不删除用户文件（`node_modules` 是 pnpm 的
+ * 链接产物，不是用户文件）。
  *
  * 核验只到脚本能证明的层次：L1 安装命令退出码、L2 `--dump-config` 含本插件且 profile
  * 记录对齐；L3 运行期挂载只输出 `mounted=unknown`，必须由员工在设置页确认。
@@ -20,12 +23,12 @@
  * 归属：docs/teamflow/20261110-r17-dsh-lite-integration/TECH-CHANGE.md §3.2。
  *
  * 用法：
- *   node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web>
+ *   node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|名称>
  *     [--sha256 <hex>] [--dsh <path>] [--dry-run] [--json]
  */
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,6 +87,15 @@ const HOST_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/u;
 /** `--pnpm-from-host` 的回显：工具来源写进结论，读日志的人才知道没有查过 PATH。 */
 export const PNPM_FROM_HOST_LINE = '工具：pnpm 由宿主提供（--pnpm-from-host），不在 PATH 查找，也不补装';
 
+/**
+ * pnpm 在「node_modules 由另一个 store 链接」时拒绝继续安装所用的错误码。
+ * 触发条件是 store 目录不同，与 pnpm 版本无关：同一个 profile 被两个 pnpm 写过就会遇到。
+ */
+export const STORE_MISMATCH_CODE = 'ERR_PNPM_UNEXPECTED_STORE';
+
+/** `--reinstall-on-store-mismatch` 的回显：修复是否获准写进结论，读日志的人才知道 node_modules 可能被清空。 */
+export const REINSTALL_LINE = '修复：pnpm 报 store 不一致时，清空目标 profile 的 node_modules 后重试一次（--reinstall-on-store-mismatch）';
+
 export const USAGE = [
   '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto|名称>',
   '        [--sha256 <hex>] [--dsh <path>] [--install-host] [--host-version <ver>]',
@@ -97,6 +109,10 @@ export const USAGE = [
   '                     是同一 tgz 的自算值（自证，只能发现损坏）',
   '  --dsh <path>       指定 dsh（原生可执行文件或 npm 的 .cmd/.bat shim）；缺省在 PATH 查找',
   '  --pnpm-from-host   --dsh 指向的宿主自带 pnpm（如企业版桌面壳）；不在 PATH 查找 pnpm，也不补装',
+  '  --reinstall-on-store-mismatch',
+  '                     pnpm 报 store 不一致（该 profile 的 node_modules 由另一个 pnpm 的 store 装入）',
+  '                     时，清空 profiles/<名>/node_modules 后重试一次；只由拥有该 profile 的调用方',
+  '                     传入（企业版桌面壳）。不带该参数时报 PROFILE_STORE_MISMATCH，不动 profile',
   '  --install-host     找不到 dsh 时用 npm 全局安装官方宿主（需要 npm 与网络）',
   '  --host-version <v> 安装宿主时锁定的版本；缺省 ' + DEFAULT_HOST_VERSION,
   '  --dry-run          只打印将执行的命令与核验点，不写入',
@@ -198,6 +214,7 @@ export function parseArgs(argv) {
     installHost: false,
     hostVersion: DEFAULT_HOST_VERSION,
     pnpmFromHost: false,
+    reinstallOnStoreMismatch: false,
     dryRun: false,
     json: false,
     help: false,
@@ -229,6 +246,10 @@ export function parseArgs(argv) {
     }
     if (arg === '--pnpm-from-host') {
       options.pnpmFromHost = true;
+      continue;
+    }
+    if (arg === '--reinstall-on-store-mismatch') {
+      options.reinstallOnStoreMismatch = true;
       continue;
     }
     const separator = arg.indexOf('=');
@@ -1285,6 +1306,116 @@ async function verifyInstall({ exec, launch, profile, lines }) {
 }
 
 /**
+ * 子进程输出里的 pnpm 错误码（如 `ERR_PNPM_UNEXPECTED_STORE`），没有则为 null。
+ * 宿主把 pnpm 的两个输出流原样转出；错误码在输出的前部，而结论只带得出末尾几行，
+ * 所以单独取一次：只看末尾，员工看到的是「换一个 store 或重装依赖」这类通用提示，
+ * 看不出是哪一个 profile、哪一份 node_modules 出的问题。
+ *
+ * @param {{stdout?: string, stderr?: string}} result
+ * @returns {string|null}
+ */
+export function pnpmErrorCode(result) {
+  const match = /\bERR_PNPM_[A-Z0-9_]+\b/u.exec(`${result?.stderr ?? ''}\n${result?.stdout ?? ''}`);
+  return match === null ? null : match[0];
+}
+
+/**
+ * `profiles/<p>/node_modules/.modules.yaml` 里记录的 store 目录：pnpm 链接这份 node_modules
+ * 时所用的 store。文件名是 YAML，现行 pnpm（11、12）写入的是 JSON；也兼容逐行
+ * `storeDir: …` 的写法。读不出返回 null，结论里就不带它。
+ *
+ * @param {string} profileDir
+ * @returns {string|null}
+ */
+export function recordedStoreDirectory(profileDir) {
+  let text;
+  try {
+    text = readFileSync(join(profileDir, 'node_modules', '.modules.yaml'), 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed?.storeDir === 'string' && parsed.storeDir !== '') return parsed.storeDir;
+  } catch {
+    // 不是 JSON：按逐行的写法读。
+  }
+  const match = /^\s*storeDir\s*:\s*(\S.*?)\s*$/mu.exec(text);
+  return match === null ? null : match[1].replace(/^"(.*)"$/u, '$1');
+}
+
+/** 清空 node_modules 失败时的结论：多半是文件被进程占用，退出后重跑会再清一次。 */
+function resetFailure(error, path) {
+  return new InitError(
+    'PROFILE_RESET_FAILED',
+    `init: 无法清空 ${path}（${error?.code ?? error?.message ?? 'UNKNOWN'}）`,
+    '退出占用该 profile 的 DSH 进程（含托盘或后台驻留的）后重跑，重跑会再清一次，删到一半不影响；仍失败时请管理员处理该目录。',
+  );
+}
+
+/**
+ * 逐项删除目录里的内容，再由调用方删目录本身。链接只删链接本身，不进入它的目标：
+ * pnpm 布局里的链接可以指向 profile 之外，而上游 `apps/desktop` 注明 Electron 的递归删除
+ * 在 Windows 上会跟进目录联接，所以这里不使用递归删除。
+ */
+function removeTree(directory) {
+  let entries;
+  try {
+    entries = readdirSync(directory);
+  } catch (error) {
+    throw resetFailure(error, directory);
+  }
+  for (const name of entries) {
+    const path = join(directory, name);
+    let stats;
+    try {
+      stats = lstatSync(path);
+      if (stats.isSymbolicLink()) unlinkSync(path);
+      else if (stats.isDirectory()) {
+        removeTree(path);
+        rmdirSync(path);
+      } else unlinkSync(path);
+    } catch (error) {
+      // 里层已经说明过原因的结论原样上抛，不再包一层。
+      if (error instanceof InitError) throw error;
+      throw resetFailure(error, path);
+    }
+  }
+}
+
+/**
+ * 清空目标 profile 的 `node_modules`：pnpm 的链接产物，可由 profile 的清单与锁文件重建。
+ * 只动这一个目录，且只由包操作步骤在调用方声明拥有该 profile
+ * （`--reinstall-on-store-mismatch`）、pnpm 又报 store 不一致时调用。
+ *
+ * `node_modules` 本身是链接（符号链接或目录联接）或不是目录时不动它：那不是 pnpm 留下的
+ * 普通目录，链接背后可能是别处的东西。
+ *
+ * @param {string} profileDir
+ * @returns {'absent' | 'removed'}
+ * @throws {InitError} PROFILE_RESET_FAILED
+ */
+export function resetProfileNodeModules(profileDir) {
+  const target = join(profileDir, 'node_modules');
+  let stats;
+  try {
+    stats = lstatSync(target);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 'absent';
+    throw resetFailure(error, target);
+  }
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new InitError(
+      'PROFILE_RESET_FAILED',
+      'init: node_modules 是链接或不是目录，未清空',
+      '该 profile 的 node_modules 不是 pnpm 留下的普通目录；请管理员确认它指向什么后再处理。',
+    );
+  }
+  removeTree(target);
+  return 'removed';
+}
+
+/**
  * 执行一次初始化。
  *
  * 返回 `{ code, lines, warnings, result }`：`lines` 是要打到 stdout 的逐行回显，`result`
@@ -1469,6 +1600,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     if (options.dryRun) {
       lines.push(replacing === null ? 'dry-run：未执行安装，未写入 profile' : 'dry-run：未执行卸载与安装，未写入 profile');
       if (options.pnpmFromHost) lines.push(PNPM_FROM_HOST_LINE);
+      if (options.reinstallOnStoreMismatch) lines.push(REINSTALL_LINE);
       if (release.secret !== null) lines.push('dry-run：安装完成后会把交付目录内的 IAM 客户端密钥写入本机凭据库，并删除该密钥文件');
       lines.push(...verificationPoints(profile));
       return {
@@ -1493,24 +1625,61 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     // 也不补装：宿主的每次包操作都用自己的 pnpm，员工机器上有没有装都不影响安装。
     const pnpm = options.pnpmFromHost ? { env, dir: null } : await ensurePnpm({ exec: cli, env, platform: process.platform, lines });
     if (options.pnpmFromHost) lines.push(PNPM_FROM_HOST_LINE);
+    if (options.reinstallOnStoreMismatch) lines.push(REINSTALL_LINE);
+    // 包操作遇到 pnpm 的 store 不一致（node_modules 由另一个 pnpm 的 store 链接）时：调用方
+    // 声明拥有该 profile，就清空 node_modules 重试一次；否则带着原因停下，不动 profile。
+    // 整次初始化只修复一次：修复之后仍不一致，说明两次包操作解析出了不同的 store。
+    let storeRepaired = false;
+    const mismatch = (args, detail, next) => new InitError('PROFILE_STORE_MISMATCH', `init: dsh plugin ${args[3]} 失败：${detail}`, next);
+    const packageStep = async (args, failureCode) => {
+      const run = () => runStep(cli, launch, args, INSTALL_TIMEOUT_MS, failureCode, { env: pnpm.env });
+      let result = await run();
+      if (result.code === 0 || pnpmErrorCode(result) !== STORE_MISMATCH_CODE) return result;
+      const recorded = recordedStoreDirectory(profile.dir);
+      const linked = recorded === null ? '' : `（记录的 store：${recorded}）`;
+      if (!options.reinstallOnStoreMismatch) {
+        throw mismatch(
+          args,
+          `profile「${profile.name}」的 node_modules 由另一个 pnpm store 装入${linked}，本次使用的 pnpm 不能在它上面继续安装`,
+          `退出占用该 profile 的 DSH 进程，删除 ${join('profiles', profile.name, 'node_modules')} 后重跑；该 profile 里其他来源的插件须仍能重新获取。`,
+        );
+      }
+      const environment = '连续两次包操作解析出不同的 store，属该机器的 pnpm 环境问题；请管理员核对该机器的 pnpm 配置（store-dir、PNPM_HOME）后重试。';
+      if (storeRepaired) {
+        throw mismatch(args, `本次初始化已清空过 profiles/${profile.name}/node_modules，这一步 pnpm 仍报 store 不一致${linked}`, environment);
+      }
+      storeRepaired = true;
+      lines.push(`store 不一致：profile「${profile.name}」的 node_modules 由另一个 pnpm store 装入${linked}，清空后重试本步`);
+      lines.push(resetProfileNodeModules(profile.dir) === 'removed'
+        ? `已清空 profiles/${profile.name}/node_modules`
+        : `profiles/${profile.name}/node_modules 已不存在`);
+      warnings.push(`warn: 已按 --reinstall-on-store-mismatch 清空 profiles/${profile.name}/node_modules 并重试；该 profile 里不由本次交付装入的插件需要重新安装。`);
+      result = await run();
+      if (result.code !== 0 && pnpmErrorCode(result) === STORE_MISMATCH_CODE) {
+        throw mismatch(args, `清空 profiles/${profile.name}/node_modules 重试后 pnpm 仍报 store 不一致${linked}`, environment);
+      }
+      return result;
+    };
     if (replacing !== null) {
-      const removal = await runStep(cli, launch, removeCommand, INSTALL_TIMEOUT_MS, 'UNINSTALL_FAILED', { env: pnpm.env });
+      const removal = await packageStep(removeCommand, 'UNINSTALL_FAILED');
       if (removal.code !== 0) {
         const reason = reasonTail(removal);
+        const code = pnpmErrorCode(removal);
         throw new InitError(
           'UNINSTALL_FAILED',
-          `init: dsh plugin remove 失败（退出码 ${removal.code}）${reason === '' ? '' : `：${reason}`}`,
+          `init: dsh plugin remove 失败（退出码 ${removal.code}）${code === null ? '' : `：${code}`}${reason === '' ? '' : `：${reason}`}`,
           `旧版本 ${replacing} 仍在或状态未知，本次未执行安装。确认没有 DSH 进程占用 profile「${profile.name}」后重跑本脚本；需要人工处理时先执行 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}。`,
         );
       }
       lines.push(`卸载：dsh 退出码 0（旧版本 ${replacing} 已移除）`);
     }
-    const install = await runStep(cli, launch, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED', { env: pnpm.env });
+    const install = await packageStep(command, 'INSTALL_FAILED');
     if (install.code !== 0) {
       const reason = reasonTail(install);
+      const code = pnpmErrorCode(install);
       throw new InitError(
         'INSTALL_FAILED',
-        `init: dsh plugin add 失败（退出码 ${install.code}）${reason === '' ? '' : `：${reason}`}`,
+        `init: dsh plugin add 失败（退出码 ${install.code}）${code === null ? '' : `：${code}`}${reason === '' ? '' : `：${reason}`}`,
         replacing === null
           ? `检查上面的命令输出与 profile 占用情况后重跑；回滚用 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}。`
           : `旧版本 ${replacing} 已卸载，本次安装未完成，profile 当前不含 ${ENTRY_PACKAGE}。排除原因后重跑本脚本会重新安装；需要回到旧版本时用旧交付包重跑本脚本。`,

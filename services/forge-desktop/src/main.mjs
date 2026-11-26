@@ -25,8 +25,30 @@ import { createRuntime } from './runtime.mjs';
 import { startShell } from './shell.mjs';
 import { childEnvironment, loginShellArgs, loginShellFallbackArgs, parseNulEnv, parseShellEnv } from './shell-env.mjs';
 
-const PROFILE = 'web';
+/**
+ * The one profile the shell owns, under `$DSH_HOME/profiles/`. Not `web`: that
+ * profile is the terminal CLI's, and one profile for both let either side
+ * change the other's plugins, patch layer and lockfile. Not `desktop`: the dsh
+ * command line reserves that name for the official Desktop application. The
+ * name is a custom one the installer accepts and creates from the web template.
+ * What the terminal shares with the shell is kept above the profiles: sessions
+ * and sign-in state under `$DSH_HOME`.
+ */
+const PROFILE = 'heluo-desktop';
 const BIND_HOST = '127.0.0.1';
+/**
+ * The one port the shell's service listens on. It is fixed so the window keeps
+ * the same origin from one start to the next: the Web client keeps drafts,
+ * shortcut overrides and layout state in the window's storage, which is keyed
+ * by origin, and an origin includes the port. A port handed out by the system
+ * (`0`) resets all of that on every start.
+ *
+ * 30810 is assigned to no one at IANA, lies below the lowest default ephemeral
+ * range (Linux starts at 32768), and is not the terminal's default (3080), so a
+ * terminal `dsh web` and the shell run at once. What a fixed port costs is that
+ * another program on it stops the shell from starting (`PORT_CONFLICT`).
+ */
+const PORT = '30810';
 const DSH_ENTRY = join(process.resourcesPath, ...DSH_ENTRY_PARTS);
 const PNPM_ENTRY = join(process.resourcesPath, ...PNPM_ENTRY_PARTS);
 const TRAY_ICON = join(process.resourcesPath, ...TRAY_ICON_PARTS);
@@ -61,10 +83,14 @@ function profileDirectory(env) {
   return join(env.DSH_HOME ?? join(homedir(), '.dsh'), 'profiles', PROFILE);
 }
 
-/** The web profile's process: this app's binary as Node, running the embedded dsh through the shell's entry. */
+/**
+ * The shell's profile process: this app's binary as Node, running the embedded
+ * dsh through the shell's entry. It listens on the shell's own fixed port, so a
+ * terminal `dsh web` can run at the same time and the window's origin stays put.
+ */
 function spawnProfile(env) {
   return () => {
-    const child = spawn(process.execPath, [EMBEDDED_ENTRY, '--profile', PROFILE, '--host', BIND_HOST, '--no-open'], {
+    const child = spawn(process.execPath, [EMBEDDED_ENTRY, '--profile', PROFILE, '--host', BIND_HOST, '--port', PORT, '--no-open'], {
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,

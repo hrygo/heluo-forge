@@ -791,6 +791,11 @@ test('employee guide starts dsh web and Desktop is documented separately (issue 
   assert.match(guide, /在终端运行 dsh web/u, '默认安装写入 web profile，必须让员工显式启动 dsh web');
   assert.doesNotMatch(guide, /或打开 Desktop/u, '不能用「打开 Desktop」代替启动 web profile');
   assert.match(guide, /## Desktop 用户/u, 'Desktop 需单独说明安装与核验条件');
+  // The desktop shell owns its own profile: an employee with both the terminal and the app installs twice.
+  assert.match(guide, /桌面应用（Windows \/ macOS 安装包）使用自己的 heluo-desktop profile/u, '须说明桌面应用使用独立 profile，本启动器只装 web profile');
+  assert.match(guide, /它使用 heluo-desktop profile，\s*与 web profile 各自安装、各自升级/u, '终端与桌面应用各自安装、各自升级');
+  // The launcher never clears node_modules itself: the guide says what the employee is to do when pnpm refuses the profile.
+  assert.match(guide, /提示 PROFILE_STORE_MISMATCH：这个 profile 的 node_modules 是另一个 pnpm 用别的 store 装的。退出所有 DSH 进程（含托盘驻留的），删除 ~\/\.dsh\/profiles\/<profile 名>\/node_modules，再运行本启动器/u, '须给出 PROFILE_STORE_MISMATCH 的处理办法');
   assert.match(guide, /自算值\*\*（自证）/u, '自算摘要必须标成自证，而不是独立口径');
 
   for (const name of ['install-macos.command', 'install-linux.sh']) {
