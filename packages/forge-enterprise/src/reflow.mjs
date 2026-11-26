@@ -18,6 +18,12 @@ export const OFFICIAL_ROWS = Object.freeze([
   'credentials',
 ]);
 
+// 内置运行时的两行（CORP-DSH-DESIGN-025）。它们不在官方停用范围内，也不参与回灌判定：
+// 启用与否取决于桌面壳是否交出 `DSH_PRIMARY_RUNTIME`，而不是 `disabled: true` 有没有落地，
+// 所以 `rowsFromDump` 读不出它们的状态。运行层的核验见
+// `scripts/probe/run-primary-runtime-probe.mjs`。
+export const RUNTIME_ROWS = Object.freeze(['workspace-dependencies', 'skill-office']);
+
 export class EnterpriseReflowError extends Error {
   constructor(code, message, details = undefined) {
     super(message);

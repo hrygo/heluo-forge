@@ -20,6 +20,7 @@ import { fail } from './errors.mjs';
 import { EMBEDDED_ENTRY } from './embedded-cli.mjs';
 import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
 import { embeddedExec, embeddedScriptExec, runCommand } from './process.mjs';
+import { primaryRuntimeVariable } from './primary-runtime.mjs';
 import { createRuntime } from './runtime.mjs';
 import { startShell } from './shell.mjs';
 import { childEnvironment, loginShellArgs, loginShellFallbackArgs, parseNulEnv, parseShellEnv } from './shell-env.mjs';
@@ -48,7 +49,11 @@ async function environmentForChildren() {
     else loginEnv = parseShellEnv((await ask(fallback)).stdout);
   }
   // The shell's own variables never reach a child; ELECTRON_RUN_AS_NODE is set per child.
-  return childEnvironment(process.env, loginEnv, { prepend: [join(process.resourcesPath, BIN_DIR)] });
+  return {
+    ...childEnvironment(process.env, loginEnv, { prepend: [join(process.resourcesPath, BIN_DIR)] }),
+    // The bundled runtime is the app's own: named after everything inherited was merged, so nothing inherited names it.
+    ...primaryRuntimeVariable(process.resourcesPath),
+  };
 }
 
 /** The directory of the profile the shell installs into. The rule is the installer's own for `$DSH_HOME` (dshHomeOf): the two must change together. */

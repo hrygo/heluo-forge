@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DSH_ENTRY_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../services/forge-desktop/src/layout.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const WIN_ICON = 'icons/app-icon.ico';
@@ -38,11 +38,12 @@ const DEFAULT_APP_DIR = join('services', 'forge-desktop');
 const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb'];
 
 /**
- * The one directory that travels exactly as its tarball laid it down: the dsh
- * artifact `runtime-lock.json` pins by digest. Everything else under
- * `dsh/node_modules` is the registry closure.
+ * The directories that travel exactly as they were staged: the dsh artifact
+ * `runtime-lock.json` pins by digest, and the bundled runtime, whose staged
+ * bytes are the ones its checks ran against and its record counts. Everything
+ * else under `dsh/node_modules` is the registry closure.
  */
-const VERBATIM_RUNTIME_DIR = `${DSH_ENTRY_PARTS.slice(0, 4).join('/')}/`;
+const VERBATIM_RUNTIME_DIRS = Object.freeze([`${DSH_ENTRY_PARTS.slice(0, 4).join('/')}/`, `${PRIMARY_RUNTIME_DIR}/`]);
 
 /**
  * The locales Electron keeps, each named the way the platform names its locale
@@ -132,17 +133,17 @@ export function readAppIdentity(path) {
  * that carries the same rule to electron-builder.
  */
 export function isPackaged(relativePath) {
-  if (relativePath.startsWith(VERBATIM_RUNTIME_DIR)) return true;
+  if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
   return !RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath));
 }
 
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
- * and lets a later pattern override an earlier one, so the verbatim directory
+ * and lets a later pattern override an earlier one, so each verbatim directory
  * is re-included after the exclusions, not before them.
  */
 function runtimeFilter() {
-  return ['**/*', ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`), `${VERBATIM_RUNTIME_DIR}**`];
+  return ['**/*', ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`), ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`)];
 }
 
 /**

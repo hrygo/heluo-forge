@@ -65,7 +65,7 @@ test('配置反向：换掉身份任一字段，配置随之偏离真源（判�
   }
 });
 
-test('安装包内容：运行时不读取的文件类型不进包，台账钉定的制品目录原样保留', () => {
+test('安装包内容：运行时不读取的文件类型不进包，台账钉定的制品目录与内置运行时原样保留', () => {
   // 规则只认文件类型，与所在目录无关：同一个 .d.ts，在制品目录内留下，在闭包里裁掉。
   assert.equal(isPackaged('dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts'), true);
   assert.equal(isPackaged('dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts'), false);
@@ -74,6 +74,13 @@ test('安装包内容：运行时不读取的文件类型不进包，台账钉�
     assert.equal(isPackaged(`dsh/node_modules/pkg/lib/${excluded}`), false, excluded);
   }
   assert.equal(isPackaged('dsh/node_modules/pkg/lib/index.js'), true);
+  // 内置运行时是暂存后检查过、并按文件数与字节数记入构建记录的那棵树：进包的必须就是它。
+  // 它里面 pnpm 副本的类型声明随载荷保留，而壳直接启动的那份 pnpm 属于注册表闭包，照旧裁掉。
+  assert.equal(isPackaged('primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts'), true);
+  assert.equal(isPackaged('pnpm/dist/node_modules/fdir/dist/index.d.mts'), false);
+  assert.equal(isPackaged('primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/tests.map'), true);
+  // 豁免落到目录边界上：同前缀的别的目录不在豁免之列。
+  assert.equal(isPackaged('primary-runtime-other/lib/index.d.ts'), false);
   // 运行文件、许可与说明文本、品牌材料、员工包和 npm 的隐藏锁文件都不在规则内。
   for (const kept of ['dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js', 'dsh/node_modules/zod/LICENSE.md', 'dsh/node_modules/openai/README.md', 'dsh/node_modules/.package-lock.json', 'brand/tray.png', 'brand/status.html', 'enterprise-assets/employee-manifest.json']) {
     assert.equal(isPackaged(kept), true, kept);
@@ -84,7 +91,7 @@ test('打包配置：过滤规则与判定同源且顺序正确；关闭差分�
   const root = temp(t);
   const config = builderConfig({ identity: readAppIdentity(identityFile(root)), version: '1.2.3', resourcesDir: join(root, 'resources'), iconsDir: join(BRAND_DIR, 'icons'), appDir: join(REPO_ROOT, 'services', 'forge-desktop'), outputDir: join(root, 'dist') });
   // electron-builder 按顺序应用并让后者覆盖前者：豁免目录排在排除规则之后才生效。
-  assert.deepEqual(config.extraResources[0].filter, ['**/*', '!**/*.ts', '!**/*.cts', '!**/*.mts', '!**/*.map', '!**/*.pdb', 'dsh/node_modules/@deepseek-ai/dsh/**']);
+  assert.deepEqual(config.extraResources[0].filter, ['**/*', '!**/*.ts', '!**/*.cts', '!**/*.mts', '!**/*.map', '!**/*.pdb', 'dsh/node_modules/@deepseek-ai/dsh/**', 'primary-runtime/**']);
   // 本应用不建自动更新 feed，差分形式的归档比 solid 归档大三分之一。
   assert.equal(config.nsis.differentialPackage, false);
   // 两种拼写各对应一种平台的语言文件名：macOS 用 en / zh_CN / zh_TW，Windows 与 Linux 用 en-US / zh-CN / zh-TW。

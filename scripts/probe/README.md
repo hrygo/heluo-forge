@@ -316,3 +316,51 @@ node scripts/probe/run-task-acceptance.mjs --out /tmp/task-accept.json
 
 2026-11-25 实测：连续三次 11/11，退出码 0，单次约 20 秒。
 记录见 [docs/design/verification/iam-store-access-task.md](../../docs/design/verification/iam-store-access-task.md)。
+
+## `run-primary-runtime-probe.mjs`（内置运行时：`web` profile 里的到达性）
+
+回答 [CORP-DSH-PLAN-026 §3 #9](../../docs/plans/2026-11-19-desktop-bundle-packaging.md)：桌面壳随包携带的
+运行时，能否在不修改上游的前提下到达 `web` profile 的 agent。在临时 `DSH_HOME` 里引导 `web` profile，
+把探针插件挂在末尾，在宿主进程内用宿主自己的工具管线核对；再跑一组不带解锁的基线作对照。
+不接真实模型或网关。
+
+```sh
+# 先按发布流水线的顺序暂存：dsh 闭包，再是内置运行时（它的布局取自暂存好的 dsh）。
+node scripts/stage-desktop-payload.mjs --output <staged> --dsh-tgz <dsh.tgz> --pnpm-tgz <pnpm.tgz>
+node scripts/stage-primary-runtime.mjs --target <mac-arm64|win-x64> --output <staged>/resources \
+  --pnpm-tgz <pnpm.tgz> --dsh-modules <staged>/resources/dsh/node_modules
+
+node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources
+node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources --electron <应用二进制>
+node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources \
+  --bundle <heluo-forge-enterprise-*.tgz> --keep --out /tmp/primary-runtime-probe.json
+
+# 以打出来的应用包为准：包内的 dsh 闭包与载荷，应用自己的 Electron 与 app.asar 里的壳入口（目前只认 macOS 的 .app）。
+node scripts/probe/run-primary-runtime-probe.mjs --app <staged 以外打出来的 .app> \
+  --bundle <heluo-forge-enterprise-*.tgz>
+```
+
+解锁的两种交付方式都要成立：默认由 `--patch` 覆盖层携带两行（原文取自
+`packages/forge-enterprise/cordis.patch.yml`）；给出 `--bundle` 时改为安装该企业底座包，由它的补丁层
+交付这两行。`--electron` 让 dsh 以 Electron 的 Node 模式运行，与桌面壳一致。给出 `--app` 时以打出来的应用包为准，
+与桌面壳的启动方式一致。退出码：0 全部通过；
+1 有失败项；2 前置条件不具备。
+
+| 断言 | 含义 |
+|---|---|
+| `探针在宿主内运行` | 探针插件在真实 `web` profile 进程内跑完并写出结果 |
+| `应用二进制可作为 Node 运行`（仅 `--app`） | 应用自己的 Electron 能以 Node 模式启动，壳的入口与 dsh 都靠它 |
+| `建出带默认 preset 的真实 agent 会话` | 按 web 会话控制器的方式组装：解析默认 preset，在 agent 的 setup 里挂载 |
+| `Loader 对这两行没有告警` | 两行按 id 命中，没有 `not found` 或 `name` 不匹配 |
+| `工具在宿主层注册`、`工具对 agent 可见` | `ctx.tools.get` 在宿主层与 agent 作用域都取得到 |
+| `agent 的调用成功`、`首次调用把载荷安装到 Harness home` | 返回绝对路径，路径在 `$DSH_HOME/dsh-runtimes/` 之下 |
+| `安装后的 runtime.json 与暂存的一致` 等四条 | 清单相同、别名是相对链接、报出 node / pnpm 与各发行包版本、再次调用路径不变 |
+| `Office 技能把模型指向内置依赖` | 技能正文让模型调用 `load_workspace_dependencies`，而不是找 PATH 上的 Python |
+| `agent 的 shell 用内置 Python 跑起 Office 库` | 在 agent 作用域里派发 `bash`，跑通 numpy、pandas 与三个 Office 库 |
+| `之后的会话复用已安装的载荷` | 第二个进程再调用时，安装目录没有被重建 |
+| `基线：…` 四条 | 不带解锁时工具未注册、调用被拒、技能指向用户自己的 Python、没有安装任何东西 |
+| `暂存的载荷没有被写入，也没有变大` | 工具运行期间暂存目录的文件数不变 |
+
+2026-11-26 实测（macOS arm64，DSH 0.2.2-rc.5 的闭包与 mac-arm64 载荷）：`--patch` 配 Electron 44.7.0
+运行器 23/23；企业底座包配 Node 24.21.0 运行器 27/27；`--app` 配企业底座包 28/28；单次约 60 秒。
+记录见 [docs/design/verification/desktop-primary-runtime.md](../../docs/design/verification/desktop-primary-runtime.md)。
