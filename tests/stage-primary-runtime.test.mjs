@@ -386,6 +386,77 @@ test('载荷布局：runtime.json 与上游工具读取的三个解释器落在�
   assert.equal(lstatSync(join(f.payload, 'dependencies', 'python', 'bin', 'python3.12')).isFile(), true);
 });
 
+test('win-x64 载荷布局：从 Windows Node zip 根目录取 node.exe 落到 bin/node.exe，并跳过非 Windows 主机冒烟（回归）', { skip: !POSIX }, async (t) => {
+  const buildWinFixture = (nodeEntries) => {
+    const f = fixture(t);
+    const root = temp(t);
+    const cache = join(root, 'win-cache');
+    mkdirSync(cache, { recursive: true });
+    const nodeVersion = process.versions.node;
+    const nodeRoot = `node-v${nodeVersion}-win-x64`;
+    const nodeBytes = writeZip(nodeEntries(nodeRoot));
+    const nodeEntry = cached(cache, nodeBytes, `https://nodejs.example.invalid/dist/v${nodeVersion}/${nodeRoot}.zip`);
+
+    const pythonSource = join(root, 'win-python');
+    mkdirSync(join(pythonSource, 'Lib'), { recursive: true });
+    writeFileSync(join(pythonSource, 'python.exe'), 'MZ-standin-python');
+    writeFileSync(join(pythonSource, 'Lib', 'os.py'), '# stand-in stdlib\n');
+    const pythonArchive = `cpython-${PYTHON_VERSION}+20260901-x86_64-pc-windows-msvc-install_only_stripped.tar.gz`;
+    const pythonEntry = cached(cache, archiveTree(pythonSource, 'python', join(root, 'win-python.tgz')), `https://github.example.invalid/astral-sh/python-build-standalone/releases/download/20260901/${pythonArchive}`);
+
+    const winWheels = [numpyWheel(cache), putWheel(cache, 'pandas-3.0.1', [{ path: 'pandas/__init__.py', content: '' }]), putWheel(cache, 'lxml-6.1.3', [{ path: 'lxml/etree.pyd', content: 'pyd' }])];
+    const sharedWheels = [putWheel(cache, 'python_docx-1.2.0', [{ path: 'docx/__init__.py', content: '' }])];
+    const lock = {
+      nodeVersion,
+      pythonVersion: PYTHON_VERSION,
+      pythonRelease: '20260901',
+      targets: {
+        ...f.lock.targets,
+        'win-x64': {
+          nodeArchive: 'win-x64.zip',
+          nodeSha256: nodeEntry.sha256,
+          pythonTarget: 'x86_64-pc-windows-msvc',
+          pythonSha256: pythonEntry.sha256,
+          wheels: winWheels.map(({ url, sha256 }) => ({ url, sha256 })),
+        },
+      },
+      wheels: sharedWheels.map(({ url, sha256 }) => ({ url, sha256 })),
+      pythonPackages: PYTHON_PACKAGES,
+    };
+    const lockPath = join(root, 'win-primary-runtime-lock.json');
+    writeLedger(lockPath, lock);
+    return { f, cache, lockPath };
+  };
+
+  // Official Windows Node.js zips keep `node.exe` at `<root>/node.exe`, never `<root>/bin/node.exe`.
+  const valid = buildWinFixture((nodeRoot) => [
+    { path: `${nodeRoot}/node.exe`, content: 'MZ-standin-node' },
+    { path: `${nodeRoot}/LICENSE`, content: 'Node.js MIT\n' },
+    { path: `${nodeRoot}/npm.cmd`, content: '@ECHO OFF\n' },
+  ]);
+  const record = await stagePrimaryRuntime(valid.f.args({ target: 'win-x64', cache: valid.cache, lockPath: valid.lockPath, smoke: process.platform !== 'win32' }));
+  const manifest = JSON.parse(readFileSync(join(valid.f.payload, 'runtime.json'), 'utf8'));
+  const paths = helpers.workspaceDependencyPaths(valid.f.payload, manifest);
+  assert.equal(record.target, 'win-x64');
+  assert.equal(record.smoke.status, 'skipped');
+  assert.equal(manifest.platform, 'win32');
+  assert.equal(readFileSync(paths.node, 'utf8'), 'MZ-standin-node');
+  assert.equal(readFileSync(join(valid.f.payload, 'dependencies', 'node', 'LICENSE'), 'utf8'), 'Node.js MIT\n');
+  assert.equal(existsSync(join(valid.f.payload, 'dependencies', 'node', 'npm.cmd')), false);
+  assert.equal(readFileSync(paths.python, 'utf8'), 'MZ-standin-python');
+  assert.equal(existsSync(join(paths.pythonPackages, 'numpy', '__init__.py')), true);
+
+  // Reverse: a Windows zip missing `<root>/node.exe` (e.g. only under `bin/`) fails closed.
+  const wrongLayout = buildWinFixture((nodeRoot) => [
+    { path: `${nodeRoot}/bin/node.exe`, content: 'MZ-standin-node' },
+    { path: `${nodeRoot}/LICENSE`, content: 'Node.js MIT\n' },
+  ]);
+  await assert.rejects(
+    stagePrimaryRuntime(wrongLayout.f.args({ target: 'win-x64', cache: wrongLayout.cache, lockPath: wrongLayout.lockPath, smoke: false })),
+    (error) => refused('ARCHIVE_LAYOUT_INVALID')(error) && error.message.includes('node.exe'),
+  );
+});
+
 test('只有解释器与许可证进入载荷：Node.js 发行包里的其余成员不随包', { skip: !POSIX }, async (t) => {
   const f = fixture(t);
   await stagePrimaryRuntime(f.args());
@@ -634,7 +705,7 @@ test('反向：流水线里运行时暂缺的任何一环都被识别（变异�
   const workflow = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-bundle.yml'), 'utf8');
   const variants = [
     ['the lock is not compared with upstream', workflow.replace('      - name: Verify the pinned runtime lock against upstream\n        run: node scripts/stage-primary-runtime.mjs --verify-lock\n', ''), /desktop-mac: the pinned lock must be compared with upstream/u],
-    ['the Windows job builds the wrong payload', workflow.replace('--target win-x64', '--target linux-x64'), /desktop-windows: the staging must pass --target win-x64/u],
+    ['the Windows job builds the wrong payload', workflow.replace(/(stage-primary-runtime\.mjs[^\n]*\n\s+)--target win-x64/u, '$1--target linux-x64'), /desktop-windows: the staging must pass --target win-x64/u],
     ['the macOS job stages before the dsh closure', workflow.replace(/(      - name: Stage the desktop payload\n        run: \|\n(?:[^\n]*\n)*?)(      - name: Stage the bundled runtime\n        run: \|\n(?:[^\n]*\n)*?[^\n]*primary-runtime-record\.json"\n)/u, '$2$1'), /desktop-mac: the bundled runtime must be staged after the dsh closure/u],
     ['the runtime is not staged at all', workflow.replace(/      - name: Stage the bundled runtime\n        run: \|\n(?:[^\n]*\n)*?[^\n]*primary-runtime-record\.json"\n/u, ''), /desktop-mac: exactly one staging/u],
   ];
