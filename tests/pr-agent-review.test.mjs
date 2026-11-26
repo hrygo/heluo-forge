@@ -12,6 +12,7 @@ const runFile = promisify(execFile);
 const workflow = await readFile(new URL('../.github/workflows/pr-agent.yml', import.meta.url), 'utf8');
 const head = 'a'.repeat(40);
 const base = 'b'.repeat(40);
+const longCommentText = '中'.repeat(44_000);
 
 function stepDefinition(name) {
   return workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0] ?? '';
@@ -112,6 +113,7 @@ async function withGitHub(run) {
     GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
     GITHUB_REPOSITORY: 'corp/example',
     GITHUB_OUTPUT: join(directory, 'output'),
+    GITHUB_EVENT_PATH: join(directory, 'event.json'),
     GH_TOKEN: 'test-token',
     PR_NUMBER: '42',
     EVENT_NAME: 'pull_request',
@@ -129,6 +131,11 @@ async function withGitHub(run) {
 
 async function execute(name, env) {
   return runFile(process.execPath, ['--input-type=module', '--eval', stepScript(name)], { env });
+}
+
+async function commentEvent(env, body) {
+  await writeFile(env.GITHUB_EVENT_PATH, JSON.stringify({ action: 'created', comment: { body } }));
+  return { ...env, EVENT_NAME: 'issue_comment', EVENT_ACTION: 'created' };
 }
 
 async function capture(env) {
@@ -342,21 +349,30 @@ test('manual describe commands select only the summary action', async () => {
     ['issue_comment', '  /DESCRIBE_PR\n--pr_description.enable_help_text=true', [true, false]],
     ['issue_comment', '/review --pr_reviewer.inline_key_issues=true', [false, true]],
     ['issue_comment', '/ask what does /describe do?', [false, true]],
+    ['issue_comment', `/ask ${longCommentText}`, [false, true]],
     ['issue_comment', '/describe_extra', [false, true]],
   ];
   await withGitHub(async ({ env }) => {
     for (const [event, body, expected] of cases) {
-      const revision = await capture({
-        ...env,
-        EVENT_NAME: event,
-        EVENT_HEAD: event === 'pull_request' ? head : '',
-        COMMENT_BODY: body,
-      });
+      const eventEnv = event === 'issue_comment' ? await commentEvent(env, body) : { ...env, EVENT_HEAD: head };
+      const revision = await capture(eventEnv);
       const github = { event_name: event, event: { comment: { body } } };
       const steps = { revision: { outcome: 'success', outputs: revision } };
-      assert.deepEqual(canRun.map((matches) => matches(github, steps, () => false)), expected, body || event);
+      assert.deepEqual(canRun.map((matches) => matches(github, steps, () => false)), expected, body.slice(0, 60) || event);
     }
   });
+});
+
+test('long comment bodies do not enter the runner environment and review validation still reads the command', async () => {
+  const review = `/review ${longCommentText}`;
+  assert.ok(Buffer.byteLength(review) > 128 * 1024);
+  await withGitHub(async ({ env }) => {
+    const manual = await commentEvent(env, review);
+    const revision = await capture(manual);
+    assert.equal(revision.head, head);
+    await assert.rejects(submit(manual, revision, ''), /did not produce structured review output/u);
+  });
+  assert.doesNotMatch(workflow, /^ +[A-Z_]+: \$\{\{ github\.event\.comment\.body \}\}/mu);
 });
 
 test('large reviews use bounded chunking and show coverage gaps', async () => {
@@ -465,7 +481,7 @@ test('an outdated queued event cannot review the new head on behalf of an older 
 test('an explicit manual /review still runs for a previously reviewed head', async () => {
   await withGitHub(async ({ state, env }) => {
     recordAutomaticRun(state);
-    const manual = { ...env, EVENT_NAME: 'issue_comment', EVENT_ACTION: 'created', COMMENT_BODY: '  /review' };
+    const manual = await commentEvent(env, '  /review');
     const revision = await capture(manual);
     assert.equal(revision.head, head);
     await submit(manual, revision, '{"merge_recommendation":"no_concerns_found"}');
@@ -504,10 +520,10 @@ test('missing output fails only when a review was expected', async () => {
   await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
     await assert.rejects(submit(env, revision, ''));
-    await assert.rejects(submit({ ...env, EVENT_NAME: 'issue_comment', COMMENT_BODY: '  /review --some-option' }, revision, ''));
-    const incremental = await submit({ ...env, EVENT_NAME: 'issue_comment', COMMENT_BODY: '/review -i' }, revision, '');
+    await assert.rejects(submit(await commentEvent(env, '  /review --some-option'), revision, ''));
+    const incremental = await submit(await commentEvent(env, '/review -i'), revision, '');
     assert.match(incremental.stdout, /warning.*Incremental review.*output/iu);
-    await submit({ ...env, EVENT_NAME: 'issue_comment', COMMENT_BODY: '/ask a question' }, revision, '');
+    await submit(await commentEvent(env, '/ask a question'), revision, '');
     await submit({ ...env, PR_TITLE: '[Auto] ignored' }, revision, '');
     assert.equal(state.requests.filter((request) => request.method === 'POST').length, 0);
   });
@@ -771,7 +787,7 @@ test('a target branch advance while checking synchronized comments invalidates t
 
 test('manual review of a fork or deleted head repository skips both model steps', async () => {
   await withGitHub(async ({ state, env }) => {
-    const manualReview = { ...env, EVENT_NAME: 'issue_comment', COMMENT_BODY: '/review' };
+    const manualReview = await commentEvent(env, '/review');
     for (const repo of [{ full_name: 'outside/fork' }, null]) {
       state.pr.head.repo = repo;
       assert.deepEqual(await capture(manualReview), {});

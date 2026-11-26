@@ -114,13 +114,12 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
           EVENT_NAME: ${{ github.event_name }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
         run: &capture_revision |
           node --input-type=module <<'NODE'
-          import { appendFile } from 'node:fs/promises';
+          import { appendFile, readFile } from 'node:fs/promises';
 
           const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, GITHUB_RUN_ID, PR_NUMBER, EVENT_HEAD,
-            EVENT_NAME, COMMENT_BODY, EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
+            EVENT_NAME, GITHUB_EVENT_PATH, EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
           if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '')) throw new Error('Invalid PR number');
           const api = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}`;
           const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` };
@@ -181,8 +180,11 @@ jobs:
             throw new Error('Invalid target branch revision');
           }
           // The comment runner dispatches the first command, including the /describe_pr alias.
-          const manualSummary = EVENT_NAME === 'issue_comment' &&
-            /^\/+describe(?:_pr)?(?:[ \t\r\n]|$)/i.test((COMMENT_BODY ?? '').trim());
+          const commentBody = EVENT_NAME === 'issue_comment'
+            ? JSON.parse(await readFile(GITHUB_EVENT_PATH, 'utf8'))?.comment?.body
+            : '';
+          const manualSummary = typeof commentBody === 'string' &&
+            /^\/+describe(?:_pr)?(?:[ \t\r\n]|$)/i.test(commentBody.trim());
           await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nbase_ref=${baseRef}\nstarted=${new Date().toISOString()}\nmanual_summary=${manualSummary}\n`);
           NODE
 
@@ -234,7 +236,6 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
           PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
           REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
           REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
@@ -244,17 +245,20 @@ jobs:
           PR_AGENT_ALLOW_RETRY: "true"
         run: &validate_review |
           node --input-type=module <<'NODE'
-          import { appendFile } from 'node:fs/promises';
+          import { appendFile, readFile } from 'node:fs/promises';
 
-          const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, COMMENT_BODY,
+          const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, GITHUB_EVENT_PATH,
             PR_TITLE, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEWED_BASE_REF,
             REVIEW_STARTED_AT, PR_AGENT_ALLOW_RETRY, PR_AGENT_CHECK_REFRESH, GITHUB_OUTPUT } = process.env;
           if (!REVIEW_RESULT) {
             // Match the upstream ignored-title and incremental-review skips.
             const ignoredTitle = /^\[Auto\]/.test(PR_TITLE ?? '');
-            const incremental = EVENT_NAME === 'issue_comment' && /^\s*\/review\s+-i(?:\s|$)/i.test(COMMENT_BODY ?? '');
+            const commentBody = EVENT_NAME === 'issue_comment'
+              ? JSON.parse(await readFile(GITHUB_EVENT_PATH, 'utf8'))?.comment?.body ?? ''
+              : '';
+            const incremental = /^\s*\/review\s+-i(?:\s|$)/i.test(commentBody);
             const expected = !ignoredTitle && (EVENT_NAME === 'pull_request' ||
-              (EVENT_NAME === 'issue_comment' && !incremental && /^\s*\/review(?:\s|$)/i.test(COMMENT_BODY ?? '')));
+              (!incremental && /^\s*\/review(?:\s|$)/i.test(commentBody)));
             if (!expected) {
               if (incremental && !ignoredTitle) {
                 console.log('::warning::Incremental review produced no structured output; check whether PR-Agent skipped unchanged files.');
@@ -389,7 +393,6 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
           PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
           REVIEW_RESULT: ${{ steps.pr_agent_retry.outputs.review }}
           REVIEWED_HEAD: ${{ steps.retry_revision.outputs.head }}
