@@ -47,6 +47,7 @@ delete isolatedEnv.DSH_PROFILE_DIR;
 const npm = (args) => execNpm(['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const enterpriseDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
 const engineeringDir = join(project, 'node_modules', '@heluo', 'forge-engineering');
+const skillsManagerDir = join(project, 'node_modules', '@heluo', 'forge-skills-manager');
 const intact = () => readFileSync(join(project, 'user-file.txt'), 'utf8') === 'user-workspace-marker\n' && readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8') === '# 用户笔记\n';
 const statusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
 const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -58,14 +59,17 @@ async function activateInstalled(label, host) {
   ]);
   const enterpriseInstalledPath = realpathSync(enterpriseDir);
   const engineeringInstalledPath = realpathSync(engineeringDir);
+  const skillsManagerInstalledPath = realpathSync(skillsManagerDir);
   const enterpriseRequire = createRequire(pathToFileURL(join(enterpriseInstalledPath, 'package.json')));
   const engineeringRequire = createRequire(pathToFileURL(join(engineeringInstalledPath, 'package.json')));
-  // 通用底座与企业研发套件为两个独立预装包，各自携带 cordis.patch.yml；
-  // 并存安装时仅共享 `heluo-policy` 策略行，其余能力按包隔离且互不强耦合。
+  const skillsManagerRequire = createRequire(pathToFileURL(join(skillsManagerInstalledPath, 'package.json')));
+  // 通用底座、技能管理器与企业研发套件各自携带补丁；技能管理器不属于
+  // enterprise 依赖闭包，三者在同一 Host 中只共享 `heluo-policy` 策略行。
   const enterprisePatch = parsePatchLayer(readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8'));
   const engineeringPatch = parsePatchLayer(readFileSync(join(engineeringDir, 'cordis.patch.yml'), 'utf8'));
+  const skillsManagerPatch = parsePatchLayer(readFileSync(join(skillsManagerDir, 'cordis.patch.yml'), 'utf8'));
   const mergedRows = new Map();
-  for (const row of [...enterprisePatch.inserted, ...engineeringPatch.inserted]) {
+  for (const row of [...enterprisePatch.inserted, ...engineeringPatch.inserted, ...skillsManagerPatch.inserted]) {
     if (!mergedRows.has(row.id)) mergedRows.set(row.id, row);
   }
   const patch = { inserted: [...mergedRows.values()] };
@@ -81,6 +85,7 @@ async function activateInstalled(label, host) {
         layers: [
           { packageName: '@heluo/forge-enterprise', packageDir: enterpriseInstalledPath },
           { packageName: '@heluo/forge-engineering', packageDir: engineeringInstalledPath },
+          { packageName: '@heluo/forge-skills-manager', packageDir: skillsManagerInstalledPath },
         ],
         skippedBundles: [],
       },
@@ -88,6 +93,7 @@ async function activateInstalled(label, host) {
     await ctx.plugin(PluginPackages, { resolution }).await();
     const enterpriseDeps = Object.keys(JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).dependencies);
     const engineeringDeps = Object.keys(JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).dependencies);
+    const skillsManagerDeps = Object.keys(JSON.parse(readFileSync(join(skillsManagerDir, 'package.json'), 'utf8')).dependencies ?? {});
     const sharedDeps = new Set(enterpriseDeps.filter((name) => engineeringDeps.includes(name)));
     const resolvedFrom = (name, prefixes) => resolution.entries.some(
       (entry) => entry.name === name
@@ -96,7 +102,8 @@ async function activateInstalled(label, host) {
     );
     const enterpriseResolves = enterpriseDeps.every((name) => resolvedFrom(name, sharedDeps.has(name) ? [enterpriseInstalledPath, engineeringInstalledPath] : [enterpriseInstalledPath]));
     const engineeringResolves = engineeringDeps.every((name) => resolvedFrom(name, sharedDeps.has(name) ? [enterpriseInstalledPath, engineeringInstalledPath] : [engineeringInstalledPath]));
-    record(`${label}-native-runtime-resolves-bundled-members`, enterpriseResolves && engineeringResolves);
+    const skillsManagerResolves = skillsManagerDeps.every((name) => resolvedFrom(name, [skillsManagerInstalledPath]));
+    record(`${label}-native-runtime-resolves-bundled-members`, enterpriseResolves && engineeringResolves && skillsManagerResolves);
     await ctx.plugin(SystemPrompt, {}).await();
     await ctx.plugin(Tools, {}).await();
     await ctx.plugin(Loader, { baseUrl: pathToFileURL(join(enterpriseInstalledPath, 'cordis.patch.yml')).href }).await();
@@ -106,7 +113,7 @@ async function activateInstalled(label, host) {
     const skillProviders = new Map();
     ctx.provide('skills', {
       registerProvider: (create) => {
-        const provider = create();
+        const provider = create({ invalidate() {}, signal: AbortSignal.timeout(300000) });
         skillProviders.set(provider.name, provider);
         return () => skillProviders.delete(provider.name);
       },
@@ -116,14 +123,23 @@ async function activateInstalled(label, host) {
         return () => skillProviders.delete(`direct-${at}-${entry?.name ?? 'unknown'}`);
       },
     });
+    const managerRoutes = new Map();
+    ctx.provide('sessions', { list: () => [] });
+    ctx.provide('connection', { fetch: { register(route) {
+      if (managerRoutes.has(route.path)) throw new Error('duplicate manager route');
+      managerRoutes.set(route.path, route);
+      return () => managerRoutes.delete(route.path);
+    } } });
     const enterpriseIdSet = new Set(enterprisePatch.inserted.map((row) => row.id));
     const engineeringIdSet = new Set(engineeringPatch.inserted.map((row) => row.id));
+    const skillsManagerIdSet = new Set(skillsManagerPatch.inserted.map((row) => row.id));
     const enterpriseCatalogText = readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8');
     const resolved = [];
     for (const row of patch.inserted) {
+      const fromSkillsManager = skillsManagerIdSet.has(row.id);
       const fromEngineering = engineeringIdSet.has(row.id) && !enterpriseIdSet.has(row.id);
-      const ownerRequire = fromEngineering ? engineeringRequire : enterpriseRequire;
-      const ownerPath = fromEngineering ? engineeringInstalledPath : enterpriseInstalledPath;
+      const ownerRequire = fromSkillsManager ? skillsManagerRequire : fromEngineering ? engineeringRequire : enterpriseRequire;
+      const ownerPath = fromSkillsManager ? skillsManagerInstalledPath : fromEngineering ? engineeringInstalledPath : enterpriseInstalledPath;
       const entry = ownerRequire.resolve(row.name);
       const memberPath = relative(ownerPath, entry);
       if (memberPath.startsWith('..') || isAbsolute(memberPath)) throw new Error(`member escaped installed tarball: ${row.name}`);
@@ -139,16 +155,17 @@ async function activateInstalled(label, host) {
       ids.push(await ctx.loader.create({ id: row.id, name: row.name, config }));
     }
     await ctx.loader.await();
-    // 底座四行（凭据/策略/IAM/品牌）与研发套件五行按 id 合并，
-    // 仅共享策略行 `heluo-policy` 重合。
+    // 底座四行、研发套件五行与独立技能管理器一行按 id 去重合并为 9 行；
+    // 唯一共享行是 `heluo-policy`，manager 行由其自身补丁提供。
     record(
       `${label}-patch-mounts-base-and-overlay`,
-      patch.inserted.length === 8 && new Set(patch.inserted.map((row) => row.id)).size === 8 && resolved.length === 8,
+      patch.inserted.length === 9 && new Set(patch.inserted.map((row) => row.id)).size === 9 && resolved.length === 9,
       { ids: patch.inserted.map((row) => row.id) },
     );
     // 分包隔离要被证明：底座不得偷带研发成员，研发套件不得携带 IAM/凭据行，仅共享 heluo-policy。
     const baseIds = enterprisePatch.inserted.map((row) => row.id);
     const engineeringIdsAll = engineeringPatch.inserted.map((row) => row.id);
+    const skillsManagerIds = skillsManagerPatch.inserted.map((row) => row.id);
     const sharedIds = baseIds.filter((id) => engineeringIdsAll.includes(id));
     const engineeringOnlyIds = ['heluo-engineering-ui', 'heluo-issue-delivery-skill', 'forge-devops', 'heluo-gitee'];
     const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam', 'heluo-brand'];
@@ -156,11 +173,14 @@ async function activateInstalled(label, host) {
       `${label}-layers-are-disjoint`,
       baseIds.length === 4
         && engineeringIdsAll.length === 5
+        && skillsManagerIds.length === 1
+        && skillsManagerIds[0] === 'heluo-skills-manager'
         && sharedIds.length === 1
         && sharedIds[0] === 'heluo-policy'
         && engineeringOnlyIds.every((id) => engineeringIdsAll.includes(id) && !baseIds.includes(id))
-        && baseOnlyIds.every((id) => baseIds.includes(id) && !engineeringIdsAll.includes(id)),
-      { baseIds, engineeringIds: engineeringIdsAll, sharedIds },
+        && baseOnlyIds.every((id) => baseIds.includes(id) && !engineeringIdsAll.includes(id))
+        && !baseIds.includes('heluo-skills-manager'),
+      { baseIds, engineeringIds: engineeringIdsAll, skillsManagerIds, sharedIds },
     );
     // 失败行要给出**原因**：只报 phase=3 的探针会把"配置被拒"和"依赖缺失"混成一句话。
     const phases = [];
@@ -178,6 +198,12 @@ async function activateInstalled(label, host) {
     }
     const mounted = ['credentials', 'policy', 'iam', 'devops', 'gitee'].every((key) => ctx.get(key) !== undefined);
     record(`${label}-real-loader-instantiates-members`, mounted && phases.every((entry) => entry.phase === 2 /* FiberState.ACTIVE (const enum in the installed SDK) */), { resolved, phases, fixture: 'memory credentials; no real identity, keychain or network' });
+    record(`${label}-skills-manager-mounted`, managerRoutes.has('/api/forge-skills-manager/nacos/list') && skillProviders.has('dsh-skills-manager-external'));
+    let dynamicallyBoundIam;
+    const iamBinding = ctx.inject(['iam'], (services) => { dynamicallyBoundIam = services.iam; });
+    await iamBinding.await();
+    record(`${label}-independent-skills-manager-shares-iam-host`, dynamicallyBoundIam === ctx.get('iam') && typeof dynamicallyBoundIam?.getView === 'function');
+    await iamBinding.dispose();
     // AC-1：装上之后 Skill 入口必须**可枚举**（摘要 + 按需正文），而不是"装上了却静默无入口"。
     const skillProvider = skillProviders.get('enterprise-clauses');
     const listed = skillProvider === undefined ? [] : await skillProvider.list();
@@ -230,12 +256,18 @@ async function activateInstalled(label, host) {
     if (label === 'install') {
       const enterpriseManifest = JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8'));
       const engineeringManifest = JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8'));
+      const skillsManagerManifest = JSON.parse(readFileSync(join(skillsManagerDir, 'package.json'), 'utf8'));
       const members = [
         ...Object.keys(enterpriseManifest.dependencies ?? {}),
         ...(enterpriseManifest.bundledDependencies ?? []),
         ...Object.keys(engineeringManifest.dependencies ?? {}),
         ...(engineeringManifest.bundledDependencies ?? []),
+        ...Object.keys(skillsManagerManifest.dependencies ?? {}),
+        ...(skillsManagerManifest.bundledDependencies ?? []),
       ];
+      record('enterprise-does-not-bundle-skills-manager', !members.includes('@heluo/forge-skills-manager')
+        && !Object.keys(enterpriseManifest.dependencies ?? {}).includes('@heluo/forge-skills-manager')
+        && !enterpriseManifest.bundledDependencies?.includes('@heluo/forge-skills-manager'), { members });
       record('legacy-sdd-member-retired', !members.includes('@heluo/forge-sdd'), { members });
     }
     const policy = ctx.get('policy');
@@ -247,6 +279,7 @@ async function activateInstalled(label, host) {
     unloaded = ['credentials', 'policy', 'iam', 'devops', 'gitee'].every((key) => ctx.get(key) === undefined);
     record(`${label}-loader-unload-clears-registrations`, unloaded);
     record(`${label}-loader-unload-clears-skill-providers`, skillProviders.size === 0, { providers: [...skillProviders.keys()] });
+    record(`${label}-loader-unload-clears-manager-routes`, managerRoutes.size === 0);
   } finally {
     await ctx.fiber.dispose();
   }
@@ -314,6 +347,7 @@ try {
   // This rehearsal checks composition with synthetic credentials, not production storage.
   const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1') });
   const engineeringFirst = buildBundle({ entry: '@heluo/forge-engineering', destination: join(dir, 'pack-v1-engineering') });
+  const skillsManagerFirst = buildBundle({ entry: '@heluo/forge-skills-manager', destination: join(dir, 'pack-v1-skills-manager') });
   evidence.artifact = {
     sha256: sha256(first.tarball),
     members: first.members,
@@ -325,15 +359,23 @@ try {
       files: engineeringFirst.packed.length,
       version: engineeringFirst.manifest.version,
     },
+    skillsManager: {
+      sha256: sha256(skillsManagerFirst.tarball),
+      members: skillsManagerFirst.members,
+      files: skillsManagerFirst.packed.length,
+      version: skillsManagerFirst.manifest.version,
+    },
     storage: 'synthetic fixture; production storage not verified',
   };
-  npm(['install', first.tarball, engineeringFirst.tarball]);
+  npm(['install', first.tarball, engineeringFirst.tarball, skillsManagerFirst.tarball]);
   const installed = JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8'));
   const installedEngineering = JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8'));
-  record('install-v1-with-patch-and-workspace-intact', installed.version === first.manifest.version && installedEngineering.version === engineeringFirst.manifest.version && intact());
+  const installedSkillsManager = JSON.parse(readFileSync(join(skillsManagerDir, 'package.json'), 'utf8'));
+  record('install-v1-with-patch-and-workspace-intact', installed.version === first.manifest.version && installedEngineering.version === engineeringFirst.manifest.version && installedSkillsManager.version === skillsManagerFirst.manifest.version && intact());
   const closure = [
     ...auditReleaseClosure(enterpriseDir, { allowInstalledBinLinks: true }),
     ...auditReleaseClosure(engineeringDir, { allowInstalledBinLinks: true }),
+    ...auditReleaseClosure(skillsManagerDir, { allowInstalledBinLinks: true }),
   ];
   record('installed-final-tarball-closure', closure.length === 0, { errors: closure, isolatedEmptyCache: true, registryUnreachable: true });
   const installedIamCli = join(enterpriseDir, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
@@ -351,13 +393,13 @@ try {
   const patched = dump([
     join(enterpriseDir, 'cordis.patch.yml'),
     join(engineeringDir, 'cordis.patch.yml'),
+    join(skillsManagerDir, 'cordis.patch.yml'),
   ]);
   const baselineRows = rows(base.stdout ?? '');
   const patchedRows = rows(patched.stdout ?? '');
   const present = officialRows.filter((id) => baselineRows.has(id));
   record('installed-patch-disables-official-rows', base.status === 0 && patched.status === 0 && present.length > 0 && present.every((id) => patchedRows.get(id) === true && baselineRows.get(id) === false), { present, absent: officialRows.filter((id) => !baselineRows.has(id)), note: 'dump proves composition only; absent rows are NOT disabled' });
-  // §6.3：两个独立预装包各自携带同 id（`heluo-policy`）且目录逐字一致（6 条受控写，无 `isolate`），
-  // 运行期由 Cordis Loader 按 id 去重保留单一策略实例；`--dump-config` 中每层补丁各占一节 `# == <path>`。
+  // enterprise 与 engineering 的 heluo-policy 目录逐字一致；manager 使用第三层独立补丁。
   // 带 `, patched by <path>` 的是被本补丁改写的官方 bundle 头，必须与独立插入段区分。
   const patchedLines = (patched.stdout ?? '').split('\n');
   const sectionStarts = [];
@@ -381,13 +423,17 @@ try {
   ];
   const enterprisePolicyCatalog = catalogFromPatch(readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8'));
   const engineeringPolicyCatalog = catalogFromPatch(readFileSync(join(engineeringDir, 'cordis.patch.yml'), 'utf8'));
+  const skillsManagerPatchText = readFileSync(join(skillsManagerDir, 'cordis.patch.yml'), 'utf8');
   const catalogsIdentical = JSON.stringify(enterprisePolicyCatalog) === JSON.stringify(engineeringPolicyCatalog);
   record(
-    'installed-patch-policy-union',
+    'installed-patch-independent-manager-and-policy-union',
     patched.status === 0
-      && sections.length === 2
-      && sections.every((chunk) => rowCount(chunk, 'heluo-policy') === 1 && actionsOf(chunk).join() === expectedActions.join())
+      && sections.length === 3
+      && sections.slice(0, 2).every((chunk) => rowCount(chunk, 'heluo-policy') === 1 && actionsOf(chunk).join() === expectedActions.join())
       && catalogsIdentical
+      && rowCount(sections[2] ?? '', 'heluo-skills-manager') === 1
+      && !/heluo-skills-manager/u.test(readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8'))
+      && /heluo-skills-manager/u.test(skillsManagerPatchText)
       && rowCount(section, 'forge-devops') === 1
       && rowCount(section, 'heluo-gitee') === 1
       && rowCount(section, 'heluo-engineering-ui') === 1
@@ -396,6 +442,7 @@ try {
       sections: sections.length,
       perSectionPolicyRows: sections.map((chunk) => rowCount(chunk, 'heluo-policy')),
       perSectionActions: sections.map(actionsOf),
+      managerRows: sections.map((chunk) => rowCount(chunk, 'heluo-skills-manager')),
       catalogsIdentical,
       devopsRows: rowCount(section, 'forge-devops'),
       giteeRows: rowCount(section, 'heluo-gitee'),
@@ -405,16 +452,17 @@ try {
   await activateInstalled('install', host);
   const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
   const engineeringUpgraded = buildBundle({ entry: '@heluo/forge-engineering', destination: join(dir, 'pack-v2-engineering'), version: '0.1.1' });
-  npm(['install', upgraded.tarball, engineeringUpgraded.tarball]);
+  const skillsManagerUpgraded = buildBundle({ entry: '@heluo/forge-skills-manager', destination: join(dir, 'pack-v2-skills-manager'), version: '0.1.1' });
+  npm(['install', upgraded.tarball, engineeringUpgraded.tarball, skillsManagerUpgraded.tarball]);
   await activateInstalled('upgrade', host);
-  record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).version === '0.1.1' && JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());
-  npm(['install', first.tarball, engineeringFirst.tarball]);
+  record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).version === '0.1.1' && JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).version === '0.1.1' && JSON.parse(readFileSync(join(skillsManagerDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());
+  npm(['install', first.tarball, engineeringFirst.tarball, skillsManagerFirst.tarball]);
   await activateInstalled('rollback', host);
-  record('rollback-to-0.1.0-keeps-composition-and-workspace', JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).version === first.manifest.version && JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).version === engineeringFirst.manifest.version && intact());
-  npm(['uninstall', '@heluo/forge-enterprise', '@heluo/forge-engineering']);
+  record('rollback-to-0.1.0-keeps-composition-and-workspace', JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).version === first.manifest.version && JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).version === engineeringFirst.manifest.version && JSON.parse(readFileSync(join(skillsManagerDir, 'package.json'), 'utf8')).version === skillsManagerFirst.manifest.version && intact());
+  npm(['uninstall', '@heluo/forge-enterprise', '@heluo/forge-engineering', '@heluo/forge-skills-manager']);
   // SDD 退役后 bin 链接也应消失；路径按安装位置就地计算，不依赖已删除的变量。
   const retiredBin = join(project, 'node_modules', '.bin', process.platform === 'win32' ? 'forge-sdd.cmd' : 'forge-sdd');
-  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(enterpriseDir) && !existsSync(engineeringDir) && !existsSync(retiredBin) && intact());
+  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(enterpriseDir) && !existsSync(engineeringDir) && !existsSync(skillsManagerDir) && !existsSync(retiredBin) && intact());
   record('repository-working-tree-untouched', execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }) === statusAtStart, { note: 'concurrent edits in shared worktree may invalidate this snapshot' });
 } catch (error) {
   record('rehearsal-exception', false, { error: error.message });

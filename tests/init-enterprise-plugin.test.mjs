@@ -1910,3 +1910,54 @@ test('runInit --profile uat 从 web 模板创建自定义 profile 后安装并�
   assert.match(outcome.lines.join('\n'), /dsh --profile uat/, '启动提示要给出自定义 profile 的启动命令');
   assert.doesNotMatch(outcome.lines.join('\n'), /终端运行 dsh web（/, '自定义 profile 不能提示 dsh web');
 });
+
+test('readPrivateRelease distinguishes Nacos and IAM declarations and retains legacy IAM binding', t => {
+  const keys = ['nacos.serverUrl', 'nacos.namespaceId', 'nacos.username', 'nacos.password'];
+  for (const withNacos of [false, true]) {
+    for (const withClientSecret of [false, true]) {
+      const { dir } = writeRelease(tempRoot(t), { mutate(meta) {
+        meta.config = { keys: withNacos ? keys : [], secretEmbedded: withNacos || withClientSecret,
+          clientSecretEmbedded: withClientSecret, embeddedSecrets: withNacos ? ['nacos.password'] : [] };
+      } });
+      if (withClientSecret) {
+        assert.throws(() => readPrivateRelease(dir), { code: 'SECRET_BUNDLE_INCOMPLETE' });
+        writeSecretBundle(dir);
+      }
+      assert.equal(readPrivateRelease(dir).secret !== null, withClientSecret);
+    }
+  }
+  const { dir } = writeRelease(tempRoot(t), { mutate(meta) {
+    meta.config = { keys: [], secretEmbedded: true };
+  } });
+  assert.throws(() => readPrivateRelease(dir), { code: 'SECRET_BUNDLE_INCOMPLETE' });
+  writeSecretBundle(dir);
+  assert.ok(readPrivateRelease(dir).secret);
+  for (const config of [
+    { secretEmbedded: false, clientSecretEmbedded: true, embeddedSecrets: [] },
+    { secretEmbedded: true, clientSecretEmbedded: false, embeddedSecrets: [] },
+    { secretEmbedded: false, clientSecretEmbedded: 'false', embeddedSecrets: [] },
+    { secretEmbedded: true, clientSecretEmbedded: true, embeddedSecrets: ['iam.clientSecret'] },
+  ]) {
+    const bad = writeRelease(tempRoot(t), { mutate(meta) { meta.config = { keys, ...config }; } });
+    assert.throws(() => readPrivateRelease(bad.dir), { code: 'SECRET_EMBEDDED' });
+  }
+});
+
+test('readPrivateRelease accepts only the declared Nacos credential exception', t => {
+  const keys = ['nacos.serverUrl', 'nacos.namespaceId', 'nacos.username', 'nacos.password'];
+  for (const embeddedSecrets of [['nacos.password'], ['iam.clientSecret'], ['nacos.password', 'iam.clientSecret'], []]) {
+    const root = tempRoot(t);
+    const { dir } = writeRelease(root, { mutate(meta) { meta.config = { keys, secretEmbedded: true, embeddedSecrets }; } });
+    if (embeddedSecrets?.length === 1 && embeddedSecrets[0] === 'nacos.password') assert.ok(readPrivateRelease(dir));
+    else assert.throws(() => readPrivateRelease(dir), { code: 'SECRET_EMBEDDED' });
+  }
+  const root = tempRoot(t);
+  const { dir } = writeRelease(root, { mutate(meta) { meta.config = { keys: [], secretEmbedded: true, embeddedSecrets: ['nacos.password'] }; } });
+  assert.throws(() => readPrivateRelease(dir), { code: 'SECRET_EMBEDDED' });
+  for (const embeddedSecrets of [undefined, [], ['nacos.password'], ['iam.clientSecret'], 'nacos.password', null]) {
+    const root = tempRoot(t);
+    const { dir } = writeRelease(root, { mutate(meta) { meta.config = { keys, secretEmbedded: false, embeddedSecrets }; } });
+    if (embeddedSecrets === undefined || (Array.isArray(embeddedSecrets) && embeddedSecrets.length === 0)) assert.ok(readPrivateRelease(dir));
+    else assert.throws(() => readPrivateRelease(dir), { code: 'SECRET_EMBEDDED' });
+  }
+});

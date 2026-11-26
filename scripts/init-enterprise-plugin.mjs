@@ -545,10 +545,22 @@ export function readPrivateRelease(directory) {
   if (typeof version !== 'string' || version.trim() === '') {
     throw new InitError('SIDECAR_INVALID', 'init: sidecar 缺少企业包版本', '重新取得完整私版交付目录。');
   }
-  // 内嵌客户端密钥是管理员显式选择的交付形态：sidecar 记录 secretEmbedded，绑定文件
-  // 记录摘要，安装器装完后立即写入本机凭据库并删除该文件。二者缺一即拒绝安装，
-  // 不允许“声明内嵌却没有可用的密钥文件”。
-  const secret = metadata?.config?.secretEmbedded === true ? readEmbeddedClientSecret(dir) : null;
+  const config = metadata?.config;
+  const kinds = config?.embeddedSecrets;
+  const validKinds = kinds === undefined || (Array.isArray(kinds)
+    && (kinds.length === 0 || (kinds.length === 1 && kinds[0] === 'nacos.password')));
+  const hasNacos = Array.isArray(kinds) && kinds.includes('nacos.password');
+  // Older IAM deliveries declare only secretEmbedded; keep their bound-file flow.
+  const hasClientSecret = config?.clientSecretEmbedded === true
+    || (config?.clientSecretEmbedded === undefined && config?.secretEmbedded === true && kinds === undefined);
+  const validClientFlag = config?.clientSecretEmbedded === undefined || typeof config.clientSecretEmbedded === 'boolean';
+  if (!validKinds || !validClientFlag || typeof config?.secretEmbedded !== 'boolean'
+    || config.secretEmbedded !== (hasNacos || hasClientSecret)
+    || (hasNacos && (!Array.isArray(config.keys)
+      || !['nacos.serverUrl', 'nacos.namespaceId', 'nacos.username', 'nacos.password'].every(key => config.keys.includes(key))))) {
+    throw new InitError('SECRET_EMBEDDED', 'init: sidecar 的内嵌凭据声明不受支持，拒绝安装', '核对 Nacos 专用只读密码声明与 IAM 客户端密钥绑定文件，重新取得完整交付目录。');
+  }
+  const secret = hasClientSecret ? readEmbeddedClientSecret(dir) : null;
   const tarball = metadata?.tarball;
   if (typeof tarball?.name !== 'string' || tarball.name === '' || tarball.name !== tarball.name.split(/[\\/]/u).pop()) {
     throw new InitError('SIDECAR_INVALID', 'init: sidecar 的 tarball.name 不是简单文件名', '拒绝可能越界的路径；重新取得完整私版交付目录。');

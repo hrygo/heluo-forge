@@ -1,0 +1,130 @@
+import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { createPortablePathSet, isPortableFileSegment, isSafeAncestorDirectory } from "./filesystem-paths.js";
+const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const repositoryInstallKeys = /* @__PURE__ */ new Set(["dsh", "agents"]);
+function isRepositoryRootKey(key) {
+  const normalized = key === void 0 ? "dsh" : key;
+  if (typeof normalized !== "string") return false;
+  if (normalized.startsWith("preset-") || normalized === "preset") return true;
+  return repositoryInstallKeys.has(normalized);
+}
+function createInstallationRecords(local) {
+  const { checkedRepositoryRootDefinition, projectRootForRecord, userRoots } = local;
+  function repositoryInstallRoot(key = "dsh", presetRoots) {
+    const normalized = key === void 0 ? "dsh" : key;
+    if (typeof normalized !== "string") throw failure("\u6280\u80FD\u5B89\u88C5\u4F4D\u7F6E\u65E0\u6548");
+    if (normalized.startsWith("preset-") || normalized === "preset") {
+      if (presetRoots) {
+        const preset = presetRoots.find((item) => item.key === normalized);
+        if (preset && preset.mutable && preset.native === false) {
+          return { ...preset, key: preset.key };
+        }
+      }
+      throw failure("\u6280\u80FD\u5B89\u88C5\u4F4D\u7F6E\u65E0\u6548");
+    }
+    if (!repositoryInstallKeys.has(normalized)) throw failure("\u6280\u80FD\u5B89\u88C5\u4F4D\u7F6E\u65E0\u6548");
+    const root = userRoots().find((item) => item.key === normalized);
+    if (!root) throw failure("\u6280\u80FD\u5B89\u88C5\u4F4D\u7F6E\u65E0\u6548");
+    return { ...root, key: root.key };
+  }
+  async function recordInstallRoot(record, registered, indexed, presetRoots) {
+    if (record.workspace === void 0) {
+      const root = repositoryInstallRoot(record.root, presetRoots);
+      const checked = await checkedRepositoryRootDefinition(root);
+      if (!checked) throw failure("\u6280\u80FD\u5B89\u88C5\u4F4D\u7F6E\u4E0D\u53EF\u7528", "error.root.unsafe");
+      if (checked.ok === false) throw Object.assign(failure(checked.error, checked.code || "error.root.unsafe"), { params: checked.params });
+      return root;
+    }
+    const resolved = await projectRootForRecord(record.workspace, registered, indexed);
+    if ("ok" in resolved && resolved.ok === false) throw Object.assign(failure(resolved.error, resolved.code || "error.workspace.unavailable"), { params: resolved.params });
+    return resolved.root;
+  }
+  return { repositoryInstallRoot, recordInstallRoot };
+}
+const targetIdentity = (path) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+const installationSourceKey = (rootPath, name) => JSON.stringify([targetIdentity(rootPath), name]);
+const fileIndex = (entries) => Object.entries(entries).map(([path, bytes]) => ({ path, hash: hash(bytes) })).sort((a, b) => a.path.localeCompare(b.path, "en"));
+const signature = (files) => hash(JSON.stringify([...files].map(({ path, hash: hash2 }) => ({ path, hash: hash2 })).sort((a, b) => a.path.localeCompare(b.path, "en"))));
+function validSkillEntries(entries, name) {
+  return Array.isArray(entries) && entries.length > 0 && entries.length <= 2 && new Set(entries).size === entries.length && entries.every((entry) => entry === name || entry === `${name}.md`);
+}
+const skillManifestFingerprint = (entries, files) => hash(JSON.stringify([[...entries].sort(), signature(files)]));
+async function readSkillManifest(parent, name) {
+  safePath(name);
+  if (name.includes("/")) throw failure("\u6280\u80FD\u540D\u79F0\u65E0\u6548");
+  await safeDirectory(parent);
+  const entries = [], files = [];
+  let bytes = 0;
+  for (const entry of [name, `${name}.md`]) {
+    const path = join(parent, entry);
+    let info;
+    try {
+      info = await fs.lstat(path);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (info.isSymbolicLink()) throw failure("\u6280\u80FD\u5305\u542B\u94FE\u63A5");
+    if (entry === name && info.isDirectory()) {
+      const tree = await readSkillTree(path);
+      bytes += Object.values(tree).reduce((size, value) => size + value.byteLength, 0);
+      files.push(...fileIndex(tree).map((file) => ({ ...file, path: `${name}/${file.path}` })));
+    } else if (entry === `${name}.md` && info.isFile() && info.size <= 32 << 20) {
+      bytes += info.size;
+      files.push({ path: entry, hash: hash(await fs.readFile(path)) });
+    } else throw failure("\u6280\u80FD\u6761\u76EE\u5F62\u6001\u65E0\u6548");
+    entries.push(entry);
+  }
+  if (!entries.length) throw Object.assign(new Error("\u6280\u80FD\u4E0D\u5B58\u5728"), { code: "ENOENT" });
+  if (files.length > 1e3 || bytes > 64 << 20) throw failure("\u6280\u80FD\u5B8C\u6574\u8D44\u6E90\u8D85\u51FA\u9650\u5236");
+  return { entries, files, fingerprint: skillManifestFingerprint(entries, files) };
+}
+function failure(message, code = "error.repo.invalid") {
+  return Object.assign(new Error(message), { code, statusCode: 400 });
+}
+function safePath(path) {
+  if (typeof path !== "string" || !path || path.length > 512 || path.split("/").length > 64 || path.split("/").some((p) => !isPortableFileSegment(p))) throw failure("\u6280\u80FD\u6587\u4EF6\u8DEF\u5F84\u65E0\u6548");
+}
+async function safeDirectory(root) {
+  for (let p = root; ; p = dirname(p)) {
+    const info = await fs.lstat(p);
+    if (!await isSafeAncestorDirectory(p, info)) throw failure("\u6280\u80FD\u6216\u5907\u4EFD\u76EE\u5F55\u5305\u542B\u94FE\u63A5");
+    if (dirname(p) === p) break;
+  }
+}
+async function readSkillTree(root) {
+  await safeDirectory(root);
+  const result = /* @__PURE__ */ Object.create(null);
+  let size = 0, count = 0;
+  const seen = createPortablePathSet();
+  async function walk(dir, prefix = "") {
+    for (const entry of await fs.readdir(dir)) {
+      const path = prefix + entry;
+      safePath(path);
+      if (!seen.add(path)) throw failure("\u6280\u80FD\u5305\u542B\u91CD\u590D\u8DEF\u5F84");
+      if (++count > 2e3) throw failure("\u6280\u80FD\u76EE\u5F55\u6570\u91CF\u8D85\u9650");
+      const target = join(dir, entry), info = await fs.lstat(target);
+      if (info.isSymbolicLink()) throw failure("\u6280\u80FD\u5305\u542B\u94FE\u63A5\uFF0C\u62D2\u7EDD\u66F4\u65B0");
+      if (info.isDirectory()) await walk(target, path + "/");
+      else {
+        if (!info.isFile() || info.size > 32 << 20 || (size += info.size) > 64 << 20 || Object.keys(result).length >= 1e3) throw failure("\u6280\u80FD\u6587\u4EF6\u6570\u91CF\u6216\u5927\u5C0F\u8D85\u9650");
+        result[path] = await fs.readFile(target);
+      }
+    }
+  }
+  await walk(root);
+  return result;
+}
+export {
+  createInstallationRecords,
+  fileIndex,
+  installationSourceKey,
+  isRepositoryRootKey,
+  readSkillManifest,
+  readSkillTree,
+  signature,
+  skillManifestFingerprint,
+  validSkillEntries
+};

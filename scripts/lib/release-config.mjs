@@ -12,6 +12,8 @@
  * reaches the patch layer as such; confidential mode writes it as the plugin's
  * `allowInsecureClientAuthHttp`. `HELUO_IAM_CLIENT_SECRET` never enters the
  * patch layer: it travels beside the plugin tarball for first-run provisioning.
+ * Nacos configuration belongs to the standalone Skill Manager package builder;
+ * the employee build neither maps nor reads those environment variables.
  */
 export const RELEASE_CONFIG_KEYS = Object.freeze([
   'HELUO_IAM_AUTH_MODE',

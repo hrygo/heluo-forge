@@ -96,6 +96,8 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 ### 让企业能力更容易发现
 
+[技能管理器](packages/forge-skills-manager/README.md)支持全局与项目技能的创建导入、启停分类和回收站管理，并可发现其他本机 Agent 的技能。员工可以从 Nacos 公共技能库搜索技能、阅读详情，将完整资源下载到全局或已登记项目；下载后默认禁用，由员工显式启用。
+
 **AIHUB** 面向员工提供企业 **MCP、Skills、CLI 和插件**的浏览与获取门户。**Nacos AI 注册中心**承担 MCP 服务的注册与发现，以及 Skills 的注册与获取，让员工在授权范围内按需使用企业能力。
 
 插件分发方向复用 AIHUB 提供的索引与 DSH 原生插件市场，让员工按需发现和安装企业提供的能力。
@@ -111,9 +113,9 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 | **研发工作** | 在个人工作环境中衔接需求、Issue、代码、验证和交付。 | DevOps、Gitee 等扩展已有部分本地实现；企业 CLI 与目标终端仍需验证。[实现与验证入口](docs/design/README.md#22-实现与验证入口) |
 | **企业身份与治理** | 使用企业身份和模型，按既有权限与策略访问工作工具。 | 身份、凭据、策略及企业组合已有部分本地实现；企业 IAM、网关与目标环境需分别验证。 |
 | **AIHUB 能力门户** | 在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。 | 产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。 |
-| **Nacos AI 注册中心** | 注册、发现 MCP 服务，注册和获取 Skills。 | Nacos 提供相应注册中心能力；企业版本、权限及实际接入需分别核验。 |
+| **Nacos AI 注册中心** | 注册、发现 MCP 服务，注册和获取 Skills。 | 技能管理器已接入 Skills 只读发现与下载，并有本机验证；企业版本与权限仍需核验，MCP 接入另行评估与验证。 |
 | **插件发现与分发** | 通过熟悉的 DSH 入口发现和安装企业提供的扩展。 | 原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md) |
-| **企业技能** | 发现适用的企业 Skill，按需安装并在工作中使用。 | 通过企业 Nacos 发现、安装及原生加载 Skill 为待评估方向。[企业技能跟踪](https://github.com/hrygo/heluo-forge/issues/97) |
+| **企业技能** | 统一管理本地与项目 Skill，发现适用的企业 Skill，按需安装和启用。 | 技能管理器已有本地预览实现，支持其他 Agent 技能发现及 Nacos 搜索、详情和完整资源下载；以独立插件安装，企业环境与目标终端仍待验证。[技能管理](packages/forge-skills-manager/README.md) |
 | **智能邮件** | 查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。 | dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155) |
 | **个人记忆** | 员工选择记忆的采集和使用方式，让助理更好地延续工作。 | Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264) |
 | **企业 IM 聊天** | 在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。 | [企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。 |
@@ -124,7 +126,11 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 ## 当前进展
 
-河洛已形成企业研发场景的需求、架构与模块设计，身份、凭据、策略、企业组合和研发工具等已有部分本地实现与验证。智能邮件通过 dsh-mail 融入工作环境；记忆、企业沟通、跨端协同及专家智能体等方向已有产品方案或跟踪议题。
+**河洛当前处于预览阶段，尚未发布首个正式版本。** 身份、凭据、策略、企业组合和研发工具等已有部分本地实现与验证；技能管理器已提供本地预览，可体验本地技能管理及 Nacos 公共技能库。当前本地预览使用模拟 IAM 与模型网关，企业真实登录、模型访问和服务端权限仍需联调。
+
+智能邮件通过 dsh-mail 融入工作环境；记忆、企业沟通、跨端协同及专家智能体等方向已有产品方案或跟踪议题。
+
+近期验证重点是完善预览体验、完成企业 IAM／模型网关／Nacos 联调，以及验证目标终端的安装、升级与实际使用。正式交付和试点安排以验收结果为前提，阶段门禁与实施计划见[推广实施方案](docs/plans/rollout-plan.md)。
 
 各模块的实际实现、验证环境与接入边界以[逐模块设计索引](docs/design/README.md#22-实现与验证入口)及对应方案为准。
 
@@ -137,6 +143,7 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 | 产品当前范围和企业研发场景 | [需求与场景基线](docs/requirements/requirements-baseline.md) |
 | 架构、企业接入与安全边界 | [总体架构](docs/architecture/platform-architecture.md) · [安全说明](SECURITY.md) |
 | 已实现什么、验证到哪里 | [实现与验证入口](docs/design/README.md#22-实现与验证入口) |
+| 本地与企业技能如何管理 | [技能管理说明](packages/forge-skills-manager/README.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) |
 | 企业能力门户与注册中心 | [插件市场设计](docs/design/plugins/forge-market.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) · [Nacos MCP Registry](https://nacos.io/en/docs/latest/manual/user/ai/mcp-registry/) · [Nacos Skill Registry](https://nacos.io/en/docs/v3.2/manual/user/ai/skill-registry/) |
 | 员工个人助理的产品方向 | [邮件](https://github.com/hrygo/heluo-forge/issues/155) · [个人记忆](https://github.com/hrygo/heluo-forge/issues/264) · [企业聊天](docs/requirements/enterprise-collaboration-chat-proposal.md) · [IM 远程交办](https://github.com/hrygo/heluo-forge/issues/240) · [OA](https://github.com/hrygo/heluo-forge/issues/241) · [专家智能体](docs/requirements/delegra-experts-prd.md) |
 | 交付、部署与贡献 | [部署说明](deploy/README.md) · [贡献指南](CONTRIBUTING.md) · [文档总览](docs/README.md) |

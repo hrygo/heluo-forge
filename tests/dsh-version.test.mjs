@@ -26,6 +26,58 @@ import {
 
 const ROOT = process.cwd();
 const BASELINE = readDshVersion(ROOT);
+
+test('manifest version exemptions follow JSON fields in pretty, compact and shared-line layouts', () => {
+  const root = fixtureRoot();
+  const file = join(root, 'packages/fixture-plugin/package.json');
+  mkdirSync(dirname(file), { recursive: true });
+  try {
+    for (const indentation of [undefined, 2, '\t']) {
+      const manifest = {
+        engines: { dsh: '>=' + BASELINE },
+        devDependencies: { '@deepseek-ai/dsh-skill': BASELINE },
+        dependencies: { '@deepseek-ai/dsh-host-webserver': BASELINE },
+        optionalDependencies: { '@deepseek-ai/dsh-scope': BASELINE },
+        peerDependencies: { '@deepseek-ai/dsh-skill': BASELINE },
+        metadata: { devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } },
+      };
+      writeFileSync(file, JSON.stringify(manifest, null, indentation));
+      const rows = listCodeOccurrences(root);
+      assert.equal(rows.filter(item => item.kind === 'code-allowed').length, 2);
+      assert.equal(rows.filter(item => item.kind === 'code-forbidden').length, 4);
+    }
+    const sharedLine = [
+      '{',
+      '  "devDependencies": {"@deepseek-ai/dsh-skill": "' + BASELINE + '"}, "dependencies": {"@deepseek-ai/dsh-host-webserver": "' + BASELINE + '"}',
+      '}',
+    ];
+    writeFileSync(file, sharedLine.join('\r\n'));
+    const sharedRows = listCodeOccurrences(root);
+    assert.deepEqual(sharedRows.map(item => item.kind), ['code-allowed', 'code-forbidden']);
+    assert.ok(sharedRows.every(item => item.line === 2));
+    writeFileSync(file, JSON.stringify({
+      devDependencies: {
+        '@deepseek-ai/dsh-skill': sibling(BASELINE),
+        'unrelated-library': BASELINE,
+      },
+    }));
+    assert.equal(listCodeOccurrences(root).filter(item => item.kind === 'code-forbidden').length, 2);
+    writeFileSync(file, JSON.stringify({
+      description: 'devDependencies: {"@deepseek-ai/dsh-skill": "' + BASELINE + '"}',
+      nested: [{ devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } }],
+      devDependencies: { '@deepseek-ai/dsh-skill': BASELINE },
+    }));
+    assert.deepEqual(listCodeOccurrences(root).map(item => item.kind), ['code-forbidden', 'code-forbidden', 'code-allowed']);
+    writeFileSync(file, '{"devDependencies":{"@deepseek-ai/dsh-skill":"' + BASELINE + '"}');
+    assert.deepEqual(listCodeOccurrences(root).map(item => item.kind), ['code-forbidden']);
+    writeFileSync(file, '{}');
+    writeFileSync(join(root, 'pnpm-lock.yaml'), `version: ${BASELINE}\n`);
+    writeFileSync(join(root, 'scripts/bad.mjs'), `const dshVersion = '${BASELINE}';\n`);
+    const occurrences = listCodeOccurrences(root);
+    assert.equal(occurrences.find(item => item.file === 'pnpm-lock.yaml').kind, 'code-allowed');
+    assert.equal(occurrences.find(item => item.file === 'scripts/bad.mjs').kind, 'code-forbidden');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 /** 与基线同发布线的另一个版本，用于验证替换。 */
 function sibling(version) {
   const match = version.match(/^(.*?)(\d+)(-[0-9A-Za-z.]+)?$/);

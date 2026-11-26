@@ -1,0 +1,47 @@
+// 筛选下拉走宿主 Menu。设置页不再引入 Ant。
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { handleSourceMenuEscape } from "../src/source-select-model.ts";
+
+const selectSource = await readFile(new URL("../src/source-select.ts", import.meta.url), "utf8");
+assert.ok(selectSource.includes("align: \"start\""), "筛选下拉对齐触发器起始边缘展开");
+assert.ok(selectSource.includes("danger: opt.danger"), "操作菜单保留危险标记");
+assert.ok(selectSource.includes("handleSourceMenuEscape"), "打开的筛选或操作菜单把 Escape 交给独立处理函数");
+assert.ok(selectSource.includes("@deepseek-ai/dsh-client-ui-primitives"), "下拉使用宿主官方 Menu 原语");
+
+const escapeCalls = [];
+assert.equal(handleSourceMenuEscape({
+  key: "Escape",
+  preventDefault: () => escapeCalls.push("prevent"),
+  stopPropagation: () => escapeCalls.push("stop"),
+  stopImmediatePropagation: () => escapeCalls.push("stopImmediate"),
+}, () => escapeCalls.push("close")), true, "Escape 关闭打开的菜单");
+assert.deepEqual(escapeCalls, ["prevent", "stop", "stopImmediate", "close"], "菜单 Escape 不再传到宿主设置页");
+assert.equal(handleSourceMenuEscape({
+  key: "Tab",
+  preventDefault: () => escapeCalls.push("prevent"),
+  stopPropagation: () => escapeCalls.push("stop"),
+  stopImmediatePropagation: () => escapeCalls.push("stopImmediate"),
+}, () => escapeCalls.push("close")), false, "其它按键不关闭菜单");
+
+const source = await readFile(new URL("../src/client.ts", import.meta.url), "utf8");
+assert.ok(source.includes('className: "dssm-search"'), "搜索框使用 Ant Design 输入框");
+assert.ok(!source.includes('h("input", { className: "dssm-control'), "可见文本输入不能继续使用自定义控件");
+assert.ok(!source.includes("dssm-fallback-switch"), "开关不再保留自绘兜底");
+assert.ok(!source.includes("dssm-host-modal"), "弹窗不再套一层自绘外壳");
+assert.ok(source.includes('className: "dssm-row-state"'), "状态与开关必须在同一组");
+assert.ok(source.includes("@deepseek-ai/dsh-client-ui-primitives"), "设置页直接使用宿主原语");
+assert.match(
+  source,
+  /\.dssm-source\{[^}]*background:transparent/,
+  "来源卡片背景与技能列表一致，透出页面底色，不再另铺 layer-2",
+);
+const repository = await readFile(new URL("../src/nacos-ui.ts", import.meta.url), "utf8");
+const destination = await readFile(new URL("../src/destination-picker.ts", import.meta.url), "utf8");
+assert.match(source, /\.dssm-source-list\{[^}]*border:1px solid var\(--dsw-alias-border-l1\)/, "来源列表使用宿主主题边框");
+assert.match(source, /\.dssm-summary\{[^}]*background:transparent/, "统计区域使用透明背景");
+assert.doesNotMatch(source, /\.dssm-summary\{[^}]*settings-card-fill/, "统计条不能回退到实心设置卡片填充");
+assert.match(destination, /\.dssm-destination-path\{[^}]*border-radius:var\(--dsw-radius-lg/, "路径预览与嵌套内容使用同一档位");
+assert.ok(!/background:var\(--dsw-alias-bg-layer-\d,#[\da-f]+\)/i.test(source + repository + destination), "背景不再引入独立的深色实心兜底");
+assert.ok(!/borderRadius: 6/.test(source + selectSource + repository), "Action buttons follow the shared corner radius");
+console.log("宿主筛选与样式契约检查通过");

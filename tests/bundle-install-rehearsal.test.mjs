@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+import { parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const script = join(here, '..', 'scripts', 'probe', 'run-bundle-install-rehearsal.mjs');
@@ -20,6 +22,34 @@ test('rehearsal evidence does not claim production storage verification', () => 
   assert.match(source, /storage: 'synthetic fixture; production storage not verified'/u);
 });
 
+test('rehearsal composition checks retain brand and skills and reject missing or duplicate members', () => {
+  const source = readFileSync(script, 'utf8');
+  const start = source.indexOf('    record(\n      `${label}-patch-mounts-base-and-overlay`');
+  const end = source.indexOf('    const phases = [];', start);
+  assert.ok(start >= 0 && end > start, 'the actual rehearsal composition checks must be located');
+  const checks = source.slice(start, end);
+  const base = parsePatchLayer(readFileSync(join(here, '..', 'packages', 'forge-enterprise', 'cordis.patch.yml'), 'utf8'));
+  const engineering = parsePatchLayer(readFileSync(join(here, '..', 'packages', 'forge-engineering', 'cordis.patch.yml'), 'utf8'));
+  const manager = parsePatchLayer(readFileSync(join(here, '..', 'packages', 'forge-skills-manager', 'cordis.patch.yml'), 'utf8'));
+  const merged = [...new Map([...base.inserted, ...engineering.inserted, ...manager.inserted].map((row) => [row.id, row])).values()];
+  const evaluate = (baseRows, rows) => {
+    const results = [];
+    runInNewContext(checks, {
+      label: 'test', patch: { inserted: rows }, resolved: rows,
+      enterprisePatch: { inserted: baseRows }, engineeringPatch: engineering, skillsManagerPatch: manager,
+      record: (id, ok) => results.push(ok),
+    });
+    return results;
+  };
+  assert.deepEqual(evaluate(base.inserted, merged), [true, true]);
+  assert.deepEqual(evaluate(base.inserted.filter((row) => row.id !== 'heluo-brand'), merged.filter((row) => row.id !== 'heluo-brand')), [false, false]);
+  assert.equal(evaluate(base.inserted, merged.filter((row) => row.id !== 'heluo-skills-manager'))[0], false);
+  assert.equal(evaluate([...base.inserted, ...manager.inserted], merged)[1], false, 'manager must not re-enter enterprise patch');
+  assert.equal(evaluate(base.inserted, [...merged.slice(0, -1), merged[0]])[0], false);
+  assert.equal(evaluate([...base.inserted, engineering.inserted.find((row) => row.id === 'heluo-gitee')], merged)[1], false);
+  assert.equal(evaluate(base.inserted, merged.slice(0, -1))[0], false);
+});
+
 for (const profile of profiles) {
   test(`the bundle install/upgrade/uninstall/rollback rehearsal passes (${profile})`, { skip, timeout: 300_000 }, () => {
     const output = execFileSync(process.execPath, [script], {
@@ -29,12 +59,13 @@ for (const profile of profiles) {
     assert.match(output, /installed-patch-disables-official-rows/);
     assert.match(output, /installed-final-tarball-closure/);
     assert.match(output, /installed-iam-client-secret-provision/);
-    // 底座三行 + 研发叠加层四行，且 Skill 候选本身满足宿主校验、能按候选取正文、卸载后 provider 清空。
+    // 底座四行 + 研发独占四行 + 独立管理器一行。
     assert.match(output, /install-patch-mounts-base-and-overlay/);
     assert.match(output, /install-real-loader-instantiates-members/);
     assert.match(output, /installed-skill-candidate-shape/);
     assert.match(output, /installed-skill-get-by-candidate/);
-    assert.match(output, /installed-patch-policy-union/);
+    assert.match(output, /installed-patch-independent-manager-and-policy-union/);
+    assert.match(output, /install-independent-skills-manager-shares-iam-host/);
     assert.match(output, /install-loader-unload-clears-skill-providers/);
     assert.match(output, /legacy-sdd-member-retired/);
     assert.match(output, /upgrade-real-loader-instantiates-members/);

@@ -11,12 +11,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
+import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { baseNameOf, sha256 } from '../scripts/lib/release-support.mjs';
-import { buildPublicRelease } from '../scripts/build-public-release.mjs';
+import { releaseToolFiles, buildPublicRelease } from '../scripts/build-public-release.mjs';
 import { createReleaseTree, ENTRY, MEMBER, put } from './fixtures/release-tree.mjs';
 
 test('the artifact name survives a runner that joins with backslashes', () => {
@@ -136,6 +137,9 @@ const IAM_VALIDATOR_FILES = ['config.mjs', 'model-options.mjs', 'http-url.mjs', 
 const TOOL_TREE_FILES = [
   '.agents/skills/heluo-forge-release-bundle/SKILL.md',
   ...IAM_VALIDATOR_FILES,
+  'packages/forge-skills-manager/lib/nacos.js',
+  'packages/forge-skills-manager/docs/packaging.md',
+  'scripts/lib/nacos-release.mjs',
   'scripts/build-enterprise-bundle.mjs',
   'scripts/build-public-release.mjs',
   'scripts/init-enterprise-plugin.mjs',
@@ -199,6 +203,11 @@ test('builds a configuration-neutral public release from a tagged checkout', (t)
     assert.ok(entry, `the standalone maker must include IAM validation dependency ${name}`);
     assert.deepEqual(entry.content, readFileSync(join(TOOL_ROOT, 'packages/forge-iam/src', name)));
   }
+  for (const path of ['packages/forge-skills-manager/lib/nacos.js', 'packages/forge-skills-manager/docs/packaging.md', 'scripts/lib/nacos-release.mjs']) {
+    assert.deepEqual(tools.find(entry => entry.path === `toolchain/${path}`)?.content, readFileSync(join(TOOL_ROOT, path)));
+  }
+  const readme = tools.find(entry => entry.path === 'toolchain/README.md').content.toString();
+  assert.match(readme, /packages\/forge-skills-manager\/docs\/packaging\.md/);
   const extracted = temp(t, 'forge-standalone-toolchain-');
   for (const entry of tools) {
     const path = join(extracted, entry.path);
@@ -411,7 +420,7 @@ test('refuses a tool tree with no release scripts', (t) => {
 
 test('refuses a tool tree missing one required script or the skill entry', (t) => {
   const tree = taggedTree(t);
-  for (const missing of ['scripts/release-delivery.mjs', '.agents/skills/heluo-forge-release-bundle/SKILL.md', 'packages/forge-iam/src/config.mjs']) {
+  for (const missing of ['scripts/release-delivery.mjs', '.agents/skills/heluo-forge-release-bundle/SKILL.md', 'packages/forge-iam/src/config.mjs', 'packages/forge-skills-manager/lib/nacos.js', 'packages/forge-skills-manager/docs/packaging.md', 'scripts/lib/nacos-release.mjs']) {
     const destination = output(t);
     assert.throws(
       () => buildPublicRelease({ root: tree.root, toolRoot: toolTree(t, { omit: missing }), output: destination, tag: `v${VERSION}`, license: 'Apache-2.0' }),
@@ -461,4 +470,52 @@ test('refuses a tracked source file that carries a credential pattern', (t) => {
     },
   );
   assert.equal(existsSync(destination), false);
+});
+
+
+test('standalone toolchain includes Nacos rules runtime and packaging instructions', async t => {
+  const files = releaseToolFiles(TOOL_ROOT);
+  assert.equal(new Set(files).size, files.length);
+  for (const path of ['packages/forge-skills-manager/lib/nacos.js', 'packages/forge-skills-manager/docs/packaging.md', 'scripts/lib/nacos-release.mjs']) {
+    assert.ok(files.includes(path), path);
+    const root = toolTree(t, { omit: path });
+    expectCode(() => releaseToolFiles(root), 'TOOLS_INCOMPLETE');
+  }
+  const guide = readFileSync(join(TOOL_ROOT, 'packages/forge-skills-manager/docs/packaging.md'), 'utf8');
+  for (const key of ['SERVER_URL', 'NAMESPACE_ID', 'USERNAME', 'PASSWORD']) assert.ok(guide.includes(`HELUO_NACOS_${key}`));
+  assert.match(guide, /--dry-run/);
+  assert.match(guide, /--confirm/);
+
+  // Exercise the archived import closure from a directory outside the checkout.
+  const bytes = writeBundleTarball(files.map(path => ({ path, body: readFileSync(join(TOOL_ROOT, path)) })));
+  const entries = readBundleEntries(bytes, { withContent: true });
+  const extracted = temp(t, 'forge-extracted-tools-');
+  for (const entry of entries) {
+    const target = join(extracted, entry.path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, entry.content);
+  }
+  const maker = await import(pathToFileURL(join(extracted, 'scripts/lib/private-bundle.mjs')));
+  const config = maker.buildConfig(maker.parseEnvConfig([
+    'HELUO_IAM_AUTH_MODE=public',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=test-client',
+    'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+    'HELUO_NACOS_NAMESPACE_ID=public',
+    'HELUO_NACOS_USERNAME=svc-ci',
+    'HELUO_NACOS_PASSWORD=synthetic-password',
+  ].join('\n')));
+  const runtimePath = 'node_modules/@heluo/forge-skills-manager/lib/nacos.js';
+  const publicEntries = [
+    { path: 'package.json', content: Buffer.from(JSON.stringify({ name: '@heluo/forge-enterprise', version: '0.1.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } })) },
+    { path: 'cordis.patch.yml', content: Buffer.from("- insert:\n    - id: heluo-skills-manager\n      name: '@heluo/forge-skills-manager'\n      config: {}\n") },
+    { path: runtimePath, content: readFileSync(join(extracted, 'packages/forge-skills-manager/lib/nacos.js')) },
+  ];
+  assert.equal(maker.preflightNacosRelease(publicEntries, config).nacosConfigured, true);
+  publicEntries.find(entry => entry.path === runtimePath).content = Buffer.from('// old runtime\n');
+  expectCode(() => maker.preflightNacosRelease(publicEntries, config), 'NACOS_RUNTIME_MISMATCH');
+  assert.equal(readFileSync(join(extracted, 'packages/forge-skills-manager/docs/packaging.md'), 'utf8'), guide);
+  for (const match of guide.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/gu)) {
+    assert.ok(existsSync(resolve(extracted, 'packages/forge-skills-manager/docs', match[1])), match[1]);
+  }
 });

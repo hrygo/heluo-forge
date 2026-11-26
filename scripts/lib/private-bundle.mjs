@@ -22,9 +22,11 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { isConfigured, validateConfig } from '../../packages/forge-iam/src/config.mjs';
 
 import { verifyBundle } from '../verify-enterprise-bundle.mjs';
+import { NACOS_ENV_MAP, parseNacosConfig, checkNacosRelease, assertNacosReleaseConfig as assertNacosConfig } from './nacos-release.mjs';
 import { readBundleEntries } from './bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './bundle-manifest.mjs';
 import { writeBundleTarball } from './bundle-write.mjs';
+import { parsePatchBlocks } from './patch-layer-blocks.mjs';
 import { assertOutsideDirectory, atomicWrite, parseDigest, safeRelativePath, scanReleaseFiles, scanText, sha256, stableJson } from './release-support.mjs';
 
 export const PRIVATE_SCHEMA = 'heluo-private-release/1';
@@ -33,6 +35,7 @@ export const TOOL_NAME = 'heluo-forge-release-tools';
 export const TOOL_VERSION = '1.0.0';
 export const SUPPORTED_PLATFORMS = Object.freeze(['windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64']);
 export const IAM_VALIDATOR_MODULES = Object.freeze(['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']);
+export { NACOS_ENV_MAP, NACOS_RUNTIME_FILE } from './nacos-release.mjs';
 
 export class PrivateBundleError extends Error {
   constructor(code, message, details = undefined) {
@@ -92,7 +95,7 @@ export const GITEE_ENV_MAP = Object.freeze({
 /** Secret-bearing names are recognized so the maker can refuse them explicitly. */
 export const SECRET_ENV_KEYS = Object.freeze(['HELUO_IAM_CLIENT_SECRET', 'HELUO_IAM_CLIENT_SECRET_FILE']);
 
-const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...SECRET_ENV_KEYS]);
+const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...Object.keys(NACOS_ENV_MAP), ...SECRET_ENV_KEYS]);
 const INTEGER_KEYS = new Set(['HELUO_IAM_CALLBACK_PORT', 'HELUO_GITEE_TIMEOUT_MS']);
 const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
 const validatedConfigs = new WeakSet();
@@ -302,7 +305,7 @@ function redirectPathProblem(value) {
 }
 
 /**
- * Convert parsed entries into the two patch config objects, applying the same
+ * Convert parsed entries into plugin config objects, applying the same
  * constraints the plugins apply at load time. The maker validates *before*
  * writing, so an invalid private bundle never reaches a delivery directory.
  */
@@ -316,6 +319,7 @@ export function buildConfig(entries) {
   let clientSecret;
   const iam = {};
   const gitee = {};
+  const nacos = {};
   const problems = [];
   const put = (target, key, value) => {
     if (value !== undefined && value !== '') target[key] = value;
@@ -428,6 +432,7 @@ export function buildConfig(entries) {
     put(gitee, field, raw);
   }
 
+  Object.assign(nacos, parseNacosConfig(byKey, problems));
   if (secretKeys.length > 1) {
     problems.push('set only one of HELUO_IAM_CLIENT_SECRET and HELUO_IAM_CLIENT_SECRET_FILE');
   } else if (secretKeys.length === 1) {
@@ -507,9 +512,11 @@ export function buildConfig(entries) {
   const config = freezeConfig({
     iam,
     gitee,
+    nacos,
     keys: [
       ...Object.keys(iam).map((key) => `iam.${key}`),
       ...Object.keys(gitee).map((key) => `gitee.${key}`),
+      ...Object.keys(nacos).map((key) => `nacos.${key}`),
     ].sort(),
     // Kept out of `keys` on purpose: every redacted summary prints that list.
     ...(clientSecret === undefined ? {} : { secret: { clientSecret } }),
@@ -534,6 +541,17 @@ function requireValidatedConfig(config) {
 export function resolveBundleConfig({ config, configPath, allowSecret = false }) {
   if (config !== undefined) return requireValidatedConfig(config);
   return buildConfig(parseEnvConfig(readConfigFile(resolve(configPath)), { allowSecret }));
+}
+
+/** Explicit field check retained for callers validating deployment input alone. */
+export function assertNacosReleaseConfig(config) {
+  assertNacosConfig(config, fail);
+}
+
+/** Same plugin-specific gate for previews, CLI confirmation and final writes. */
+export function preflightNacosRelease(entries, config, options = {}) {
+  const installed = skillsPatchEntry(entries) !== undefined;
+  return checkNacosRelease(entries, config, { ...options, installed, fail });
 }
 
 /** Only double-quoted JSON strings are emitted; JSON escapes are valid YAML scalars. */
@@ -628,9 +646,8 @@ export function injectPatchConfig(text, id, config) {
 }
 
 /**
- * Bundle patch files in tarball order (a bundle may ship one patch or several
- * layers: `cordis.patch.yml` plus `cordis.patch.<layer>.yml`); the acceptance gate
- * judges the **set** — order is irrelevant, a layer only carries part of the rows.
+ * Inventory of shipped patch files in tarball order, including undeclared files.
+ * Runtime configuration uses declaredPatchEntriesOf() in Host declaration order.
  */
 export const PATCH_FILE_PATTERN = /^cordis\.patch(?:\.[A-Za-z0-9-]+)?\.yml$/u;
 
@@ -648,19 +665,52 @@ function insertedIds(text) {
 }
 
 /** `dsh.bundle.patch` 指向的那一层：bundle 必须随包发出，否则装上也加载不到。 */
-function declaredPatchPath(root) {
+function declaredPatchPaths(root) {
   const declared = root?.dsh?.bundle?.patch;
-  return typeof declared === 'string' ? declared.replace(/^\.\//u, '') : undefined;
+  const paths = typeof declared === 'string' ? [declared] : declared;
+  if (!Array.isArray(paths) || !paths.length || paths.some(path => typeof path !== 'string')) return undefined;
+  const normalized = paths.map(path => path.replace(/^\.\//u, ''));
+  if (new Set(normalized).size !== normalized.length || normalized.some(path => !PATCH_FILE_PATTERN.test(path))) return undefined;
+  return normalized;
+}
+
+/** Match the Host's declaration order; undeclared files never supply configuration. */
+export function declaredPatchEntriesOf(entries, root = membersOf(entries).root) {
+  const problems = patchLayerProblems(root, entries);
+  if (problems.length) fail('PUBLIC_TARBALL_INVALID', problems.join('; '));
+  return declaredPatchPaths(root).map(path => entries.find(entry => entry.path === path));
+}
+
+export function skillsPatchEntry(entries) {
+  const matches = [];
+  for (const entry of declaredPatchEntriesOf(entries)) {
+    const text = entry.content.toString('utf8');
+    const parsed = parsePatchBlocks(text);
+    for (const block of parsed.blocks) {
+      const insertion = /^\s*- insert:\s*(?:#.*)?$/u.test(parsed.lines[block.start]);
+      const rows = insertion ? parsePatchBlocks(parsed.lines.slice(block.start + 1, block.end).join('\n')) : { lines: parsed.lines, blocks: [block] };
+      for (const row of rows.blocks) {
+        if (row.id !== 'heluo-skills-manager') continue;
+        const properties = rows.lines.slice(row.start, row.end).filter(line => new RegExp(`^ {${row.indent + 2}}\\S`, 'u').test(line));
+        matches.push({ entry, insertion, name: row.name, disabled: properties.some(line => /^\s+disabled:/u.test(line) && !/^\s+disabled:\s*false\s*(?:#.*)?$/u.test(line)) });
+      }
+    }
+  }
+  if (!matches.length) return undefined;
+  if (matches.length !== 1 || !matches[0].insertion || matches[0].name !== '@heluo/forge-skills-manager' || matches[0].disabled) {
+    fail('PUBLIC_TARBALL_INVALID', 'Skill Manager must have exactly one enabled insert row with its expected package name in the declared patch layers');
+  }
+  return matches[0].entry;
 }
 
 /** 公版 bundle 的补丁层完整性：必须声明默认层、且默认层真的在包里。 */
 export function patchLayerProblems(root, patchEntries) {
   const problems = [];
-  const declared = declaredPatchPath(root);
+  const declared = declaredPatchPaths(root);
   if (declared === undefined) {
-    problems.push('package.json does not declare dsh.bundle.patch');
-  } else if (!patchEntries.some((entry) => entry.path === declared)) {
-    problems.push(`bundle does not ship the declared patch ${declared}`);
+    problems.push('package.json does not declare dsh.bundle.patch as valid paths');
+  } else {
+    for (const path of declared) if (!patchEntries.some((entry) => entry.path === path)) problems.push(`bundle does not ship the declared patch ${path}`);
   }
   if (patchEntries.length === 0) problems.push('bundle has no patch file');
   return problems;
@@ -678,7 +728,7 @@ export function assertNeutralPatch(input, { required = ['heluo-iam'] } = {}) {
     .filter((text) => typeof text === 'string' && text.length > 0);
   const problems = [];
   const requiredSet = new Set(required);
-  const neutralChecked = new Set(['heluo-credentials-keychain', 'heluo-iam', 'forge-devops', 'heluo-gitee', ...requiredSet]);
+  const neutralChecked = new Set(['heluo-credentials-keychain', 'heluo-iam', 'forge-devops', 'heluo-gitee', 'heluo-skills-manager', ...requiredSet]);
   const seen = new Set();
   const ownerOfId = new Map();
   for (const [index, text] of texts.entries()) {
@@ -695,6 +745,9 @@ export function assertNeutralPatch(input, { required = ['heluo-iam'] } = {}) {
       if (!ids.has(id)) continue;
       const lines = text.split('\n');
       const rowIndex = lines.findIndex((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line));
+      if (lines.filter((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line)).length > 1) {
+        problems.push(`insert id "${id}" is declared more than once in a patch layer`);
+      }
       const baseIndent = lines[rowIndex].length - lines[rowIndex].trimStart().length;
       for (let cursor = rowIndex + 1; cursor < lines.length; cursor += 1) {
         const line = lines[cursor];
@@ -799,7 +852,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   if (requireVersionChange && version === root.version) {
     fail('VERSION_UNCHANGED', `private version must differ from the public version ${root.version}: same name+version must mean the same bytes`);
   }
-  const patchEntries = patchEntriesOf(entries);
+  const patchEntries = declaredPatchEntriesOf(entries, root);
   const layerProblems = patchLayerProblems(root, patchEntries);
   if (layerProblems.length > 0) {
     fail('PUBLIC_TARBALL_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
@@ -819,7 +872,10 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));
   const iamOwner = ownerOf('heluo-iam');
   const giteeOwner = ownerOf('heluo-gitee');
+  const skillsOwner = skillsPatchEntry(entries);
   const hasGiteeConfig = Object.keys(config.gitee ?? {}).length > 0;
+  const hasNacosConfig = Object.keys(config.nacos ?? {}).length > 0;
+  const nacosRelease = preflightNacosRelease(entries, config);
   if (iamOwner === undefined || (hasGiteeConfig && giteeOwner === undefined)) {
     fail(
       'PUBLIC_TARBALL_INVALID',
@@ -837,6 +893,9 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     if (giteeOwner !== undefined && entry === giteeOwner && hasGiteeConfig) {
       patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
     }
+    if (skillsOwner !== undefined && entry === skillsOwner && hasNacosConfig) {
+      patch = injectPatchConfig(patch, 'heluo-skills-manager', { nacos: config.nacos });
+    }
     injectedPatches.set(entry.path, patch);
     // 只有真的被改写的层才进产物与 change 元数据：没改的层重写一遍只会让审计噪声变大。
     if (patch !== original) rewrittenLayers.set(entry.path, patch);
@@ -853,7 +912,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     entry: { name: root.name, version },
     base: { version: root.version, tarballSha256: baseSha256 },
     tool: { name: TOOL_NAME, version: TOOL_VERSION },
-    config: { keys: config.keys, secretEmbedded: config.secret !== undefined },
+    config: { keys: config.keys, secretEmbedded: nacosRelease.secretEmbedded || config.secret !== undefined, clientSecretEmbedded: config.secret !== undefined, embeddedSecrets: nacosRelease.embeddedSecrets },
   };
 
   const replaced = new Map([
@@ -1002,6 +1061,7 @@ export function makePrivateBundle(input) {
     changed: built.changed,
     configKeys: built.metadata.config.keys,
     secretEmbedded: built.metadata.config.secretEmbedded,
+    clientSecretEmbedded: built.metadata.config.clientSecretEmbedded,
     manifest: join(output, 'bundle-manifest.json'),
     release: join(output, 'private-release.json'),
     verified: true,
@@ -1031,9 +1091,10 @@ export function inspectPublicTarball(publicPath) {
   if (root.name !== '@heluo/forge-engineering') assertIamValidatorMatches(entries);
   const patchEntries = patchEntriesOf(entries);
   const problems = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
-  problems.push(...patchLayerProblems(root, patchEntries));
-  if (patchEntries.length > 0) {
-    problems.push(...assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(root.name) }));
+  const layerProblems = patchLayerProblems(root, patchEntries);
+  problems.push(...layerProblems);
+  if (!layerProblems.length) {
+    problems.push(...assertNeutralPatch(declaredPatchEntriesOf(entries, root).map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(root.name) }));
   }
   return { sha256: sha256(bytes), version: root.version, name: root.name, files: entries.length, problems };
 }

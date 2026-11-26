@@ -1,0 +1,1141 @@
+// 预设模式专属技能（内置创造模式 + 用户新建自定义模式）的发现、详情与管理测试
+// 运行：node test/preset-skills.test.mjs
+
+import { promises as fsPromises } from "node:fs";
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
+import { createServer } from "node:http";
+import { createTestFetchBridge } from "./fixtures/test-fetch-server.mjs";
+
+import {
+  state,
+  skillDetail,
+  collectPresetRoots,
+} from "../lib/core.js";
+import { apply as applyHost } from "../lib/index.js";
+
+let passed = 0;
+let failed = 0;
+function ok(cond, msg) {
+  if (cond) passed++;
+  else {
+    failed++;
+    console.error("✗ " + msg);
+  }
+}
+function eq(actual, expected, msg) {
+  ok(
+    actual === expected,
+    msg +
+      " (got " +
+      JSON.stringify(actual) +
+      ", want " +
+      JSON.stringify(expected) +
+      ")",
+  );
+}
+
+// 服务端按 realpath 归一预设目录；macOS 的 tmpdir 位于 /var → /private/var 符号链接
+// 之后，fixture 根目录创建后先解析到真实位置，断言与解析结果同口径。
+const tmp = await realpath(await mkdtemp(join(tmpdir(), "dssm-preset-test-")));
+process.env.DSH_HOME = tmp;
+
+const mockCordisDir = join(tmp, "mock-cordis-skills");
+await mkdir(join(mockCordisDir, "cordis-plugin-development"), { recursive: true });
+await writeFile(
+  join(mockCordisDir, "cordis-plugin-development", "SKILL.md"),
+  `---
+name: cordis-plugin-development
+description: 创造模式内置专属技能，用于编写和扩展 DSH 插件。
+---
+这是创造模式插件开发的 instructions。`,
+  "utf8",
+);
+
+const customReviewSkillsDir = join(tmp, "custom-review-skills");
+await mkdir(join(customReviewSkillsDir, "strict-code-review"), { recursive: true });
+await writeFile(
+  join(customReviewSkillsDir, "strict-code-review", "SKILL.md"),
+  `---
+name: strict-code-review
+description: 针对代码提交执行严格的静态审查与缺陷分析。
+---
+这是代码审查模式专属技能的正文 instructions。`,
+  "utf8",
+);
+
+console.log("── 1. 宿主预设来源提取（collectPresetRoots）──");
+
+// 模拟宿主 AgentPresetRegistry 服务
+const mockAgentPresets = {
+  definitions: new Map([
+    [
+      "standard",
+      {
+        config: {
+          id: "standard",
+          name: "标准模式",
+          plugins: [
+            { id: "tool-bash", name: "@deepseek-ai/dsh-tool-bash" },
+            { id: "skill-filesystem", name: "@deepseek-ai/dsh-skill-filesystem" },
+          ],
+        },
+      },
+    ],
+    [
+      "cordis",
+      {
+        config: {
+          id: "cordis",
+          name: "创造模式",
+          plugins: [
+            {
+              id: "skill-filesystem",
+              name: "@deepseek-ai/dsh-skill-filesystem",
+              config: {
+                customSkillDirs: ["@deepseek-ai/dsh-agent-preset/skills"],
+              },
+            },
+          ],
+        },
+      },
+    ],
+    [
+      "code-review",
+      {
+        config: {
+          id: "code-review",
+          name: "代码审查模式",
+          plugins: [
+            {
+              id: "skill-filesystem",
+              name: "@deepseek-ai/dsh-skill-filesystem",
+              config: {
+                customSkillDirs: [customReviewSkillsDir],
+              },
+            },
+          ],
+        },
+      },
+    ],
+  ]),
+  async list() {
+    return [
+      { id: "standard", name: "标准模式" },
+      { id: "cordis", name: "创造模式" },
+      { id: "code-review", name: "代码审查模式" },
+    ];
+  },
+};
+
+const mockCtx = {
+  get(name) {
+    if (name === "agentPresets") return mockAgentPresets;
+    return undefined;
+  },
+};
+
+const roots = await collectPresetRoots(mockCtx, { cordisSkillsDir: mockCordisDir });
+ok(Array.isArray(roots), "collectPresetRoots 返回数组");
+eq(roots.length, 2, "只为包含专属技能目录的预设生成根（cordis 与 code-review，排除 standard）");
+
+const cordisRoot = roots.find((r) => r.key === "preset-cordis");
+ok(!!cordisRoot, "发现内置 cordis 预设根");
+eq(cordisRoot.kind, "preset", "根类型为 preset");
+eq(cordisRoot.mutable, false, "预设根不可写");
+eq(cordisRoot.toggleable, false, "B方案：内置预设根只读，不提供假开关");
+ok(cordisRoot.rank >= 10000, "预设根优先级沉底 (>= 10000)");
+eq(cordisRoot.native, true, "内置 cordis 模式 native 为 true");
+ok(cordisRoot.label.includes("创造模式") || cordisRoot.label.includes("cordis"), "标签包含模式名称");
+
+const reviewRoot = roots.find((r) => r.key === "preset-code-review");
+ok(!!reviewRoot, "发现自定义 code-review 预设根");
+eq(reviewRoot.kind, "preset", "根类型为 preset");
+eq(reviewRoot.mutable, true, "自定义预设根支持管理与写入（mutable: true）");
+eq(reviewRoot.toggleable, true, "自定义预设根开放真开关（toggleable: true）");
+ok(reviewRoot.rank >= 10000 && reviewRoot.rank !== cordisRoot.rank, "自定义预设根优先级独立且沉底 (>= 10000)");
+eq(reviewRoot.native, false, "自定义模式 native 为 false");
+eq(reviewRoot.path, customReviewSkillsDir, "路径指向自定义模式配置的 customSkillDirs");
+ok(reviewRoot.label.includes("代码审查模式"), "标签包含自定义模式名称");
+
+// P2-3 覆盖：当 definitions 为 undefined 时，走 list() + readDocument() 分支
+const mockFallbackRegistry = {
+  definitions: undefined,
+  async list() {
+    return [{ id: "yaml-mode", name: "YAML 预设模式" }];
+  },
+  async readDocument(id) {
+    return {
+      content: `
+id: ${id}
+name: YAML 预设模式
+plugins:
+  - id: skill-filesystem
+    customSkillDirs:
+      - "${customReviewSkillsDir}"
+`,
+    };
+  },
+};
+const fallbackRoots = await collectPresetRoots({ agentPresets: mockFallbackRegistry });
+ok(fallbackRoots.some((r) => r.key === "preset-yaml-mode"), "通过 list + readDocument 成功解析 YAML 块状 customSkillDirs");
+
+// Exercise YAML flow arrays: customSkillDirs: ["dir1", "dir2"].
+const mockInlineYamlRegistry = {
+  definitions: undefined,
+  async list() {
+    return [{ id: "inline-yaml-mode", name: "Inline YAML 预设模式" }];
+  },
+  async readDocument(id) {
+    return {
+      content: `
+id: ${id}
+name: Inline YAML 预设模式
+plugins:
+  - id: skill-filesystem
+    customSkillDirs: ["${customReviewSkillsDir}"]
+`,
+    };
+  },
+};
+const inlineRoots = await collectPresetRoots({ agentPresets: mockInlineYamlRegistry });
+ok(inlineRoots.some((r) => r.key === "preset-inline-yaml-mode"), "Parse customSkillDirs from YAML flow arrays");
+
+// 覆盖 P2-B inspectCompositions 宿主基准路径 baseUrl 解析通道
+const mockCompositionsRegistry = {
+  definitions: new Map(),
+  async inspectCompositions() {
+    return {
+      modules: [{ baseUrl: import.meta.url }],
+    };
+  },
+};
+const compRoots = await collectPresetRoots({ agentPresets: mockCompositionsRegistry });
+ok(Array.isArray(compRoots), "通过 inspectCompositions baseUrl 探测通道运行正常");
+
+// 平滑降级测试：无 agentPresets 且无任何 cordis 时安全返回空数组
+const emptyRoots = await collectPresetRoots({});
+ok(Array.isArray(emptyRoots), "宿主无 agentPresets 服务时平滑降级返回数组");
+
+// 校验相对路径解析与宿主 resolve() 一致且保守标为只读（mutable: false）
+const oldCwd = process.cwd();
+let relRoot;
+try {
+  process.chdir(tmp);
+  const relPresetRoots = await collectPresetRoots({
+    agentPresets: {
+      definitions: new Map([
+        [
+          "rel-mode",
+          {
+            config: {
+              id: "rel-mode",
+              name: "相对路径模式",
+              plugins: [{ id: "skill-filesystem", config: { customSkillDirs: ["./custom-review-skills"] } }],
+            },
+          },
+        ],
+      ]),
+    },
+  });
+  relRoot = relPresetRoots.find((r) => r.key === "preset-rel-mode");
+} finally {
+  process.chdir(oldCwd);
+}
+ok(!!relRoot, "相对路径 customSkillDirs 按宿主 resolve(dir) 成功发现");
+eq(relRoot?.path, customReviewSkillsDir, "相对路径解析基准对齐宿主 process.cwd()");
+eq(relRoot?.mutable, false, "相对路径或 ~ 写法保守标为只读（防止写偏）");
+
+console.log("── 2. 状态快照集成（state）与排序位置 ──");
+
+const snapshot = await state({ presetRoots: roots });
+const foundReviewRoot = snapshot.roots.find((r) => r.key === "preset-code-review");
+ok(!!foundReviewRoot, "state 返回的快照中包含自定义预设来源");
+ok(
+  foundReviewRoot && foundReviewRoot.skills.some((s) => s.name === "strict-code-review"),
+  "自定义预设来源中包含其专属技能 strict-code-review",
+);
+
+const dshIndex = snapshot.roots.findIndex((r) => r.key === "dsh");
+const agentsIndex = snapshot.roots.findIndex((r) => r.key === "agents");
+const cordisIndex = snapshot.roots.findIndex((r) => r.key === "preset-cordis");
+const reviewIndex = snapshot.roots.findIndex((r) => r.key === "preset-code-review");
+ok(cordisIndex > dshIndex && cordisIndex > agentsIndex, "预设来源排在常规 DSH 与公共 Agent 之后（正常来源最后面）");
+ok(reviewIndex > dshIndex && reviewIndex > agentsIndex, "自定义预设来源排在常规 DSH 与公共 Agent 之后（正常来源最后面）");
+
+console.log("── 2.05 P2-A 只读来源对历史残留脏数据的防御测试 ──");
+const stateDir = join(tmp, "skills-manager");
+await mkdir(stateDir, { recursive: true });
+await writeFile(
+  join(stateDir, "state.json"),
+  JSON.stringify({
+    sources: { "preset-cordis": false, "preset-code-review": false },
+    disabledSkills: {
+      "preset-cordis": ["cordis-plugin-development"],
+      "preset-code-review": ["strict-code-review"],
+    },
+    enabledSkills: {},
+  }),
+  "utf8",
+);
+const dirtySnapshot = await state({ presetRoots: roots });
+const dirtyCordisRoot = dirtySnapshot.roots.find((r) => r.key === "preset-cordis");
+const dirtyReviewRoot = dirtySnapshot.roots.find((r) => r.key === "preset-code-review");
+eq(dirtyCordisRoot?.enabled, true, "哪怕历史配置残留 false，只读内置 cordis 来源恒为 enabled: true");
+eq(dirtyReviewRoot?.enabled, false, "自定义可开关预设正确继承并遵守 state.json 中的停用记忆（enabled: false）");
+const dirtyCordisSkill = dirtyCordisRoot?.skills.find((s) => s.name === "cordis-plugin-development");
+eq(dirtyCordisSkill?.enabled, true, "只读预设技能不读取 disabledSkills 残留，恒为 enabled: true");
+const dirtyDetail = await skillDetail("preset-cordis", "cordis-plugin-development", { presetRoots: roots });
+eq(dirtyDetail.loadable, true, "skillDetail 读取只读预设详情成功且 loadable: true");
+eq(dirtyDetail.sourceReadOnly, true, "只读预设来源详情标记 sourceReadOnly: true");
+// 清理测试用的脏 state.json，避免影响后续测试
+await rm(stateDir, { recursive: true, force: true });
+
+console.log("── 2.1 客户端 rootDisplayName 国际化（i18n）测试 ──");
+const { stripTypeScriptTypes } = await import("node:module");
+const clientSource = await readFile(new URL("../src/client.ts", import.meta.url), "utf8");
+const dictMatch = clientSource.match(/var DICT\s*=\s*(\{[\s\S]*?\n\s{4}\});/);
+ok(dictMatch, "DICT 定义存在");
+const DICT = new Function(`return ${dictMatch[1]};`)();
+
+const fnMatch = clientSource.match(/function rootDisplayName\s*\([\s\S]*?\n\s{4}\}/);
+ok(fnMatch, "rootDisplayName 函数存在");
+const strippedJs = stripTypeScriptTypes(fnMatch[0]);
+const translateOrFallback = (t, key, fallback) => {
+  const val = t(key);
+  return typeof val === "string" && val !== key ? val : fallback;
+};
+const rootDisplayName = new Function("translateOrFallback", `return ${strippedJs}`)(translateOrFallback);
+
+function translateMock(locale, key, params) {
+  let val = DICT[locale]?.[key] || key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) val = val.replace(`{${k}}`, v);
+  }
+  return val;
+}
+eq(rootDisplayName((k, p) => translateMock("zh", k, p), cordisRoot), "预设: 创造模式", "中文下正确渲染「预设: 创造模式」");
+eq(rootDisplayName((k, p) => translateMock("en", k, p), cordisRoot), "Preset: Creator Mode", "英文下正确渲染「Preset: Creator Mode」");
+eq(rootDisplayName((k, p) => translateMock("zh", k, p), reviewRoot), "预设: 代码审查模式", "自定义模式中文下正确保留自定义名");
+eq(rootDisplayName((k, p) => translateMock("en", k, p), reviewRoot), "Preset: 代码审查模式", "自定义模式英文下前缀本地化");
+
+// 多目录预设：group 与 label 必须保留 (1)/(2) 后缀且不影响国际化翻译
+const multiDir1 = join(tmp, "multi-dir-1");
+const multiDir2 = join(tmp, "multi-dir-2");
+await mkdir(multiDir1, { recursive: true });
+await mkdir(multiDir2, { recursive: true });
+const multiPresetRoots = await collectPresetRoots({
+  agentPresets: {
+    definitions: new Map([
+      [
+        "cordis",
+        {
+          config: {
+            id: "cordis",
+            name: "创造模式",
+            plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [multiDir1, multiDir2] } }],
+          },
+        },
+      ],
+    ]),
+  },
+});
+eq(multiPresetRoots.length, 2, "多目录预设返回 2 个根");
+eq(multiPresetRoots[0].group, "创造模式 (1)", "多目录第 1 项 group 带 (1) 消歧");
+eq(multiPresetRoots[1].group, "创造模式 (2)", "多目录第 2 项 group 带 (2) 消歧");
+eq(rootDisplayName((k, p) => translateMock("en", k, p), multiPresetRoots[0]), "Preset: Creator Mode (1)", "英文下多目录第 1 项保留序号且翻译完整");
+eq(rootDisplayName((k, p) => translateMock("en", k, p), multiPresetRoots[1]), "Preset: Creator Mode (2)", "英文下多目录第 2 项保留序号且翻译完整");
+
+console.log("── 3. 技能详情读取（skillDetail）──");
+
+const detail = await skillDetail("preset-code-review", "strict-code-review", { presetRoots: roots });
+ok(detail.ok !== false, "成功读取自定义预设技能详情");
+eq(detail.name, "strict-code-review", "技能名称匹配");
+ok(detail.description.includes("严格的静态审查"), "读取到 frontmatter 中的描述");
+ok(detail.body.includes("代码审查模式专属技能的正文"), "读取到正文内容");
+
+console.log("── 4. 端到端 HTTP 路由测试 ──");
+
+const { connection, handler } = createTestFetchBridge();
+const emitted = [];
+let currentAgentPreset = "code-review";
+let agentProviderRegistered = null;
+const agentListeners = [];
+applyHost({
+  connection,
+  skills: {
+    registerProvider() {
+      return () => {};
+    },
+  },
+  tools: {
+    register() {
+      return () => {};
+    },
+  },
+  effect(fn) {
+    return fn();
+  },
+  emit(...args) {
+    emitted.push(args);
+  },
+  on(event, listener) {
+    if (event === "agent/created") agentListeners.push(listener);
+    return () => {};
+  },
+  get(name) {
+    if (name === "agentPresets") return { ...mockAgentPresets, composedPreset: () => currentAgentPreset };
+    return undefined;
+  },
+});
+
+const server = createServer(handler);
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const addr = server.address();
+const port = addr && typeof addr === "object" ? addr.port : 0;
+const api = `http://127.0.0.1:${port}/api/forge-skills-manager`;
+
+const stateRes = await fetch(`${api}/state`, {
+  headers: { host: `127.0.0.1:${port}` },
+});
+eq(stateRes.status, 200, "GET /state 返回 200");
+const statePayload = await stateRes.json();
+ok(statePayload.ok === true, "GET /state payload.ok === true");
+const httpReviewRoot = statePayload.data.roots.find((r) => r.key === "preset-code-review");
+ok(!!httpReviewRoot, "HTTP 状态接口返回自定义预设根");
+ok(
+  httpReviewRoot && httpReviewRoot.skills.some((s) => s.name === "strict-code-review"),
+  "HTTP 状态接口中包含自定义预设的专属技能",
+);
+
+// 详情接口
+const detailRes = await fetch(`${api}/detail`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review", name: "strict-code-review" }),
+});
+eq(detailRes.status, 200, "POST /detail 返回 200");
+const detailPayload = await detailRes.json();
+ok(detailPayload.ok === true, "POST /detail payload.ok === true");
+eq(detailPayload.data.name, "strict-code-review", "POST /detail 成功获取到技能名称");
+
+// 只读内置预设来源拒绝写入停用状态，防止破坏宿主内置包
+const disableCordisRes = await fetch(`${api}/disable`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-cordis", name: "cordis-builtin-skill" }),
+});
+const disableCordisPayload = await disableCordisRes.json();
+ok(disableCordisPayload.ok === false, "内置只读预设来源发起停用请求被安全拒绝");
+eq(disableCordisPayload.code, "error.root.readonly", "内置预设停用精准返回只读错误码 error.root.readonly");
+ok(disableCordisPayload.error.includes("启用或停用"), "toggle 只读错误精准包含对应动作文案");
+
+// 校验 readonlyError 对 create / delete 返回精准的对应动作描述
+const createOnReadonlyRes = await fetch(`${api}/create`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-cordis", name: "fail-skill", description: "d", body: "b" }),
+});
+const createOnReadonlyPayload = await createOnReadonlyRes.json();
+eq(createOnReadonlyPayload.code, "error.root.readonly", "向只读内置预设新建技能返回 error.root.readonly");
+ok(createOnReadonlyPayload.error.includes("创建"), "create 只读错误文案精准提示不允许创建（非启用或停用）");
+
+const deleteOnReadonlyRes = await fetch(`${api}/delete`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-cordis", name: "cordis-builtin-skill" }),
+});
+const deleteOnReadonlyPayload = await deleteOnReadonlyRes.json();
+eq(deleteOnReadonlyPayload.code, "error.root.readonly", "删除只读内置预设技能返回 error.root.readonly");
+ok(deleteOnReadonlyPayload.error.includes("删除"), "delete 只读错误文案精准提示不允许删除");
+
+// 验证 clientSource 中预设不进入外部目录覆盖列表且带只读相对路径徽标
+ok(clientSource.includes('root.kind !== "preset" && root.scope !== "preset"'), "UI 中预设根不进入外部可覆盖目录按钮列表");
+ok(clientSource.includes("preset.readonlyRelative"), "UI 中相对路径自定义预设带只读警示徽标");
+
+// 整源停用接口同样拒绝内置只读预设来源
+const sourceDisableCordisRes = await fetch(`${api}/source-disable`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-cordis" }),
+});
+const sourceDisableCordisPayload = await sourceDisableCordisRes.json();
+ok(sourceDisableCordisPayload.ok === false, "内置只读预设来源发起整源停用被安全拒绝");
+
+console.log("── 4.5 自定义预设真开关、Agent Layer 拦截、分类备注与仓库来源显示测试 ──");
+
+// 1. 停用自定义预设的单个技能
+const disableCustomRes = await fetch(`${api}/disable`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review", name: "strict-code-review" }),
+});
+const disableCustomPayload = await disableCustomRes.json();
+ok(disableCustomPayload.ok === true, "自定义预设单个技能支持停用开关");
+
+// 2. 在宿主层模拟不同 preset 的 Agent provider 验证真拦截且不串味
+const { listProviderCandidates } = await import("../lib/core.js");
+const agentDisabledCandidates = await listProviderCandidates({ presetRoots: roots.filter((r) => r.presetId === "code-review" && r.toggleable) });
+const disabledCandidate = agentDisabledCandidates.find((c) => c.name === "strict-code-review");
+ok(!!disabledCandidate, "自定义预设停用时在 agent layer 发布拦截候选");
+eq(disabledCandidate?.invocation?.modelInvocable, false, "被停用的预设技能 modelInvocable=false（压制宿主）");
+eq(disabledCandidate?.invocation?.userInvocable, false, "被停用的预设技能 userInvocable=false（从斜杠菜单隐藏）");
+ok((disabledCandidate?.rank ?? 999) < 300, "拦截候选 rank < 300 覆盖宿主 CUSTOM_RANK(300)");
+
+// 切换到无关模式（如 standard），不得泄漏 code-review 技能
+const standardCandidates = await listProviderCandidates({ presetRoots: roots.filter((r) => r.presetId === "standard" && r.toggleable) });
+ok(!standardCandidates.some((c) => c.name === "strict-code-review"), "其他模式不会泄漏自定义预设的专属技能");
+
+// 3. 重新启用单个技能
+const enableCustomRes = await fetch(`${api}/enable`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review", name: "strict-code-review" }),
+});
+ok((await enableCustomRes.json()).ok === true, "自定义预设单个技能支持重新启用");
+
+// 4. 整源开关：停用整个自定义预设来源
+const sourceDisableCustomRes = await fetch(`${api}/source-disable`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review" }),
+});
+ok((await sourceDisableCustomRes.json()).ok === true, "自定义预设来源支持整组停用开关");
+
+const sourceDisabledCandidates = await listProviderCandidates({ presetRoots: roots.filter((r) => r.presetId === "code-review" && r.toggleable) });
+const srcDisabledCandidate = sourceDisabledCandidates.find((c) => c.name === "strict-code-review");
+eq(srcDisabledCandidate?.invocation?.modelInvocable, false, "整组停用自定义预设时同样发布覆盖拦截");
+
+// 恢复整源开关
+const sourceEnableCustomRes = await fetch(`${api}/source-enable`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review" }),
+});
+ok((await sourceEnableCustomRes.json()).ok === true, "自定义预设来源支持整组恢复启用");
+
+// 5. 在自定义预设下创建分类与技能备注
+const catCreateRes = await fetch(`${api}/category-create`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review", name: "审查规则" }),
+});
+const catCreatePayload = await catCreateRes.json();
+ok(catCreatePayload.ok === true, "自定义预设下成功创建分类");
+
+const noteRes = await fetch(`${api}/skill-note`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({ root: "preset-code-review", name: "strict-code-review", note: "我的模式备注" }),
+});
+ok((await noteRes.json()).ok === true, "自定义预设下成功保存技能备注");
+
+
+
+// 7. 模拟真实宿主 agent/created 与 composedPreset 动态切模式端到端校验
+const fakeAgentCtx = {
+  skills: {
+    registerProvider(create) {
+      agentProviderRegistered = create({ invalidate() {} });
+      return () => {};
+    },
+  },
+};
+for (const listener of agentListeners) {
+  listener({ agent: { id: "agent-test-1", ctx: fakeAgentCtx } });
+}
+ok(!!agentProviderRegistered, "宿主 agent/created 成功在 agent 作用域注册专属 provider");
+await fetch(`${api}/disable`, {
+  method: "POST",
+  headers: { host: `127.0.0.1:${port}`, "content-type": "application/json", "x-dsh-skills-manager": "1" },
+  body: JSON.stringify({ root: "preset-code-review", name: "strict-code-review" }),
+});
+const codeReviewAgentItems = await agentProviderRegistered.list();
+const blockedEntry = codeReviewAgentItems.find((c) => c.name === "strict-code-review");
+ok(!!blockedEntry && blockedEntry.invocation.modelInvocable === false, "code-review 模式下的 Agent 实时收到停用拦截候选");
+currentAgentPreset = "standard";
+const switchedAgentItems = await agentProviderRegistered.list();
+ok(!switchedAgentItems.some((c) => c.name === "strict-code-review"), "切模式到 standard 后，同一 Agent 实时不再接收 code-review 技能候选");
+await fetch(`${api}/enable`, {
+  method: "POST",
+  headers: { host: `127.0.0.1:${port}`, "content-type": "application/json", "x-dsh-skills-manager": "1" },
+  body: JSON.stringify({ root: "preset-code-review", name: "strict-code-review" }),
+});
+
+console.log("── 5. 自定义预设模式专属技能管理能力测试（增删改与目标选择）──");
+
+// 5.1 目标选择器（DestinationPicker）契约
+const { destinationPayload, destinationReady } = await import("../src/destination-picker.ts");
+const presetValue = { scope: "preset", location: "dsh", workspace: "", presetKey: "preset-code-review" };
+const presetPl = destinationPayload(presetValue);
+eq(presetPl.root, "preset-code-review", "destinationPayload 在 scope=preset 时正确带出 presetKey");
+const testPresetDests = [{ key: "preset-code-review", name: "代码审查模式", path: customReviewSkillsDir, available: true }];
+ok(destinationReady(presetValue, [], [], testPresetDests), "destinationReady 认可有效的自定义预设");
+ok(!destinationReady({ ...presetValue, presetKey: "unknown" }, [], [], testPresetDests), "destinationReady 拒绝未知的预设");
+ok(!destinationReady(presetValue, [], [], undefined), "destinationReady 缺列表时安全拒绝");
+ok(!destinationReady(presetValue, [], [], []), "destinationReady 空列表时安全拒绝");
+
+// 5.2 在自定义预设模式下新建技能（POST /create）
+const createRes = await fetch(`${api}/create`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({
+    root: "preset-code-review",
+    name: "new-analyzer-skill",
+    description: "专为代码审查模式创建的深度分析技能",
+    body: "这是新建分析技能的正文内容",
+  }),
+});
+eq(createRes.status, 200, "POST /create 到自定义预设返回 200");
+const createPayload = await createRes.json();
+ok(createPayload.ok === true && createPayload.data.name === "new-analyzer-skill", "自定义预设成功创建新技能");
+
+// 校验物理文件确实存在于 customReviewSkillsDir
+const newSkillFile = join(customReviewSkillsDir, "new-analyzer-skill", "SKILL.md");
+const newSkillContent = await readFile(newSkillFile, "utf8");
+ok(newSkillContent.includes("专为代码审查模式创建的深度分析技能"), "物理文件成功写入自定义预设专属目录");
+
+// 5.3 在自定义预设模式下删除技能 / 移入回收站（POST /delete）
+const deleteRes = await fetch(`${api}/delete`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({
+    root: "preset-code-review",
+    name: "new-analyzer-skill",
+  }),
+});
+eq(deleteRes.status, 200, "POST /delete 移除自定义预设技能返回 200");
+const deletePayload = await deleteRes.json();
+ok(deletePayload.ok === true && !!deletePayload.data.id, "自定义预设技能成功移入回收站");
+
+// 校验物理文件已被移除
+let fileExistsAfterDelete = true;
+try {
+  await readFile(newSkillFile, "utf8");
+} catch {
+  fileExistsAfterDelete = false;
+}
+ok(!fileExistsAfterDelete, "物理文件已被移出自定义预设目录");
+
+// 5.4 从回收站恢复（POST /trash-restore）
+const restoreRes = await fetch(`${api}/trash-restore`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({
+    id: deletePayload.data.id,
+  }),
+});
+eq(restoreRes.status, 200, "POST /trash-restore 恢复预设技能返回 200");
+const restorePayload = await restoreRes.json();
+ok(restorePayload.ok === true, "自定义预设技能从回收站恢复成功");
+
+// 校验物理文件已恢复回 customReviewSkillsDir
+const restoredContent = await readFile(newSkillFile, "utf8");
+ok(restoredContent.includes("专为代码审查模式创建的深度分析技能"), "物理文件成功恢复至自定义预设目录");
+
+// 5.5 内置预设模式（cordis）严格防写保护
+const builtinCreateRes = await fetch(`${api}/create`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({
+    root: "preset-cordis",
+    name: "malicious-write",
+    description: "尝试向官方内置模式写入技能",
+    body: "应该被拒绝",
+  }),
+});
+const builtinCreatePayload = await builtinCreateRes.json();
+ok(builtinCreatePayload.ok === false, "向内置只读预设（cordis）写入技能被安全拒绝");
+
+// 5.6 导入（POST /upload）到自定义预设模式，验证文件精确写入预设目录，且全局目录零污染
+const uploadRes = await fetch(`${api}/upload`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${port}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({
+    root: "preset-code-review",
+    name: "imported-checker-skill",
+    entries: [
+      {
+        path: "SKILL.md",
+        data: Buffer.from(`---
+name: imported-checker-skill
+description: 通过 upload 导入到代码审查模式的静态检查器
+---
+这是检查器正文`).toString("base64"),
+      },
+    ],
+  }),
+});
+eq(uploadRes.status, 200, "POST /upload 到自定义预设返回 200");
+const uploadPayload = await uploadRes.json();
+ok(uploadPayload.ok === true, "POST /upload 成功导入");
+
+// 校验物理文件落入预设专属目录，且全局技能目录无此技能
+const importedSkillInPreset = join(customReviewSkillsDir, "imported-checker-skill", "SKILL.md");
+const importedSkillInGlobal = join(tmp, "skills", "imported-checker-skill", "SKILL.md");
+let globalHasSkill = false;
+try {
+  await readFile(importedSkillInGlobal);
+  globalHasSkill = true;
+} catch {}
+ok(await readFile(importedSkillInPreset, "utf8").then((c) => c.includes("静态检查器")), "物理文件精确落入自定义预设专属目录");
+ok(!globalHasSkill, "P1-A 闭环：全局 DSH 技能目录零写入、无副本污染");
+
+// 5.7 预设目录重叠守卫（P2-A）：与全局技能目录重叠时拒绝写入
+const overlapSkillsDir = join(tmp, "skills");
+await mkdir(overlapSkillsDir, { recursive: true });
+const overlapMockPresets = {
+  definitions: new Map([
+    [
+      "overlap-preset",
+      {
+        config: {
+          id: "overlap-preset",
+          name: "重叠模式",
+          plugins: [
+            {
+              id: "skill-filesystem",
+              name: "@deepseek-ai/dsh-skill-filesystem",
+              config: {
+                customSkillDirs: [overlapSkillsDir],
+              },
+            },
+          ],
+        },
+      },
+    ],
+  ]),
+};
+const overlapBridge = createTestFetchBridge();
+applyHost({
+  connection: overlapBridge.connection,
+  skills: { registerProvider: () => () => {} },
+  tools: { register: () => () => {} },
+  effect: (fn) => fn(),
+  emit: () => {},
+  get: (name) => (name === "agentPresets" ? overlapMockPresets : undefined),
+});
+const overlapServer = createServer(overlapBridge.handler);
+await new Promise((resolve) => overlapServer.listen(0, "127.0.0.1", resolve));
+const overlapPort = overlapServer.address().port;
+const overlapApi = `http://127.0.0.1:${overlapPort}/api/forge-skills-manager`;
+
+const overlapCreateRes = await fetch(`${overlapApi}/create`, {
+  method: "POST",
+  headers: {
+    host: `127.0.0.1:${overlapPort}`,
+    "content-type": "application/json",
+    "x-dsh-skills-manager": "1",
+  },
+  body: JSON.stringify({
+    root: "preset-overlap-preset",
+    name: "overlap-skill",
+    description: "尝试向与全局重叠的预设写入",
+    body: "应该被拒绝",
+  }),
+});
+const overlapPayload = await overlapCreateRes.json();
+ok(overlapPayload.ok === false, "P2-A 闭环：与全局目录重叠的预设根拒绝写入");
+eq(overlapPayload.code, "error.root.unsafe", "重叠预设根精准返回 error.root.unsafe");
+overlapServer.close();
+
+console.log("── 6. 前向兼容只读路径判定、损坏状态隔离、非 ASCII 预设 ID 与热路径缓存失效 ──");
+
+// 6.1 P2: 不在硬编码名单内的新官方预设，只要 baseUrl 或目录位于宿主包路径（如 node_modules/@deepseek-ai 或 .asar），自动只读且禁开关
+const hostScopedSkillsDir = join(tmp, "node_modules", "@deepseek-ai", "dsh-agent-preset", "new-mode-skills");
+await mkdir(join(hostScopedSkillsDir, "official-review-skill"), { recursive: true });
+await writeFile(
+  join(hostScopedSkillsDir, "official-review-skill", "SKILL.md"),
+  "---\nname: official-review-skill\ndescription: 宿主新增内置预设技能\n---\n内容",
+  "utf8",
+);
+const customDirWithHostBase = join(tmp, "custom-host-base-skills");
+await mkdir(join(customDirWithHostBase, "base-skill"), { recursive: true });
+await writeFile(
+  join(customDirWithHostBase, "base-skill", "SKILL.md"),
+  "---\nname: base-skill\ndescription: 宿主baseUrl加载的新预设\n---\n内容",
+  "utf8",
+);
+const resourcesAppSkillsDir = join(tmp, "resources", "app", "skills");
+await mkdir(join(resourcesAppSkillsDir, "res-app-skill"), { recursive: true });
+await writeFile(
+  join(resourcesAppSkillsDir, "res-app-skill", "SKILL.md"),
+  "---\nname: res-app-skill\ndescription: 宿主resources/app目录内置预设技能\n---\n内容",
+  "utf8",
+);
+const userResourcesSkillsDir = join(tmp, "my-project", "resources", "preset-skills");
+await mkdir(join(userResourcesSkillsDir, "user-res-skill"), { recursive: true });
+await writeFile(
+  join(userResourcesSkillsDir, "user-res-skill", "SKILL.md"),
+  "---\nname: user-res-skill\ndescription: 用户项目下同名resources目录的自定义预设技能\n---\n内容",
+  "utf8",
+);
+const fakeElectronResourcesDir = join(tmp, "fake-electron-resources");
+const fakeElectronSkillsDir = join(fakeElectronResourcesDir, "skills");
+await mkdir(join(fakeElectronSkillsDir, "electron-res-skill"), { recursive: true });
+await writeFile(
+  join(fakeElectronSkillsDir, "electron-res-skill", "SKILL.md"),
+  "---\nname: electron-res-skill\ndescription: 宿主process.resourcesPath下内置预设技能\n---\n内容",
+  "utf8",
+);
+const prevResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+Object.defineProperty(process, "resourcesPath", { value: fakeElectronResourcesDir, configurable: true });
+const futureBuiltinPresets = {
+  definitions: new Map([
+    [
+      "deep-review",
+      {
+        config: {
+          id: "deep-review",
+          name: "官方深度审查",
+          plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [hostScopedSkillsDir] } }],
+        },
+      },
+    ],
+    [
+      "host-base-mode",
+      {
+        context: { baseUrl: "file:///D:/Tools/dsh/node_modules/@deepseek-ai/dsh-agent-preset/index.js" },
+        config: {
+          id: "host-base-mode",
+          name: "宿主来源模式",
+          plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [customDirWithHostBase] } }],
+        },
+      },
+    ],
+    [
+      "res-app-mode",
+      {
+        config: {
+          id: "res-app-mode",
+          name: "宿主资源App目录模式",
+          plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [resourcesAppSkillsDir] } }],
+        },
+      },
+    ],
+    [
+      "electron-res-mode",
+      {
+        config: {
+          id: "electron-res-mode",
+          name: "Electron资源根目录模式",
+          plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [fakeElectronSkillsDir] } }],
+        },
+      },
+    ],
+    [
+      "user-res-mode",
+      {
+        config: {
+          id: "user-res-mode",
+          name: "用户项目resources自定义模式",
+          plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [userResourcesSkillsDir] } }],
+        },
+      },
+    ],
+  ]),
+};
+const futureRoots = await collectPresetRoots({ get: (k) => (k === "agentPresets" ? futureBuiltinPresets : undefined) });
+if (prevResourcesPath) {
+  Object.defineProperty(process, "resourcesPath", prevResourcesPath);
+} else {
+  delete process.resourcesPath;
+}
+const futureReviewRoot = futureRoots.find((r) => r.key === "preset-deep-review");
+const futureBaseRoot = futureRoots.find((r) => r.key === "preset-host-base-mode");
+const futureResAppRoot = futureRoots.find((r) => r.key === "preset-res-app-mode");
+const futureElectronResRoot = futureRoots.find((r) => r.key === "preset-electron-res-mode");
+const futureUserResRoot = futureRoots.find((r) => r.key === "preset-user-res-mode");
+eq(futureReviewRoot?.native, true, "位于 node_modules/@deepseek-ai 下的新预设自动识别为官方内置（无需写死 id 名单）");
+eq(futureReviewRoot?.mutable, false, "宿主安装目录内的未知 ID 预设自动只读禁止写入");
+eq(futureReviewRoot?.toggleable, false, "宿主安装目录内的未知 ID 预设自动关闭真开关");
+eq(futureBaseRoot?.native, true, "从 @deepseek-ai baseUrl 加载的新预设自动识别为官方内置");
+eq(futureBaseRoot?.mutable, false, "从 @deepseek-ai baseUrl 加载的未知 ID 预设自动只读");
+eq(futureBaseRoot?.toggleable, false, "从 @deepseek-ai baseUrl 加载的未知 ID 预设自动关闭开关");
+eq(futureResAppRoot?.native, true, "位于 resources/app/ 目录下的新预设自动判定为内置只读");
+eq(futureResAppRoot?.mutable, false, "位于 resources/app/ 目录下的新预设禁止写入");
+eq(futureElectronResRoot?.native, true, "位于真实 process.resourcesPath 下的新预设自动判定为内置只读");
+eq(futureElectronResRoot?.mutable, false, "位于真实 process.resourcesPath 下的新预设禁止写入");
+eq(futureUserResRoot?.native, false, "用户项目下包含 resources/ 目录的自定义预设不被误伤为内置");
+eq(futureUserResRoot?.mutable, true, "用户项目下包含 resources/ 目录的自定义预设正常可写");
+eq(futureUserResRoot?.toggleable, true, "用户项目下包含 resources/ 目录的自定义预设正常支持开关");
+
+// 6.2 P3 #2: 含非 ASCII 字符（如中文）的自定义预设 ID 支持开关持久化且二次读取不丢失
+const cjkSkillsDir = join(tmp, "cjk-preset-skills");
+await mkdir(join(cjkSkillsDir, "cjk-preset-skill"), { recursive: true });
+await writeFile(
+  join(cjkSkillsDir, "cjk-preset-skill", "SKILL.md"),
+  "---\nname: cjk-preset-skill\ndescription: 中文ID自定义预设技能\n---\n正文",
+  "utf8",
+);
+const cjkPresetObj = {
+  definitions: new Map([
+    [
+      "深度审查",
+      {
+        config: {
+          id: "深度审查",
+          name: "深度审查",
+          plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [cjkSkillsDir] } }],
+        },
+      },
+    ],
+  ]),
+};
+const cjkRoots = await collectPresetRoots({ get: (k) => (k === "agentPresets" ? cjkPresetObj : undefined) });
+const cjkRoot = cjkRoots.find((r) => r.key === "preset-深度审查");
+ok(!!cjkRoot && cjkRoot.toggleable === true, "非 ASCII 自定义预设 ID 正常发现且支持真开关");
+const { setSkillEnabled } = await import("../lib/core.js");
+const cjkDisableRes = await setSkillEnabled(cjkRoot, "cjk-preset-skill", false);
+ok(cjkDisableRes.ok !== false, "含中文 ID 的预设技能停用持久化成功");
+const cjkReloadedState = await state({ presetRoots: cjkRoots });
+const cjkSkillView = cjkReloadedState.roots.find((r) => r.key === "preset-深度审查")?.skills.find((s) => s.name === "cjk-preset-skill");
+eq(cjkSkillView?.enabled, false, "含中文 ID 的预设停用状态重启后完整保留不回弹");
+
+// 6.3 P3 #1: 当 state.json 损坏不可写（writable === false）时，绝不向宿主发送预设禁用覆盖候选
+const stateFilePath = join(tmp, "skills-manager", "state.json");
+const savedStateBackup = await readFile(stateFilePath, "utf8");
+await writeFile(stateFilePath, "{corrupted-json", "utf8");
+const { listProviderCandidates: listWithCorruptState } = await import("../lib/core.js");
+const corruptCandidates = await listWithCorruptState({ presetRoots: cjkRoots });
+ok(!corruptCandidates.some((c) => c.source === "preset-深度审查"), "state.json 损坏 fail-closed 时绝不向外发预设禁用覆盖候选（保障宿主原生预设技能可用）");
+await writeFile(stateFilePath, savedStateBackup, "utf8");
+
+// 6.4 P3 #3: 热路径缓存复用与 agent-preset/selected 事件失效验证
+let presetCollectCount = 0;
+let cachedModeActivePreset = "code-review";
+const cachedListeners = new Map();
+let cachedProvider = null;
+const cachedBridge = createTestFetchBridge();
+applyHost({
+  connection: cachedBridge.connection,
+  skills: { registerProvider: () => () => {} },
+  tools: { register: () => () => {} },
+  effect: (fn) => fn(),
+  on(ev, listener) {
+    cachedListeners.set(ev, [...(cachedListeners.get(ev) || []), listener]);
+    return () => {};
+  },
+  get(name) {
+    if (name === "agentPresets") {
+      return {
+        list: async () => {
+          presetCollectCount++;
+          return [
+            {
+              id: "code-review",
+              name: "缓存测试模式",
+            },
+          ];
+        },
+        readDocument: async () => ({
+          content: `plugins:\n  - id: skill-filesystem\n    config:\n      customSkillDirs:\n        - "${customReviewSkillsDir.replace(/\\/g, "\\\\")}"`,
+        }),
+        composedPreset: () => cachedModeActivePreset,
+      };
+    }
+    return undefined;
+  },
+});
+const cacheAgentCtx = {
+  skills: {
+    registerProvider(create) {
+      cachedProvider = create({ invalidate() {} });
+      return () => {};
+    },
+  },
+};
+for (const listener of cachedListeners.get("agent/created") || []) {
+  listener({ agent: { id: "cache-agent-1", ctx: cacheAgentCtx } });
+}
+presetCollectCount = 0;
+await cachedProvider.list();
+await cachedProvider.list();
+await cachedProvider.list();
+eq(presetCollectCount, 1, "连续多次调用 provider.list() 在 TTL 内复用缓存仅扫一次预设");
+for (const listener of cachedListeners.get("agent-preset/selected") || []) {
+  listener();
+}
+await cachedProvider.list();
+eq(presetCollectCount, 2, "收到 agent-preset/selected 事件后立即清缓存并在下次读取时刷新");
+
+// 验证 miss 穿透负缓存：对不存在的 preset-nonexistent 连续发起请求，冷却窗口内不重复触发扫盘
+const cachedServer = createServer(cachedBridge.handler);
+await new Promise((r) => cachedServer.listen(0, "127.0.0.1", r));
+const cachedPort = cachedServer.address().port;
+const cachedApi = `http://127.0.0.1:${cachedPort}/api/forge-skills-manager`;
+const countBeforeMiss = presetCollectCount;
+for (let i = 0; i < 3; i++) {
+  await fetch(`${cachedApi}/enable`, {
+    method: "POST",
+    headers: { host: `127.0.0.1:${cachedPort}`, "content-type": "application/json", "x-dsh-skills-manager": "1" },
+    body: JSON.stringify({ root: "preset-nonexistent", name: "any" }),
+  });
+}
+eq(presetCollectCount, countBeforeMiss, "连续对失效 preset-* 发起请求时受 miss 负缓存保护，冷却期内零重复扫盘");
+cachedServer.close();
+
+// 6.5 桌面端 Electron .asar 兼容：支持 definitions.context.baseUrl 指向的 .asar 内置技能目录，且不依赖 fs.opendir
+const fakeAsarAppRoot = join(tmp, "desktop-dist", "resources", "app.asar", "dsh");
+const fakeAsarWebAppDir = join(fakeAsarAppRoot, "node_modules", "@deepseek-ai", "dsh-web-app", "presets");
+const fakeAsarPresetPkg = join(fakeAsarAppRoot, "node_modules", "@deepseek-ai", "dsh-agent-preset");
+const fakeAsarSkillsDir = join(fakeAsarPresetPkg, "skills");
+await mkdir(fakeAsarWebAppDir, { recursive: true });
+await mkdir(join(fakeAsarSkillsDir, "cordis-plugin-development"), { recursive: true });
+await writeFile(join(fakeAsarPresetPkg, "package.json"), JSON.stringify({ name: "@deepseek-ai/dsh-agent-preset", version: JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).devDependencies["@deepseek-ai/dsh-skill"] }), "utf8");
+await writeFile(join(fakeAsarWebAppDir, "cordis.patch.yml"), "# mock preset patch\n", "utf8");
+await writeFile(
+  join(fakeAsarSkillsDir, "cordis-plugin-development", "SKILL.md"),
+  "---\nname: cordis-plugin-development\ndescription: 桌面端内置 ASAR 创造模式技能\n---\nASAR 创造模式正文",
+  "utf8",
+);
+
+const origOpendir = fsPromises.opendir;
+const origReaddir = fsPromises.readdir;
+let opendirErrCode = "ENOENT"; // Windows Electron 44 对 app.asar 路径调用 opendir 实测返回 ENOENT
+fsPromises.opendir = async () => {
+  const err = new Error(`${opendirErrCode}: simulated opendir unsupported`);
+  err.code = opendirErrCode;
+  throw err;
+};
+try {
+  const desktopAsarPresets = {
+    // 故意让 inspectCompositions 只返回 standard（模拟桌面端当前默认预设不是 cordis 时的情形）
+    inspectCompositions: () => [{ id: "standard", modules: [] }],
+    definitions: new Map([
+      [
+        "cordis",
+        {
+          context: { baseUrl: pathToFileURL(join(fakeAsarWebAppDir, "cordis.patch.yml")).href },
+          config: {
+            id: "cordis",
+            name: "创造模式",
+            plugins: [{ id: "skill-filesystem", config: { customSkillDirs: [{ __jsExpr: "deferred" }] } }],
+          },
+        },
+      ],
+    ]),
+  };
+  const asarRoots = await collectPresetRoots({ get: (k) => (k === "agentPresets" ? desktopAsarPresets : undefined) });
+  const asarCordisRoot = asarRoots.find((r) => r.key === "preset-cordis");
+  ok(!!asarCordisRoot, "桌面端 app.asar 内置预设创造模式必须被正常发现（不能被 .asar 黑名单屏蔽）");
+  eq(asarCordisRoot?.path, fakeAsarSkillsDir, "优先解析当前运行中宿主 definitions.context.baseUrl 对应的 .asar 内置技能目录");
+  eq(asarCordisRoot?.native, true, "app.asar 内置预设保持 native: true");
+  eq(asarCordisRoot?.mutable, false, "app.asar 内置预设保持只读不可写");
+  eq(asarCordisRoot?.toggleable, false, "app.asar 内置预设保持不可开关");
+
+  // 1) 验证 .asar 路径遇 ENOENT（Windows Electron 44 真机行为）自动回退 readdir
+  const asarState = await state({ presetRoots: asarRoots });
+  const asarRootView = asarState.roots.find((r) => r.key === "preset-cordis");
+  ok(asarRootView?.exists === true, "Windows Electron .asar 路径 opendir 抛 ENOENT 时回退 readdir 识别目录存在");
+  eq(asarRootView?.skills.length, 1, "Windows Electron .asar 路径 opendir 抛 ENOENT 时回退 readdir 列出技能");
+  eq(asarRootView?.skills[0]?.name, "cordis-plugin-development", "准确读取 .asar 内置技能名称");
+  const asarDetail = await skillDetail("preset-cordis", "cordis-plugin-development", { presetRoots: asarRoots });
+  eq(asarDetail?.body, "ASAR 创造模式正文", "点开 .asar 内置技能详情可正常读取正文");
+
+  // 2) 验证 Unix/通用路径遇 ENOTDIR / ENOSYS 时同样自动回退 readdir
+  for (const fallbackCode of ["ENOTDIR", "ENOSYS"]) {
+    opendirErrCode = fallbackCode;
+    const { discoverReadonlyEntries } = await import("../lib/readonly-discovery.js");
+    const scanFallback = await discoverReadonlyEntries(fakeAsarSkillsDir);
+    eq(scanFallback.exists, true, `opendir 抛 ${fallbackCode} 时回退 readdir 识别存在`);
+    eq(scanFallback.entries.length, 1, `opendir 抛 ${fallbackCode} 时回退 readdir 读出条目`);
+  }
+} finally {
+  fsPromises.opendir = origOpendir;
+  fsPromises.readdir = origReaddir;
+}
+
+// 3) 验证普通物理目录优先走流式 fs.opendir，不提前调用 fs.readdir 全量加载内存
+let physicalOpendirCalls = 0;
+let physicalReaddirCalls = 0;
+fsPromises.opendir = async (...args) => {
+  physicalOpendirCalls++;
+  return origOpendir(...args);
+};
+fsPromises.readdir = async (...args) => {
+  physicalReaddirCalls++;
+  return origReaddir(...args);
+};
+try {
+  const { discoverReadonlyEntries } = await import("../lib/readonly-discovery.js");
+  const physicalScan = await discoverReadonlyEntries(customReviewSkillsDir);
+  eq(physicalScan.exists, true, "普通物理目录流式扫描正常");
+  ok(physicalOpendirCalls > 0, "普通物理目录优先使用流式 fs.opendir");
+  eq(physicalReaddirCalls, 0, "普通物理目录不回退调用 fs.readdir 全量读取");
+} finally {
+  fsPromises.opendir = origOpendir;
+  fsPromises.readdir = origReaddir;
+}
+
+server.close();
+await rm(tmp, { recursive: true, force: true });
+
+console.log(`\n${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);

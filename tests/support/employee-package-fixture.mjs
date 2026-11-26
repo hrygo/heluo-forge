@@ -32,6 +32,11 @@ export const VALUES = Object.freeze({
   HELUO_IAM_CLIENT_AUTH_METHOD: 'client_secret_post',
   HELUO_IAM_CLIENT_SECRET_REF: 'desktop-ref-4d7a',
   HELUO_IAM_CLIENT_SECRET: 'synthetic-client-secret-9e2f-7b4c',
+  HELUO_NACOS_SERVER_URL: 'http://nacos-7f3a.corp.example/nacos',
+  HELUO_NACOS_NAMESPACE_ID: 'skills-7f3a',
+  HELUO_NACOS_USERNAME: 'svc-ci',
+  HELUO_NACOS_PASSWORD: 'synthetic-nacos-password-7f3a',
+  HELUO_NACOS_TIMEOUT_MS: '20000',
 });
 
 // Free-form values: the ones whose presence elsewhere would be a disclosure.
@@ -45,6 +50,10 @@ export const FREE_FORM = Object.freeze(
     'HELUO_IAM_DEFAULT_PROVIDER',
     'HELUO_IAM_CLIENT_SECRET_REF',
     'HELUO_IAM_CLIENT_SECRET',
+    'HELUO_NACOS_SERVER_URL',
+    'HELUO_NACOS_NAMESPACE_ID',
+    'HELUO_NACOS_USERNAME',
+    'HELUO_NACOS_PASSWORD',
   ].map((key) => VALUES[key]),
 );
 
@@ -70,7 +79,7 @@ export function sourceRepo(t) {
   return { root, commit: git('rev-parse', 'HEAD') };
 }
 
-function neutralPatch() {
+function neutralPatch({ skills = false } = {}) {
   return [
     '# fixture composition',
     '- insert:',
@@ -79,17 +88,26 @@ function neutralPatch() {
     '    - id: heluo-gitee',
     "      name: '@heluo/forge-gitee'",
     '      config: {}',
+    ...(skills ? [
+      '    - id: heluo-skills-manager',
+      "      name: '@heluo/forge-skills-manager'",
+      '      config: {}',
+    ] : []),
     '',
   ].join('\n');
 }
 
 /** The tarball a real public build produces for `name`: neutral, verifier-matched, closable. */
-export function publicTarball(name = '@heluo/forge-enterprise') {
+export function publicTarball(name = '@heluo/forge-enterprise', { skills = false } = {}) {
   const manifest = { name, version: '0.1.0', license: 'Apache-2.0', dsh: { bundle: { patch: './cordis.patch.yml' } } };
   return writeBundleTarball([
     { path: 'package.json', body: `${JSON.stringify(manifest, null, 2)}\n` },
-    { path: 'cordis.patch.yml', body: neutralPatch() },
+    { path: 'cordis.patch.yml', body: neutralPatch({ skills }) },
     { path: 'README.md', body: '# fixture\n' },
+    ...(skills ? [{
+      path: 'node_modules/@heluo/forge-skills-manager/lib/nacos.js',
+      body: readFileSync(join(TOOL_ROOT, 'packages/forge-skills-manager/lib/nacos.js')),
+    }] : []),
     ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].map((module) => ({
       path: `node_modules/@heluo/forge-iam/src/${module}`,
       body: readFileSync(join(TOOL_ROOT, 'packages/forge-iam/src', module)),

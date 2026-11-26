@@ -6,7 +6,7 @@
 |---|---|
 | 包名 | `@heluo/forge-enterprise` |
 | 详细设计 | [详细设计](../../docs/design/plugins/forge-enterprise.md)（[CORP-DSH-DESIGN-004](../../docs/design/plugins/forge-enterprise.md)） |
-| 实现状态 | 状态：可用（组合骨架：官方 7 行禁用层与回灌检测 [reflow.mjs](src/reflow.mjs) 已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 装配通用底座四项成员：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam` 与 `@heluo/forge-brand`（品牌令牌，中性行不带 config）；不包含任何研发工具、研发面板或研发 Skill）；企业真实 IAM 端点与 OS 凭据集成待实机联调 |
+| 实现状态 | 状态：可用（组合骨架：官方 7 行禁用层与回灌检测 [reflow.mjs](src/reflow.mjs) 已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 装配通用底座四项成员：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam` 与 `@heluo/forge-brand`（品牌令牌，中性行不带 config）；不包含研发工具、研发面板或研发 Skill）；企业真实 IAM 端点与 OS 凭据集成待实机联调 |
 | 运行时 | DSH 宿主装载 [cordis.patch.yml](cordis.patch.yml)；包根模块仅导出官方行回灌检测器，不包含客户端 UI 容器 |
 
 ## 核心组成与补丁边界
@@ -24,7 +24,7 @@ pnpm --filter @heluo/forge-enterprise test
 
 ## 边界
 
-- 本包面向全体企业员工，只包含账号登录、AI 网关、模型目录管理、加密凭据存储与通用策略底座；不含任何研发域成员或界面容器，可单独预装，也可与独立的 `@heluo/forge-engineering` 并存安装（共存时同名 `heluo-policy` 由 Cordis Loader 合并为单实例）。
+- 本包面向全体企业员工，只包含账号登录、AI 网关、模型目录管理、加密凭据存储、通用策略底座与品牌令牌；不包含研发域成员，可单独预装，也可与独立的 `@heluo/forge-engineering` 并存安装（共存时同名 `heluo-policy` 由 Cordis Loader 合并为单实例）。
 - 每个插入行可按环境配置单独覆盖；策略、认证或加密存储不可用时按 fail-closed 语义拒绝，不以「可禁用」为由回退明文凭据或放行未授权访问。
 - 内置运行时的载荷由桌面壳随包携带，本包只交出让它对 `web` profile 生效的两行配置；载荷的暂存、体积与随包许可见[验证记录](../../docs/design/verification/desktop-primary-runtime.md)。
 - 生产与合规审计场景需把 `audit.sink` 从默认的 `memory` 改为 `file`（按天 JSONL、保留 `keepDays` 天）；组织信封要求持久审计时 `memory` 会被拒（`POLICY_AUDIT_NOT_DURABLE`）。服务另提供 `setAuditSink` 程序注入入口；真实企业网关、IAM 与 OS 凭据联动以企业环境实测为准。

@@ -1,0 +1,71 @@
+{
+  "name": "@heluo/forge-skills-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "技能管理 — 本地技能管理与 Nacos 企业公共库",
+  "engines": {
+    "dsh": ">=0.2.2-rc.5"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./icon": "./assets/icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "assets",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "pack:private": "node scripts/package.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "test:compat": "node scripts/verify-runtime.mjs",
+    "verify": "node scripts/check-generated.mjs && npm run typecheck && node --test"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.5",
+    "@types/node": "22.20.4",
+    "@types/react": "18.3.31",
+    "@types/yauzl": "3.4.0",
+    "esbuild": "0.25.0",
+    "fflate": "0.8.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "10.1.0",
+    "react-test-renderer": "18.3.1",
+    "remark-gfm": "4.0.1",
+    "typescript": "5.9.3",
+    "yauzl": "3.4.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ],
+      "platform": "web"
+    }
+  }
+}

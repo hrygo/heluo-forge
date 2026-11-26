@@ -1,0 +1,238 @@
+// 路由层的工作区目标：创建、导入、上传都只经登记列表解析，且不信任前端路径。
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { mkdtemp, mkdir, writeFile, readFile, rm, lstat } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { createTestFetchBridge } from "./fixtures/test-fetch-server.mjs";
+
+const temporary = await mkdtemp(join(tmpdir(), "dssm-ws-routes-"));
+process.env.DSH_HOME = join(temporary, "home");
+process.env.DSH_AGENTS_HOME = join(temporary, "agents");
+process.env.HOME = process.env.USERPROFILE = join(temporary, "user");
+process.env.DSH_SKILLS_MANAGER_SKIP_PROBE = "1";
+for (const key of ["CODEX", "CLAUDE", "GEMINI", "OPENCODE", "CURSOR", "COPILOT"]) process.env[`DSH_${key}_HOME`] = join(temporary, `configured-${key.toLowerCase()}`);
+const { apply } = await import("../lib/index.js");
+
+const registered = join(temporary, "work", "registered");
+const other = join(temporary, "work", "other");
+const unregistered = join(temporary, "work", "unregistered");
+for (const dir of [join(registered, ".git"), join(other, ".git"), unregistered]) await mkdir(dir, { recursive: true });
+let list = [
+  { id: "ws-1", title: "registered", path: registered },
+  { id: "ws-2", title: "other", path: other },
+];
+let registryAvailable = true;
+const { connection, handler } = createTestFetchBridge();
+const emitted = [];
+apply({
+  connection,
+  sessions: { get: () => ({ header: { cwd: registered } }) },
+  effect(register) { return register(); },
+  skills: { registerProvider() { return () => {}; } },
+  get(name) {
+    if (name === "sessions") return { list: () => [{ id: "test-session", header: { agentPreset: "default" } }] };
+    return name === "workspaceRegistry" && registryAvailable ? { list: () => list } : undefined;
+  },
+  emit(name, ...args) { emitted.push([name, ...args]); },
+});
+const server = createServer(handler);
+await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+const base = `http://127.0.0.1:${server.address().port}/api/forge-skills-manager`;
+const headers = { "content-type": "application/json", "x-dsh-skills-manager": "1" };
+const post = (action, payload) => fetch(`${base}/${action}`, { method: "POST", headers, body: JSON.stringify(payload) });
+const exists = (path) => lstat(path).then(() => true, () => false);
+const globalRoot = join(process.env.DSH_HOME, "skills");
+const doc = (name) => `---\nname: ${name}\ndescription: 工作区路由测试\n---\n正文\n`;
+
+try {
+  // 1. 创建：选工作区只写该项目，不写全局，也不写别的工作区。
+  let response = await post("create", { name: "route-create", description: "路由创建", body: "正文", workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(registered, ".dsh", "skills", "route-create", "SKILL.md")), true);
+  assert.equal(await exists(join(globalRoot, "route-create")), false);
+  assert.equal(await exists(join(other, ".dsh")), false);
+
+  // 2. 未登记路径、相对路径、不存在路径：400 且不创建任何目录。
+  for (const workspace of [unregistered, "relative/dir", join(temporary, "work", "ghost"), 42, {}]) {
+    response = await post("create", { name: "route-denied", description: "x", body: "x", workspace });
+    assert.equal(response.status, 400, `拒绝 ${JSON.stringify(workspace)}`);
+    assert.equal((await response.json()).code, "error.workspace.unregistered");
+  }
+  assert.equal(await exists(join(unregistered, ".dsh")), false, "拒绝时不创建目录");
+  assert.equal(await exists(join(temporary, "work", "ghost")), false);
+
+  // 3. 登记服务不可用：任何工作区写入都拒绝，用户目录仍可写。
+  registryAvailable = false;
+  response = await post("create", { name: "no-registry", description: "x", body: "x", workspace: registered });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "error.workspace.unregistered");
+  response = await post("create", { name: "user-still-ok", description: "用户目录", body: "正文" });
+  assert.equal(response.status, 200, "缺省仍写用户目录");
+  assert.equal(await exists(join(globalRoot, "user-still-ok", "SKILL.md")), true);
+  registryAvailable = true;
+
+  // 4. 同名只比较所选目录：全局已有，不挡项目；同一项目重复才冲突。
+  response = await post("create", { name: "user-still-ok", description: "项目同名", body: "正文", workspace: other });
+  assert.equal(response.status, 200, "全局同名不阻止项目");
+  response = await post("create", { name: "user-still-ok", description: "再来", body: "正文", workspace: other });
+  assert.equal(response.status, 400, "同一项目重复冲突");
+
+  // 5. 上传：同样只写所选工作区，覆盖策略只相对所选目录。
+  const entries = [{ path: "SKILL.md", data: Buffer.from(doc("route-upload")).toString("base64") }];
+  response = await post("upload", { name: "route-upload", entries, workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(registered, ".dsh", "skills", "route-upload", "SKILL.md")), true);
+  assert.equal(await exists(join(globalRoot, "route-upload")), false);
+  response = await post("upload", { name: "route-upload", entries, workspace: unregistered });
+  assert.equal(response.status, 400);
+  assert.equal(await exists(join(unregistered, ".dsh")), false);
+
+  // 6. 本地路径导入：来源与目标目录重叠检查对所选目录生效。
+  // 本地目录导入沿用来源文件夹名作为技能名，因此文件夹名与断言保持一致。
+  const source = join(temporary, "route-import");
+  await mkdir(source, { recursive: true });
+  await writeFile(join(source, "SKILL.md"), doc("route-import"));
+  response = await post("import", { source, workspace: other });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(other, ".dsh", "skills", "route-import", "SKILL.md")), true);
+  response = await post("import", { source: join(other, ".dsh", "skills"), workspace: other });
+  const overlap = await response.json();
+  assert.equal(overlap.ok === false || response.status >= 400, true, "来源位于所选目录内时拒绝");
+
+  // 6b. 用户级位置：创建、上传、导入也可以写 Shared Agent，且只有它和 DSH 两处可写。
+  const agentsRoot = process.env.DSH_AGENTS_HOME ? join(process.env.DSH_AGENTS_HOME, "skills") : "";
+  response = await post("create", { name: "agents-created", description: "写进公共 Agent", body: "正文", root: "agents" });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(agentsRoot, "agents-created", "SKILL.md")), true, "创建写进 Shared Agent 目录");
+  assert.equal(await exists(join(globalRoot, "agents-created")), false, "不会同时写全局 DSH");
+  response = await post("upload", { name: "agents-upload", entries: [{ path: "SKILL.md", data: Buffer.from(doc("agents-upload")).toString("base64") }], root: "agents" });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(agentsRoot, "agents-upload", "SKILL.md")), true);
+  const agentsSource = join(temporary, "agents-import-src");
+  await mkdir(agentsSource, { recursive: true });
+  await writeFile(join(agentsSource, "SKILL.md"), doc("agents-import-src"));
+  response = await post("import", { source: agentsSource, root: "agents" });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(agentsRoot, "agents-import-src", "SKILL.md")), true);
+  // 写进 Shared Agent 的技能，在管理页里要能正常启停，并能移入回收站后原样恢复。
+  response = await post("disable", { root: "agents", name: "agents-created" });
+  assert.equal(response.status, 200, await response.clone().text());
+  response = await post("enable", { root: "agents", name: "agents-created" });
+  assert.equal(response.status, 200, await response.clone().text());
+  response = await post("delete", { root: "agents", name: "agents-created" });
+  assert.equal(response.status, 200, await response.clone().text());
+  const agentsDeleted = (await response.json()).data;
+  assert.equal(await exists(join(agentsRoot, "agents-created", "SKILL.md")), false, "普通 Shared Agent 技能无需安装记录也可回收");
+  response = await post("trash-restore", { id: agentsDeleted.id });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await exists(join(agentsRoot, "agents-created", "SKILL.md")), true, "普通 Shared Agent 技能恢复到原目录");
+  const managerState = await (await fetch(`${base}/state`)).json();
+  assert.equal(managerState.data.roots.find(root => root.key === "agents").mutable, true, "管理页应提供 Shared Agent 的普通文件操作");
+  // Codex、Claude 等其他 Agent 目录仍然只读。
+  for (const key of ["codex", "claude", "gemini"]) {
+    response = await post("create", { name: "forbidden-" + key, description: "x", body: "x", root: key });
+    assert.equal(response.status >= 400, true, key + " 目录不可写");
+    assert.equal(await exists(join(temporary, "configured-" + key, "skills", "forbidden-" + key)), false);
+  }
+  // 带 workspace 的请求一律只写项目 DSH：即使同时声明 root=agents，也不能落到 Shared Agent。
+  for (const [action, payload] of [
+    ["create", { name: "ws-and-agents", description: "x", body: "x" }],
+    ["upload", { name: "ws-and-agents", entries: [{ path: "SKILL.md", data: Buffer.from(doc("ws-and-agents")).toString("base64") }] }],
+  ]) {
+    response = await post(action, { ...payload, workspace: registered, root: "agents" });
+    assert.equal(await exists(join(agentsRoot, "ws-and-agents")), false, action + "：带工作区时不写 Shared Agent");
+    if (response.status === 200) assert.equal(await exists(join(registered, ".dsh", "skills", "ws-and-agents", "SKILL.md")), true, action + "：落在项目 DSH");
+  }
+  // 其他 Agent 目录即使走导入也不可写。
+  const forbiddenSource = join(temporary, "forbidden-src");
+  await mkdir(forbiddenSource, { recursive: true });
+  await writeFile(join(forbiddenSource, "SKILL.md"), doc("forbidden-src"));
+  for (const key of ["codex", "claude"]) {
+    response = await post("import", { source: forbiddenSource, root: key });
+    assert.equal(await exists(join(temporary, "configured-" + key, "skills", "forbidden-src")), false, "导入也不能写 " + key);
+    response = await post("upload", { name: "forbidden-up", entries: [{ path: "SKILL.md", data: Buffer.from(doc("forbidden-up")).toString("base64") }], root: key });
+    assert.equal(await exists(join(temporary, "configured-" + key, "skills", "forbidden-up")), false, "上传也不能写 " + key);
+  }
+  // 同名冲突只相对所选目录：DSH 里已有，不挡 Shared Agent。
+  response = await post("create", { name: "dsh-and-agents", description: "x", body: "x" });
+  assert.equal(response.status, 200);
+  response = await post("create", { name: "dsh-and-agents", description: "x", body: "x", root: "agents" });
+  assert.equal(response.status, 200, "同名只比较所选目录");
+
+  // 项目回收恢复始终重新核验登记，活动会话不提供额外写权限。
+  response = await post("delete", { root: "dsh", workspace: registered, name: "route-upload" });
+  assert.equal(response.status, 200);
+  const trashed = (await response.json()).data;
+  list = [];
+  headers["x-dsh-skills-session"] = "still-active";
+  assert.equal((await post("trash-restore", { id: trashed.id })).status, 400);
+  list = [{ path: registered }, { path: other }];
+  assert.equal((await post("trash-restore", { id: trashed.id })).status, 200);
+
+  response = await post("disable", { name: "user-still-ok", root: "dsh" });
+  assert.equal(response.status, 200, "不带 workspace 仍可停用全局技能");
+  response = await post("enable", { name: "user-still-ok", root: "dsh", workspace: registered });
+  assert.equal(response.status, 400, "带 workspace 时 root=dsh 不能改全局技能");
+  assert.equal(await exists(join(globalRoot, "user-still-ok", "SKILL.md")), true);
+  const afterSteal = (await (await fetch(`${base}/state`)).json()).data.roots.find((item) => item.key === "dsh").skills.find((item) => item.name === "user-still-ok");
+  assert.notEqual(afterSteal.enabled, true, "全局技能保持停用");
+  response = await post("detail", { name: "user-still-ok", root: "dsh", workspace: registered });
+  assert.equal(response.status, 400, "带 workspace 的详情不能读取全局技能");
+  response = await post("delete", { name: "user-still-ok", root: "dsh", workspace: registered });
+  assert.equal(response.status, 400, "带 workspace 的删除不能移走全局技能");
+  assert.equal(await exists(join(globalRoot, "user-still-ok", "SKILL.md")), true);
+  const projectKey = (await (await post("workspace-skills", { workspace: registered })).json()).data.roots.find((item) => item.kind === "project-dsh").key;
+  response = await post("disable", { name: "route-create", root: projectKey, workspace: registered });
+  assert.equal(response.status, 200, "工作区范围内仍可按项目根键停用");
+  response = await post("category-create", { root: "project-dsh:0123456789abcdef", name: "假项目分类", workspace: registered });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "error.category.root", "未登记项目键不能创建分类");
+  emitted.length = 0;
+  response = await post("category-create", { root: projectKey, name: "路由分类", workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  const categoryId = (await response.json()).data.category.id;
+  assert.deepEqual(emitted, [], "纯分类元数据创建不刷新宿主技能目录");
+  response = await post("category-assign", { root: projectKey, name: "no-such-skill", category: categoryId, workspace: registered });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "error.skill.notFound", "路由归类也不接受不存在的技能");
+  response = await post("category-assign", { root: projectKey, name: "route-create", category: categoryId, workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(emitted, [], "切换分组只改管理器元数据，不刷新宿主技能目录");
+  response = await post("category-move", { root: projectKey, name: "route-create", category: categoryId, workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(emitted, [], "排序只改管理器元数据，不刷新宿主技能目录");
+  // 验证 /skill-note 路由：作用域、成功与失败校验
+  response = await post("skill-note", { root: projectKey, name: "route-create", note: "路由测试备注", workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await response.json()).data.note, "路由测试备注");
+  // 不存在的技能返回 400 与 error.skill.notFound
+  response = await post("skill-note", { root: projectKey, name: "ghost-skill", note: "测试", workspace: registered });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "error.skill.notFound");
+  // 未登记的项目根返回 400
+  response = await post("skill-note", { root: "project-dsh:0123456789abcdef", name: "route-create", note: "测试", workspace: registered });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "error.note.root");
+  response = await post("category-disable", { root: projectKey, category: categoryId, workspace: registered });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.ok(emitted.some(([name]) => name === "commands/change"), "分类启停仍刷新宿主技能目录");
+
+  // 保存的项目根失效后，即便登记仍在，也不能改写父 Git 项目的同名文件。
+  const parentSkill = join(temporary, "work", ".dsh", "skills", "route-repo", "SKILL.md");
+  await mkdir(join(temporary, "work", ".git"), { recursive: true });
+  await mkdir(join(temporary, "work", ".dsh", "skills", "route-repo"), { recursive: true });
+  await writeFile(parentSkill, "父项目不可碰");
+  await rm(join(registered, ".git"), { recursive: true });
+  for (const action of ["disable", "delete"]) {
+    response = await post(action, { root: projectKey, name: "route-upload", workspace: registered });
+    assert.equal(response.status, 400, action + " 拒绝保存根漂移");
+    assert.equal(await readFile(parentSkill, "utf8"), "父项目不可碰");
+    assert.equal(await exists(join(registered, ".dsh", "skills", "route-upload", "SKILL.md")), true);
+  }
+
+  console.log("工作区路由：创建、上传、导入、登记校验与同名隔离均通过");
+} finally {
+  server.close();
+  await rm(temporary, { recursive: true, force: true });
+}

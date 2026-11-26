@@ -1,0 +1,156 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createInstallOperations } from '../lib/install-operations.js';
+
+test('P2 receipt capacity refuses execution and recovers once existing receipts settle', async () => {
+  const operations = createInstallOperations();
+  let release, calls = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const requests = Array.from({ length: 256 }, (_, index) => operations.run(randomUUID(), String(index), async () => { await gate; return { name: 'example-skill', root: 'fixture' }; }));
+  try {
+    assert.throws(() => operations.run(randomUUID(), 'extra', async () => { calls++; }), { code: 'error.proto.busy' });
+    assert.equal(calls, 0);
+    release(); await Promise.all(requests);
+    await operations.run(randomUUID(), 'extra', async () => { calls++; return { name: 'example-skill', root: 'fixture' }; });
+    assert.equal(calls, 1);
+  } finally { release(); await Promise.all(requests); await operations.dispose(); }
+});
+
+test('installation receipts remain pending until confirmed and never resend an uncertain write', async () => {
+  const operations = createInstallOperations();
+  const id = randomUUID();
+  let release, calls = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const task = async () => { calls++; await pending; return { name: 'example-skill', root: 'fixture' }; };
+  const first = operations.run(id, 'same-target', task);
+  assert.equal(operations.run(id, 'same-target', task), first);
+  assert.deepEqual(await operations.status(id), { state: 'pending' });
+  assert.throws(() => operations.run(randomUUID(), 'same-target', task), { code: 'error.proto.busy' });
+  release();
+  await first;
+  assert.equal(calls, 1);
+  assert.equal((await operations.status(id)).state, 'succeeded');
+  const failedId = randomUUID();
+  const defect = new ReferenceError('after commit');
+  await assert.rejects(operations.run(failedId, 'unknown-target', async () => { throw defect; }), error => error === defect);
+  assert.equal((await operations.status(failedId)).state, 'pending');
+  assert.throws(() => operations.run(randomUUID(), 'unknown-target', task), { code: 'error.proto.busy' });
+  const rejectedId = randomUUID();
+  await assert.rejects(operations.run(rejectedId, 'rejected-target', async () => { throw Object.assign(new Error('rejected'), { code: 'error.nacos.notFound' }); }));
+  assert.equal((await operations.status(rejectedId)).state, 'rejected');
+  assert.equal((await operations.status(randomUUID())).state, 'pending');
+  await assert.rejects(operations.status('../invalid'), { code: 'error.nacos.query' });
+  assert.throws(() => operations.run(id, 'different-target', task), { code: 'error.nacos.query' });
+
+  const recoveredId = randomUUID();
+  let receipt;
+  await assert.rejects(operations.run(recoveredId, 'recovered-target', async () => { throw Object.assign(new Error('not confirmed'), { code: 'error.repo.installState' }); }, async () => receipt));
+  assert.equal((await operations.status(recoveredId)).state, 'pending');
+  receipt = { name: 'recovered-skill', root: 'fixture' };
+  assert.equal((await operations.status(recoveredId)).state, 'succeeded');
+  assert.deepEqual(await operations.run(recoveredId, 'recovered-target', () => assert.fail('must not resend')), receipt);
+});
+
+test('local mutation receipts preserve rejection, uncertainty and the original lost response', async () => {
+  const operations = createInstallOperations();
+  const id = randomUUID();
+  const result = { ok: true, imported: [{ name: 'example-skill' }] };
+  let calls = 0;
+  await operations.runMutation(id, 'POST /upload body-fingerprint', async () => { calls++; return result; });
+  assert.deepEqual(await operations.mutationStatus(id), { state: 'succeeded', result });
+  assert.equal(await operations.runMutation(id, 'POST /upload body-fingerprint', () => assert.fail('must not repeat')), result);
+  assert.equal(calls, 1);
+  assert.throws(() => operations.runMutation(id, 'POST /create body-fingerprint', async () => result), { code: 'error.proto.invalidParams' });
+  assert.throws(() => operations.runMutation(id, 'POST /upload different-body', async () => result), { code: 'error.proto.invalidParams' });
+  const rejectedId = randomUUID();
+  const rejection = { ok: false, code: 'error.root.unsafe', error: 'unsafe root' };
+  assert.equal(await operations.runMutation(rejectedId, 'rejected', async () => rejection), rejection);
+  assert.deepEqual(await operations.mutationStatus(rejectedId), { state: 'rejected', result: rejection, code: rejection.code, error: rejection.error });
+  const unclassifiedId = randomUUID();
+  await operations.runMutation(unclassifiedId, 'no-code', async () => ({ ok: false }));
+  assert.deepEqual(await operations.mutationStatus(unclassifiedId), { state: 'rejected', result: { ok: false }, code: 'error.proto.rejected', error: '操作已拒绝' });
+  for (const error of [new ReferenceError('reader defect'), new TypeError('storage defect'), Object.assign(new Error('uncertain'), { code: 'error.repo.installState' }), Object.assign(new TypeError('coded programming defect'), { code: 'error.repo.state' })]) {
+    const uncertainId = randomUUID();
+    const target = 'uncertain-' + uncertainId;
+    await assert.rejects(operations.runMutation(uncertainId, target, async () => { throw error; }), caught => caught === error);
+    assert.deepEqual(await operations.mutationStatus(uncertainId), { state: 'pending' });
+    await assert.rejects(operations.runMutation(uncertainId, target, () => assert.fail('must not resend')), caught => caught === error);
+    assert.throws(() => operations.runMutation(randomUUID(), target, () => assert.fail('fresh id must not resend an uncertain mutation')), { code: 'error.proto.busy' });
+  }
+  const pendingId = randomUUID();
+  await operations.runMutation(pendingId, 'pending-result', async () => ({ ok: false, code: 'error.repo.installState' }));
+  assert.deepEqual(await operations.mutationStatus(pendingId), { state: 'pending' });
+  assert.deepEqual(await operations.mutationStatus(randomUUID()), { state: 'pending' });
+  assert.deepEqual(await operations.mutationStatus(id), { state: 'succeeded', result });
+
+  const inspectedId = randomUUID();
+  let durable = false;
+  await operations.runMutation(inspectedId, 'inspected-target', async () => ({ ok: false, code: 'error.repo.installState' }), async () =>
+    durable ? { state: 'succeeded', result: { ok: true, value: 'confirmed' } } : undefined);
+  assert.deepEqual(await operations.mutationStatus(inspectedId), { state: 'pending' });
+  assert.throws(() => operations.runMutation(randomUUID(), 'inspected-target', async () => 'must not run'), { code: 'error.proto.busy' });
+  durable = true;
+  assert.deepEqual(await operations.mutationStatus(inspectedId), { state: 'succeeded', result: { ok: true, value: 'confirmed' } });
+  assert.deepEqual(await operations.runMutation(inspectedId, 'inspected-target', async () => assert.fail('must replay confirmed receipt')), { ok: true, value: 'confirmed' });
+  assert.equal(await operations.runMutation(randomUUID(), 'inspected-target', async () => 'new attempt'), 'new attempt');
+});
+
+test('mutation inspection preserves uncertainty on read failure and replays a confirmed rejection', async () => {
+  const operations = createInstallOperations();
+  const id = randomUUID();
+  let failure = Object.assign(new Error('unreadable state'), { code: 'EACCES' });
+  const rejection = { state: 'rejected', code: 'error.repo.state', error: 'not committed' };
+  await operations.runMutation(id, 'inspected-rejection', async () => ({ ok: false, code: 'error.repo.installState' }), async () => {
+    if (failure) throw failure;
+    return rejection;
+  });
+  assert.deepEqual(await operations.mutationStatus(id), { state: 'pending' });
+  failure = new TypeError('inspection defect');
+  await assert.rejects(operations.mutationStatus(id), error => error === failure);
+  failure = undefined;
+  assert.deepEqual(await operations.mutationStatus(id), rejection);
+  assert.deepEqual(await operations.runMutation(id, 'inspected-rejection', () => assert.fail('must not resend')), { ok: false, code: rejection.code, error: rejection.error });
+});
+
+test('unload rejects waiting admission and hot reload waits for an already started transaction', async () => {
+  const path = join(tmpdir(), 'forge-operation-owner-' + randomUUID());
+  const old = createInstallOperations();
+  old.bindManager(path);
+  let entered, finish;
+  const started = new Promise(resolve => { entered = resolve; });
+  const paused = new Promise(resolve => { finish = resolve; });
+  const writes = [];
+  const runningId = randomUUID();
+  const first = old.runMutation(runningId, 'running', () => old.enqueue(async () => {
+    writes.push('old started');
+    entered();
+    await paused;
+    writes.push('old committed');
+    return { ok: true };
+  }));
+  await started;
+  const queuedId = randomUUID();
+  const queued = old.runMutation(queuedId, 'queued', () => old.enqueue(() => assert.fail('disposed queued write started')));
+  await Promise.resolve();
+  let drained = false;
+  const disposal = old.dispose().then(() => { drained = true; });
+  await assert.rejects(queued, { code: 'error.nacos.cancelled' });
+  assert.equal(drained, false);
+  assert.equal((await old.mutationStatus(runningId)).state, 'pending');
+  assert.equal((await old.mutationStatus(queuedId)).state, 'rejected');
+  const reloadedModule = await import('../lib/install-operations.js?generation=' + randomUUID());
+  const current = reloadedModule.createInstallOperations();
+  current.bindManager(path);
+  const next = current.enqueue(async () => { writes.push('new committed'); return 'done'; });
+  await Promise.resolve();
+  assert.deepEqual(writes, ['old started']);
+  finish();
+  await Promise.all([first, disposal, next]);
+  assert.deepEqual(writes, ['old started', 'old committed', 'new committed']);
+  assert.equal((await current.mutationStatus(runningId)).state, 'succeeded');
+  await assert.rejects(old.enqueue(() => assert.fail('old owner admitted a write')), { code: 'error.nacos.cancelled' });
+  await current.dispose();
+});

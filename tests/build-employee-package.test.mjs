@@ -21,13 +21,24 @@ import {
   resolveEmployeeConfig,
 } from '../scripts/build-employee-package.mjs';
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
-import { IAM_ENV_MAP, PrivateBundleError, SECRET_ENV_KEYS } from '../scripts/lib/private-bundle.mjs';
+import { buildConfig, IAM_ENV_MAP, parseEnvConfig, PrivateBundleError, SECRET_ENV_KEYS } from '../scripts/lib/private-bundle.mjs';
 import { RELEASE_CONFIG_KEYS } from '../scripts/lib/release-config.mjs';
+import { NACOS_ENV_MAP } from '../scripts/lib/nacos-release.mjs';
+import { buildDelivery } from '../scripts/release-delivery.mjs';
+import { buildPrivateTarball } from '../scripts/lib/private-bundle.mjs';
 import { fakePublicBuilder, FREE_FORM, publicTarball, sha256Of, sourceRepo, temp, TOOL_ROOT, VALUES } from './support/employee-package-fixture.mjs';
 
 const TAG = 'v1.2.3';
 const ENTRY = '@heluo/forge-enterprise';
 const ENGINEERING = '@heluo/forge-engineering';
+
+// Historical combined artifacts retain their own Nacos contract. They do not
+// use the current employee build's environment allowlist.
+function legacySkillsConfig(env = VALUES) {
+  const text = Object.entries(env).filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${key === 'HELUO_NACOS_USERNAME' || key === 'HELUO_NACOS_PASSWORD' ? `"${value}"` : value}`).join('\n');
+  return buildConfig(parseEnvConfig(text, { allowSecret: true }));
+}
 
 function expectCode(fn, code, pattern) {
   assert.throws(fn, (error) => {
@@ -153,6 +164,41 @@ test('every configuration key reaches its plugin field, and a bad value is refus
   assert.equal(ignored.iam.authorizationEndpoint, undefined);
 });
 
+test('historical combined bundle parsing preserves Nacos credential whitespace and literal quotes and refuses multiline input', () => {
+  for (const key of ['HELUO_NACOS_USERNAME', 'HELUO_NACOS_PASSWORD']) {
+    const field = key === 'HELUO_NACOS_USERNAME' ? 'username' : 'password';
+    for (const value of ['  synthetic value  ', '"synthetic-value"', "'synthetic-value'", 'synthetic"value']) {
+      assert.equal(legacySkillsConfig({ ...VALUES, [key]: value }).nacos[field], value);
+    }
+    expectCode(() => legacySkillsConfig({ ...VALUES, [key]: 'line-one\nline-two' }), 'CONFIG_INVALID');
+  }
+});
+
+test('historical combined delivery embeds Nacos input and refuses every missing required field', t => {
+  const root = temp(t, 'forge-employee-nacos-');
+  const bytes = publicTarball(ENTRY, { skills: true });
+  const publicPath = join(root, 'public.tgz');
+  writeFileSync(publicPath, bytes);
+  const config = legacySkillsConfig();
+  const input = { publicPath, publicSha256: sha256Of(bytes), config, embedClientSecret: true,
+    version: '1.2.3-corp.1', output: join(root, 'delivery'), dryRun: true };
+  const preview = buildDelivery(input);
+  assert.equal(preview.plan.nacosConfigured, true);
+  assert.equal(preview.plan.clientSecretEmbedded, true);
+  assert.deepEqual(preview.plan.embeddedSecrets, ['nacos.password']);
+  assert.equal(FREE_FORM.some(value => JSON.stringify(preview.plan).includes(value)), false);
+  const built = buildPrivateTarball({ entries: readBundleEntries(bytes, { withContent: true }),
+    config, version: input.version, baseSha256: input.publicSha256 });
+  assert.ok(built.patch.includes(VALUES.HELUO_NACOS_PASSWORD));
+  assert.equal(built.patch.includes(VALUES.HELUO_IAM_CLIENT_SECRET), false);
+  assert.equal(built.metadata.config.clientSecretEmbedded, true);
+  for (const key of Object.keys(NACOS_ENV_MAP).filter(key => key !== 'HELUO_NACOS_TIMEOUT_MS')) {
+    expectCode(() => buildDelivery({ ...input, config: legacySkillsConfig({ ...VALUES, [key]: undefined }) }), 'CONFIG_INVALID', new RegExp(key));
+  }
+  assert.equal(existsSync(input.output), false);
+  assert.equal(existsSync(`${input.output}.zip`), false);
+});
+
 test('the package is complete, self-verifying and carries the configuration where it belongs', (t) => {
   const { root, commit } = sourceRepo(t);
   const out = temp(t, 'forge-employee-out-');
@@ -268,6 +314,11 @@ test('the package is complete, self-verifying and carries the configuration wher
   assert.doesNotMatch(patch, /allowInsecureHttp:/);
   // The client secret does not: it travels as a 0600 file for first-run provisioning.
   assert.equal(patch.includes(VALUES.HELUO_IAM_CLIENT_SECRET), false);
+  assert.equal(patch.includes(VALUES.HELUO_NACOS_PASSWORD), false);
+  assert.doesNotMatch(patch, /heluo-skills-manager|nacos:/);
+  const privateMetadata = JSON.parse(entries.find(entry => entry.path === 'heluo-private-release.json').content);
+  assert.equal(privateMetadata.config.clientSecretEmbedded, true);
+  assert.deepEqual(privateMetadata.config.embeddedSecrets, []);
   const secretPath = join(output, 'enterprise-plugin', 'iam-client-secret.txt');
   assert.equal(readFileSync(secretPath, 'utf8'), VALUES.HELUO_IAM_CLIENT_SECRET);
   assert.equal(statSync(secretPath).mode & 0o777, 0o600);

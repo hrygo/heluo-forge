@@ -17,7 +17,11 @@ import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 import { validateConfig } from '../packages/forge-iam/src/config.mjs';
+import { createNacosClient } from '../packages/forge-skills-manager/lib/nacos.js';
+import { fakeNacos } from '../packages/forge-skills-manager/spec/fixtures/nacos.mjs';
 import {
+  assertNacosReleaseConfig,
+  preflightNacosRelease,
   assertIamValidatorMatches,
   assertNeutralPatch,
   patchEntriesOf,
@@ -26,12 +30,25 @@ import {
   inspectPublicTarball,
   makePrivateBundle,
   parseEnvConfig,
+  planDigest,
   requiredRowsForEntry,
   PrivateBundleError,
 } from '../scripts/lib/private-bundle.mjs';
 
 const PUBLIC_VERSION = '0.1.0';
 const ENTRY = '@heluo/forge-enterprise';
+
+test('P2 Nacos preflight rejects undeclared, wrong-package and disabled insert rows', () => {
+  const config = buildConfig(parseEnvConfig(ENV.join('\n')));
+  const layers = layeredPatchText();
+  layers.base = layers.base.replace(SKILLS_ROW.trimEnd(), '');
+  const undeclared = readBundleEntries(publicTarball({ patches: { 'cordis.patch.yml': layers.base, 'cordis.patch.skills.yml': '- insert:\n' + SKILLS_ROW }, declaredPatches: './cordis.patch.yml' }), { withContent: true });
+  expectCode(() => preflightNacosRelease(undeclared, config), 'PUBLIC_TARBALL_INVALID');
+  for (const row of [SKILLS_ROW.replace('@heluo/forge-skills-manager', '@heluo/forge-brand'), SKILLS_ROW.replace('config: {}', 'disabled: true\n      config: {}')]) {
+    const entries = readBundleEntries(publicTarball({ patch: layers.base + row }), { withContent: true });
+    expectCode(() => preflightNacosRelease(entries, config), 'PUBLIC_TARBALL_INVALID');
+  }
+});
 
 function temp(t, prefix = 'forge-private-test-') {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -42,7 +59,7 @@ function temp(t, prefix = 'forge-private-test-') {
   return root;
 }
 
-function patchText({ iamConfig = '', giteeConfig = '' } = {}) {
+function patchText({ iamConfig = '', giteeConfig = '', skills = true } = {}) {
   const iam = iamConfig === '' ? '' : `      config:\n${iamConfig}`;
   const gitee = giteeConfig === '' ? '      config: {}\n' : `      config:\n${giteeConfig}`;
   return [
@@ -56,6 +73,7 @@ function patchText({ iamConfig = '', giteeConfig = '' } = {}) {
     '    - id: heluo-gitee',
     "      name: '@heluo/forge-gitee'",
     ...gitee.split('\n').filter(Boolean),
+    ...(skills ? SKILLS_ROW.trimEnd().split('\n') : []),
     '    - id: forge-devops',
     "      name: '@heluo/forge-devops'",
     '      config: {}',
@@ -72,6 +90,7 @@ function layeredPatchText() {
       "      name: '@heluo/forge-credentials-keychain'",
       '    - id: heluo-iam',
       "      name: '@heluo/forge-iam'",
+      ...SKILLS_ROW.trimEnd().split('\n'),
       '',
     ].join('\n'),
     overlay: [
@@ -88,7 +107,7 @@ function layeredPatchText() {
   };
 }
 
-function publicTarball({ patch, patches, validatorOverride, omitValidator, omitPatchDeclaration } = {}) {
+function publicTarball({ patch, patches, declaredPatches, validatorOverride, omitValidator, omitPatchDeclaration } = {}) {
   const files = [
     // 真实公版包必须声明默认层（`dsh.bundle.patch`）：夹具照抄这条，否则测的不是可安装形态。
     {
@@ -97,7 +116,7 @@ function publicTarball({ patch, patches, validatorOverride, omitValidator, omitP
         name: ENTRY,
         version: PUBLIC_VERSION,
         license: 'Apache-2.0',
-        ...(omitPatchDeclaration === true ? {} : { dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+        ...(omitPatchDeclaration === true ? {} : { dsh: { bundle: { patch: declaredPatches ?? (patches ? ['./cordis.patch.yml', ...Object.keys(patches).filter(path => path !== 'cordis.patch.yml' && /^cordis\.patch\.[A-Za-z0-9-]+\.yml$/.test(path)).map(path => './' + path)] : './cordis.patch.yml') } } }),
       }, null, 2)}\n`,
     },
     ...(patches === undefined
@@ -105,6 +124,8 @@ function publicTarball({ patch, patches, validatorOverride, omitValidator, omitP
       : Object.entries(patches).map(([name, body]) => ({ path: name, body }))),
     { path: 'README.md', body: '# fixture enterprise bundle\n' },
     { path: 'src/index.mjs', body: 'export const fixture = true;\n' },
+    { path: 'node_modules/@heluo/forge-skills-manager/lib/nacos.js',
+      body: readFileSync(new URL('../packages/forge-skills-manager/lib/nacos.js', import.meta.url)) },
     ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].filter((name) => name !== omitValidator).map((name) => ({
       path: `node_modules/@heluo/forge-iam/src/${name}`,
       body: name === 'config.mjs' && validatorOverride !== undefined ? validatorOverride : readFileSync(new URL(`../packages/forge-iam/src/${name}`, import.meta.url)),
@@ -164,7 +185,7 @@ function writeConfig(root, lines) {
   return path;
 }
 
-const ENV = [
+const IAM_ENV = [
   'HELUO_IAM_ISSUER=https://iam.corp.example',
   'HELUO_IAM_CLIENT_ID=forge-console',
   'HELUO_IAM_AUTHORIZATION_ENDPOINT=https://iam.corp.example/authorize',
@@ -177,6 +198,15 @@ const ENV = [
   'HELUO_GITEE_TIMEOUT_MS=15000',
 ];
 
+const NACOS_ENV = [
+  'HELUO_NACOS_SERVER_URL=http://nacos.corp.example/nacos',
+  'HELUO_NACOS_NAMESPACE_ID=skills-prod',
+  'HELUO_NACOS_USERNAME=svc-ci',
+  'HELUO_NACOS_PASSWORD=synthetic-password',
+  'HELUO_NACOS_TIMEOUT_MS=20000',
+];
+const ENV = [...IAM_ENV, ...NACOS_ENV];
+
 function expectCode(fn, code) {
   assert.throws(fn, (error) => {
     assert.equal(error instanceof PrivateBundleError, true, `expected PrivateBundleError, got ${error?.name}: ${error?.message}`);
@@ -184,6 +214,141 @@ function expectCode(fn, code) {
     return true;
   });
 }
+
+const SKILLS_ROW = '    - id: heluo-skills-manager\n      name: \'@heluo/forge-skills-manager\'\n      config: {}\n';
+
+test('Nacos configuration is optional and its defaults are left to the plugin', () => {
+  assert.deepEqual(buildConfig(parseEnvConfig(IAM_ENV.join('\n'))).nacos, {});
+  const minimal = buildConfig(parseEnvConfig([...IAM_ENV, NACOS_ENV[0]].join('\n')));
+  assert.deepEqual(minimal.nacos, { serverUrl: 'http://nacos.corp.example/nacos' });
+  assert.deepEqual(minimal.keys.filter((key) => key.startsWith('nacos.')), ['nacos.serverUrl']);
+  for (const timeout of [100, 120000]) {
+    const config = buildConfig(parseEnvConfig([...IAM_ENV, NACOS_ENV[0], `HELUO_NACOS_TIMEOUT_MS=${timeout}`].join('\n')));
+    assert.match(createNacosClient(config.nacos).identity({ skillName: 'example-skill', version: '1.0.0' }), /^nacos:[a-f0-9]{64}$/u);
+  }
+});
+
+test('maker embeds Nacos configuration in the owning layer and preserves other files', async (t) => {
+  for (const owner of ['base', 'overlay']) {
+    const root = temp(t);
+    const layers = layeredPatchText();
+    layers.base = layers.base.replace(SKILLS_ROW.trimEnd(), '');
+    layers[owner] += SKILLS_ROW;
+    const publicBytes = publicTarball({ patches: { 'cordis.patch.yml': layers.base, 'cordis.patch.engineering.yml': layers.overlay } });
+    const publicPath = join(root, 'public.tgz');
+    writeFileSync(publicPath, publicBytes);
+    const configPath = writeConfig(root, [...IAM_ENV, ...NACOS_ENV]);
+    const configBefore = readFileSync(configPath);
+    assert.deepEqual(inspectPublicTarball(publicPath).problems, []);
+    const config = buildConfig(parseEnvConfig(readFileSync(configPath, 'utf8')));
+    const result = buildPrivateTarball({ entries: readBundleEntries(publicBytes, { withContent: true }),
+      config, version: '0.1.0-corp.1', baseSha256: createHash('sha256').update(publicBytes).digest('hex') });
+    const tarball = join(root, 'private.tgz');
+    writeFileSync(tarball, result.tar);
+    const packed = readBundleEntries(tarball, { withContent: true });
+    const ownerPath = owner === 'base' ? 'cordis.patch.yml' : 'cordis.patch.engineering.yml';
+    const text = packed.find((entry) => entry.path === ownerPath).content.toString('utf8');
+    assert.ok(text.includes('      config:\n        nacos:\n          serverUrl: "http://nacos.corp.example/nacos"'));
+    for (const expected of ['namespaceId: "skills-prod"', 'username: "svc-ci"', 'password: "synthetic-password"', 'timeoutMs: 20000']) assert.ok(text.includes(expected), expected);
+    const runtimeConfig = Object.fromEntries([...text.matchAll(/^ {10}(serverUrl|namespaceId|username|password): (".*")$/gm)]
+      .map(([, field, value]) => [field, JSON.parse(value)]));
+    const nacos = fakeNacos('http://nacos.corp.example');
+    // Read the shipped scalars, so this proves the archive and runtime contracts agree.
+    await createNacosClient(runtimeConfig, nacos.fetcher).list();
+    assert.deepEqual(Object.fromEntries(new URLSearchParams(nacos.calls[0].options.body)), { username: 'svc-ci', password: 'synthetic-password' });
+    const otherPath = owner === 'base' ? 'cordis.patch.engineering.yml' : 'cordis.patch.yml';
+    assert.doesNotMatch(packed.find((entry) => entry.path === otherPath).content.toString('utf8'), /nacos/iu);
+    for (const before of readBundleEntries(publicBytes, { withContent: true })) {
+      if (['package.json', 'cordis.patch.yml', 'cordis.patch.engineering.yml'].includes(before.path)) continue;
+      const after = packed.find((entry) => entry.path === before.path);
+      assert.equal(after.sha256, before.sha256, before.path);
+      assert.equal(after.mode, before.mode, before.path);
+    }
+    assert.deepEqual(readFileSync(configPath), configBefore);
+    assert.equal(existsSync(join(root, 'cordis.patch.yml')), false);
+    const metadata = JSON.parse(packed.find((entry) => entry.path === 'heluo-private-release.json').content);
+    assert.equal(metadata.config.secretEmbedded, true);
+    assert.ok(metadata.config.keys.includes('nacos.serverUrl'));
+    assert.doesNotMatch(JSON.stringify(metadata), /nacos\.corp\.example|skills-prod|synthetic-password|svc-ci/u);
+    assert.equal(verifyBundle(tarball).ok, true);
+  }
+});
+
+test('Nacos fields reject invalid deployment settings without exposing values', () => {
+  const credentialUrl = new URL('https://nacos.corp.example/nacos');
+  credentialUrl.username = 'svc-ci';
+  credentialUrl.password = 'example-secret';
+  for (const [key, value] of [
+    ['SERVER_URL', ''], ['SERVER_URL', 'ftp://nacos.corp.example'],
+    ['SERVER_URL', credentialUrl.href],
+    ['SERVER_URL', 'https://nacos.corp.example/nacos?token=example-secret'],
+    ['SERVER_URL', 'https://nacos.corp.example/nacos#example-secret'],
+    ['NAMESPACE_ID', ''], ['NAMESPACE_ID', 'bad/namespace'], ['NAMESPACE_ID', 'a'.repeat(129)],
+    ['USERNAME', ''], ['PASSWORD', '"   "'],
+    ['TIMEOUT_MS', '99'], ['TIMEOUT_MS', '120001'], ['TIMEOUT_MS', '100.5'],
+  ]) {
+    const lines = NACOS_ENV.filter((line) => !line.startsWith(`HELUO_NACOS_${key}=`));
+    assert.throws(() => buildConfig(parseEnvConfig([...IAM_ENV, ...lines, `HELUO_NACOS_${key}=${value}`].join('\n'))), (error) => {
+      assert.equal(error.code, 'CONFIG_INVALID');
+      assert.doesNotMatch(error.message, /example-secret/u);
+      return true;
+    });
+  }
+  expectCode(() => buildConfig(parseEnvConfig([...IAM_ENV, 'HELUO_NACOS_NAMESPACE_ID=public'].join('\n'))), 'CONFIG_INVALID');
+  for (const key of ['USERNAME_ENV', 'PASSWORD_ENV', 'ALLOW_INSECURE_HTTP', 'TOKEN']) {
+    assert.throws(() => parseEnvConfig([...IAM_ENV, `HELUO_NACOS_${key}=example-secret`].join('\n')), (error) => {
+      assert.equal(error.code, 'CONFIG_UNKNOWN_KEY');
+      assert.doesNotMatch(error.message, /example-secret/u);
+      return true;
+    });
+  }
+});
+
+test('formal Nacos configuration requires all four fields and accepts HTTP without an opt-in', () => {
+  const full = buildConfig(parseEnvConfig([...IAM_ENV, ...NACOS_ENV].join('\n')));
+  assertNacosReleaseConfig(full);
+  assert.equal(full.nacos.serverUrl, 'http://nacos.corp.example/nacos');
+  for (const key of ['SERVER_URL', 'NAMESPACE_ID', 'USERNAME', 'PASSWORD']) {
+    const lines = NACOS_ENV.filter(line => !line.startsWith(`HELUO_NACOS_${key}=`));
+    expectCode(() => assertNacosReleaseConfig(buildConfig(parseEnvConfig([...IAM_ENV, ...lines].join('\n')))), 'CONFIG_INVALID');
+    const incomplete = { ...full, nacos: { ...full.nacos } };
+    delete incomplete.nacos[{ SERVER_URL: 'serverUrl', NAMESPACE_ID: 'namespaceId', USERNAME: 'username', PASSWORD: 'password' }[key]];
+    expectCode(() => buildPrivateTarball({ entries: readBundleEntries(publicTarball(), { withContent: true }), version: '0.1.0-corp.1', config: incomplete, baseSha256: 'a'.repeat(64) }), 'CONFIG_INVALID');
+  }
+  expectCode(() => assertNacosReleaseConfig(buildConfig(parseEnvConfig(IAM_ENV.join('\n')))), 'CONFIG_INVALID');
+  const parameters = { publicSha256: 'a'.repeat(64), version: '0.1.0-corp.1', platforms: ['windows-x64'] };
+  for (const field of ['serverUrl', 'namespaceId', 'username', 'password']) {
+    const changed = { ...full, nacos: { ...full.nacos, [field]: full.nacos[field] + '-changed' } };
+    assert.notEqual(planDigest({ ...parameters, config: full }), planDigest({ ...parameters, config: changed }));
+  }
+});
+
+test('maker refuses Nacos configuration without an unambiguous neutral Skill Manager row', () => {
+  const config = buildConfig(parseEnvConfig([...IAM_ENV, ...NACOS_ENV].join('\n')));
+  const nonNeutral = SKILLS_ROW.replace('config: {}', 'config:\n        nacos:\n          serverUrl: https://nacos.corp.example/nacos');
+  for (const patches of [
+    { 'cordis.patch.yml': patchText({ skills: false }) },
+    { 'cordis.patch.yml': patchText() + SKILLS_ROW + SKILLS_ROW },
+    { 'cordis.patch.yml': patchText() + SKILLS_ROW, 'cordis.patch.other.yml': '- insert:\n' + SKILLS_ROW },
+    { 'cordis.patch.yml': patchText() + nonNeutral },
+  ]) {
+    const bytes = publicTarball({ patches });
+    expectCode(() => buildPrivateTarball({ entries: readBundleEntries(bytes, { withContent: true }),
+      version: '0.1.0-corp.1', config, baseSha256: createHash('sha256').update(bytes).digest('hex') }), 'PUBLIC_TARBALL_INVALID');
+  }
+  assert.ok(assertNeutralPatch(patchText({ skills: false }) + nonNeutral).some((problem) => problem.includes('non-empty config')));
+});
+
+test('maker refuses an old or absent Nacos runtime that cannot read package credentials', () => {
+  const config = buildConfig(parseEnvConfig(ENV.join('\n')));
+  const entries = readBundleEntries(publicTarball(), { withContent: true });
+  const path = 'node_modules/@heluo/forge-skills-manager/lib/nacos.js';
+  for (const changed of [entries.filter(entry => entry.path !== path), entries.map(entry =>
+    entry.path === path ? { ...entry, content: Buffer.from('export const oldRuntime = true;\n') } : entry)]) {
+    expectCode(() => preflightNacosRelease(changed, config), 'NACOS_RUNTIME_MISMATCH');
+    expectCode(() => buildPrivateTarball({ entries: changed, config, version: '0.1.0-corp.1', baseSha256: 'a'.repeat(64) }), 'NACOS_RUNTIME_MISMATCH');
+  }
+});
 
 test('maker changes only the patch, the version and its own metadata', (t) => {
   const root = temp(t);
@@ -202,7 +367,7 @@ test('maker changes only the patch, the version and its own metadata', (t) => {
   });
   assert.equal(result.version, '0.2.0');
   assert.equal(result.base.version, PUBLIC_VERSION);
-  assert.equal(result.configKeys.length, 10);
+  assert.equal(result.configKeys.length, 15);
   const after = readBundleEntries(result.tarball, { withContent: true });
   const before = readBundleEntries(publicBytes, { withContent: true });
   const changed = [];
@@ -222,7 +387,7 @@ test('maker changes only the patch, the version and its own metadata', (t) => {
   assert.match(patch, /- "openid"/u);
   assert.match(patch, /timeoutMs: 15000/u);
   const metadata = JSON.parse(after.find((entry) => entry.path === 'heluo-private-release.json').content.toString('utf8'));
-  assert.equal(metadata.config.secretEmbedded, false);
+  assert.equal(metadata.config.secretEmbedded, true);
   assert.equal(JSON.stringify(metadata).includes('corp.example'), false, 'metadata must not copy configuration values');
   const verified = verifyBundle(result.tarball, { manifestPath: join(output, 'bundle-manifest.json') });
   assert.equal(verified.ok, true, verified.errors.join('\n'));
@@ -435,7 +600,9 @@ test('a confidential private bundle carries only the declared IAM method and ref
   assert.match(patch, /clientSecretRef: "enterprise-oidc"/u);
   assert.doesNotMatch(patch, /^\s*(?:clientSecret|client_secret):/mu);
   const metadata = JSON.parse(entries.find((entry) => entry.path === 'heluo-private-release.json').content.toString('utf8'));
-  assert.equal(metadata.config.secretEmbedded, false);
+  assert.equal(metadata.config.secretEmbedded, true);
+  assert.equal(metadata.config.clientSecretEmbedded, false);
+  assert.deepEqual(metadata.config.embeddedSecrets, ['nacos.password']);
   assert.doesNotMatch(JSON.stringify(metadata), /enterprise-oidc/u);
 });
 
@@ -462,6 +629,7 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
     'HELUO_IAM_CALLBACK_ADDRESS=127.0.0.1',
     'HELUO_IAM_MANAGED_MODELS_BASE_URL=http://gateway.corp.example:9080/aig-coding/v1',
     'HELUO_IAM_DEFAULT_PROVIDER=zy-coding',
+    ...NACOS_ENV,
     ...extra,
   ].join('\n'));
   assert.throws(
@@ -689,7 +857,7 @@ test('patch injection keeps every other composition line intact', () => {
   const patch = built.patch;
   assert.match(patch, /id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}/u);
   assert.match(patch, /id: heluo-gitee\n {6}name: '@heluo\/forge-gitee'\n {6}config:\n {8}host: "gitee\.corp\.example"/u);
-  assert.equal((patch.match(/- id: /gu) ?? []).length, 4);
+  assert.equal((patch.match(/- id: /gu) ?? []).length, 5);
 });
 
 test('layer-aware gate: a two-layer bundle is neutral and gets its config injected where the row lives', (t) => {
@@ -840,4 +1008,53 @@ test('the shipped profile mapping passes the plugin schema', () => {
   const result = validateConfig({ ...iam });
   assert.equal('issues' in result, false, JSON.stringify(result.issues ?? []));
   assert.deepEqual(result.value.profileFields, { name: 'pinyin', workNo: 'work_no' });
+});
+
+test('private metadata distinguishes Nacos and IAM client secrets in every combination', t => {
+  for (const withNacos of [false, true]) {
+    for (const withClientSecret of [false, true]) {
+      const config = buildConfig(parseEnvConfig([
+        ...IAM_ENV,
+        ...(withNacos ? NACOS_ENV : []),
+        'HELUO_IAM_AUTH_MODE=confidential',
+        'HELUO_IAM_CLIENT_AUTH_METHOD=client_secret_post',
+        'HELUO_IAM_CLIENT_SECRET_REF=enterprise-oidc',
+        ...(withClientSecret ? ['HELUO_IAM_CLIENT_SECRET=synthetic-client-secret'] : []),
+      ].join('\n'), { allowSecret: true }));
+      const bytes = publicTarball({ patch: patchText({ skills: withNacos }) });
+      const built = buildPrivateTarball({ entries: readBundleEntries(bytes, { withContent: true }),
+        config, version: '0.1.0-corp.1', baseSha256: createHash('sha256').update(bytes).digest('hex') });
+      const packed = readBundleEntries(built.tar, { withContent: true });
+      const metadata = JSON.parse(packed.find(entry => entry.path === 'heluo-private-release.json').content);
+      const patch = packed.find(entry => entry.path === 'cordis.patch.yml').content.toString('utf8');
+      assert.equal(metadata.config.secretEmbedded, withNacos || withClientSecret);
+      assert.equal(metadata.config.clientSecretEmbedded, withClientSecret);
+      assert.deepEqual(metadata.config.embeddedSecrets, withNacos ? ['nacos.password'] : []);
+      assert.doesNotMatch(patch + JSON.stringify(metadata), /synthetic-client-secret/);
+      assert.equal(patch.includes('synthetic-password'), withNacos);
+      const root = temp(t);
+      const publicPath = join(root, 'public.tgz');
+      writeFileSync(publicPath, bytes);
+      const result = makePrivateBundle({ publicPath, expectedSha256: createHash('sha256').update(bytes).digest('hex'),
+        config, version: '0.1.0-corp.1', output: join(root, 'private'), repoRoot: join(root, 'repo') });
+      assert.equal(result.secretEmbedded, withNacos || withClientSecret);
+      assert.equal(result.clientSecretEmbedded, withClientSecret);
+    }
+  }
+});
+
+test('Nacos requirement follows the installed plugin instead of every private bundle', () => {
+  const config = buildConfig(parseEnvConfig(IAM_ENV.join('\n')));
+  const entries = readBundleEntries(publicTarball({ patch: patchText({ skills: false }) }), { withContent: true })
+    .filter(entry => !entry.path.includes('@heluo/forge-skills-manager/'));
+  const plan = preflightNacosRelease(entries, config);
+  assert.deepEqual(plan, { nacosConfigured: false, embeddedSecrets: [], secretEmbedded: false });
+  const built = buildPrivateTarball({ entries, config, version: '0.1.0-corp.1', baseSha256: 'a'.repeat(64) });
+  assert.equal(built.metadata.config.secretEmbedded, false);
+  assert.deepEqual(built.metadata.config.embeddedSecrets, []);
+  assert.doesNotMatch(built.patch, /nacos/);
+  const withNacos = buildConfig(parseEnvConfig(ENV.join('\n')));
+  expectCode(() => preflightNacosRelease(entries, withNacos), 'PUBLIC_TARBALL_INVALID');
+  const installed = readBundleEntries(publicTarball(), { withContent: true });
+  expectCode(() => preflightNacosRelease(installed, config), 'CONFIG_INVALID');
 });

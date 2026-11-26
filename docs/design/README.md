@@ -28,6 +28,7 @@
 |---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) |
+| `@heluo/forge-skills-manager` | Host + Client 插件 | [plugins/forge-skills-manager.md](plugins/forge-skills-manager.md) |
 | `@heluo/forge-enterprise` | umbrella bundle（通用底座：企业账号与模型） | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) |
 | `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) |
@@ -70,6 +71,7 @@ Delegra 侧的专家执行面横跨运行时镜像与 Kubernetes 沙箱，同属
 | 模块 | 实现与验证记录 |
 |---|---|
 | `forge-iam` | [IAM 实现与验证记录](verification/forge-iam.md) |
+| `forge-skills-manager` | [技能管理器实现与验证记录](verification/forge-skills-manager.md) |
 | `forge-credentials-keychain` | [凭据存储实测边界](verification/forge-credentials-keychain.md) |
 | `forge-policy` | [策略与审计实测边界](verification/forge-policy.md) |
 | `forge-experts` | [专家智能体实现与验证记录](verification/forge-experts.md) |
