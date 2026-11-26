@@ -6,6 +6,24 @@
 
 本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间、专用只读账号与密码，安装后无需填写连接配置；中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。本机 DSH 0.2.2-rc.2 三包离线安装、装配与 manager HTTP 启动通过；企业权限、完整三包装卸及目标平台仍待验。
 
+## 2026-11-26 PR 465 其余 P2 修复
+
+本轮修复七项评审问题：内联第三方代码许可证交付、实际声明的补丁层预检与注入、响应体断流拒绝、未准入 UUID 拒绝、管理状态写入阶段判定、回收事务恢复及首次安装响应校验。状态存储只读核验不重复写入；移除来源和永久删除等已产生部分副作用的复合操作保持 pending。第三方声明随 `lib/` 进入独立中性及预置 TGZ；员工企业包不包含 Skill Manager 的代码和声明。设计、契约与包内制包说明同步，根 README 和项目级安装器、交付器未修改。
+
+固定 Node 24.21.0 / pnpm 11.28.5，本机 Windows，全部新增验证使用合成配置和隔离目录：
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| 新增 P2 的 UI、HTTP、回执容量回归；再扩展回收恢复用例 | 修复前首组 7 项失败；暂存夹具修正为实际变更后仍因 ENOSPC 失败。回收组 4 项因原缺陷失败；修复后对应项通过。覆盖未写入、拒绝后重试、原 UUID、未知异常，以及目录和双形态、本地修改、来源替换、移动前中断与删除后的提交失败 |
+| 包目录：`node --run verify` | 最终 171 项全部通过，无失败或跳过；26 个生成文件一致、类型检查通过；测试约 103.1 秒，整体约 110.7 秒。包含许可证及异地构建可复现性、管理/Nacos/UI、存储并发和结构变异 |
+| 根目录：`node --test tests/skills-manager-package.test.mjs tests/skills-manager-iam.test.mjs tests/employee-skills-boundary.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-skills-manager/test/independent-package.test.mjs` | 16 项通过，约 15.8 秒；正式预置及声明文件、空缓存离线安装、同 Host IAM 动态注入与 enterprise 不挂载 manager 的既有行为保持 |
+| 根目录：`node --test tests/private-bundle.test.mjs tests/build-employee-package.test.mjs tests/release-delivery.test.mjs tests/release-public.test.mjs`，与隔离 `90922cd` 源码对照 | 最终 112 项中 62 通过、47 失败、3 跳过，约 60.3 秒；基线 111 项中 61 通过、47 失败、3 跳过，约 46.4 秒。失败名称逐项一致，为 Windows 权限、链接夹具及缺少 `zip` 等既有环境限制；声明清单夹具同步后无新增失败。抽取发布工具的实际导入闭包验证通过 |
+| 最终中性 TGZ 的 `verify-host.mjs`，仓库外仅适配为官方 Electron 执行 ASAR CLI | 11 项通过，约 25.2 秒；真实 DSH 0.2.2-rc.2、新 HOME/profile、空缓存、合成 Nacos。覆盖认证、准入拒绝、丢失响应核对、默认禁用、完整资源、并发写入、重启、热停启和卸载保留数据 |
+| 预置 TGZ 的单层及声明双层隔离 Host 探针 | 各 4 项通过，约 8.1 / 9.1 秒；包内预置完成合成 Nacos 登录与列表，错误环境凭据未覆盖预置，无 profile Nacos 覆盖或启动回写，声明文件保留。双层为从预置 TGZ 重组的合成夹具；不是正式多层产品制包。探针后仅调整复合操作错误处理与演练断言，连接预置及声明逻辑不变 |
+| 根目录：`pnpm check` | 约 39.9 秒后在既有 enterprise/IAM 的 bin 0644 归档审计失败；此前生成物、类型、文档、结构和技能检查通过。未进入全库单测，不记全库通过 |
+
+正式包仍在制包时将 Nacos 地址、命名空间及专用只读账号密码写入有效 `cordis.patch.yml` 的 `config.nacos`；配置诊断可能携带密码的评审项按用户指示暂不修复。企业真实服务端权限、目标 DSH 0.2.1-rc.3 及其他操作系统未验；本机用户现用 DSH Web 与 Nacos 保持原样。最终文档、结构、版本、差异格式与提交签名检查随交付复核；此记录不代替远端 CI 或企业验收。
+
 ## 2026-11-26 精确版本准入与 ZIP 完整性
 
 Nacos 目录仅展示已启用、latest 精确版本状态为 `online` 的条目；版本列表缺失时只补查当前页候选的元数据。详情及安装复核名称、命名空间、latest 与精确版本状态，通过 Client API 显式指定版本下载。上传及企业下载共用内联 yauzl 读取器，按流检查实际长度、CRC32、单项及累计输出预算，全部验证通过后才交给解析或写入；保留便携路径规则和既有错误码。读取器及传递依赖的许可证随生成模块保留。设计与 Nacos 契约同步，包内 README 保持功能和使用说明职责，根 README 未修改。

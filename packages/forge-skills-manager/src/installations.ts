@@ -8,7 +8,7 @@ import type { indexRegisteredWorkspaces } from "./core.js";
 import type { InstallationPort } from "./local-ports.js";
 import type { MutationInspection } from "./install-operations.js";
 import { isExpectedOperationError } from "./operation-errors.js";
-import { createInstallationRecords,fileIndex,installationSourceKey,isRepositoryRootKey,readSkillTree,signature } from "./installation-records.js";
+import { createInstallationRecords,fileIndex,installationSourceKey,isRepositoryRootKey,readSkillTree,readSkillManifest,validSkillEntries,skillManifestFingerprint,signature } from "./installation-records.js";
 import { parseGitUrl } from "./legacy-sources.js";
 
 
@@ -49,6 +49,7 @@ function validateStoredState(input: unknown): asserts input is RepositoryState {
     if (record.trashId !== undefined && (typeof record.trashId !== "string" || !/^\d+-[a-f0-9-]{36}$/.test(record.trashId))) throw failure("仓库回收记录无效");
     if (record.restoreFingerprint !== undefined && (typeof record.restoreFingerprint !== "string" || !record.trashId || !/^[a-f0-9]{64}$/.test(record.restoreFingerprint))) throw failure("仓库恢复记录无效");
     if (record.uninstallFingerprint !== undefined && (!record.trashId || !/^[a-f0-9]{64}$/.test(record.uninstallFingerprint))) throw failure("仓库卸载记录无效");
+    if (record.trashEntries !== undefined && (!record.trashId || !validSkillEntries(record.trashEntries, record.name))) throw failure("回收资源形态无效");
     safePath(record.path, true);
     safePath(record.name);
     if (record.name.includes("/")) throw failure("仓库安装名称无效");
@@ -71,6 +72,8 @@ function validateStoredState(input: unknown): asserts input is RepositoryState {
         if (item.workspace !== undefined && (item.root !== "dsh" || typeof item.workspace !== "string" || !item.workspace || item.workspace.length > 1024)) throw failure("目录安装工作区无效");
         if (item.trashId !== undefined && (typeof item.trashId !== "string" || !/^\d+-[a-f0-9-]{36}$/.test(item.trashId))) throw failure("目录回收记录无效");
         if (item.restoreFingerprint !== undefined && (!item.trashId || !/^[a-f0-9]{64}$/.test(item.restoreFingerprint))) throw failure("目录恢复记录无效");
+        if (item.uninstallFingerprint !== undefined && (!item.trashId || !/^[a-f0-9]{64}$/.test(item.uninstallFingerprint))) throw failure("目录回收记录无效");
+        if (item.trashEntries !== undefined && (!item.trashId || !validSkillEntries(item.trashEntries, item.name))) throw failure("目录回收资源形态无效");
         if (item.disabledOnInstall !== undefined && typeof item.disabledOnInstall !== "boolean") throw failure("目录安装策略无效");
         if (item.complete !== undefined && typeof item.complete !== "boolean") throw failure("目录安装确认状态无效");
         if (item.complete === false && (!item.root || !item.files?.length)) throw failure("目录安装意图无效");
@@ -209,6 +212,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
     try {
       safePath(record.name);
       const rootPath = (await resolveInstallRoot(record, registered, indexed)).path;
+      if (record.trashEntries) return (await readSkillManifest(rootPath, record.name)).fingerprint === fingerprint;
       // 一次完整遍历同时检查链接、额外文件和内容变化，不能只检查已知文件。
       return signature(fileIndex(await readSkillTree(join(rootPath, record.name)))) === fingerprint;
     } catch (error) { if (!isExpectedOperationError(error)) throw error; return false; }
@@ -238,8 +242,34 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       const directory = await fs.lstat(receipt), file = await fs.lstat(join(receipt, "metadata.json"));
       if (!directory.isDirectory() || directory.isSymbolicLink() || !file.isFile() || file.isSymbolicLink() || file.size > 32 << 10) return false;
       const metadata = JSON.parse(await fs.readFile(join(receipt, "metadata.json"), "utf8"));
-      return metadata.id === record.trashId && metadata.name === record.name && (record.workspace ? metadata.root?.scope === "project" && metadata.root.projectRoot === record.workspace : (metadata.root?.scope === "user" || metadata.root?.scope === "preset") && metadata.root.key === (record.root || "dsh")) && ("path" in record ? metadata.repository?.id === record.id && metadata.repository.path === record.path : Array.isArray(metadata.catalog) && metadata.catalog.includes(record.id)) && metadata.entries?.length === 1 && metadata.entries[0] === record.name;
+      return metadata.id === record.trashId && metadata.name === record.name && (record.workspace ? metadata.root?.scope === "project" && metadata.root.projectRoot === record.workspace : (metadata.root?.scope === "user" || metadata.root?.scope === "preset") && metadata.root.key === (record.root || "dsh")) && ("path" in record ? metadata.repository?.id === record.id && metadata.repository.path === record.path : Array.isArray(metadata.catalog) && metadata.catalog.includes(record.id)) && validSkillEntries(metadata.entries, record.name) && (!record.trashEntries || JSON.stringify(metadata.entries.slice().sort()) === JSON.stringify(record.trashEntries.slice().sort()));
     } catch (error) { if (!(error instanceof SyntaxError) && !isExpectedOperationError(error)) throw error; return false; }
+  }
+  async function rollbackCatalogStage(record: CatalogInstallRecord) {
+    if (!record.trashId || !record.uninstallFingerprint || !record.trashEntries) return;
+    const stage = join(trashRootPath(), `.stage-${record.trashId}`);
+    if (await absentTrashPath(stage) || !await absentTrashPath(join(trashRootPath(), record.trashId))) return;
+    const info = await fs.lstat(stage);
+    if (!info.isDirectory() || info.isSymbolicLink()) return;
+    const children = await fs.readdir(stage);
+    if (children.some(name => !record.trashEntries!.includes(name) && name !== 'metadata.json')) return;
+    if (children.includes('metadata.json')) {
+      const metadataInfo = await fs.lstat(join(stage, 'metadata.json'));
+      if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink() || metadataInfo.size > 32 << 10) return;
+      const metadata = JSON.parse(await fs.readFile(join(stage, 'metadata.json'), 'utf8'));
+      if (metadata.id !== record.trashId || metadata.name !== record.name || !metadata.catalog?.includes(record.id)) return;
+    }
+    const root = await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record));
+    const optional = async (parent: string) => {
+      try { return await readSkillManifest(parent, record.name); }
+      catch (error) { if (isExpectedOperationError(error) && error.code === 'ENOENT') return { entries: [], files: [] }; throw error; }
+    };
+    const original = await optional(root.path), staged = await optional(stage);
+    const entries = [...original.entries, ...staged.entries];
+    if (new Set(entries).size !== entries.length || skillManifestFingerprint(entries, [...original.files, ...staged.files]) !== record.uninstallFingerprint) return;
+    for (const entry of staged.entries) await fs.rename(join(stage, entry), join(root.path, entry));
+    if (children.includes('metadata.json')) await fs.unlink(join(stage, 'metadata.json'));
+    await fs.rmdir(stage);
   }
   async function recoverPending(loaded?: RepositoryState) {
     catalogWarnings = [];
@@ -252,9 +282,23 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       const id = record.trashId!;
       const occupied = data.installs.some(other => other !== record && !other.trashId && (other.root || "dsh") === (record.root || "dsh") && (other.workspace ?? null) === (record.workspace ?? null) && other.name.toLowerCase() === record.name.toLowerCase());
       if (!occupied && await absentTrashPath(join(trashRootPath(), id)) && await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) && await matches(record, record.uninstallFingerprint, registered, await indexedFor(record))) {
-        delete record.trashId; delete record.uninstallFingerprint;
-        for (const item of catalogRecords(data).filter(item => item.trashId === id)) delete item.trashId;
+        delete record.trashId; delete record.uninstallFingerprint; delete record.trashEntries;
+        for (const item of catalogRecords(data).filter(item => item.trashId === id)) { delete item.trashId; delete item.uninstallFingerprint; delete item.trashEntries; }
         recovered = true; recoveredInstallIds.push(`${record.id}:${record.path}`);
+      }
+    }
+    for (const record of catalogRecords(data).filter(item => item.trashId && item.uninstallFingerprint && !item.restoreFingerprint)) {
+      const id = record.trashId!;
+      try { await rollbackCatalogStage(record); }
+      catch (error) {
+        if (!(error instanceof SyntaxError) && !isExpectedOperationError(error)) throw error;
+        catalogWarnings.push({ id: record.id, code: "error.repo.installState", error: "回收暂存资源仍待核验，请恢复磁盘写入后重试" });
+        continue;
+      }
+      const occupied = catalogRecords(data).some(other => other !== record && !other.trashId && locationKey(other) === locationKey(record));
+      if (!occupied && await absentTrashPath(join(trashRootPath(), id)) && await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) && await catalogMatches(record, record.uninstallFingerprint!)) {
+        delete record.trashId; delete record.uninstallFingerprint; delete record.trashEntries;
+        recovered = true; recoveredCatalogIds.push(record.id);
       }
     }
     for (const record of data.installs.filter(record => !record.complete && !record.trashId)) {
@@ -265,7 +309,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       // Require the atomic successful-restore receipt and exact restored files.
       if (await hasRestoreReceipt(record) && await matches(record, record.restoreFingerprint, registered, await indexedFor(record))) {
         restoredIds.push(record.trashId!);
-        delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint; recovered = true;
+        delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint; delete record.trashEntries; recovered = true;
       }
     }
     for (const record of catalogRecords(data)) {
@@ -286,7 +330,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
     for (const record of catalogRecords(data).filter(record => record.root && record.trashId && record.restoreFingerprint)) {
       if (await hasRestoreReceipt(record) && await catalogMatches(record, record.restoreFingerprint!)) {
         restoredIds.push(record.trashId!);
-        delete record.trashId; delete record.restoreFingerprint; recovered = true;
+        delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint; delete record.trashEntries; recovered = true;
       }
     }
     // 仅恢复与安装/恢复意图完全相同的目录；保留任何本地修改，不删除或覆盖文件。
@@ -337,6 +381,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
     try {
       const presetRoots = await fetchPresetRoots();
       const root = await recordInstallRoot(record, requestIndex().registered, await indexedFor(record), presetRoots);
+      if (record.trashEntries) return (await readSkillManifest(root.path, record.name)).fingerprint === fingerprint;
       return signature(fileIndex(await readSkillTree(join(root.path, record.name)))) === fingerprint;
     } catch (error) {
       if (!isExpectedOperationError(error)) throw error;
@@ -354,7 +399,9 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       if (!records.length) return restoreSkillTrash(id, log, options);
       for (const record of records) {
         if (metadata!.name !== record.name || (record.workspace ? metadata!.root?.projectRoot !== record.workspace || metadata!.root.scope !== "project" : (metadata!.root?.scope !== "user" && metadata!.root?.scope !== "preset") || metadata!.root.key !== record.root)) throw failure("回收站来源与目录身份不一致");
-        record.restoreFingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, record.name))));
+        if (!validSkillEntries(metadata!.entries, record.name)) throw failure("回收资源形态无效");
+        record.restoreFingerprint = (await readSkillManifest(join(trashRootPath(), id), record.name)).fingerprint;
+        record.trashEntries = metadata!.entries;
       }
       await write(data);
       const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
@@ -363,7 +410,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
         for (const record of records) delete record.restoreFingerprint;
         await write(data); return result;
       }
-      for (const record of records) { delete record.trashId; delete record.restoreFingerprint; }
+      for (const record of records) { delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint; delete record.trashEntries; }
       try { await write(data); }
       catch (error) { if (!isExpectedOperationError(error)) throw error; throw failure("技能已恢复，目录身份等待校验；恢复磁盘写入后重新打开发现页", "error.repo.installState"); }
       await fs.rm(join(trashRootPath(), `.restored-${id}`), { recursive: true, force: true });
@@ -388,14 +435,41 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
 return {
  managerPath,
  sources,
+prepareTrashInspection: (root: SkillRoot | undefined, name: string) => serialize(async () => {
+      if (!root) return undefined;
+      const before = catalogCopies(await read(), root, name);
+      if (!before.length) return undefined;
+      const fingerprint = (await readSkillManifest(root.path, name)).fingerprint;
+      return (): Promise<MutationInspection | undefined> => serialize(async () => {
+        const data = await read();
+        const current = before.map(item => catalogRecords(data).find(record => record.id === item.id && locationKey(record) === locationKey(item)));
+        if (current.some(record => !record || record.trashId || !record.complete)) return undefined;
+        const checked = await resolveInstallRoot(current[0]!, requestIndex().registered, await indexedFor(current[0]!));
+        if ((await readSkillManifest(checked.path, name)).fingerprint !== fingerprint) return undefined;
+        return { state: "rejected", code: "error.trash.notMoved", error: "技能未移入回收站，请重试" };
+      }, false, false);
+    }, false, false),
+prepareDeleteInspection: (id: string) => serialize(async () => {
+      const metadata = (await listTrash()).find(item => item.id === id);
+      if (!metadata) return undefined;
+      const data = await read();
+      const tracked = [...data.installs, ...catalogRecords(data)].filter(record => record.trashId === id);
+      if (!tracked.length) return undefined;
+      return (): Promise<MutationInspection | undefined> => serialize(async () => {
+        const current = await read();
+        if (!await absentTrashPath(join(trashRootPath(), id)) || !await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) || !await absentTrashPath(join(trashRootPath(), `.restored-${id}`))) return undefined;
+        if (current.pendingTrashDeletes?.some(item => item.id === id) || [...current.installs, ...catalogRecords(current)].some(record => record.trashId === id)) return undefined;
+        return { state: "succeeded", result: { id, name: metadata.name } };
+      }, false, false);
+    }, false, false),
 prepareRestoreInspection: (id: string) => serialize(async () => {
       const metadata = (await listTrash()).find(item => item.id === id);
-      if (!metadata || metadata.entries.length !== 1 || metadata.entries[0] !== metadata.name || (!metadata.repository && !metadata.catalog?.length)) return undefined;
+      if (!metadata || !validSkillEntries(metadata.entries, metadata.name) || (!metadata.repository && !metadata.catalog?.length)) return undefined;
       const data = await read();
       const installs = data.installs.filter(record => record.trashId === id && record.id === metadata.repository?.id && record.path === metadata.repository.path);
       const catalogs = catalogRecords(data).filter(record => record.trashId === id && metadata.catalog?.includes(record.id));
       if (!installs.length && !catalogs.length) return undefined;
-      const fingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, metadata.name))));
+      const fingerprint = (await readSkillManifest(join(trashRootPath(), id), metadata.name)).fingerprint;
       // Capture the exact pre-restore identities and resource digest, including local edits.
       // Status reads verify the recovered records and files; they never perform recovery.
       return (): Promise<MutationInspection | undefined> => serialize(async () => {
@@ -403,11 +477,11 @@ prepareRestoreInspection: (id: string) => serialize(async () => {
         if (!await absentTrashPath(join(trashRootPath(), id))) return undefined;
         for (const before of installs) {
           const record = current.installs.find(item => item.id === before.id && item.path === before.path && item.commit === before.commit && locationKey(item) === locationKey(before));
-          if (!record?.complete || record.trashId || record.restoreFingerprint || record.uninstallFingerprint || !await matches(record, fingerprint)) return undefined;
+          if (!record?.complete || record.trashId || record.restoreFingerprint || record.uninstallFingerprint || (await readSkillManifest((await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record))).path, record.name)).fingerprint !== fingerprint) return undefined;
         }
         for (const before of catalogs) {
           const record = catalogRecords(current).find(item => item.id === before.id && locationKey(item) === locationKey(before));
-          if (record?.complete !== true || record.trashId || record.restoreFingerprint || !await catalogMatches(record, fingerprint)) return undefined;
+          if (record?.complete !== true || record.trashId || record.restoreFingerprint || (await readSkillManifest((await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record))).path, record.name)).fingerprint !== fingerprint) return undefined;
         }
         return { state: "succeeded", result: { id, name: metadata.name, root: metadata.root } };
       }, false, false);
@@ -511,23 +585,24 @@ trashSkill: (root: SkillRoot | undefined, name: string) => serialize(async () =>
       const records = root ? catalogCopies(data, root, name) : [];
       if (!records.length) return deleteSkill(root, name, log);
       const id = `${Date.now()}-${randomUUID()}`;
-      for (const record of records) record.trashId = id;
+      const manifest = await readSkillManifest(root!.path, name);
+      for (const record of records) { record.trashId = id; record.uninstallFingerprint = manifest.fingerprint; record.trashEntries = manifest.entries; }
       await write(data);
       try {
         const result = await deleteSkill(root, name, log, { catalogTrash: { id, ids: records.map(record => record.id) } });
         if ("ok" in result && result.ok === false) {
           if (result.code === "error.repo.installState") return result;
-          for (const record of records) delete record.trashId;
+          for (const record of records) { delete record.trashId; delete record.uninstallFingerprint; delete record.trashEntries; }
           await write(data);
         }
         return result;
       } catch (error) {
         if (!isExpectedOperationError(error)) throw error;
         if (error.code === "error.repo.installState") throw error;
-        if (!(await listTrash()).some(item => item.id === id)) {
-          for (const record of records) delete record.trashId;
+        if (await absentTrashPath(join(trashRootPath(), id)) && await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) && (await readSkillManifest(root!.path, name)).fingerprint === manifest.fingerprint) {
+          for (const record of records) { delete record.trashId; delete record.uninstallFingerprint; delete record.trashEntries; }
           await write(data);
-        }
+        } else throw failure("回收结果待确认，资源及事务记录已保留，请重新打开技能管理器核验", "error.repo.installState");
         throw error;
       }
     }, false),
@@ -584,11 +659,12 @@ restoreTrash: (id: string, options: MutationOptions = {}) => serialize(async () 
         const data = await read();
         const record = data.installs.find(item => item.trashId === id && item.id === metadata.repository!.id && item.path === metadata.repository!.path);
         if (!record) return restoreSkillTrash(id, log, options);
-        if (metadata.name !== record.name || (record.workspace ? metadata.root?.scope !== "project" || metadata.root.projectRoot !== record.workspace : (metadata.root?.scope !== "user" && metadata.root?.scope !== "preset") || metadata.root.key !== (record.root || "dsh")) || metadata.entries.length !== 1 || metadata.entries[0] !== record.name) throw failure("回收站来源与安装记录不一致");
+        if (metadata.name !== record.name || (record.workspace ? metadata.root?.scope !== "project" || metadata.root.projectRoot !== record.workspace : (metadata.root?.scope !== "user" && metadata.root?.scope !== "preset") || metadata.root.key !== (record.root || "dsh")) || !validSkillEntries(metadata.entries, record.name)) throw failure("回收站来源与安装记录不一致");
         // Journal the exact local edits being restored before moving any files.
-        record.restoreFingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, record.name))));
+        record.restoreFingerprint = (await readSkillManifest(join(trashRootPath(), id), record.name)).fingerprint;
+        record.trashEntries = metadata.entries;
         const catalog = catalogRecords(data).filter(item => item.trashId === id && metadata.catalog?.includes(item.id));
-        for (const item of catalog) item.restoreFingerprint = record.restoreFingerprint;
+        for (const item of catalog) { item.restoreFingerprint = record.restoreFingerprint; item.trashEntries = metadata.entries; }
         await write(data);
         const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
         if ("ok" in result && result.ok === false) {
@@ -597,8 +673,8 @@ restoreTrash: (id: string, options: MutationOptions = {}) => serialize(async () 
           for (const item of catalog) delete item.restoreFingerprint;
           await write(data); return result;
         }
-        delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint;
-        for (const item of catalog) { delete item.trashId; delete item.restoreFingerprint; }
+        delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint; delete record.trashEntries;
+        for (const item of catalog) { delete item.trashId; delete item.restoreFingerprint; delete item.uninstallFingerprint; delete item.trashEntries; }
         try { await write(data); }
         catch (error) { if (!isExpectedOperationError(error)) throw error; throw failure("技能已恢复，来源状态等待校验；恢复磁盘写入后重新打开仓库页", "error.repo.installState"); }
         await fs.rm(join(trashRootPath(), `.restored-${id}`), { recursive: true, force: true }).catch(() => undefined);

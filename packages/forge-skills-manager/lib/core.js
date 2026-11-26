@@ -900,11 +900,16 @@ async function removeCustomSource(key) {
   await writeRootPathConfig(config, {
     customSources: config.customSources.filter((item) => item.id !== id)
   });
-  await managerState.update((state2) => {
-    for (const field of ["sources", "disabledSkills", "enabledSkills", "customNotes", "categories", "categoryMembers", "categoryOrder"]) {
-      if (state2[field]) delete state2[field][id];
-    }
-  }, { force: true });
+  try {
+    await managerState.update((state2) => {
+      for (const field of ["sources", "disabledSkills", "enabledSkills", "customNotes", "categories", "categoryMembers", "categoryOrder"]) {
+        if (state2[field]) delete state2[field][id];
+      }
+    }, { force: true });
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
+    throw codedError("\u6765\u6E90\u5DF2\u79FB\u9664\uFF0C\u7BA1\u7406\u72B6\u6001\u6E05\u7406\u4ECD\u5F85\u786E\u8BA4", "error.repo.installState");
+  }
   return { ok: true, removed: id };
 }
 async function collectSkillDirectories(root) {
@@ -1939,8 +1944,9 @@ async function setSourceEnabled(key, enabled, log, options = {}) {
   const rootKey = root.key;
   const updated = await managerState.update((state2) => {
     state2.sources[rootKey] = enabled === true;
+    return { root: root.key, enabled: enabled === true };
   });
-  if (updated) return updated;
+  if ("ok" in updated) return updated;
   if (log)
     log(
       enabled ? "source-enable" : "source-disable",
@@ -2089,8 +2095,9 @@ async function setSkillNote(key, skillName, noteText, log, options = {}) {
     if (!customNotes[root.key]) customNotes[root.key] = /* @__PURE__ */ Object.create(null);
     if (text) customNotes[root.key][skillName] = text;
     else delete customNotes[root.key][skillName];
+    return { root: root.key, name: skillName, note: text || null };
   });
-  if (updated) return updated;
+  if ("ok" in updated) return updated;
   if (log) log("skill-note", `${root.key}/${skillName} \u66F4\u65B0\u81EA\u5B9A\u4E49\u7B80\u4ECB: ${text ? `"${text}"` : "\u5DF2\u6E05\u7A7A"}`);
   return { root: root.key, name: skillName, note: text || null };
 }
@@ -2421,7 +2428,7 @@ async function deleteSkill(root, name, log, options = {}) {
   const id = options.repositoryTrash?.id || options.catalogTrash?.id || `${Date.now()}-${randomUUID()}`;
   if (!/^\d+-[a-f0-9-]{36}$/.test(id)) throw codedError("\u56DE\u6536\u7AD9\u6761\u76EE\u7F16\u53F7\u975E\u6CD5", "error.trash.invalid", { id });
   const trashRoot = trashRootPath();
-  const stage = join(trashRoot, `.stage-${options.repositoryTrash ? id : randomUUID()}`);
+  const stage = join(trashRoot, `.stage-${options.repositoryTrash || options.catalogTrash ? id : randomUUID()}`);
   const finalPath = join(trashRoot, id);
   const moved = [];
   let cleanupUncertain = false;
@@ -2626,7 +2633,12 @@ async function permanentlyDeleteTrash(id, log) {
       params: { id }
     };
   await fs.rm(join(trashRootPath(), id), { recursive: true, force: true });
-  await forgetCategoryMember(metadata);
+  try {
+    await forgetCategoryMember(metadata);
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
+    throw codedError("\u56DE\u6536\u8D44\u6E90\u5DF2\u5220\u9664\uFF0C\u7BA1\u7406\u72B6\u6001\u6E05\u7406\u4ECD\u5F85\u786E\u8BA4", "error.repo.installState");
+  }
   if (log) log("trash-delete", `\u6C38\u4E45\u5220\u9664\u56DE\u6536\u7AD9\u6761\u76EE ${metadata.name} (${id})`);
   return { id, name: metadata.name };
 }

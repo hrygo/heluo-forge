@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { writeFileAtomically } from "./file-writes.js";
-import { isExpectedOperationError } from "./operation-errors.js";
+import { writeFileAtomically, AtomicWriteError } from "./file-writes.js";
+import { isExpectedOperationError, PendingOperationError } from "./operation-errors.js";
 function createManagerStateStore(schema) {
   const queues = /* @__PURE__ */ new Map();
   function unavailable(path) {
@@ -35,9 +35,27 @@ function createManagerStateStore(schema) {
       const next2 = schema.normalize(current.state);
       if (!schema.validate(next2)) throw new Error("Invalid manager state update");
       if (options.force || JSON.stringify(next2) !== previous) {
-        await fs.mkdir(dirname(path), { recursive: true });
-        await writeFileAtomically(path, `${JSON.stringify(next2, null, 2)}
-`);
+        const text = `${JSON.stringify(next2, null, 2)}
+`;
+        try {
+          await fs.mkdir(dirname(path), { recursive: true });
+          await writeFileAtomically(path, text);
+        } catch (error) {
+          if (error instanceof AtomicWriteError && error.phase === "replace") {
+            throw new PendingOperationError("\u72B6\u6001\u63D0\u4EA4\u7ED3\u679C\u5F85\u786E\u8BA4\uFF0C\u8BF7\u6838\u5BF9\u64CD\u4F5C\u7ED3\u679C", async () => {
+              const committed = await read(path);
+              if (!committed.writable) return void 0;
+              const actual = JSON.stringify(committed.state);
+              if (actual === JSON.stringify(next2)) return { state: "succeeded", result };
+              if (actual === previous) return { state: "rejected", code: "error.state.write", error: "\u72B6\u6001\u53D8\u66F4\u672A\u63D0\u4EA4\uFF0C\u8BF7\u91CD\u8BD5" };
+              return void 0;
+            });
+          }
+          if (isExpectedOperationError(error) && /^E[A-Z0-9]+$/.test(error.code)) {
+            throw Object.assign(new Error("\u72B6\u6001\u672A\u5199\u5165\uFF0C\u8BF7\u6062\u590D\u78C1\u76D8\u7A7A\u95F4\u6216\u6743\u9650\u540E\u91CD\u8BD5"), { code: "error.state.write", statusCode: 500 });
+          }
+          throw error;
+        }
       }
       return result;
     };

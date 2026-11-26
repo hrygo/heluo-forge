@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { normalizeDependencyIds } from './build-identities.mjs';
+import { bundledNotices } from './build-notices.mjs';
 
 export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -22,7 +23,7 @@ export async function buildPlugin(output = join(packageRoot, 'lib'), root = pack
   await mkdir(output, { recursive: true });
   await build({ absWorkingDir: root, entryPoints: hostFiles.map(name => join(source, name)), outdir: output, outbase: source,
     bundle: false, format: 'esm', platform: 'node', target: 'node24', legalComments: 'none', logLevel: 'silent' });
-  await build({ absWorkingDir: root, entryPoints: [join(source, 'zip.ts')], outfile: join(output, 'zip.js'),
+  const zipBuild = await build({ absWorkingDir: root, entryPoints: [join(source, 'zip.ts')], outfile: join(output, 'zip.js'), metafile: true,
     bundle: true, format: 'esm', platform: 'node', target: 'node24', legalComments: 'none', logLevel: 'silent',
     banner: { js: `/* Third-party ZIP reader: yauzl 3.4.0 and pend 1.2.0\n${zipLicenses.join('\n')}*/\nimport { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);` } });
   const zipPath = join(output, 'zip.js');
@@ -33,7 +34,7 @@ export async function buildPlugin(output = join(packageRoot, 'lib'), root = pack
   if (!digitAlphabet.test(zip)) throw new Error('ZIP reader CP437 table changed');
   zip = zip.replace(digitAlphabet, (_, before, after) => before + '01234" + "56789' + after);
   await writeFile(zipPath, zip);
-  await build({ absWorkingDir: root, entryPoints: [join(source, 'client.ts')], outfile: join(output, 'client.js'),
+  const clientBuild = await build({ absWorkingDir: root, entryPoints: [join(source, 'client.ts')], outfile: join(output, 'client.js'), metafile: true,
     bundle: true, format: 'cjs', platform: 'browser', target: 'es2022', minify: false,
     external: ['@deepseek-ai/dsh-client-ui-primitives'], legalComments: 'none',
     plugins: [{ name: 'host-react', setup(builder) {
@@ -66,6 +67,7 @@ export async function buildPlugin(output = join(packageRoot, 'lib'), root = pack
     client = client.replace(declaration, match => `${anchor}\n${match}`);
   }
   await writeFile(clientPath, client);
+  await writeFile(join(output, 'THIRD-PARTY-NOTICES.txt'), await bundledNotices([zipBuild.metafile, clientBuild.metafile], root));
 }
 
 export async function publishBuild() {

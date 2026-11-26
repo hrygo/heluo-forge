@@ -87,6 +87,14 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
         chunks.push(value);
       }
       return Buffer.concat(chunks, size);
+    } catch (caught) {
+      // Abort/timeout classification belongs to run(); programming defects stay visible.
+      signal.throwIfAborted();
+      if (caught instanceof TypeError && caught.cause && typeof caught.cause === "object" && "code" in caught.cause &&
+          typeof caught.cause.code === "string" && /^(?:ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|UND_ERR_(?:SOCKET|CONNECT_TIMEOUT|BODY_TIMEOUT))$/.test(caught.cause.code)) {
+        throw error("unavailable", "企业技能库连接中断，请恢复网络后重试");
+      }
+      throw caught;
     } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
   async function request(path: string, params: Record<string, string>, signal: AbortSignal, auth?: string, form?: URLSearchParams, limit = 2 << 20) {

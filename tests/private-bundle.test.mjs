@@ -38,6 +38,18 @@ import {
 const PUBLIC_VERSION = '0.1.0';
 const ENTRY = '@heluo/forge-enterprise';
 
+test('P2 Nacos preflight rejects undeclared, wrong-package and disabled insert rows', () => {
+  const config = buildConfig(parseEnvConfig(ENV.join('\n')));
+  const layers = layeredPatchText();
+  layers.base = layers.base.replace(SKILLS_ROW.trimEnd(), '');
+  const undeclared = readBundleEntries(publicTarball({ patches: { 'cordis.patch.yml': layers.base, 'cordis.patch.skills.yml': '- insert:\n' + SKILLS_ROW }, declaredPatches: './cordis.patch.yml' }), { withContent: true });
+  expectCode(() => preflightNacosRelease(undeclared, config), 'PUBLIC_TARBALL_INVALID');
+  for (const row of [SKILLS_ROW.replace('@heluo/forge-skills-manager', '@heluo/forge-brand'), SKILLS_ROW.replace('config: {}', 'disabled: true\n      config: {}')]) {
+    const entries = readBundleEntries(publicTarball({ patch: layers.base + row }), { withContent: true });
+    expectCode(() => preflightNacosRelease(entries, config), 'PUBLIC_TARBALL_INVALID');
+  }
+});
+
 function temp(t, prefix = 'forge-private-test-') {
   const root = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => {
@@ -95,7 +107,7 @@ function layeredPatchText() {
   };
 }
 
-function publicTarball({ patch, patches, validatorOverride, omitValidator, omitPatchDeclaration } = {}) {
+function publicTarball({ patch, patches, declaredPatches, validatorOverride, omitValidator, omitPatchDeclaration } = {}) {
   const files = [
     // 真实公版包必须声明默认层（`dsh.bundle.patch`）：夹具照抄这条，否则测的不是可安装形态。
     {
@@ -104,7 +116,7 @@ function publicTarball({ patch, patches, validatorOverride, omitValidator, omitP
         name: ENTRY,
         version: PUBLIC_VERSION,
         license: 'Apache-2.0',
-        ...(omitPatchDeclaration === true ? {} : { dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+        ...(omitPatchDeclaration === true ? {} : { dsh: { bundle: { patch: declaredPatches ?? (patches ? ['./cordis.patch.yml', ...Object.keys(patches).filter(path => path !== 'cordis.patch.yml' && /^cordis\.patch\.[A-Za-z0-9-]+\.yml$/.test(path)).map(path => './' + path)] : './cordis.patch.yml') } } }),
       }, null, 2)}\n`,
     },
     ...(patches === undefined

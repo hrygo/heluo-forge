@@ -74,6 +74,12 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
         chunks.push(value);
       }
       return Buffer.concat(chunks, size);
+    } catch (caught) {
+      signal.throwIfAborted();
+      if (caught instanceof TypeError && caught.cause && typeof caught.cause === "object" && "code" in caught.cause && typeof caught.cause.code === "string" && /^(?:ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|UND_ERR_(?:SOCKET|CONNECT_TIMEOUT|BODY_TIMEOUT))$/.test(caught.cause.code)) {
+        throw error("unavailable", "\u4F01\u4E1A\u6280\u80FD\u5E93\u8FDE\u63A5\u4E2D\u65AD\uFF0C\u8BF7\u6062\u590D\u7F51\u7EDC\u540E\u91CD\u8BD5");
+      }
+      throw caught;
     } finally {
       await reader.cancel().catch(() => void 0);
       reader.releaseLock();

@@ -8,6 +8,8 @@ import { installHttp } from '../lib/http.js';
 import { createInstallOperations } from '../lib/install-operations.js';
 import { createInstallationManager } from '../lib/installations.js';
 import { notifyChatCatalog } from '../lib/notifications.js';
+import { createNacosClient } from '../lib/nacos.js';
+import { fakeNacos, nacosConfig } from '../spec/fixtures/nacos.mjs';
 
 const prefix = '/api/forge-skills-manager';
 const deferred = () => {
@@ -15,6 +17,140 @@ const deferred = () => {
   const promise = new Promise(fulfill => { resolve = fulfill; });
   return { promise, resolve };
 };
+
+test('P2 response body disconnect rejects before local writes and permits a new UUID', async () => {
+  const remote = fakeNacos();
+  let disconnected = true, writes = 0;
+  const nacos = createNacosClient({ ...nacosConfig, username: 'svc-ci', password: 'synthetic-password' }, async (url, init) => {
+    if (disconnected && new URL(url).pathname.endsWith('/v3/client/ai/skills')) {
+      return new Response(new ReadableStream({ start(controller) {
+        controller.error(new TypeError('terminated', { cause: Object.assign(new Error('synthetic transport failure'), { code: 'ECONNRESET' }) }));
+      } }));
+    }
+    return remote.fetcher(url, init);
+  });
+  const fixture = host({ nacos, installations: { installCatalog: async () => { writes++; return { name: 'example-skill', root: 'dsh' }; } } });
+  try {
+    const id = randomUUID(), selection = { skillName: 'example-skill', version: '1.0.0' };
+    const response = await fixture.post('/nacos/install', { ...selection, operationId: id });
+    const payload = await response.json();
+    assert.equal(payload.code, 'error.nacos.unavailable');
+    assert.equal(payload.outcome, 'rejected');
+    assert.doesNotMatch(JSON.stringify(payload), /synthetic|ECONNRESET/);
+    assert.equal((await fixture.operations.status(id)).state, 'rejected');
+    assert.equal(writes, 0);
+    disconnected = false;
+    assert.equal((await fixture.post('/nacos/install', { ...selection, operationId: randomUUID() })).status, 200);
+    assert.equal(writes, 1);
+  } finally { await fixture.dispose(); }
+});
+
+test('P2 unadmitted UUID gets an explicit refusal while the admitted request keeps its receipt', async () => {
+  const entered = deferred(), release = deferred();
+  let writes = 0;
+  const fixture = host({ nacos: { load: async () => { entered.resolve(); await release.promise; return { id: 'fixture', pack: {} }; } }, installations: { installCatalog: async () => { writes++; return { name: 'example-skill', root: 'dsh' }; } } });
+  const selection = { skillName: 'example-skill', version: '1.0.0' }, firstId = randomUUID();
+  const first = fixture.post('/nacos/install', { ...selection, operationId: firstId });
+  try {
+    await entered.promise;
+    const response = await fixture.post('/nacos/install', { ...selection, operationId: randomUUID() });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).outcome, 'rejected');
+    assert.equal(writes, 0);
+    release.resolve();
+    assert.equal((await first).status, 200);
+    assert.equal((await fixture.operations.status(firstId)).state, 'succeeded');
+    assert.equal(writes, 1);
+    assert.equal((await fixture.post('/nacos/install', { ...selection, operationId: randomUUID() })).status, 200);
+  } finally { release.resolve(); await first; await fixture.dispose(); }
+});
+
+test('P2 staging failure leaves policy unchanged, rejects and permits exactly one retry', async () => {
+  await installationFixture(async ({ local, fixture }) => {
+    await local.setEntryLocation('sidebar');
+    const file = join(local.managerHomePath(), 'state.json');
+    const before = await fs.readFile(file, 'utf8'), write = fs.writeFile;
+    let failures = 0;
+    const id = randomUUID();
+    try {
+      fs.writeFile = async (path, ...args) => {
+        if (String(path).includes('.state.json.dssm-')) { failures++; throw Object.assign(new Error('synthetic full disk'), { code: 'ENOSPC' }); }
+        return write(path, ...args);
+      };
+      const response = await fixture.post('/sidebar-entry', { location: 'settings' }, id);
+      assert.equal((await response.json()).outcome, 'rejected');
+      assert.equal((await fixture.status(id)).state, 'rejected');
+      assert.equal(await fs.readFile(file, 'utf8'), before);
+      assert.equal(failures, 1);
+    } finally { fs.writeFile = write; }
+    assert.equal((await fixture.post('/sidebar-entry', { location: 'settings' }, randomUUID())).status, 200);
+    assert.equal(await local.getEntryLocation(), 'settings');
+  });
+});
+
+test('policy cleanup failure after removing a source keeps the composite action pending', async () => {
+  await installationFixture(async ({ directory, local, fixture }) => {
+    const path = join(directory, 'custom-skills');
+    await fs.mkdir(path);
+    const added = await local.addCustomSources({ label: 'Fixture', path });
+    const id = added.added[0].id, operationId = randomUUID(), write = fs.writeFile;
+    try {
+      fs.writeFile = async (file, ...args) => {
+        if (String(file).includes('.state.json.dssm-')) throw Object.assign(new Error('synthetic full disk'), { code: 'ENOSPC' });
+        return write(file, ...args);
+      };
+      const response = await fixture.post('/custom-source-remove', { id }, operationId);
+      assert.equal((await response.json()).outcome, 'pending');
+      assert.equal((await fixture.status(operationId)).state, 'pending');
+      assert.equal(local.userRoots().some(root => root.key === id), false, 'registration was already committed');
+    } finally { fs.writeFile = write; }
+  });
+});
+
+for (const committed of [false, true]) test(`P2 uncertain policy replacement is inspected read-only (committed=${committed})`, async () => {
+  await installationFixture(async ({ local, fixture }) => {
+    await local.setEntryLocation('sidebar');
+    const rename = fs.rename, file = join(local.managerHomePath(), 'state.json'), id = randomUUID();
+    try {
+      fs.rename = async (...args) => {
+        if (String(args[1]) === file) {
+          if (committed) await rename(...args);
+          throw Object.assign(new Error('synthetic uncertain replacement'), { code: 'EIO' });
+        }
+        return rename(...args);
+      };
+      assert.equal((await (await fixture.post('/sidebar-entry', { location: 'settings' }, id)).json()).outcome, 'pending');
+    } finally { fs.rename = rename; }
+    const write = fs.writeFile;
+    try {
+      fs.writeFile = async () => assert.fail('inspection must not write');
+      assert.equal((await fixture.status(id)).state, committed ? 'succeeded' : 'rejected');
+    } finally { fs.writeFile = write; }
+    assert.equal(await local.getEntryLocation(), committed ? 'settings' : 'sidebar');
+  });
+});
+
+for (const changed of [false, true]) test(`P2 catalog stage rollback verifies the complete split resource manifest (changed=${changed})`, async () => {
+  await installationFixture(async ({ local, manager, fixture }) => {
+    await fixture.post('/nacos/install', { skillName: 'example-skill', version: '1.0.0', operationId: randomUUID() });
+    const root = local.userRoots().find(root => root.key === 'dsh');
+    await fs.writeFile(join(root.path, 'example-skill.md'), 'local companion');
+    const { readSkillManifest } = await import('../lib/installation-records.js');
+    const manifest = await readSkillManifest(root.path, 'example-skill'), id = `${Date.now()}-${randomUUID()}`;
+    const stage = join(local.trashRootPath(), '.stage-' + id), file = join(manager.managerPath, 'repositories.json');
+    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    Object.assign(data.catalogInstalls[0], { trashId: id, trashEntries: manifest.entries, uninstallFingerprint: manifest.fingerprint });
+    await fs.writeFile(file, JSON.stringify(data));
+    await fs.mkdir(stage, { recursive: true });
+    await fs.rename(join(root.path, 'example-skill'), join(stage, 'example-skill'));
+    if (changed) await fs.appendFile(join(root.path, 'example-skill.md'), 'modified');
+    await manager.recoverLocal();
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+    assert.equal(saved.catalogInstalls[0].trashId, changed ? id : undefined);
+    assert.equal(await fs.stat(join(changed ? stage : root.path, 'example-skill')).then(info => info.isDirectory()), true);
+    if (!changed) assert.equal(await fs.readFile(join(root.path, 'example-skill.md'), 'utf8'), 'local companion');
+  });
+});
 function host({ path = join(tmpdir(), 'forge-host-' + randomUUID()), local = {}, installations = {}, nacos = {}, afterWrite } = {}) {
   const routes = new Map();
   const cleanups = [];
@@ -88,7 +224,7 @@ test('application rejections never become success receipts and unknown mutations
       await assert.rejects(fixture.post('/sidebar-entry', { location: ['both', 'sidebar', 'settings'][index] }, id), error => error === defect);
       assert.deepEqual(await fixture.status(id), { state: 'pending' });
     }
-    assert.equal((await (await fixture.post('/sidebar-entry', { location: 'both' }, randomUUID())).json()).outcome, 'pending');
+    assert.equal((await (await fixture.post('/sidebar-entry', { location: 'both' }, randomUUID())).json()).outcome, 'rejected');
     assert.equal(calls, 3, 'a fresh UUID cannot repeat the same uncertain target');
   } finally { await fixture.dispose(); }
 });
@@ -132,7 +268,7 @@ test('catalog notification defects stay visible after a commit and leave the mut
     await assert.rejects(fixture.post('/create', { name: 'example-skill' }, id), error => error === defect);
     assert.equal(writes, 1);
     assert.deepEqual(await fixture.status(id), { state: 'pending' });
-    assert.equal((await (await fixture.post('/create', { name: 'example-skill' }, randomUUID())).json()).outcome, 'pending');
+    assert.equal((await (await fixture.post('/create', { name: 'example-skill' }, randomUUID())).json()).outcome, 'rejected');
     assert.equal(writes, 1);
     for (const context of [
       {},
@@ -299,7 +435,7 @@ test('unknown final catalog storage failure leaves files and intent pending with
   });
 });
 
-for (const provenance of ['catalog', 'repository']) test(`a partially committed ${provenance} restore verifies recovered provenance and exact files before unlocking local mutations`, async () => {
+for (const shape of ['directory', 'dual']) for (const provenance of ['catalog', 'repository']) test(`a partially committed ${provenance} ${shape} restore verifies recovered provenance and exact files before unlocking local mutations`, async () => {
   await installationFixture(async ({ local, manager, fixture }) => {
     const { clientModule } = await import('../spec/fixtures/client-module.mjs');
     const { createClientOperations, normalizeApiFailure } = clientModule;
@@ -307,6 +443,7 @@ for (const provenance of ['catalog', 'repository']) test(`a partially committed 
     const skillFile = join(root.path, 'example-skill', 'SKILL.md');
     await fixture.post('/nacos/install', { skillName: 'example-skill', version: '1.0.0', operationId: randomUUID() });
     await fs.appendFile(skillFile, '\nlocal edits before trash');
+    if (shape === 'dual') await fs.writeFile(join(root.path, 'example-skill.md'), '---\nname: example-skill\ndescription: Local companion\n---\nKeep local file');
     const original = await fs.readFile(skillFile, 'utf8');
     const file = join(manager.managerPath, 'repositories.json');
     let trashed;
@@ -369,7 +506,49 @@ for (const provenance of ['catalog', 'repository']) test(`a partially committed 
       const retry = await fixture.post('/trash-restore', body, randomUUID());
       assert.equal((await retry.json()).code, 'error.trash.notFound', 'a new UUID reaches the operation after the target unlocks');
       assert.equal(restoredMoves, 1, 'verification never repeats the restore');
+      if (shape === 'dual') assert.match(await fs.readFile(join(root.path, 'example-skill.md'), 'utf8'), /Keep local file/);
     } finally { fs.rename = rename; }
+  });
+});
+
+test('P2 interrupted catalog trash before moving recovers projection and rejects the original receipt', async () => {
+  await installationFixture(async ({ local, manager, fixture }) => {
+    await fixture.post('/nacos/install', { skillName: 'example-skill', version: '1.0.0', operationId: randomUUID() });
+    const mkdir = fs.mkdir, defect = new ReferenceError('synthetic interruption before move'), id = randomUUID();
+    try {
+      fs.mkdir = async (path, ...args) => { if (String(path).includes('.stage-')) throw defect; return mkdir(path, ...args); };
+      await assert.rejects(fixture.post('/delete', { root: 'dsh', name: 'example-skill' }, id), error => error === defect);
+      assert.equal((await fixture.status(id)).state, 'pending');
+    } finally { fs.mkdir = mkdir; }
+    await manager.recoverLocal();
+    const data = JSON.parse(await fs.readFile(join(manager.managerPath, 'repositories.json'), 'utf8'));
+    assert.equal(data.catalogInstalls[0].trashId, undefined);
+    assert.equal((await manager.catalogInstallations([data.catalogInstalls[0].id]))[data.catalogInstalls[0].id][0].state, 'downloaded');
+    assert.equal((await fixture.status(id)).state, 'rejected');
+    assert.equal((await fixture.post('/delete', { root: 'dsh', name: 'example-skill' }, randomUUID())).status, 200);
+  });
+});
+
+test('P2 completed permanent delete can be confirmed read-only after source commit recovery', async () => {
+  await installationFixture(async ({ local, manager, fixture }) => {
+    await fixture.post('/nacos/install', { skillName: 'example-skill', version: '1.0.0', operationId: randomUUID() });
+    await fixture.post('/delete', { root: 'dsh', name: 'example-skill' }, randomUUID());
+    const [trash] = await local.listTrash(), id = randomUUID(), file = join(manager.managerPath, 'repositories.json');
+    const rename = fs.rename;
+    let commits = 0;
+    try {
+      fs.rename = async (...args) => { if (String(args[1]) === file && ++commits === 2) throw Object.assign(new Error('synthetic final commit'), { code: 'ENOSPC' }); return rename(...args); };
+      await assert.rejects(fixture.post('/trash-delete', { id: trash.id }, id));
+      assert.equal((await fixture.status(id)).state, 'pending');
+    } finally { fs.rename = rename; }
+    await manager.recoverLocal();
+    const before = await fs.readFile(file, 'utf8'), remove = fs.rm;
+    let writes = 0;
+    fs.rm = async (...args) => { writes++; return remove(...args); };
+    try { assert.equal((await fixture.status(id)).state, 'succeeded'); }
+    finally { fs.rm = remove; }
+    assert.equal(writes, 0, 'receipt inspection must not repeat deletion');
+    assert.equal(await fs.readFile(file, 'utf8'), before);
   });
 });
 

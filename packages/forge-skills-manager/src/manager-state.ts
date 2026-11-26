@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { writeFileAtomically } from "./file-writes.js";
-import { isExpectedOperationError } from "./operation-errors.js";
+import { writeFileAtomically, AtomicWriteError } from "./file-writes.js";
+import { isExpectedOperationError, PendingOperationError } from "./operation-errors.js";
 import type { ManagerState, OperationError, PolicyResult } from "./types.js";
 
 interface StateSchema {
@@ -46,8 +46,26 @@ export function createManagerStateStore(schema: StateSchema) {
       const next = schema.normalize(current.state);
       if (!schema.validate(next)) throw new Error("Invalid manager state update");
       if (options.force || JSON.stringify(next) !== previous) {
-        await fs.mkdir(dirname(path), { recursive: true });
-        await writeFileAtomically(path, `${JSON.stringify(next, null, 2)}\n`);
+        const text = `${JSON.stringify(next, null, 2)}\n`;
+        try {
+          await fs.mkdir(dirname(path), { recursive: true });
+          await writeFileAtomically(path, text);
+        } catch (error) {
+          if (error instanceof AtomicWriteError && error.phase === "replace") {
+            throw new PendingOperationError("状态提交结果待确认，请核对操作结果", async () => {
+              const committed = await read(path);
+              if (!committed.writable) return undefined;
+              const actual = JSON.stringify(committed.state);
+              if (actual === JSON.stringify(next)) return { state: "succeeded", result };
+              if (actual === previous) return { state: "rejected", code: "error.state.write", error: "状态变更未提交，请重试" };
+              return undefined;
+            });
+          }
+          if (isExpectedOperationError(error) && /^E[A-Z0-9]+$/.test(error.code!)) {
+            throw Object.assign(new Error("状态未写入，请恢复磁盘空间或权限后重试"), { code: "error.state.write", statusCode: 500 });
+          }
+          throw error;
+        }
       }
       return result;
     };

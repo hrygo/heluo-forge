@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { isExpectedOperationError, operationRejection } from "./operation-errors.js";
+import { isExpectedOperationError, operationRejection, PendingOperationError } from "./operation-errors.js";
 
 export interface InstallReceipt { name: string; root: string }
 export type InstallOutcome = { state: "pending" } | { state: "succeeded"; result: InstallReceipt } | { state: "rejected"; code: string; error: string };
@@ -105,11 +105,11 @@ export function createInstallOperations() {
     }
     if (lifetime.signal.aborted) throw cancelled();
     if ([...owner.records.values()].some(record => record.kind === kind && record.target === target && record.outcome.state === "pending" && (kind === "install" || record.settled))) {
-      throw Object.assign(new Error("该下载结果尚待确认，请核对本地技能"), { code: "error.repo.installState", statusCode: 409 });
+      throw Object.assign(new Error("目标已有操作尚待确认，本次请求未执行"), { code: "error.proto.busy", statusCode: 409 });
     }
     if (owner.records.size >= 256) {
       for (const [key, record] of owner.records) if (record.outcome.state !== "pending") owner.records.delete(key);
-      if (owner.records.size >= 256) throw Object.assign(new Error("操作结果尚待确认，请先核对本地技能"), { code: "error.repo.installState", statusCode: 409 });
+      if (owner.records.size >= 256) throw Object.assign(new Error("操作回执容量已满，本次请求未执行"), { code: "error.proto.busy", statusCode: 409 });
     }
     const record: OperationRecord = { kind, target, outcome: { state: "pending" }, settled: false, inspect, inspectMutation, promise: Promise.resolve().then(task) };
     owner.records.set(requestId, record);
@@ -122,6 +122,7 @@ export function createInstallOperations() {
       return result;
     }, error => {
       record.settled = true;
+      if (error instanceof PendingOperationError) record.inspectMutation ??= error.inspect;
       if (isExpectedOperationError(error) && error.code?.startsWith("error.") && error.code !== "error.repo.installState") {
         record.outcome = { state: "rejected", code: error.code, error: error.message };
       }

@@ -243,6 +243,7 @@ export interface InstallRecord {
     /** Retired ownership: retained only for explicit Trash restore. */
     trashId?: string;
     uninstallFingerprint?: string;
+    trashEntries?: string[];
     restoreFingerprint?: string;
     files: FileDigest[];
     source?: RepositorySource;
@@ -267,6 +268,8 @@ export interface CatalogInstallRecord {
     /** 回收站中的副本不会把后来创建的同名技能认作原安装。 */
     trashId?: string;
     restoreFingerprint?: string;
+    uninstallFingerprint?: string;
+    trashEntries?: string[];
     /** 文件落盘前记录精确摘要，确认失败后只恢复完全匹配的副本。 */
     complete?: boolean;
     files?: FileDigest[];

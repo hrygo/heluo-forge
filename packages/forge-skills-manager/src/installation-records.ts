@@ -59,6 +59,36 @@ const targetIdentity = (path: string) => process.platform === "win32" ? resolve(
 export const installationSourceKey = (rootPath: string, name: string) => JSON.stringify([targetIdentity(rootPath), name]);
 export const fileIndex = (entries: Archive) => Object.entries(entries!).map(([path, bytes]) => ({ path, hash: hash(bytes) })).sort((a, b) => a.path.localeCompare(b.path, "en"));
 export const signature = (files: FileDigest[]) => hash(JSON.stringify([...files].map(({ path, hash }) => ({ path, hash })).sort((a, b) => a.path.localeCompare(b.path, "en"))));
+export function validSkillEntries(entries: unknown, name: string): entries is string[] {
+  return Array.isArray(entries) && entries.length > 0 && entries.length <= 2 && new Set(entries).size === entries.length && entries.every(entry => entry === name || entry === `${name}.md`);
+}
+export const skillManifestFingerprint = (entries: string[], files: FileDigest[]) => hash(JSON.stringify([[...entries].sort(), signature(files)]));
+/** Complete permitted on-disk shapes, including the companion flat Markdown file. */
+export async function readSkillManifest(parent: string, name: string) {
+  safePath(name);
+  if (name.includes("/")) throw failure("技能名称无效");
+  await safeDirectory(parent);
+  const entries: string[] = [], files: FileDigest[] = [];
+  let bytes = 0;
+  for (const entry of [name, `${name}.md`]) {
+    const path = join(parent, entry);
+    let info;
+    try { info = await fs.lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+    if (info.isSymbolicLink()) throw failure("技能包含链接");
+    if (entry === name && info.isDirectory()) {
+      const tree = await readSkillTree(path);
+      bytes += Object.values(tree!).reduce((size, value) => size + value.byteLength, 0);
+      files.push(...fileIndex(tree).map(file => ({ ...file, path: `${name}/${file.path}` })));
+    } else if (entry === `${name}.md` && info.isFile() && info.size <= 32 << 20) {
+      bytes += info.size;
+      files.push({ path: entry, hash: hash(await fs.readFile(path)) });
+    } else throw failure("技能条目形态无效");
+    entries.push(entry);
+  }
+  if (!entries.length) throw Object.assign(new Error("技能不存在"), { code: "ENOENT" });
+  if (files.length > 1000 || bytes > 64 << 20) throw failure("技能完整资源超出限制");
+  return { entries, files, fingerprint: skillManifestFingerprint(entries, files) };
+}
 function failure(message: string, code = "error.repo.invalid") { return Object.assign(new Error(message), { code, statusCode: 400 }); }
 function safePath(path: string) {
   if (typeof path !== "string" || !path || path.length > 512 || path.split("/").length > 64 || path.split("/").some(p => !isPortableFileSegment(p))) throw failure("技能文件路径无效");

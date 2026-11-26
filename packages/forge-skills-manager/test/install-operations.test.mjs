@@ -5,6 +5,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstallOperations } from '../lib/install-operations.js';
 
+test('P2 receipt capacity refuses execution and recovers once existing receipts settle', async () => {
+  const operations = createInstallOperations();
+  let release, calls = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const requests = Array.from({ length: 256 }, (_, index) => operations.run(randomUUID(), String(index), async () => { await gate; return { name: 'example-skill', root: 'fixture' }; }));
+  try {
+    assert.throws(() => operations.run(randomUUID(), 'extra', async () => { calls++; }), { code: 'error.proto.busy' });
+    assert.equal(calls, 0);
+    release(); await Promise.all(requests);
+    await operations.run(randomUUID(), 'extra', async () => { calls++; return { name: 'example-skill', root: 'fixture' }; });
+    assert.equal(calls, 1);
+  } finally { release(); await Promise.all(requests); await operations.dispose(); }
+});
+
 test('installation receipts remain pending until confirmed and never resend an uncertain write', async () => {
   const operations = createInstallOperations();
   const id = randomUUID();
@@ -14,7 +28,7 @@ test('installation receipts remain pending until confirmed and never resend an u
   const first = operations.run(id, 'same-target', task);
   assert.equal(operations.run(id, 'same-target', task), first);
   assert.deepEqual(await operations.status(id), { state: 'pending' });
-  assert.throws(() => operations.run(randomUUID(), 'same-target', task), { code: 'error.repo.installState' });
+  assert.throws(() => operations.run(randomUUID(), 'same-target', task), { code: 'error.proto.busy' });
   release();
   await first;
   assert.equal(calls, 1);
@@ -23,7 +37,7 @@ test('installation receipts remain pending until confirmed and never resend an u
   const defect = new ReferenceError('after commit');
   await assert.rejects(operations.run(failedId, 'unknown-target', async () => { throw defect; }), error => error === defect);
   assert.equal((await operations.status(failedId)).state, 'pending');
-  assert.throws(() => operations.run(randomUUID(), 'unknown-target', task), { code: 'error.repo.installState' });
+  assert.throws(() => operations.run(randomUUID(), 'unknown-target', task), { code: 'error.proto.busy' });
   const rejectedId = randomUUID();
   await assert.rejects(operations.run(rejectedId, 'rejected-target', async () => { throw Object.assign(new Error('rejected'), { code: 'error.nacos.notFound' }); }));
   assert.equal((await operations.status(rejectedId)).state, 'rejected');
@@ -64,7 +78,7 @@ test('local mutation receipts preserve rejection, uncertainty and the original l
     await assert.rejects(operations.runMutation(uncertainId, target, async () => { throw error; }), caught => caught === error);
     assert.deepEqual(await operations.mutationStatus(uncertainId), { state: 'pending' });
     await assert.rejects(operations.runMutation(uncertainId, target, () => assert.fail('must not resend')), caught => caught === error);
-    assert.throws(() => operations.runMutation(randomUUID(), target, () => assert.fail('fresh id must not resend an uncertain mutation')), { code: 'error.repo.installState' });
+    assert.throws(() => operations.runMutation(randomUUID(), target, () => assert.fail('fresh id must not resend an uncertain mutation')), { code: 'error.proto.busy' });
   }
   const pendingId = randomUUID();
   await operations.runMutation(pendingId, 'pending-result', async () => ({ ok: false, code: 'error.repo.installState' }));
@@ -77,7 +91,7 @@ test('local mutation receipts preserve rejection, uncertainty and the original l
   await operations.runMutation(inspectedId, 'inspected-target', async () => ({ ok: false, code: 'error.repo.installState' }), async () =>
     durable ? { state: 'succeeded', result: { ok: true, value: 'confirmed' } } : undefined);
   assert.deepEqual(await operations.mutationStatus(inspectedId), { state: 'pending' });
-  assert.throws(() => operations.runMutation(randomUUID(), 'inspected-target', async () => 'must not run'), { code: 'error.repo.installState' });
+  assert.throws(() => operations.runMutation(randomUUID(), 'inspected-target', async () => 'must not run'), { code: 'error.proto.busy' });
   durable = true;
   assert.deepEqual(await operations.mutationStatus(inspectedId), { state: 'succeeded', result: { ok: true, value: 'confirmed' } });
   assert.deepEqual(await operations.runMutation(inspectedId, 'inspected-target', async () => assert.fail('must replay confirmed receipt')), { ok: true, value: 'confirmed' });

@@ -6,7 +6,7 @@ import type { createInstallationManager } from "./installations.js";
 import type { createNacosClient } from "./nacos.js";
 import type { MutationInspection,createInstallOperations } from "./install-operations.js";
 import type { HttpLocalPort } from "./local-ports.js";
-import { isExpectedOperationError,operationRejection } from "./operation-errors.js";
+import { isExpectedOperationError,operationRejection,PendingOperationError } from "./operation-errors.js";
 import { attachProvenance } from "./provenance.js";
 import type { CodedError,CreateInput,Diagnostic,Log,OperationError,RootView,SkillRoot,UploadInput } from "./types.js";
 import { activeSessionCwds,registeredWorkspacePaths } from './workspace-scope.js';
@@ -207,7 +207,20 @@ const requestSignal = (req: Request) => AbortSignal.any([req.signal, operations.
       }
       return result;
     };
-    const task = () => options?.queued !== false ? enqueueMutation(execute, req.signal) : execute();
+    const task = async () => {
+      try { return await (options?.queued !== false ? enqueueMutation(execute, req.signal) : execute()); }
+      catch (error) {
+        if (error instanceof PendingOperationError && new URL(req.url).pathname === `${API_PREFIX}/sidebar-entry`) {
+          throw new PendingOperationError(error.message, async () => {
+            const outcome = await error.inspect();
+            if (outcome?.state !== "succeeded") return outcome;
+            const location = outcome.result;
+            return { state: "succeeded", result: { ok: true, location, enabled: location !== "settings" } };
+          });
+        }
+        throw error;
+      }
+    };
     const operationId = req.headers.get(OPERATION_HEADER);
     return runFetch(() => {
       if (operationId === null || options?.mutation === false) return task();
@@ -433,12 +446,16 @@ const requestSignal = (req: Request) => AbortSignal.any([req.signal, operations.
     {
       path: `${API_PREFIX}/delete`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, async (b, scope) => {
+      fetch: (req) => {
+        let inspect: (() => Promise<MutationInspection | undefined>) | undefined;
+        return handlePost(req, async (b, scope) => {
         const target = await workspaceTarget(b);
         if (target && "ok" in target && target.ok === false) return target;
         const root = target ? (target as { root: SkillRoot }).root : await requestRoot(String(b.root || "dsh"), scope?.projectCwds, req.headers.get("x-dsh-skills-session"));
+        inspect = await repositories.prepareTrashInspection(root, String(b.name || ""));
         return repositories.trashSkill(root, String(b.name || ""));
-      }, { afterSuccess: afterWrite }),
+      }, { afterSuccess: afterWrite, inspect: async () => inspect?.() });
+      },
     },
     {
       path: `${API_PREFIX}/trash-restore`,
@@ -455,7 +472,14 @@ const requestSignal = (req: Request) => AbortSignal.any([req.signal, operations.
     {
       path: `${API_PREFIX}/trash-delete`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b) => repositories.permanentlyDeleteTrash(String(b.id || ""))),
+      fetch: (req) => {
+        let inspect: (() => Promise<MutationInspection | undefined>) | undefined;
+        return handlePost(req, async b => {
+          const id = String(b.id || "");
+          inspect = await repositories.prepareDeleteInspection(id);
+          return repositories.permanentlyDeleteTrash(id);
+        }, { inspect: async () => inspect?.() });
+      },
     },
     {
       path: `${API_PREFIX}/detail`,

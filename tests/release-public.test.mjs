@@ -507,11 +507,12 @@ test('standalone toolchain includes Nacos rules runtime and packaging instructio
   ].join('\n')));
   const runtimePath = 'node_modules/@heluo/forge-skills-manager/lib/nacos.js';
   const publicEntries = [
+    { path: 'package.json', content: Buffer.from(JSON.stringify({ name: '@heluo/forge-enterprise', version: '0.1.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } })) },
     { path: 'cordis.patch.yml', content: Buffer.from("- insert:\n    - id: heluo-skills-manager\n      name: '@heluo/forge-skills-manager'\n      config: {}\n") },
     { path: runtimePath, content: readFileSync(join(extracted, 'packages/forge-skills-manager/lib/nacos.js')) },
   ];
   assert.equal(maker.preflightNacosRelease(publicEntries, config).nacosConfigured, true);
-  publicEntries[1].content = Buffer.from('// old runtime\n');
+  publicEntries.find(entry => entry.path === runtimePath).content = Buffer.from('// old runtime\n');
   expectCode(() => maker.preflightNacosRelease(publicEntries, config), 'NACOS_RUNTIME_MISMATCH');
   assert.equal(readFileSync(join(extracted, 'packages/forge-skills-manager/docs/packaging.md'), 'utf8'), guide);
   for (const match of guide.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/gu)) {

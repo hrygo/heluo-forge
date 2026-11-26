@@ -192,8 +192,9 @@ try {
   const duplicate = await fetch(origin + prefix + '/nacos/install', { method: 'POST', headers: { cookie, origin, 'content-type': 'application/json', 'x-dsh-skills-manager': '1' },
     body: JSON.stringify({ ...selection('pending-skill'), operationId: randomUUID() }) });
   const rejection = await duplicate.json();
-  assert.equal(rejection.outcome, 'pending');
-  assert.equal(rejection.code, 'error.repo.installState');
+  assert.equal(duplicate.status, 409);
+  assert.equal(rejection.outcome, 'rejected');
+  assert.equal(rejection.code, 'error.proto.busy');
   assert.equal(downloads.get('pending-skill'), 1);
   releaseDownload(); await installing;
   assert.equal((await status(pendingId)).state, 'succeeded');

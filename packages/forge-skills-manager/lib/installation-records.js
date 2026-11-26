@@ -47,6 +47,40 @@ const targetIdentity = (path) => process.platform === "win32" ? resolve(path).to
 const installationSourceKey = (rootPath, name) => JSON.stringify([targetIdentity(rootPath), name]);
 const fileIndex = (entries) => Object.entries(entries).map(([path, bytes]) => ({ path, hash: hash(bytes) })).sort((a, b) => a.path.localeCompare(b.path, "en"));
 const signature = (files) => hash(JSON.stringify([...files].map(({ path, hash: hash2 }) => ({ path, hash: hash2 })).sort((a, b) => a.path.localeCompare(b.path, "en"))));
+function validSkillEntries(entries, name) {
+  return Array.isArray(entries) && entries.length > 0 && entries.length <= 2 && new Set(entries).size === entries.length && entries.every((entry) => entry === name || entry === `${name}.md`);
+}
+const skillManifestFingerprint = (entries, files) => hash(JSON.stringify([[...entries].sort(), signature(files)]));
+async function readSkillManifest(parent, name) {
+  safePath(name);
+  if (name.includes("/")) throw failure("\u6280\u80FD\u540D\u79F0\u65E0\u6548");
+  await safeDirectory(parent);
+  const entries = [], files = [];
+  let bytes = 0;
+  for (const entry of [name, `${name}.md`]) {
+    const path = join(parent, entry);
+    let info;
+    try {
+      info = await fs.lstat(path);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (info.isSymbolicLink()) throw failure("\u6280\u80FD\u5305\u542B\u94FE\u63A5");
+    if (entry === name && info.isDirectory()) {
+      const tree = await readSkillTree(path);
+      bytes += Object.values(tree).reduce((size, value) => size + value.byteLength, 0);
+      files.push(...fileIndex(tree).map((file) => ({ ...file, path: `${name}/${file.path}` })));
+    } else if (entry === `${name}.md` && info.isFile() && info.size <= 32 << 20) {
+      bytes += info.size;
+      files.push({ path: entry, hash: hash(await fs.readFile(path)) });
+    } else throw failure("\u6280\u80FD\u6761\u76EE\u5F62\u6001\u65E0\u6548");
+    entries.push(entry);
+  }
+  if (!entries.length) throw Object.assign(new Error("\u6280\u80FD\u4E0D\u5B58\u5728"), { code: "ENOENT" });
+  if (files.length > 1e3 || bytes > 64 << 20) throw failure("\u6280\u80FD\u5B8C\u6574\u8D44\u6E90\u8D85\u51FA\u9650\u5236");
+  return { entries, files, fingerprint: skillManifestFingerprint(entries, files) };
+}
 function failure(message, code = "error.repo.invalid") {
   return Object.assign(new Error(message), { code, statusCode: 400 });
 }
@@ -88,6 +122,9 @@ export {
   fileIndex,
   installationSourceKey,
   isRepositoryRootKey,
+  readSkillManifest,
   readSkillTree,
-  signature
+  signature,
+  skillManifestFingerprint,
+  validSkillEntries
 };

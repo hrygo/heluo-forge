@@ -91,6 +91,7 @@ test('private TGZ carries working Nacos credentials and installs offline without
     assert.equal(JSON.stringify(made).includes('synthetic password'), false);
     assert.equal(readFileSync(join(output, 'packaging-receipt.json'), 'utf8').includes('synthetic password'), false);
     const entries = readBundleEntries(made.tarball, { withContent: true });
+    assert.equal(entries.find(entry => entry.path === 'lib/THIRD-PARTY-NOTICES.txt').content.toString('utf8'), readFileSync(join(repo, 'packages/forge-skills-manager/lib/THIRD-PARTY-NOTICES.txt'), 'utf8'));
     assert.ok(!entries.some(e => e.path.includes('forge-enterprise') || e.path.includes('forge-iam') || e.path.includes('.env')));
     const config = readPreset(entries.find(e => e.path === 'cordis.patch.yml').content.toString());
     assert.deepEqual(config, parsePackageConfig(configText));

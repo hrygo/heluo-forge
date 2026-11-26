@@ -353,7 +353,8 @@ var managementLocales = {
     "mutation.confirmed": "\u64CD\u4F5C\u5DF2\u786E\u8BA4\uFF0C\u5DF2\u8BFB\u53D6\u5F53\u524D\u72B6\u6001\u3002",
     "mutation.refreshWarning": "\u64CD\u4F5C\u5DF2\u786E\u8BA4\uFF0C\u4F46\u5F53\u524D\u72B6\u6001\u5237\u65B0\u5931\u8D25\u3002\u8BF7\u5237\u65B0\u9875\u9762\u6838\u5BF9\uFF0C\u4E0D\u8981\u91CD\u590D\u63D0\u4EA4\u3002",
     "error.proto.pending": "\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\u3002",
-    "error.proto.busy": "\u8BF7\u5148\u6838\u5BF9\u4E0A\u4E00\u64CD\u4F5C\u7684\u7ED3\u679C\u3002",
+    "error.proto.busy": "\u5F53\u524D\u6709\u64CD\u4F5C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u672C\u6B21\u8BF7\u6C42\u672A\u6267\u884C\u3002\u8BF7\u6838\u5BF9\u539F\u64CD\u4F5C\u540E\u91CD\u8BD5\u3002",
+    "error.state.write": "\u72B6\u6001\u672A\u5199\u5165\uFF0C\u8BF7\u6062\u590D\u78C1\u76D8\u7A7A\u95F4\u6216\u6743\u9650\u540E\u91CD\u8BD5\u3002",
     "error.proto.response": "\u670D\u52A1\u7AEF\u54CD\u5E94\u65E0\u6548\uFF0C\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\u3002",
     "error.enterprise.reserved": "\u8BE5\u540D\u79F0\u7531\u4F01\u4E1A\u6D41\u7A0B\u6280\u80FD\u4FDD\u7559\uFF0C\u8BF7\u4F7F\u7528\u5176\u4ED6\u540D\u79F0\u3002",
     "error.repo.capacity": "\u5B89\u88C5\u6765\u6E90\u72B6\u6001\u8D85\u8FC7 16 MiB\u3002\u8BF7\u5148\u6E05\u7406\u4E0D\u9700\u8981\u7684\u56DE\u6536\u8BB0\u5F55\u6216\u65E7\u8EAB\u4EFD\uFF0C\u4ECD\u6709\u6548\u7684\u5B89\u88C5\u526F\u672C\u4F1A\u4FDD\u7559\u3002",
@@ -376,7 +377,8 @@ var managementLocales = {
     "mutation.confirmed": "The operation is confirmed and current state has been loaded.",
     "mutation.refreshWarning": "The operation is confirmed, but current state could not refresh. Refresh to check it; do not submit again.",
     "error.proto.pending": "The operation is awaiting confirmation.",
-    "error.proto.busy": "Confirm the previous operation first.",
+    "error.proto.busy": "Another operation is awaiting confirmation. This request was not executed; check the original operation before retrying.",
+    "error.state.write": "State was not saved. Restore disk space or write access and retry.",
     "error.proto.response": "Invalid server response. The operation is awaiting confirmation.",
     "error.enterprise.reserved": "This name is reserved for an enterprise workflow. Choose another name.",
     "error.repo.capacity": "Source tracking exceeds 16 MiB. Remove unneeded Trash records or legacy identities first. Active installation copies are kept.",
@@ -16422,7 +16424,7 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
       const epoch = detailEpoch.current;
       setChecking(true);
       try {
-        const outcome = decodeOperationOutcome(await api(`/nacos/install-status?operationId=${encodeURIComponent(pendingDownload.id)}`), isInstallReceipt);
+        const outcome = decodeOperationOutcome(await api(`/nacos/install-status?operationId=${encodeURIComponent(pendingDownload.id)}`), (result) => isInstallReceipt(result) && result.name === pendingDownload.target.name);
         if (outcome.state === "pending") {
           if (mounted.current && detailEpoch.current === epoch) setDetailError(t("nacos.pending"));
           return;
@@ -16505,6 +16507,10 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
       setDetailError(null);
       try {
         const result = await api("/nacos/install", { method: "POST", headers, body: JSON.stringify({ skillName: selected.name, version: selected.version, ...destinationPayload2(target), operationId }), signal: controller.signal });
+        if (!isInstallReceipt(result) || result.name !== installedTarget.name) {
+          if (mounted.current) setDetailError(t("nacos.pending"));
+          return;
+        }
         if (!controller.signal.aborted) pendingDownloads.delete(downloadKey);
         if (!mounted.current) return;
         if (controller.signal.aborted) {

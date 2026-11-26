@@ -15,6 +15,22 @@ const translate = (key, params = {}) => (nacosLocales.zh[key] || ({ 'btn.detail'
   .replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? `{${name}}`));
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 
+for (const result of [{}, { name: 'example-skill' }, { name: 'other-skill', root: '/workspace/skills' }]) test('P2 first POST receipt is validated: ' + JSON.stringify(result), async t => {
+  const ui = await harness(t, { holdInstall: true });
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  ui.installs[0].resolve(result); await ui.flush();
+  assert.equal(ui.refreshed, 0);
+  assert.equal(ui.button('下载到本地').props.disabled, true);
+  await ui.click('核对下载结果');
+  assert.equal(ui.calls.filter(call => call.path === '/nacos/install').length, 1);
+  ui.options.outcome = { state: 'succeeded', result: { name: 'other-skill', root: '/workspace/skills' } };
+  await ui.click('核对下载结果');
+  assert.equal(ui.refreshed, 0);
+  ui.options.outcome = { state: 'succeeded', result: { name: 'example-skill', root: '/workspace/skills' } };
+  await ui.click('核对下载结果');
+  assert.equal(ui.refreshed, 1);
+});
+
 test('Host JSX 适配保留 key、ref、children 并通过宿主公开接口创建元素', () => {
   const ref = React.createRef();
   const props = { children: ['one', 'two'], ref, title: 'document' };

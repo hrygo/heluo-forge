@@ -1097,11 +1097,17 @@ export async function removeCustomSource(key: unknown) {
   await writeRootPathConfig(config, {
     customSources: config.customSources.filter((item) => item.id !== id),
   });
-  await managerState.update(state => {
-    for (const field of ["sources", "disabledSkills", "enabledSkills", "customNotes", "categories", "categoryMembers", "categoryOrder"] as const) {
-      if (state[field]) delete state[field][id];
-    }
-  }, { force: true });
+  try {
+    await managerState.update(state => {
+      for (const field of ["sources", "disabledSkills", "enabledSkills", "customNotes", "categories", "categoryMembers", "categoryOrder"] as const) {
+        if (state[field]) delete state[field][id];
+      }
+    }, { force: true });
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
+    // Registration has already changed; a policy-only receipt cannot settle this action.
+    throw codedError("来源已移除，管理状态清理仍待确认", "error.repo.installState");
+  }
   return { ok: true as const, removed: id };
 }
 
@@ -2377,8 +2383,8 @@ export async function setSourceEnabled(key: string, enabled: boolean, log?: Log,
   if (!root || root.kind === 'project-dsh' || !root.toggleable)
     return readonlyError("toggle");
   const rootKey = root.key;
-  const updated = await managerState.update(state => { state.sources[rootKey] = enabled === true; });
-  if (updated) return updated;
+  const updated = await managerState.update(state => { state.sources[rootKey] = enabled === true; return { root: root.key, enabled: enabled === true }; });
+  if ("ok" in updated) return updated;
   if (log)
     log(
       enabled ? "source-enable" : "source-disable",
@@ -2552,8 +2558,9 @@ export async function setSkillNote(key: string, skillName: string, noteText: str
     if (!customNotes[root.key]) customNotes[root.key] = Object.create(null);
     if (text) customNotes[root.key][skillName] = text;
     else delete customNotes[root.key][skillName];
+    return { root: root.key, name: skillName, note: text || null };
   });
-  if (updated) return updated;
+  if ("ok" in updated) return updated;
   if (log) log("skill-note", `${root.key}/${skillName} 更新自定义简介: ${text ? `"${text}"` : "已清空"}`);
   return { root: root.key, name: skillName, note: text || null };
 }
@@ -2925,7 +2932,7 @@ export async function deleteSkill(root: RootInput, name: string, log?: Log, opti
   const id = options.repositoryTrash?.id || options.catalogTrash?.id || `${Date.now()}-${randomUUID()}`;
   if (!/^\d+-[a-f0-9-]{36}$/.test(id)) throw codedError("回收站条目编号非法", "error.trash.invalid", { id });
   const trashRoot = trashRootPath();
-  const stage = join(trashRoot, `.stage-${options.repositoryTrash ? id : randomUUID()}`);
+  const stage = join(trashRoot, `.stage-${options.repositoryTrash || options.catalogTrash ? id : randomUUID()}`);
   const finalPath = join(trashRoot, id);
   const moved = [];
   let cleanupUncertain = false;
@@ -3139,7 +3146,11 @@ export async function permanentlyDeleteTrash(id: string, log?: Log) {
       params: { id },
     };
   await fs.rm(join(trashRootPath(), id), { recursive: true, force: true });
-  await forgetCategoryMember(metadata);
+  try { await forgetCategoryMember(metadata); }
+  catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
+    throw codedError("回收资源已删除，管理状态清理仍待确认", "error.repo.installState");
+  }
   if (log) log("trash-delete", `永久删除回收站条目 ${metadata.name} (${id})`);
   return { id, name: metadata.name };
 }

@@ -1,3 +1,12 @@
+class PendingOperationError extends Error {
+  code = "error.repo.installState";
+  statusCode = 500;
+  inspect;
+  constructor(message, inspect) {
+    super(message);
+    this.inspect = inspect;
+  }
+}
 function operationRejection(result) {
   return {
     code: "code" in result && typeof result.code === "string" && /^error\.[a-zA-Z0-9.]+$/.test(result.code) ? result.code : "error.proto.rejected",
@@ -10,6 +19,7 @@ function isExpectedOperationError(error) {
   return /^error\.[a-zA-Z0-9.]+$/.test(error.code) || /^E[A-Z0-9]+$/.test(error.code);
 }
 export {
+  PendingOperationError,
   isExpectedOperationError,
   operationRejection
 };

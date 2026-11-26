@@ -9,6 +9,14 @@ import { runInNewContext } from 'node:vm';
 import { buildPlugin, packageRoot } from '../scripts/build.mjs';
 import { normalizeDependencyIds } from '../scripts/build-identities.mjs';
 
+test('P2 shipped notices contain every bundled Markdown and ZIP dependency license', async () => {
+  const notice = await readFile(join(packageRoot, 'lib', 'THIRD-PARTY-NOTICES.txt'), 'utf8');
+  for (const id of ['react-markdown@10.1.0', 'remark-gfm@4.0.1', 'yauzl@3.4.0', 'pend@1.2.0', 'micromark@', 'mdast-util-to-hast@']) assert.ok(notice.includes(id), id);
+  assert.match(notice, /Permission is hereby granted/);
+  assert.match(notice, /Titus Wormer/);
+  assert.doesNotMatch(notice, /fflate@|react@18/);
+});
+
 test('dependency normalization changes wrapper identities and preserves application strings', () => {
   const source = 'var dependency = __commonJS({"D:/fixture/node_modules/.pnpm/extend@3/node_modules/extend/index.js"(exports) {}}); const text = "D:/fixture/node_modules/keep";';
   const result = normalizeDependencyIds(source);

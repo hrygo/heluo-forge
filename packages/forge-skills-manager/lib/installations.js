@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
 import { isExpectedOperationError } from "./operation-errors.js";
-import { createInstallationRecords, fileIndex, installationSourceKey, isRepositoryRootKey, readSkillTree, signature } from "./installation-records.js";
+import { createInstallationRecords, fileIndex, installationSourceKey, isRepositoryRootKey, readSkillTree, readSkillManifest, validSkillEntries, skillManifestFingerprint, signature } from "./installation-records.js";
 import { parseGitUrl } from "./legacy-sources.js";
 const STATE_LIMIT = 16 << 20;
 const STATE_READ_LIMIT = 64 << 20;
@@ -39,6 +39,7 @@ function validateStoredState(input) {
     if (record.trashId !== void 0 && (typeof record.trashId !== "string" || !/^\d+-[a-f0-9-]{36}$/.test(record.trashId))) throw failure("\u4ED3\u5E93\u56DE\u6536\u8BB0\u5F55\u65E0\u6548");
     if (record.restoreFingerprint !== void 0 && (typeof record.restoreFingerprint !== "string" || !record.trashId || !/^[a-f0-9]{64}$/.test(record.restoreFingerprint))) throw failure("\u4ED3\u5E93\u6062\u590D\u8BB0\u5F55\u65E0\u6548");
     if (record.uninstallFingerprint !== void 0 && (!record.trashId || !/^[a-f0-9]{64}$/.test(record.uninstallFingerprint))) throw failure("\u4ED3\u5E93\u5378\u8F7D\u8BB0\u5F55\u65E0\u6548");
+    if (record.trashEntries !== void 0 && (!record.trashId || !validSkillEntries(record.trashEntries, record.name))) throw failure("\u56DE\u6536\u8D44\u6E90\u5F62\u6001\u65E0\u6548");
     safePath(record.path, true);
     safePath(record.name);
     if (record.name.includes("/")) throw failure("\u4ED3\u5E93\u5B89\u88C5\u540D\u79F0\u65E0\u6548");
@@ -61,6 +62,8 @@ function validateStoredState(input) {
         if (item.workspace !== void 0 && (item.root !== "dsh" || typeof item.workspace !== "string" || !item.workspace || item.workspace.length > 1024)) throw failure("\u76EE\u5F55\u5B89\u88C5\u5DE5\u4F5C\u533A\u65E0\u6548");
         if (item.trashId !== void 0 && (typeof item.trashId !== "string" || !/^\d+-[a-f0-9-]{36}$/.test(item.trashId))) throw failure("\u76EE\u5F55\u56DE\u6536\u8BB0\u5F55\u65E0\u6548");
         if (item.restoreFingerprint !== void 0 && (!item.trashId || !/^[a-f0-9]{64}$/.test(item.restoreFingerprint))) throw failure("\u76EE\u5F55\u6062\u590D\u8BB0\u5F55\u65E0\u6548");
+        if (item.uninstallFingerprint !== void 0 && (!item.trashId || !/^[a-f0-9]{64}$/.test(item.uninstallFingerprint))) throw failure("\u76EE\u5F55\u56DE\u6536\u8BB0\u5F55\u65E0\u6548");
+        if (item.trashEntries !== void 0 && (!item.trashId || !validSkillEntries(item.trashEntries, item.name))) throw failure("\u76EE\u5F55\u56DE\u6536\u8D44\u6E90\u5F62\u6001\u65E0\u6548");
         if (item.disabledOnInstall !== void 0 && typeof item.disabledOnInstall !== "boolean") throw failure("\u76EE\u5F55\u5B89\u88C5\u7B56\u7565\u65E0\u6548");
         if (item.complete !== void 0 && typeof item.complete !== "boolean") throw failure("\u76EE\u5F55\u5B89\u88C5\u786E\u8BA4\u72B6\u6001\u65E0\u6548");
         if (item.complete === false && (!item.root || !item.files?.length)) throw failure("\u76EE\u5F55\u5B89\u88C5\u610F\u56FE\u65E0\u6548");
@@ -195,6 +198,7 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     try {
       safePath(record.name);
       const rootPath = (await resolveInstallRoot(record, registered, indexed)).path;
+      if (record.trashEntries) return (await readSkillManifest(rootPath, record.name)).fingerprint === fingerprint;
       return signature(fileIndex(await readSkillTree(join(rootPath, record.name)))) === fingerprint;
     } catch (error) {
       if (!isExpectedOperationError(error)) throw error;
@@ -236,11 +240,41 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       const directory = await fs.lstat(receipt), file2 = await fs.lstat(join(receipt, "metadata.json"));
       if (!directory.isDirectory() || directory.isSymbolicLink() || !file2.isFile() || file2.isSymbolicLink() || file2.size > 32 << 10) return false;
       const metadata = JSON.parse(await fs.readFile(join(receipt, "metadata.json"), "utf8"));
-      return metadata.id === record.trashId && metadata.name === record.name && (record.workspace ? metadata.root?.scope === "project" && metadata.root.projectRoot === record.workspace : (metadata.root?.scope === "user" || metadata.root?.scope === "preset") && metadata.root.key === (record.root || "dsh")) && ("path" in record ? metadata.repository?.id === record.id && metadata.repository.path === record.path : Array.isArray(metadata.catalog) && metadata.catalog.includes(record.id)) && metadata.entries?.length === 1 && metadata.entries[0] === record.name;
+      return metadata.id === record.trashId && metadata.name === record.name && (record.workspace ? metadata.root?.scope === "project" && metadata.root.projectRoot === record.workspace : (metadata.root?.scope === "user" || metadata.root?.scope === "preset") && metadata.root.key === (record.root || "dsh")) && ("path" in record ? metadata.repository?.id === record.id && metadata.repository.path === record.path : Array.isArray(metadata.catalog) && metadata.catalog.includes(record.id)) && validSkillEntries(metadata.entries, record.name) && (!record.trashEntries || JSON.stringify(metadata.entries.slice().sort()) === JSON.stringify(record.trashEntries.slice().sort()));
     } catch (error) {
       if (!(error instanceof SyntaxError) && !isExpectedOperationError(error)) throw error;
       return false;
     }
+  }
+  async function rollbackCatalogStage(record) {
+    if (!record.trashId || !record.uninstallFingerprint || !record.trashEntries) return;
+    const stage = join(trashRootPath(), `.stage-${record.trashId}`);
+    if (await absentTrashPath(stage) || !await absentTrashPath(join(trashRootPath(), record.trashId))) return;
+    const info = await fs.lstat(stage);
+    if (!info.isDirectory() || info.isSymbolicLink()) return;
+    const children = await fs.readdir(stage);
+    if (children.some((name) => !record.trashEntries.includes(name) && name !== "metadata.json")) return;
+    if (children.includes("metadata.json")) {
+      const metadataInfo = await fs.lstat(join(stage, "metadata.json"));
+      if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink() || metadataInfo.size > 32 << 10) return;
+      const metadata = JSON.parse(await fs.readFile(join(stage, "metadata.json"), "utf8"));
+      if (metadata.id !== record.trashId || metadata.name !== record.name || !metadata.catalog?.includes(record.id)) return;
+    }
+    const root = await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record));
+    const optional = async (parent) => {
+      try {
+        return await readSkillManifest(parent, record.name);
+      } catch (error) {
+        if (isExpectedOperationError(error) && error.code === "ENOENT") return { entries: [], files: [] };
+        throw error;
+      }
+    };
+    const original = await optional(root.path), staged = await optional(stage);
+    const entries = [...original.entries, ...staged.entries];
+    if (new Set(entries).size !== entries.length || skillManifestFingerprint(entries, [...original.files, ...staged.files]) !== record.uninstallFingerprint) return;
+    for (const entry of staged.entries) await fs.rename(join(stage, entry), join(root.path, entry));
+    if (children.includes("metadata.json")) await fs.unlink(join(stage, "metadata.json"));
+    await fs.rmdir(stage);
   }
   async function recoverPending(loaded) {
     catalogWarnings = [];
@@ -256,9 +290,32 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       if (!occupied && await absentTrashPath(join(trashRootPath(), id)) && await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) && await matches(record, record.uninstallFingerprint, registered, await indexedFor(record))) {
         delete record.trashId;
         delete record.uninstallFingerprint;
-        for (const item of catalogRecords(data).filter((item2) => item2.trashId === id)) delete item.trashId;
+        delete record.trashEntries;
+        for (const item of catalogRecords(data).filter((item2) => item2.trashId === id)) {
+          delete item.trashId;
+          delete item.uninstallFingerprint;
+          delete item.trashEntries;
+        }
         recovered = true;
         recoveredInstallIds.push(`${record.id}:${record.path}`);
+      }
+    }
+    for (const record of catalogRecords(data).filter((item) => item.trashId && item.uninstallFingerprint && !item.restoreFingerprint)) {
+      const id = record.trashId;
+      try {
+        await rollbackCatalogStage(record);
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !isExpectedOperationError(error)) throw error;
+        catalogWarnings.push({ id: record.id, code: "error.repo.installState", error: "\u56DE\u6536\u6682\u5B58\u8D44\u6E90\u4ECD\u5F85\u6838\u9A8C\uFF0C\u8BF7\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u8BD5" });
+        continue;
+      }
+      const occupied = catalogRecords(data).some((other) => other !== record && !other.trashId && locationKey(other) === locationKey(record));
+      if (!occupied && await absentTrashPath(join(trashRootPath(), id)) && await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) && await catalogMatches(record, record.uninstallFingerprint)) {
+        delete record.trashId;
+        delete record.uninstallFingerprint;
+        delete record.trashEntries;
+        recovered = true;
+        recoveredCatalogIds.push(record.id);
       }
     }
     for (const record of data.installs.filter((record2) => !record2.complete && !record2.trashId)) {
@@ -274,6 +331,7 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
         delete record.trashId;
         delete record.restoreFingerprint;
         delete record.uninstallFingerprint;
+        delete record.trashEntries;
         recovered = true;
       }
     }
@@ -298,6 +356,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
         restoredIds.push(record.trashId);
         delete record.trashId;
         delete record.restoreFingerprint;
+        delete record.uninstallFingerprint;
+        delete record.trashEntries;
         recovered = true;
       }
     }
@@ -350,6 +410,7 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     try {
       const presetRoots = await fetchPresetRoots();
       const root = await recordInstallRoot(record, requestIndex().registered, await indexedFor(record), presetRoots);
+      if (record.trashEntries) return (await readSkillManifest(root.path, record.name)).fingerprint === fingerprint;
       return signature(fileIndex(await readSkillTree(join(root.path, record.name)))) === fingerprint;
     } catch (error) {
       if (!isExpectedOperationError(error)) throw error;
@@ -367,7 +428,9 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     if (!records.length) return restoreSkillTrash(id, log, options);
     for (const record of records) {
       if (metadata.name !== record.name || (record.workspace ? metadata.root?.projectRoot !== record.workspace || metadata.root.scope !== "project" : metadata.root?.scope !== "user" && metadata.root?.scope !== "preset" || metadata.root.key !== record.root)) throw failure("\u56DE\u6536\u7AD9\u6765\u6E90\u4E0E\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u4E00\u81F4");
-      record.restoreFingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, record.name))));
+      if (!validSkillEntries(metadata.entries, record.name)) throw failure("\u56DE\u6536\u8D44\u6E90\u5F62\u6001\u65E0\u6548");
+      record.restoreFingerprint = (await readSkillManifest(join(trashRootPath(), id), record.name)).fingerprint;
+      record.trashEntries = metadata.entries;
     }
     await write(data);
     const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
@@ -380,6 +443,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     for (const record of records) {
       delete record.trashId;
       delete record.restoreFingerprint;
+      delete record.uninstallFingerprint;
+      delete record.trashEntries;
     }
     try {
       await write(data);
@@ -411,24 +476,51 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
   return {
     managerPath,
     sources,
+    prepareTrashInspection: (root, name) => serialize(async () => {
+      if (!root) return void 0;
+      const before = catalogCopies(await read(), root, name);
+      if (!before.length) return void 0;
+      const fingerprint = (await readSkillManifest(root.path, name)).fingerprint;
+      return () => serialize(async () => {
+        const data = await read();
+        const current = before.map((item) => catalogRecords(data).find((record) => record.id === item.id && locationKey(record) === locationKey(item)));
+        if (current.some((record) => !record || record.trashId || !record.complete)) return void 0;
+        const checked = await resolveInstallRoot(current[0], requestIndex().registered, await indexedFor(current[0]));
+        if ((await readSkillManifest(checked.path, name)).fingerprint !== fingerprint) return void 0;
+        return { state: "rejected", code: "error.trash.notMoved", error: "\u6280\u80FD\u672A\u79FB\u5165\u56DE\u6536\u7AD9\uFF0C\u8BF7\u91CD\u8BD5" };
+      }, false, false);
+    }, false, false),
+    prepareDeleteInspection: (id) => serialize(async () => {
+      const metadata = (await listTrash()).find((item) => item.id === id);
+      if (!metadata) return void 0;
+      const data = await read();
+      const tracked = [...data.installs, ...catalogRecords(data)].filter((record) => record.trashId === id);
+      if (!tracked.length) return void 0;
+      return () => serialize(async () => {
+        const current = await read();
+        if (!await absentTrashPath(join(trashRootPath(), id)) || !await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) || !await absentTrashPath(join(trashRootPath(), `.restored-${id}`))) return void 0;
+        if (current.pendingTrashDeletes?.some((item) => item.id === id) || [...current.installs, ...catalogRecords(current)].some((record) => record.trashId === id)) return void 0;
+        return { state: "succeeded", result: { id, name: metadata.name } };
+      }, false, false);
+    }, false, false),
     prepareRestoreInspection: (id) => serialize(async () => {
       const metadata = (await listTrash()).find((item) => item.id === id);
-      if (!metadata || metadata.entries.length !== 1 || metadata.entries[0] !== metadata.name || !metadata.repository && !metadata.catalog?.length) return void 0;
+      if (!metadata || !validSkillEntries(metadata.entries, metadata.name) || !metadata.repository && !metadata.catalog?.length) return void 0;
       const data = await read();
       const installs = data.installs.filter((record) => record.trashId === id && record.id === metadata.repository?.id && record.path === metadata.repository.path);
       const catalogs = catalogRecords(data).filter((record) => record.trashId === id && metadata.catalog?.includes(record.id));
       if (!installs.length && !catalogs.length) return void 0;
-      const fingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, metadata.name))));
+      const fingerprint = (await readSkillManifest(join(trashRootPath(), id), metadata.name)).fingerprint;
       return () => serialize(async () => {
         const current = await read();
         if (!await absentTrashPath(join(trashRootPath(), id))) return void 0;
         for (const before of installs) {
           const record = current.installs.find((item) => item.id === before.id && item.path === before.path && item.commit === before.commit && locationKey(item) === locationKey(before));
-          if (!record?.complete || record.trashId || record.restoreFingerprint || record.uninstallFingerprint || !await matches(record, fingerprint)) return void 0;
+          if (!record?.complete || record.trashId || record.restoreFingerprint || record.uninstallFingerprint || (await readSkillManifest((await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record))).path, record.name)).fingerprint !== fingerprint) return void 0;
         }
         for (const before of catalogs) {
           const record = catalogRecords(current).find((item) => item.id === before.id && locationKey(item) === locationKey(before));
-          if (record?.complete !== true || record.trashId || record.restoreFingerprint || !await catalogMatches(record, fingerprint)) return void 0;
+          if (record?.complete !== true || record.trashId || record.restoreFingerprint || (await readSkillManifest((await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record))).path, record.name)).fingerprint !== fingerprint) return void 0;
         }
         return { state: "succeeded", result: { id, name: metadata.name, root: metadata.root } };
       }, false, false);
@@ -547,23 +639,36 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       const records = root ? catalogCopies(data, root, name) : [];
       if (!records.length) return deleteSkill(root, name, log);
       const id = `${Date.now()}-${randomUUID()}`;
-      for (const record of records) record.trashId = id;
+      const manifest = await readSkillManifest(root.path, name);
+      for (const record of records) {
+        record.trashId = id;
+        record.uninstallFingerprint = manifest.fingerprint;
+        record.trashEntries = manifest.entries;
+      }
       await write(data);
       try {
         const result = await deleteSkill(root, name, log, { catalogTrash: { id, ids: records.map((record) => record.id) } });
         if ("ok" in result && result.ok === false) {
           if (result.code === "error.repo.installState") return result;
-          for (const record of records) delete record.trashId;
+          for (const record of records) {
+            delete record.trashId;
+            delete record.uninstallFingerprint;
+            delete record.trashEntries;
+          }
           await write(data);
         }
         return result;
       } catch (error) {
         if (!isExpectedOperationError(error)) throw error;
         if (error.code === "error.repo.installState") throw error;
-        if (!(await listTrash()).some((item) => item.id === id)) {
-          for (const record of records) delete record.trashId;
+        if (await absentTrashPath(join(trashRootPath(), id)) && await absentTrashPath(join(trashRootPath(), `.stage-${id}`)) && (await readSkillManifest(root.path, name)).fingerprint === manifest.fingerprint) {
+          for (const record of records) {
+            delete record.trashId;
+            delete record.uninstallFingerprint;
+            delete record.trashEntries;
+          }
           await write(data);
-        }
+        } else throw failure("\u56DE\u6536\u7ED3\u679C\u5F85\u786E\u8BA4\uFF0C\u8D44\u6E90\u53CA\u4E8B\u52A1\u8BB0\u5F55\u5DF2\u4FDD\u7559\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u6280\u80FD\u7BA1\u7406\u5668\u6838\u9A8C", "error.repo.installState");
         throw error;
       }
     }, false),
@@ -618,10 +723,14 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       const data = await read();
       const record = data.installs.find((item) => item.trashId === id && item.id === metadata.repository.id && item.path === metadata.repository.path);
       if (!record) return restoreSkillTrash(id, log, options);
-      if (metadata.name !== record.name || (record.workspace ? metadata.root?.scope !== "project" || metadata.root.projectRoot !== record.workspace : metadata.root?.scope !== "user" && metadata.root?.scope !== "preset" || metadata.root.key !== (record.root || "dsh")) || metadata.entries.length !== 1 || metadata.entries[0] !== record.name) throw failure("\u56DE\u6536\u7AD9\u6765\u6E90\u4E0E\u5B89\u88C5\u8BB0\u5F55\u4E0D\u4E00\u81F4");
-      record.restoreFingerprint = signature(fileIndex(await readSkillTree(join(trashRootPath(), id, record.name))));
+      if (metadata.name !== record.name || (record.workspace ? metadata.root?.scope !== "project" || metadata.root.projectRoot !== record.workspace : metadata.root?.scope !== "user" && metadata.root?.scope !== "preset" || metadata.root.key !== (record.root || "dsh")) || !validSkillEntries(metadata.entries, record.name)) throw failure("\u56DE\u6536\u7AD9\u6765\u6E90\u4E0E\u5B89\u88C5\u8BB0\u5F55\u4E0D\u4E00\u81F4");
+      record.restoreFingerprint = (await readSkillManifest(join(trashRootPath(), id), record.name)).fingerprint;
+      record.trashEntries = metadata.entries;
       const catalog = catalogRecords(data).filter((item) => item.trashId === id && metadata.catalog?.includes(item.id));
-      for (const item of catalog) item.restoreFingerprint = record.restoreFingerprint;
+      for (const item of catalog) {
+        item.restoreFingerprint = record.restoreFingerprint;
+        item.trashEntries = metadata.entries;
+      }
       await write(data);
       const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
       if ("ok" in result && result.ok === false) {
@@ -634,9 +743,12 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       delete record.trashId;
       delete record.restoreFingerprint;
       delete record.uninstallFingerprint;
+      delete record.trashEntries;
       for (const item of catalog) {
         delete item.trashId;
         delete item.restoreFingerprint;
+        delete item.uninstallFingerprint;
+        delete item.trashEntries;
       }
       try {
         await write(data);

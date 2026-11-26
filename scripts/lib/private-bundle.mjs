@@ -26,6 +26,7 @@ import { NACOS_ENV_MAP, parseNacosConfig, checkNacosRelease, assertNacosReleaseC
 import { readBundleEntries } from './bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './bundle-manifest.mjs';
 import { writeBundleTarball } from './bundle-write.mjs';
+import { parsePatchBlocks } from './patch-layer-blocks.mjs';
 import { assertOutsideDirectory, atomicWrite, parseDigest, safeRelativePath, scanReleaseFiles, scanText, sha256, stableJson } from './release-support.mjs';
 
 export const PRIVATE_SCHEMA = 'heluo-private-release/1';
@@ -549,7 +550,7 @@ export function assertNacosReleaseConfig(config) {
 
 /** Same plugin-specific gate for previews, CLI confirmation and final writes. */
 export function preflightNacosRelease(entries, config, options = {}) {
-  const installed = patchEntriesOf(entries).some(entry => insertedIds(entry.content.toString('utf8')).has('heluo-skills-manager'));
+  const installed = skillsPatchEntry(entries) !== undefined;
   return checkNacosRelease(entries, config, { ...options, installed, fail });
 }
 
@@ -645,9 +646,8 @@ export function injectPatchConfig(text, id, config) {
 }
 
 /**
- * Bundle patch files in tarball order (a bundle may ship one patch or several
- * layers: `cordis.patch.yml` plus `cordis.patch.<layer>.yml`); the acceptance gate
- * judges the **set** — order is irrelevant, a layer only carries part of the rows.
+ * Inventory of shipped patch files in tarball order, including undeclared files.
+ * Runtime configuration uses declaredPatchEntriesOf() in Host declaration order.
  */
 export const PATCH_FILE_PATTERN = /^cordis\.patch(?:\.[A-Za-z0-9-]+)?\.yml$/u;
 
@@ -665,19 +665,52 @@ function insertedIds(text) {
 }
 
 /** `dsh.bundle.patch` 指向的那一层：bundle 必须随包发出，否则装上也加载不到。 */
-function declaredPatchPath(root) {
+function declaredPatchPaths(root) {
   const declared = root?.dsh?.bundle?.patch;
-  return typeof declared === 'string' ? declared.replace(/^\.\//u, '') : undefined;
+  const paths = typeof declared === 'string' ? [declared] : declared;
+  if (!Array.isArray(paths) || !paths.length || paths.some(path => typeof path !== 'string')) return undefined;
+  const normalized = paths.map(path => path.replace(/^\.\//u, ''));
+  if (new Set(normalized).size !== normalized.length || normalized.some(path => !PATCH_FILE_PATTERN.test(path))) return undefined;
+  return normalized;
+}
+
+/** Match the Host's declaration order; undeclared files never supply configuration. */
+export function declaredPatchEntriesOf(entries, root = membersOf(entries).root) {
+  const problems = patchLayerProblems(root, entries);
+  if (problems.length) fail('PUBLIC_TARBALL_INVALID', problems.join('; '));
+  return declaredPatchPaths(root).map(path => entries.find(entry => entry.path === path));
+}
+
+export function skillsPatchEntry(entries) {
+  const matches = [];
+  for (const entry of declaredPatchEntriesOf(entries)) {
+    const text = entry.content.toString('utf8');
+    const parsed = parsePatchBlocks(text);
+    for (const block of parsed.blocks) {
+      const insertion = /^\s*- insert:\s*(?:#.*)?$/u.test(parsed.lines[block.start]);
+      const rows = insertion ? parsePatchBlocks(parsed.lines.slice(block.start + 1, block.end).join('\n')) : { lines: parsed.lines, blocks: [block] };
+      for (const row of rows.blocks) {
+        if (row.id !== 'heluo-skills-manager') continue;
+        const properties = rows.lines.slice(row.start, row.end).filter(line => new RegExp(`^ {${row.indent + 2}}\\S`, 'u').test(line));
+        matches.push({ entry, insertion, name: row.name, disabled: properties.some(line => /^\s+disabled:/u.test(line) && !/^\s+disabled:\s*false\s*(?:#.*)?$/u.test(line)) });
+      }
+    }
+  }
+  if (!matches.length) return undefined;
+  if (matches.length !== 1 || !matches[0].insertion || matches[0].name !== '@heluo/forge-skills-manager' || matches[0].disabled) {
+    fail('PUBLIC_TARBALL_INVALID', 'Skill Manager must have exactly one enabled insert row with its expected package name in the declared patch layers');
+  }
+  return matches[0].entry;
 }
 
 /** 公版 bundle 的补丁层完整性：必须声明默认层、且默认层真的在包里。 */
 export function patchLayerProblems(root, patchEntries) {
   const problems = [];
-  const declared = declaredPatchPath(root);
+  const declared = declaredPatchPaths(root);
   if (declared === undefined) {
-    problems.push('package.json does not declare dsh.bundle.patch');
-  } else if (!patchEntries.some((entry) => entry.path === declared)) {
-    problems.push(`bundle does not ship the declared patch ${declared}`);
+    problems.push('package.json does not declare dsh.bundle.patch as valid paths');
+  } else {
+    for (const path of declared) if (!patchEntries.some((entry) => entry.path === path)) problems.push(`bundle does not ship the declared patch ${path}`);
   }
   if (patchEntries.length === 0) problems.push('bundle has no patch file');
   return problems;
@@ -819,7 +852,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   if (requireVersionChange && version === root.version) {
     fail('VERSION_UNCHANGED', `private version must differ from the public version ${root.version}: same name+version must mean the same bytes`);
   }
-  const patchEntries = patchEntriesOf(entries);
+  const patchEntries = declaredPatchEntriesOf(entries, root);
   const layerProblems = patchLayerProblems(root, patchEntries);
   if (layerProblems.length > 0) {
     fail('PUBLIC_TARBALL_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
@@ -839,7 +872,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));
   const iamOwner = ownerOf('heluo-iam');
   const giteeOwner = ownerOf('heluo-gitee');
-  const skillsOwner = ownerOf('heluo-skills-manager');
+  const skillsOwner = skillsPatchEntry(entries);
   const hasGiteeConfig = Object.keys(config.gitee ?? {}).length > 0;
   const hasNacosConfig = Object.keys(config.nacos ?? {}).length > 0;
   const nacosRelease = preflightNacosRelease(entries, config);
@@ -1058,9 +1091,10 @@ export function inspectPublicTarball(publicPath) {
   if (root.name !== '@heluo/forge-engineering') assertIamValidatorMatches(entries);
   const patchEntries = patchEntriesOf(entries);
   const problems = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
-  problems.push(...patchLayerProblems(root, patchEntries));
-  if (patchEntries.length > 0) {
-    problems.push(...assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(root.name) }));
+  const layerProblems = patchLayerProblems(root, patchEntries);
+  problems.push(...layerProblems);
+  if (!layerProblems.length) {
+    problems.push(...assertNeutralPatch(declaredPatchEntriesOf(entries, root).map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(root.name) }));
   }
   return { sha256: sha256(bytes), version: root.version, name: root.name, files: entries.length, problems };
 }

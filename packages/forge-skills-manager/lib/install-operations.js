@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { isExpectedOperationError, operationRejection } from "./operation-errors.js";
+import { isExpectedOperationError, operationRejection, PendingOperationError } from "./operation-errors.js";
 const ownersKey = Symbol.for("heluo.forge-skills-manager.operations");
 const owners = globalThis[ownersKey] ??= /* @__PURE__ */ new Map();
 function createInstallOperations() {
@@ -102,11 +102,11 @@ function createInstallOperations() {
     }
     if (lifetime.signal.aborted) throw cancelled();
     if ([...owner.records.values()].some((record2) => record2.kind === kind && record2.target === target && record2.outcome.state === "pending" && (kind === "install" || record2.settled))) {
-      throw Object.assign(new Error("\u8BE5\u4E0B\u8F7D\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u8BF7\u6838\u5BF9\u672C\u5730\u6280\u80FD"), { code: "error.repo.installState", statusCode: 409 });
+      throw Object.assign(new Error("\u76EE\u6807\u5DF2\u6709\u64CD\u4F5C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u672C\u6B21\u8BF7\u6C42\u672A\u6267\u884C"), { code: "error.proto.busy", statusCode: 409 });
     }
     if (owner.records.size >= 256) {
       for (const [key, record2] of owner.records) if (record2.outcome.state !== "pending") owner.records.delete(key);
-      if (owner.records.size >= 256) throw Object.assign(new Error("\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u8BF7\u5148\u6838\u5BF9\u672C\u5730\u6280\u80FD"), { code: "error.repo.installState", statusCode: 409 });
+      if (owner.records.size >= 256) throw Object.assign(new Error("\u64CD\u4F5C\u56DE\u6267\u5BB9\u91CF\u5DF2\u6EE1\uFF0C\u672C\u6B21\u8BF7\u6C42\u672A\u6267\u884C"), { code: "error.proto.busy", statusCode: 409 });
     }
     const record = { kind, target, outcome: { state: "pending" }, settled: false, inspect, inspectMutation, promise: Promise.resolve().then(task) };
     owner.records.set(requestId, record);
@@ -119,6 +119,7 @@ function createInstallOperations() {
       return result;
     }, (error) => {
       record.settled = true;
+      if (error instanceof PendingOperationError) record.inspectMutation ??= error.inspect;
       if (isExpectedOperationError(error) && error.code?.startsWith("error.") && error.code !== "error.repo.installState") {
         record.outcome = { state: "rejected", code: error.code, error: error.message };
       }

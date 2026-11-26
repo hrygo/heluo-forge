@@ -8,7 +8,7 @@ import { buildBundle, writeBundleArtifacts } from '../../../scripts/build-enterp
 import { readBundleEntries } from '../../../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../../../scripts/lib/bundle-write.mjs';
 import { NACOS_ENV_MAP, parseNacosConfig, assertNacosReleaseConfig, checkNacosRelease } from '../../../scripts/lib/nacos-release.mjs';
-import { injectPatchConfig, parseEnvConfig } from '../../../scripts/lib/private-bundle.mjs';
+import { injectPatchConfig, parseEnvConfig, skillsPatchEntry } from '../../../scripts/lib/private-bundle.mjs';
 import { assertOutsideDirectory, scanReleaseFiles, sha256, stableJson } from '../../../scripts/lib/release-support.mjs';
 import { verifyBundle } from '../../../scripts/verify-enterprise-bundle.mjs';
 
@@ -88,8 +88,9 @@ export function packageSkillsManager({ configText, output, version, dryRun = fal
     const entries = readBundleEntries(neutral.tarball, { withContent: true });
     const findings = scanReleaseFiles(entries.map(e => ({ path: e.path, body: e.content })), { publicOnly: true });
     if (findings.length) fail('PUBLIC_UNSAFE', findings.join('\n'));
-    const gate = checkNacosRelease(entries, config, { installed: true, runtimePath: 'lib/nacos.js', toolRoot: root, fail });
-    const patch = entries.find(e => e.path === 'cordis.patch.yml');
+    const patch = skillsPatchEntry(entries);
+    const gate = checkNacosRelease(entries, config, { installed: patch !== undefined, runtimePath: 'lib/nacos.js', toolRoot: root, fail });
+    if (!patch) fail('PUBLIC_TARBALL_INVALID', 'Skill Manager has no effective insert row');
     const rewritten = injectPatchConfig(patch.content.toString('utf8'), 'heluo-skills-manager', config);
     const manifest = { ...neutral.manifest, version };
     const metadata = {
@@ -98,7 +99,7 @@ export function packageSkillsManager({ configText, output, version, dryRun = fal
       config: { keys: Object.keys(config.nacos).map(k => `nacos.${k}`).sort(), embeddedSecrets: gate.embeddedSecrets, secretEmbedded: true, clientSecretEmbedded: false },
     };
     const files = entries.map(e => ({ path: e.path, mode: Number.parseInt(e.mode, 8), body:
-      e.path === 'package.json' ? stableJson(manifest) : e.path === 'cordis.patch.yml' ? rewritten : e.content }));
+      e.path === 'package.json' ? stableJson(manifest) : e.path === patch.path ? rewritten : e.content }));
     files.push({ path: 'private-release.json', mode: 0o644, body: stableJson(metadata) });
     const sensitive = scanReleaseFiles(files, { publicOnly: false });
     if (sensitive.length) fail('ARTIFACT_SENSITIVE', sensitive.join('\n'));

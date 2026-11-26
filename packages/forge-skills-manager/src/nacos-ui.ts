@@ -157,7 +157,7 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
       const epoch = detailEpoch.current;
       setChecking(true);
       try {
-        const outcome = decodeOperationOutcome(await api(`/nacos/install-status?operationId=${encodeURIComponent(pendingDownload.id)}`), isInstallReceipt);
+        const outcome = decodeOperationOutcome(await api(`/nacos/install-status?operationId=${encodeURIComponent(pendingDownload.id)}`), (result): result is { name: string; root: string } => isInstallReceipt(result) && result.name === pendingDownload.target.name);
         if (outcome.state === "pending") {
           if (mounted.current && detailEpoch.current === epoch) setDetailError(t("nacos.pending"));
           return;
@@ -214,6 +214,10 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
       operation.current = controller; setInstalling(true); setDetailError(null);
       try {
         const result = await api("/nacos/install", { method: "POST", headers, body: JSON.stringify({ skillName: selected.name, version: selected.version, ...destinationPayload(target), operationId }), signal: controller.signal });
+        if (!isInstallReceipt(result) || result.name !== installedTarget.name) {
+          if (mounted.current) setDetailError(t("nacos.pending"));
+          return;
+        }
         if (!controller.signal.aborted) pendingDownloads.delete(downloadKey);
         if (!mounted.current) return;
         // An aborted transport may resolve after the Host commits. Never infer success.
