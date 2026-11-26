@@ -9,6 +9,8 @@
  */
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Spelled out rather than imported: a sandboxed page has no module loader.
+// window-chrome.test.mjs holds these to the shell's own names.
 const ACTION_CHANNEL = 'forge:window-action';
 const STATE_CHANNEL = 'forge:window-state';
 

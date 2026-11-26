@@ -326,6 +326,8 @@ export function startShell(electron, options) {
     window.webContents.on('will-redirect', stay);
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     // Where there is no title bar there is no bridge, and so nothing answers it.
+    // Answered once in the life of the process: the shell has the one window, and
+    // openWindow does not run a second time for it.
     if (chrome.frameless) {
       electron.ipcMain.handle(ACTION_CHANNEL, (event, action) => {
         // Only the title bar's own page may ask, and only for what it is given.
