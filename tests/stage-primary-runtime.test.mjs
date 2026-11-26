@@ -32,7 +32,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { LEDGER_SCHEMA, TARGETS, lockedArchives, lockProblems, readPinnedLock } from '../scripts/lib/primary-runtime.mjs';
-import { measure, parseArguments, smokePayload, stagePrimaryRuntime, verifyPinnedLock } from '../scripts/stage-primary-runtime.mjs';
+import { measure, parseArguments, smokePayload, stagePrimaryRuntime, tarPlatformOptions, verifyPinnedLock } from '../scripts/stage-primary-runtime.mjs';
 import { PRIMARY_RUNTIME_DIR } from '../services/forge-desktop/src/layout.mjs';
 import * as helpers from './fixtures/primary-runtime-helpers.mjs';
 import { writeZip } from './fixtures/zip-writer.mjs';
@@ -713,5 +713,16 @@ test('反向：流水线里运行时暂缺的任何一环都被识别（变异�
     assert.notEqual(variant, workflow, `${label}: the mutation must change the workflow`);
     const problems = workflowProblems(variant);
     assert.ok(problems.some((problem) => pattern.test(problem)), `${label}: ${problems.join('; ') || 'no problem reported'}`);
+  }
+});
+
+test('反向：Windows 上的 tar 必须带 --force-local——GNU tar 把 `C:` 盘符路径当远程主机（回归 v0.1.16 远端失败）', () => {
+  // The Windows job hands `tar` absolute paths like `D:\a\_temp\...`; without the option GNU tar
+  // tries to connect to a host named `C` instead of reading the archive, which is how v0.1.16 failed.
+  assert.deepEqual(tarPlatformOptions('win32'), ['--force-local']);
+  assert.deepEqual(tarPlatformOptions('darwin'), [], 'BSD tar knows no --force-local; the option must stay Windows-only');
+  assert.deepEqual(tarPlatformOptions('linux'), []);
+  if (process.platform !== 'win32') {
+    assert.deepEqual(tarPlatformOptions(), [], 'the default follows the host, so no unknown option reaches BSD tar');
   }
 });
