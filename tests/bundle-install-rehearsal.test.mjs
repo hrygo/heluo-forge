@@ -30,20 +30,21 @@ test('rehearsal composition checks retain brand and skills and reject missing or
   const checks = source.slice(start, end);
   const base = parsePatchLayer(readFileSync(join(here, '..', 'packages', 'forge-enterprise', 'cordis.patch.yml'), 'utf8'));
   const engineering = parsePatchLayer(readFileSync(join(here, '..', 'packages', 'forge-engineering', 'cordis.patch.yml'), 'utf8'));
-  const merged = [...new Map([...base.inserted, ...engineering.inserted].map((row) => [row.id, row])).values()];
+  const manager = parsePatchLayer(readFileSync(join(here, '..', 'packages', 'forge-skills-manager', 'cordis.patch.yml'), 'utf8'));
+  const merged = [...new Map([...base.inserted, ...engineering.inserted, ...manager.inserted].map((row) => [row.id, row])).values()];
   const evaluate = (baseRows, rows) => {
     const results = [];
     runInNewContext(checks, {
       label: 'test', patch: { inserted: rows }, resolved: rows,
-      enterprisePatch: { inserted: baseRows }, engineeringPatch: engineering,
+      enterprisePatch: { inserted: baseRows }, engineeringPatch: engineering, skillsManagerPatch: manager,
       record: (id, ok) => results.push(ok),
     });
     return results;
   };
   assert.deepEqual(evaluate(base.inserted, merged), [true, true]);
-  for (const id of ['heluo-brand', 'heluo-skills-manager']) {
-    assert.deepEqual(evaluate(base.inserted.filter((row) => row.id !== id), merged.filter((row) => row.id !== id)), [false, false]);
-  }
+  assert.deepEqual(evaluate(base.inserted.filter((row) => row.id !== 'heluo-brand'), merged.filter((row) => row.id !== 'heluo-brand')), [false, false]);
+  assert.equal(evaluate(base.inserted, merged.filter((row) => row.id !== 'heluo-skills-manager'))[0], false);
+  assert.equal(evaluate([...base.inserted, ...manager.inserted], merged)[1], false, 'manager must not re-enter enterprise patch');
   assert.equal(evaluate(base.inserted, [...merged.slice(0, -1), merged[0]])[0], false);
   assert.equal(evaluate([...base.inserted, engineering.inserted.find((row) => row.id === 'heluo-gitee')], merged)[1], false);
   assert.equal(evaluate(base.inserted, merged.slice(0, -1))[0], false);
@@ -58,12 +59,13 @@ for (const profile of profiles) {
     assert.match(output, /installed-patch-disables-official-rows/);
     assert.match(output, /installed-final-tarball-closure/);
     assert.match(output, /installed-iam-client-secret-provision/);
-    // 底座五行 + 研发独占四行，且 Skill 候选本身满足宿主校验、能按候选取正文、卸载后 provider 清空。
+    // 底座四行 + 研发独占四行 + 独立管理器一行。
     assert.match(output, /install-patch-mounts-base-and-overlay/);
     assert.match(output, /install-real-loader-instantiates-members/);
     assert.match(output, /installed-skill-candidate-shape/);
     assert.match(output, /installed-skill-get-by-candidate/);
-    assert.match(output, /installed-patch-policy-union/);
+    assert.match(output, /installed-patch-independent-manager-and-policy-union/);
+    assert.match(output, /install-independent-skills-manager-shares-iam-host/);
     assert.match(output, /install-loader-unload-clears-skill-providers/);
     assert.match(output, /legacy-sdd-member-retired/);
     assert.match(output, /upgrade-real-loader-instantiates-members/);

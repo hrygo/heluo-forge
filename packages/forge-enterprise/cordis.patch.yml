@@ -81,6 +81,3 @@
     # 经 ctx.provide('forge-brand') 暴露；宿主消费面待真实宿主联调（CORP-DSH-DESIGN-006 §12）。
     - id: heluo-brand
       name: '@heluo/forge-brand'
-    - id: heluo-skills-manager
-      name: '@heluo/forge-skills-manager'
-      config: {}

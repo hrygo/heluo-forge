@@ -53,9 +53,6 @@ importers:
       '@heluo/forge-policy':
         specifier: workspace:*
         version: link:../forge-policy
-      '@heluo/forge-skills-manager':
-        specifier: workspace:*
-        version: link:../forge-skills-manager
 
   packages/forge-experts:
     dependencies:

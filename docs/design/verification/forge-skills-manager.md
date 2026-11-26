@@ -4,7 +4,91 @@
 
 ## 当前实现
 
-本地技能管理与 Nacos 只读发现；开发联调在 profile 修改配置，装配本插件的正式制包必须提供地址、命名空间、只读账号与密码并写入包内配置；Nacos 专项规则集中于独立模块，预检与最终生成共用，说明随工具链交付，HTTP/HTTPS 均可，无 Nacos HTTP 开关。回执明确标记内嵌 Nacos 密码，安装器接受该限定例外；源码及中性公版无部署值，页面与错误不回显凭据。旧环境变量方式兼容开发使用，不实现 IAM 换票。凭据可由解包读取，仅内部交付；企业权限与目标平台仍待验。
+本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间、专用只读账号与密码，安装后无需填写连接配置；中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。本机 DSH 0.2.2-rc.2 三包离线安装、装配与 manager HTTP 启动通过；企业权限、完整三包装卸及目标平台仍待验。
+
+## 2026-11-26 企业发布输入与安装说明复核
+
+统一员工包的环境配置白名单与 `release-bundle` 工作流不映射 Nacos 字段；环境中遗留的 Nacos 值不进入企业私版配置、补丁或元数据。独立 Skill Manager 仍在自己的制包入口要求四项连接配置，历史组合制品保留既有必填、原值与凭据声明校验。企业安装器和交付器的实现未修改。README 人工调试步骤区分中性开发包与预配置交付包：交付包直接使用包内配置，旧 profile 覆盖项需先备份并移除；开发包按需配置，包内连接更新通过新版本重新制包。
+
+固定 Node 24.21.0 / pnpm 11.28.5，本机 Windows；全部验证使用合成配置，不读取企业凭据：
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| 根目录：`node --test tests/employee-skills-boundary.test.mjs`，先运行新用例再修复 | 修复前 1 通过、3 因原缺陷失败，约 0.29 秒；当前 enterprise 补丁在保留 Nacos 环境值时触发 `PUBLIC_TARBALL_INVALID`。修复后 4 项通过，约 0.23 秒；覆盖实际企业补丁制作、遗留或非法环境值隔离、工作流/白名单边界和独立包四项必填 |
+| 根目录：`node --test --test-name-pattern='configuration list\|every configuration\|historical\|release-bundle is admitted' tests/build-employee-package.test.mjs tests/check-repo.test.mjs` | 5 项通过，约 2.96 秒；检查器变异覆盖五项 Nacos Secret 映射均被拒绝，IAM 输入与历史组合包断言保留 |
+| 根目录：`node --test --test-reporter=spec tests/employee-skills-boundary.test.mjs tests/build-employee-package.test.mjs tests/check-repo.test.mjs tests/desktop-shell-contract.test.mjs tests/skills-manager-package.test.mjs tests/skills-manager-iam.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-skills-manager/test/independent-package.test.mjs` | 55 项中 48 通过、7 失败，无跳过，约 18.25 秒；失败为员工包/桌面契约中缺少 `zip` 及 Windows POSIX 文件权限检查 |
+| 隔离 `0a446a6` HEAD 源码：`node --test --test-reporter=tap tests/build-employee-package.test.mjs tests/desktop-shell-contract.test.mjs` | 约 3.88 秒；逐项核对失败名称与上述 7 项一致，未新增失败；仅补入当前未改动的 manager 生成文件用于加载测试，不修改基线源码 |
+| 根目录：`pnpm check` | 生成物、类型、文档、结构和技能检查通过，仍在 enterprise/IAM 的 bin 0644 制品审计失败，未进入全库单测；未单独计时，不记全库通过 |
+
+本轮未执行远端发布、完整员工 ZIP、企业服务或目标平台验收。最终文档、结构、版本与差异格式检查结果随交付报告记录。全部修改保留在工作区，未提交、未推送。
+
+## 2026-11-26 独立交付包预置 Nacos
+
+保留 2026-11-24 已确认的制包预置要求，独立制包入口为 `packages/forge-skills-manager/scripts/package.mjs`，包脚本为 `pack:private`。复用 Nacos 字段与运行文件校验、补丁注入、TGZ 编写及独立制品核验，不修改项目级安装器和交付器。设计、契约、包 README 与操作说明统一为正式包预置、profile 仅开发覆盖；根产品首页未加入开发操作。
+
+固定 Node 24.21.0、pnpm 11.28.5、npm 11.19.0，本机 Windows 验证如下：
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| `pnpm install --frozen-lockfile --ignore-scripts` | 通过，pnpm 报告约 0.8 秒；锁文件不需改动 |
+| `node --test --test-reporter=spec tests/skills-manager-package.test.mjs` 联合 enterprise 补丁/形状、manager 独立包及同 Host IAM 用例 | 14 项通过，无失败或跳过，约 16.2 秒；覆盖四项必填、HTTP、未知/无关字段拒绝与脱敏、实际 Windows ACL、CLI 预检不写最终目录、版本区分、已有输出拒绝、独立闭包和空缓存离线安装 |
+| 同一预置断言分别读取原中性构建与新私版 TGZ | 原构建缺少配置，断言按预期失败；新包通过。除 package.json、补丁及新增预置元数据外，原文件内容与模式保持一致；安装后使用实际 Nacos 客户端登录合成服务，无 enterprise/IAM 依赖及 profile 配置 |
+| `node --test --test-reporter=spec --test-name-pattern='Nacos\|nacos\|standalone toolchain includes' tests/private-bundle.test.mjs tests/private-bundle-boundary.test.mjs tests/release-public.test.mjs` | 10 项通过，约 0.6 秒；保留既有企业私版字段、嵌套运行文件和元数据语义 |
+| `node --test --test-reporter=spec packages/forge-skills-manager/test/nacos-credentials.test.mjs packages/forge-skills-manager/test/nacos-installation.test.mjs` | 13 项通过，约 0.8 秒；覆盖显式配置及环境兼容、配置撤销/轮换、缺项拒绝和下载资源保留 |
+| `node packages/forge-skills-manager/scripts/package.mjs --config <private-nacos.env> --version <private-semver> --output <new-output-dir>`，分别预检与写出 | 通过，含配置准备约 8.7 秒；实际候选版本 `0.1.0-corp.20261126.1`，32 文件，附 manifest、摘要及脱敏回执。专用文件由原本机配置提取四项 Nacos 字段，限制 Windows ACL；原文件保留 |
+| 仓库外 `verify-preset-host.mjs`：预置合成 Nacos 的实际 TGZ、全新 profile、空缓存离线安装及真实 DSH HTTP 访问 | 3 项通过，约 9.2 秒；实际 DSH 0.2.2-rc.2，无 profile Nacos 覆盖，故意提供错误环境凭据仍以包内值登录并列出技能；启动后未回写连接配置 |
+| `pnpm check` | 约 40.9 秒后仍在 enterprise/IAM 的 bin 0644 制品审计失败；生成物、类型、文档、仓库结构及技能检查通过，未进入全库单测，不记全库通过 |
+| `check-docs.mjs`、`check-repo.mjs`、`dsh-version.mjs check`、`git diff --check` | 通过，约 3.7 秒；实际预配置 TGZ 另经独立 manifest 校验通过 |
+
+本轮没有修改运行时代码和 `lib/`。候选包携带原本机专用 Nacos 配置；真实服务端只读权限、该账号对新纯净 Nacos 的可用性、企业联调与其他平台未验。合成服务通过只证明包内预置可实际装载使用。原纯净 DSH Web 与 Nacos 未安装本包、未初始化账号或导入技能。工作区修改未提交、未推送；检查器及完整工程检查结果以本轮最终交付记录为准。
+
+## 2026-11-26 本地完整制包演练
+
+从当前未提交工作区制作候选产物，源提交、工作区状态、构建日志、制品清单及摘要均保存在仓库外。企业交付 ZIP 由现有交付器生成，只包含企业插件与安装器；研发包、Skill Manager 分别提供独立 TGZ。项目级交付器、安装器及官方 DSH 载荷未修改，用户现用 profile 未更新。
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| 固定 Node 24.21.0、npm 11.19.0、pnpm 11.28.5：`pnpm install --frozen-lockfile --ignore-scripts`，随后 manager `build` / `verify` | 安装和构建通过；verify 149 项全部通过、无跳过，测试约 123.0 秒 |
+| `build-enterprise-bundle.mjs`：manager、engineering 两个独立入口；`verify-enterprise-bundle.mjs` 与摘要复核 | 均通过；manager 31 文件，无运行时依赖成员；engineering 制包约 4.9 秒，manager 制包及独立核验约 3.9 秒 |
+| enterprise 默认构建 | 约 5.2 秒后因 Windows 下 IAM bin 归档模式 0644 失败；原始制包路径仍受此限制 |
+| enterprise 本地 Windows 适配后构建、独立校验及 0644 反向控制 | 通过，约 3.9 秒；仅在仓库外构建进程中按 Git 的 100755 恢复 IAM bin 归档执行位，逐文件验证内容和其他模式不变。原有校验器仍拒绝 0644；132 文件，四个依赖成员，不包含 manager 文件或挂载 |
+| 现有 `release-delivery.mjs` 的 `buildDelivery`：预览、生成私版、独立校验、ZIP 与逐文件摘要核验 | 通过，生成约 1.1 秒，ZIP 22 文件与输出目录逐字节一致。Windows 使用本地 .NET ZIP 适配，交付器源码未改 |
+| manager `verify-host.mjs`，仅在仓库外适配为官方 Electron 执行 ASAR CLI | 11 项全部通过，约 25.3 秒；新 HOME/profile、空 npm 缓存离线安装，真实 DSH 0.2.2-rc.2 与合成 Nacos，覆盖 HTTP 准入、响应丢失回执、并发写入、重启、热禁用/启用及卸载保留数据 |
+| 三个实际 TGZ 的全新 profile 离线安装、配置 dump 与真实 DSH HTTP 启动 | 通过，约 14.3 秒；enterprise 单独安装不安装或挂载 manager；三包共存时 manager、IAM、研发 UI 各一行，manager 已认证接口可用 |
+| enterprise 补丁/包形状、manager 独立包、同 Host IAM 用例 | 10 项全部通过、无跳过，约 0.5 秒 |
+| 根目录 `pnpm check` | 约 39.9 秒后在 enterprise/IAM 的 0644 bin 制品审计失败；之前的生成物、类型、文档、仓库结构及技能检查通过。未进入全库单测，不记全库通过 |
+| `check-docs.mjs`、`check-repo.mjs`、`dsh-version.mjs check`、`git diff --check` | 通过，连同制品回执整理约 4.7 秒 |
+
+私版沿用本机既有的环回模拟 IAM/网关配置，未内嵌客户端密钥。配置原文件及其受限 Windows ACL 保留；仅在内存选取企业配置，Discovery 模式省略显式 issuer，Nacos 配置不进入企业包。模拟 Discovery 服务当前不可达，预览和回执明确记录未执行在线验证；此制品为本地离线联调候选，不是企业正式发布。真实企业登录、Nacos 权限、浏览器 GUI、根文件指定的目标 DSH 0.2.1-rc.3 及其他平台未验。三包启动不等于产品已消费 IAM subject，也不等于完整三包装卸演练。完整校验、文档及差异检查以本次交付报告为准；未提交、未推送或发布。
+
+## 2026-11-26 文档职责复核
+
+项目级文档保留产品功能与范围、插件职责与导航、开发检查、跨插件技能命名约束；构建安装步骤集中于包内说明，IAM 服务边界留在模块设计。移除尚未入库的专项方案及公共导航，企业交付方案、enterprise 设计和设置菜单设计不再重复描述 Skill Manager；历史制品兼容规则与测试事实保留于契约和本记录。根 README 修正旧的组合交付表述，保持产品说明职责。
+
+本轮只调整文档。固定 Node 24.21.0 / pnpm 11.28.5：`node scripts/check-docs.mjs`、`node scripts/check-repo.mjs` 与 `git diff --check` 通过，约 2.9 秒；`node --test --test-reporter=spec --test-name-pattern='standalone toolchain includes Nacos rules runtime and packaging instructions' tests/release-public.test.mjs` 及 enterprise 的 `bundle-patch`、`package-shape` 用例共 9 项通过，约 1.3 秒。`pnpm check` 约 37.1 秒后仍在 IAM/enterprise TGZ 的 bin 0644 审计处停止，之前的生成物、类型、文档、结构与技能检查通过；未进入全库单测，不记全库通过。补写记录后的文档及差异检查另作最终复核。
+
+## 2026-11-26 独立打包安装与 IAM 共存
+
+项目负责人确认安装与打包解耦：enterprise 的依赖、捆绑清单及补丁移除 Skill Manager，底座仅保留品牌、凭据、IAM、策略四个成员；Skill Manager 继续用自己的入口与补丁。项目级员工交付器和安装器未修改。操作见[独立制包安装说明](../../../packages/forge-skills-manager/docs/packaging.md)。根 README 的产品受众职责保持，设计、需求与 Nacos 当前安装路径同步。
+
+环境为 Windows、固定 Node 24.21.0 / pnpm 11.28.5，子进程 PATH 使用同一 Node，构建器记录 npm 11.19.0。所有安装使用仓库外临时目录与合成数据，未修改用户现用 profile。下表为本地离线证据，不表示真实企业 IAM、Nacos 或生产发布验收。
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| 根目录：`pnpm install --frozen-lockfile --ignore-scripts` | 通过，约 14.2 秒；锁文件无需重新解析 |
+| 根目录：`node packages/forge-skills-manager/scripts/build.mjs` | 通过，约 1.7 秒；生成物与既有内容一致 |
+| 包目录：`node --run verify` | 最终 149 项通过，无失败或跳过，约 118.0 秒；含生成物一致性、类型、管理/Nacos/UI 回归与结构变异。跨包 IAM 用例单列于根测试 |
+| 根目录：`node --test --test-reporter=spec packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-enterprise/test/package-shape.test.mjs packages/forge-enterprise/test/reflow.test.mjs packages/forge-skills-manager/test/independent-package.test.mjs tests/skills-manager-iam.test.mjs tests/bundle-install-rehearsal.test.mjs` | 22 项通过、2 项跳过，约 0.8 秒；缺少可被入口识别的 DSH 可执行文件，SDK/web 完整装卸演练未运行 |
+| 上述文件另加 `tests/bundle-build.test.mjs tests/bundle-closure.test.mjs tests/bundle-verify.test.mjs` | 98 通过、4 失败、2 跳过，约 26.1 秒；四项失败为两处 Windows symlink EPERM、执行位夹具、POSIX npm 路径夹具，与此前主线对照记录一致 |
+| 根目录：`node scripts/build-enterprise-bundle.mjs --entry @heluo/forge-skills-manager <new-output-dir>` | 通过，约 2.7 秒；31 个文件，无运行时依赖成员，附 manifest 与摘要 |
+| 根目录：`node scripts/verify-enterprise-bundle.mjs <skills-manager.tgz> --manifest <output-dir>/bundle-manifest.json --json` | 通过，约 0.3 秒；核验实际 TGZ、入口、包体闭包与 SHA-256 |
+| 空项目：`npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false <skills-manager.tgz>`，使用空缓存与空 npmrc，再导入包入口并检查清单及安装目录 | 通过，约 1.9 秒；入口可导入、自有补丁存在，未安装 enterprise 或 IAM |
+| 根目录：`pnpm check` | 约 40.6 秒后在制品审计失败；生成物、类型、文档、结构和技能检查通过，enterprise/IAM 的 IAM bin 在 TGZ 内为 0644。未进入全库单测，不记全库通过；主线同平台限制见 2026-11-25 记录 |
+| 根目录：`node scripts/check-docs.mjs`、`node scripts/check-repo.mjs`、`node scripts/dsh-version.mjs check` | 通过，合计约 3.9 秒；文档证据补写后的最终复核另随交付报告记录 |
+
+`tests/skills-manager-iam.test.mjs` 使用真实 Cordis、实际 manager 与 IAM 插件，并在 manager 作用域添加仅用于测试的动态注入回调；connection、skills、sessions 为合成 Host 服务。覆盖 IAM 缺失时 manager 启动、服务装载后取得同一实例、卸载后引用清除、替换后绑定新实例，以及卸载 manager 后 IAM 保留。未在产品代码添加空壳身份消费者，也未调用企业端点。IAM 诊断日志异步写入在 Windows 清理临时目录时可能短暂持锁，测试仅对临时目录删除使用有限重试。
+
+三包安装演练已更新为 enterprise、engineering、manager 分别构建安装，合并九行、只有策略共享；变异用例证明缺少 manager 或将其重新混入 enterprise 均会失败。完整真实 DSH 三包装卸、旧组合包迁移、浏览器界面、严格 SDK 兼容、真实企业权限与目标平台本轮未验；不将普通 npm 离线安装或 Cordis 服务绑定当作这些验收。
 
 ## 2026-11-25 PR 465 主线同步与 P2 修复
 

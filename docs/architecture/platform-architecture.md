@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-001 |
 | 文档名称 | 河洛企业级智能研发平台总体架构设计 |
-| 版本 | V3.9.1 |
+| 版本 | V3.9.2 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组 |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-25 |
+| 最后更新 | 2026-11-26 |
 | 门禁 | G0 |
 | 文档层级 | L1 总体架构；字段级契约与运行手册由子文档承担（见 §12） |
 
@@ -192,7 +192,7 @@ flowchart TB
   SMAN -->|"只读发现与下载"| NACOS
 ```
 
-> 图：客户端 / DSH 运行时 / 企业能力 / 企业平台四层；能力格是职责视图，不等于现有 Host 挂载行。企业语义由 Skill 提供，研发执行归 Teamflow。通用底座 `@heluo/forge-enterprise` 插入 credentials-keychain、policy、IAM、skills-manager 四个 Host；研发套件 `@heluo/forge-engineering` 作为独立预装包插入 `heluo-engineering-ui`、`heluo-issue-delivery-skill`、`forge-devops`、`forge-gitee` 与同目录 `heluo-policy`；SDD 已于 2026-11-03 退役，不是 Host。运行时中未逐一展开的 `authorization`、`settings`、`webServer` 见 §5。
+> 图：客户端 / DSH 运行时 / 企业能力 / 企业平台四层；能力格是职责视图，不等于现有 Host 挂载行。企业语义由 Skill 提供，研发执行归 Teamflow。通用底座 `@heluo/forge-enterprise` 插入 credentials-keychain、policy、IAM、brand 四个 Host；研发套件 `@heluo/forge-engineering` 作为独立预装包插入 `heluo-engineering-ui`、`heluo-issue-delivery-skill`、`forge-devops`、`forge-gitee` 与同目录 `heluo-policy`；SDD 已于 2026-11-03 退役，不是 Host。运行时中未逐一展开的 `authorization`、`settings`、`webServer` 见 §5。
 
 五条请求路径：
 
@@ -251,7 +251,8 @@ flowchart TB
 
 | 包 | 形态 | 职责 | 依赖的 seam |
 |---|---|---|---|
-| `@heluo/forge-enterprise` | umbrella bundle | 组合通用底座（`forge-credentials-keychain`、`forge-policy`、`forge-iam`、`forge-skills-manager`）并禁用官方账号/模型行 | `cordis.patch.yml` |
+| `@heluo/forge-enterprise` | umbrella bundle | 组合通用底座（`forge-credentials-keychain`、`forge-policy`、`forge-iam`、`forge-brand`）并禁用官方账号/模型行 | `cordis.patch.yml` |
+| `@heluo/forge-skills-manager` | Host + Client 插件 | 本地技能管理与 Nacos 只读发现、下载 | 宿主技能、会话与连接服务；自有 `cordis.patch.yml` |
 | `@heluo/forge-engineering` | umbrella bundle | 独立组合研发能力（`heluo-policy` 共享目录、`heluo-engineering-ui`、`heluo-issue-delivery-skill`、`forge-devops`、`forge-gitee`） | `cordis.patch.yml` |
 | `@heluo/forge-iam` | Host + Client 插件 | 企业 IAM 独占登录、刷新、登录态与网关凭据录入、账户 UI；官方行由组合包禁用；MCP token broker 仅按后续获批集成需要评估 | `credentials`、`webServer`、`settings`、`llm-pi-ai`（消费方）、`agentDefaultModel`；`authorization` 仅作后续通用凭据 UI 适配 |
 | `@heluo/forge-gateway` | 配置 bundle | 企业模型路由、白名单、重试策略 | `llm-pi-ai` |
@@ -262,7 +263,7 @@ flowchart TB
 | DSH 原生插件市场 | DSH 内置 | 读取 AIHUB 索引、展示插件并调用官方 manager 安装 | `pluginMarket`、`pluginManager` |
 | `@heluo/forge-brand` | 配置 bundle | 产品名、Logo、主题 token | `brand`、`client-ui-theme` |
 
-组合方式区分目标职责与实际交付：当前 umbrella patch 既有官方行 `disabled` 覆写，也以 `insert` 插入 credentials-keychain、policy、IAM、skills-manager 四个 Host；`@heluo/forge-sdd` 已于 2026-11-03 从依赖、bundledDependencies 与 bin 移除并删除包，不属于 Host。已安装 profile 与已发布制品不动；历史兼容语义见[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)。**可被关闭不等于关闭后仍保持依赖权限**：IAM、policy 和必要审计须在相关操作时满足安全依赖，缺失则拒绝；可执行性仍须按门禁取得负向验收证据。
+组合方式区分目标职责与实际交付：当前 enterprise patch 既有官方行 `disabled` 覆写，也以 `insert` 插入 credentials-keychain、policy、IAM、brand 四个 Host。`@heluo/forge-sdd` 已于 2026-11-03 从依赖、bundledDependencies 与 bin 移除并删除包，不属于 Host。已安装 profile 与已发布制品不动；历史兼容语义见[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)。**可被关闭不等于关闭后仍保持依赖权限**：IAM、policy 和必要审计须在相关操作时满足安全依赖，缺失则拒绝；可执行性仍须按门禁取得负向验收证据。
 
 ## 7. 领域设计
 

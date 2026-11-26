@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-018 |
 | 文档名称 | 企业设置菜单统一与 Token 收敛详细设计 |
-| 版本 | V2.2.2 |
+| 版本 | V2.2.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-24 |
+| 最后更新 | 2026-11-26 |
 | 门禁 | G2（双独立预装包拆分设计、仓内代码与离线契约/探针闭环已落地；目标环境专项证据待补充） |
 | 交付门禁 | 不改 DSH；双独立预装包拆分、四包源码、双定位 UI 契约与合成探针离线闭环；容器级汇总属后续项，企业网关/OS 凭据库/双端 GUI 与联邦换票未联调 |
 | 确认人 | 用户（项目唯一决策人） |
@@ -68,7 +68,7 @@ Heluo Forge 面向全体企业员工提供**智能个人助理**（日常对话�
 
 企业能力拆分为两个独立打包、独立发布、可自由单独或联合安装的 DSH 组合包，替代早期需要命令行 `--patch` 叠加的设计：
 
-1. **通用企业底座 `@heluo/forge-enterprise`（「企业账号与模型」）**：禁用七项官方行（`deepseek-account` / `ui-settings-account` / `llm-deepseek-account` / `llm-deepseek` / `llm-pi-ai` / `ui-settings-models` / `credentials`），仅挂载全员共用的基础组件：`heluo-credentials-keychain`、`heluo-policy`（共享 12 动作目录，无 `isolate`）、`heluo-iam` 与 `skills-manager`。包体内**零研发代码、零研发导出与零研发补丁行**，通用侧栏仅呈现 `-10 / 0 / 10 / 15 / 20`。
+1. **通用企业底座 `@heluo/forge-enterprise`（「企业账号与模型」）**：禁用七项官方行（`deepseek-account` / `ui-settings-account` / `llm-deepseek-account` / `llm-deepseek` / `llm-pi-ai` / `ui-settings-models` / `credentials`），挂载全员共用基础组件：`heluo-credentials-keychain`、`heluo-policy`（共享 12 动作目录，无 `isolate`）、`heluo-iam` 与 `heluo-brand`。包体内**零研发代码、零研发导出与零研发补丁行**，通用侧栏仅呈现 `-10 / 0 / 10 / 15 / 20`。
 2. **研发能力套件 `@heluo/forge-engineering`（「企业研发工具套件」）**：不禁用任何官方账号或模型行，挂载共享 `heluo-policy`（逐字一致的 12 动作目录，无 `isolate`）、`heluo-engineering-ui`（`forge-engineering` `order: 30` 纯展示容器）、`heluo-issue-delivery-skill`、`@heluo/forge-devops` 与 `@heluo/forge-gitee`。单独安装可直接使用；与 `@heluo/forge-enterprise` 同装时，两者共享 `id: heluo-policy` 自动折叠为唯一运行时实例。
 
 ### 3.3 `企业研发工具` 容器与内置凭据条目装配
@@ -195,7 +195,7 @@ flowchart TB
 |---|---|---|
 | `@heluo/forge-credentials-keychain` | 复用 `readRecord` / `modifyRecord` / `deleteRecord`；校验各扩展注册的 `storageRef` 符合 `^[A-Za-z_][A-Za-z0-9_]*$` | **不**改变既有 `ENTERPRISE_STATIC_KEY`；**不**向工具包开放原始 Vault 句柄 |
 | `@heluo/forge-iam` | **已实施（离线闭环）**：通用扩展凭据服务与 Broker；`GET /api/forge-iam/ext-credentials`、`PUT/DELETE /api/forge-iam/ext-credentials/<id>`；手动模型 `POST /api/forge-iam/models/manual`；三步通用引导及 `forge-iam`（`-10`）、`forge-models`（`10`）界面。账号面板不声明研发凭据子槽位；真实企业网关与工具侧系统凭据库联动的专项证据待补充 | **严禁在 `forge-iam` 源码或默认文案中硬编码 `DevOps`/`Gitee`/`dop`/`gh`**，且不得向第三方研发工具提供入口；遵守 `client-structure.test.mjs` 单点读取与参数预算 |
-| `@heluo/forge-enterprise` / `@heluo/forge-engineering` | **已实施（双独立预装包分层）**：通用底座 `@heluo/forge-enterprise` 保留 `cordis.patch.yml` 4 行（`keychain` + `policy` + `iam` + `skills-manager`）及官方 7 行禁用，零研发文件与导出；研发工具包 `@heluo/forge-engineering` 作为独立预装 bundle 提供 `heluo-engineering-ui`（`forge-engineering` `order: 30` + icon + `heluo.engineering.tab` + 折叠诊断区）、`heluo-issue-delivery-skill`、`skills/`、`switches/`、`forge-devops`、`forge-gitee` 与逐字同步的 `heluo-policy`；双包均有双语 `locale/*.json`、`docs/DETAIL*.md` 与 `icon.svg` | 容器内严禁写业务逻辑或持久化状态；维持两包间 `heluo-policy` 12 条目录（6 读 + 6 写）逐字同步；`@heluo/forge-enterprise` 严禁引入任何研发文件或依赖 |
+| `@heluo/forge-enterprise` / `@heluo/forge-engineering` | enterprise 装配凭据、策略、IAM、品牌四个底座成员并禁用官方七行；engineering 提供研发容器、Issue Skill、DevOps、Gitee 与共享策略 | 容器仅装配；两包的策略目录保持一致；enterprise 无研发文件、导出或依赖 |
 | `@heluo/forge-devops` | **已实施（离线闭环，外部未联调）**：`cli-runner.mjs` 收敛至 `ENV_ALLOWLIST`、扩展描述符 `HEL_EXT_DEVOPS_TOKEN` 与可选 Broker 接入、`client.js` 实现 `heluo.engineering.tab`（`order: 10`，就绪检查与配置面板合并为一个条目、四层明细收拢在工具就绪详情折叠区）与独立回退（保留既有 `devops` 60 + `devops-readiness` 29，不注册分区图标），并将 `DevopsCredentialItem`（`DEVOPS_API_KEY`）直接内置渲染在 `DevopsSection` 底部（无 IAM 时安静提示使用本机环境），不向 `企业账号` 注槽；用户可见文案不强调「只读」；**未联调**：真实 `dop` OS 凭据库联动与双端实机验证 | 保留 ADR-0012 单包可用性与单一 `?refresh=1` 契约 |
 | `@heluo/forge-gitee` | **已实施**：保留 `runtime-config.mjs` 中 `authEnv`/`persistentToken` 后端契约与检测、扩展描述符 `HEL_EXT_GITEE_TOKEN` 与可选 Broker 接入、`client.js` 实现 `heluo.engineering.tab`（`order: 20`）与独立回退（保留 `gitee` 50，不注册分区图标），彻底移除「高级」用户表单，并将 `GiteeCredentialItem`（`GITEE_TOKEN` + 条件式明文风险提示）直接内置渲染在 `GiteeSection` 底部，不向 `企业账号` 注槽 | 禁止绕过 `detectPersistentToken` 或改动用户本地 `~/.gitee-cli/config.json` |
 | 全仓门禁与文档 | `tests/ui-contract.test.mjs` 分别覆盖 **「通用助理 2 菜单（`企业账号` 零研发渗漏）」** 与 **「研发增强 3 菜单（含子 Tab 与内置 Token 卡）」** 两组契约；同步插件设计文档与 README | 不放松 P1–P9、补丁一致性与脱敏扫描测试 |

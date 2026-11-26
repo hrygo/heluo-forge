@@ -12,8 +12,8 @@
  * reaches the patch layer as such; confidential mode writes it as the plugin's
  * `allowInsecureClientAuthHttp`. `HELUO_IAM_CLIENT_SECRET` never enters the
  * patch layer: it travels beside the plugin tarball for first-run provisioning.
- * Nacos read-only credentials follow their separate contract: they enter the
- * skills-manager patch in internal deliveries, with no runtime environment setup.
+ * Nacos configuration belongs to the standalone Skill Manager package builder;
+ * the employee build neither maps nor reads those environment variables.
  */
 export const RELEASE_CONFIG_KEYS = Object.freeze([
   'HELUO_IAM_AUTH_MODE',
@@ -30,11 +30,6 @@ export const RELEASE_CONFIG_KEYS = Object.freeze([
   'HELUO_IAM_CLIENT_AUTH_METHOD',
   'HELUO_IAM_CLIENT_SECRET_REF',
   'HELUO_IAM_CLIENT_SECRET',
-  'HELUO_NACOS_SERVER_URL',
-  'HELUO_NACOS_NAMESPACE_ID',
-  'HELUO_NACOS_USERNAME',
-  'HELUO_NACOS_PASSWORD',
-  'HELUO_NACOS_TIMEOUT_MS',
 ]);
 
 /** The runner token: the only secret the workflow may map that is not configuration. */
@@ -58,10 +53,7 @@ export function configTextFromEnv(env) {
   for (const key of RELEASE_CONFIG_KEYS) {
     const value = env[key];
     if (typeof value !== 'string' || value === '') continue;
-    // The data parser removes one outer quote pair without interpreting escapes.
-    // Preserve credential whitespace and literal quotes exactly as configured.
-    const rendered = key === 'HELUO_NACOS_USERNAME' || key === 'HELUO_NACOS_PASSWORD' ? `"${value}"` : value;
-    lines.push(`${key}=${rendered}`);
+    lines.push(`${key}=${value}`);
   }
   return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
 }

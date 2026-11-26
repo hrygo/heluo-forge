@@ -16,7 +16,7 @@ assert.ok(cliArgument && tarballArgument, 'Usage: node scripts/verify-host.mjs <
 const cli = resolve(cliArgument), tarball = resolve(tarballArgument);
 const verdict = verifyBundle(tarball);
 assert.equal(verdict.ok, true, verdict.errors.join('\n'));
-assert.ok(['@heluo/forge-skills-manager', '@heluo/forge-enterprise'].includes(verdict.summary.entryName));
+assert.equal(verdict.summary.entryName, '@heluo/forge-skills-manager', 'use the independently built Skill Manager tarball');
 const directory = await fs.mkdtemp(join(tmpdir(), 'forge-skills-host-'));
 const home = join(directory, 'dsh'), user = join(directory, 'user'), workspace = join(directory, 'workspace');
 const profile = join(home, 'profiles', 'manager-probe');

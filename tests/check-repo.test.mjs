@@ -381,6 +381,11 @@ test('release-bundle is admitted under its narrow conditions and nothing else', 
     rejected(RELEASE_BUNDLE.replace('        env:\n          HELUO_IAM_CLIENT_ID', '        with:\n          HELUO_IAM_CLIENT_ID'), /through an env: block/);
     // A secret outside the configuration list has no documented injection target.
     rejected(RELEASE_BUNDLE.replace('secrets.HELUO_IAM_CLIENT_SECRET }}', 'secrets.HELUO_GITEE_HOST }}'), /outside the configuration list/);
+    // Skill Manager has its own package configuration, outside employee jobs.
+    for (const key of ['SERVER_URL', 'NAMESPACE_ID', 'USERNAME', 'PASSWORD', 'TIMEOUT_MS']) {
+      rejected(RELEASE_BUNDLE.replace('HELUO_IAM_CLIENT_SECRET: ${{ secrets.HELUO_IAM_CLIENT_SECRET }}',
+        `HELUO_NACOS_${key}: \${{ secrets.HELUO_NACOS_${key} }}`), /outside the configuration list/);
+    }
     // The exception is bound to the one file: the same text under another name is not admitted.
     rmSync(join(root, path));
     write(root, '.github/workflows/other-release.yml', RELEASE_BUNDLE);

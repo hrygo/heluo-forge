@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-SKILLS-001 |
 | 文档名称 | Nacos 公共技能库契约 |
-| 版本 | V1.2.3 |
+| 版本 | V1.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-25 |
+| 最后更新 | 2026-11-26 |
 | 门禁 | 本地合成与独立实例验证；企业环境未验 |
 
 > 编制依据：本仓库的只读 Nacos 客户端、合成用例与本机历史实验；企业部署尚未联调。
@@ -35,6 +35,8 @@ Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理�
 
 ### 1.1 正式制包输入
 
+Skill Manager 正式交付由包内 `scripts/package.mjs` 读取下列配置，预置到独立 TGZ 的 `heluo-skills-manager` 补丁行；员工安装时无需填写连接信息。该入口仅接收表中的 Nacos 字段，不要求 enterprise 或 IAM 配置。中性源码构建不要求部署值，用于开发和构建核验。
+
 `make-private-bundle.mjs` 与 `release-delivery.mjs` 对装配 `heluo-skills-manager` 的企业公版要求下列四项配置；测试环境私版与正式环境私版采用同一判据。未装配技能管理器的企业包无需提供 Nacos 字段，回执不声明内嵌 Nacos 密码；向该类包提供 Nacos 字段时拒绝，不静默丢弃。中性企业公版的源码构建不要求部署值。
 
 | 专用配置文件字段 | 写入运行字段 | 校验与默认 |
@@ -51,13 +53,13 @@ Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理�
 
 私版元数据的 `config.embeddedSecrets` 仅列包内 Nacos 密码（`["nacos.password"]` 或 `[]`）；`config.clientSecretEmbedded` 单独声明是否采用现有 IAM 客户端密钥独立文件交付，`config.secretEmbedded` 是两者的合计布尔值。Nacos 密码不触发 IAM 绑定文件读取；两者同时交付时，安装器分别核验 Nacos 必填字段和 IAM 绑定文件。旧版仅以 `secretEmbedded: true` 声明的 IAM 交付继续要求有效绑定文件。IAM 客户端密钥不写入插件补丁或元数据，仍按其独立流程预置到目标凭据库。
 
-Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `scripts/lib/nacos-release.mjs`；两个制包入口及库调用共用此模块。预检在输出计划和请求摘要确认前检查公版中的 Nacos 运行文件与配套工具一致，仅允许 LF/CRLF 差异；缺失或不匹配报 `NACOS_RUNTIME_MISMATCH`，不输出已配置成功计划。正式写包前重复核验，不信任之前的预检状态。独立工具链附带 `packages/forge-skills-manager/docs/packaging.md`，不要求制包人员取得源码或修改公共 Skill。
+Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `scripts/lib/nacos-release.mjs`；独立制包及既有企业私版入口共用此模块。独立包核对根目录的 `lib/nacos.js`，历史组合包核对嵌套成员的同一文件，只允许 LF/CRLF 差异；缺失或不匹配报 `NACOS_RUNTIME_MISMATCH`。独立制包在写出前完成字段、包体和敏感文件校验，并生成 manifest、SHA-256 及只含字段名的预置回执。`--dry-run` 仅预检、不生成最终输出。既有企业私版工具的摘要确认语义保持。制包步骤见[包内说明](../../packages/forge-skills-manager/docs/packaging.md)。
 
 ### 1.2 开发配置与生效方式
 
-开发联调使用完整企业组合包，在隔离 profile 的 `cordis.patch.yml` 修改 `nacos` 字段并重启 Host，无需重新编译或打包。旧开发环境可继续使用 `usernameEnv`、`passwordEnv`；只要显式提供了 `username` 或 `password` 任一字段，就必须提供完整账号密码，不回落环境变量。缺失、空白或类型不符时返回 `error.nacos.config`（503），不发送远端请求，也不复用缓存令牌。本地管理仍可使用。凭据变化后重新登录，令牌仅缓存于内存。插件不自行加载 `.env`，也不实现 IAM 换票。
+安装后在目标 profile 的 `cordis.patch.yml` 配置 `heluo-skills-manager.config.nacos` 并重启 Host，无需重新编译或打包。旧开发环境可继续使用 `usernameEnv`、`passwordEnv`；只要显式提供了 `username` 或 `password` 任一字段，就必须提供完整账号密码，不回落环境变量。缺失、空白或类型不符时返回 `error.nacos.config`（503），不发送远端请求，也不复用缓存令牌。本地管理仍可使用。凭据变化后重新登录，令牌仅缓存于内存。插件不自行加载 `.env`，也不实现 IAM 换票。
 
-正式包更新连接或账号密码时，修改专用配置并使用新的私版版本重新预检、确认、安装和重启，无需重编译源码。旧 profile 覆盖项须备份后移除，避免覆盖包内预置。员工不提供 Nacos 环境变量，安装器不读取或注入制包 `.env`；只有开发兼容路径可在未配置显式账号密码时读取运行环境。完整命令见[随包打包说明](../../packages/forge-skills-manager/docs/packaging.md)。
+正式交付 TGZ 已包含部署值；更新包内配置须使用新私版版本重新预检和安装，并备份、移除会遮盖预置值的旧 profile 覆盖项。profile 直配仅作为开发联调覆盖。安装时不读取或注入制包 `.env`。完整命令见[随包打包说明](../../packages/forge-skills-manager/docs/packaging.md)。
 
 ### 1.3 凭据与交付边界
 

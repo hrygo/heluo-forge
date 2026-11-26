@@ -48,7 +48,7 @@ export function assertNacosReleaseConfig(config, fail) {
 }
 
 /** No runtime code from the downloaded artifact is executed by the maker. */
-export function checkNacosRelease(entries, config, { installed, fail, toolRoot } = {}) {
+export function checkNacosRelease(entries, config, { installed, fail, toolRoot, runtimePath = 'node_modules/@heluo/forge-skills-manager/lib/nacos.js' } = {}) {
   if (!installed) {
     if (Object.keys(config.nacos ?? {}).length > 0) {
       fail('PUBLIC_TARBALL_INVALID', 'public tarball does not declare the Skill Manager insert row required by Nacos configuration');
@@ -56,7 +56,7 @@ export function checkNacosRelease(entries, config, { installed, fail, toolRoot }
     return { nacosConfigured: false, embeddedSecrets: [], secretEmbedded: false };
   }
   assertNacosReleaseConfig(config, fail);
-  const runtime = entries.find(entry => entry.path === 'node_modules/@heluo/forge-skills-manager/lib/nacos.js');
+  const runtime = entries.find(entry => entry.path === runtimePath);
   const path = toolRoot === undefined ? new URL(`../../${NACOS_RUNTIME_FILE}`, import.meta.url) : join(toolRoot, NACOS_RUNTIME_FILE);
   let expected;
   try { expected = readFileSync(path); }

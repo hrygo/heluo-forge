@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "pack:private": "node scripts/package.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test",
     "test:compat": "node scripts/verify-runtime.mjs",

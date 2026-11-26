@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.10.3 |
+| 版本 | V1.10.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -15,7 +15,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-11-26 |
 | 门禁 | G2 |
-| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）、`forge-iam`、`forge-brand` 与 `forge-skills-manager`；研发工具拆至独立包 `@heluo/forge-engineering`；内置运行时的两行按 `DSH_PRIMARY_RUNTIME` 条件启用） |
+| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）、`forge-iam` 与 `forge-brand`；研发工具拆至独立包 `@heluo/forge-engineering`；内置运行时的两行按 `DSH_PRIMARY_RUNTIME` 条件启用） |
 
 > 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用官方行后 shell/onboarding 是否完整。
 >
@@ -25,7 +25,7 @@
 
 `@heluo/forge-enterprise`（**企业账号与模型**）作为面向全体企业员工的通用底座组合包，只回答一个问题：企业登录、凭证安全存储与模型访问由哪些基础能力、在什么前提下一起出现。
 
-边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 12 动作默认目录，不使用 `isolate`）、`@heluo/forge-iam`、`@heluo/forge-brand` 与 `@heluo/forge-skills-manager`，不实现其中任何一个；包体内不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee 依赖——全部研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
+边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 12 动作默认目录，不使用 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-brand`，不实现其中任何一个；不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee。研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
 
 O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key、官方账户 UI、通用模型配置与自由模型设置六行**，以及官方明文凭据提供方一行，使企业 IAM 成为唯一登录，并让 `DEEPSEEK_API_KEY` 与自填网关都不构成旁路。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
 
@@ -111,9 +111,6 @@ insert:
     name: '@heluo/forge-iam'                     # 已实现，§5.1.2 已挂
   - id: heluo-brand
     name: '@heluo/forge-brand'
-  - id: heluo-skills-manager
-    name: '@heluo/forge-skills-manager'
-    config: {}
 ```
 
 研发扩展由独立的 `@heluo/forge-engineering` 安装；`forge-gateway` 不作为独立运行时行挂载。市场采用 DSH 原生索引源与 AIHUB 索引，不插入历史市场插件行。
@@ -146,7 +143,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用企业底座补丁**——禁用七个官方账号、模型与明文凭据行，`insert:` 段插入凭据加密存储、策略门禁、企业 IAM、品牌令牌与技能管理五插件，与研发插件零耦合。研发相关条目（研发设置容器、Issue 交付 Skill、DevOps、Gitee）全部独立收口到 `@heluo/forge-engineering` 组合包（见[企业研发工具套件详细设计](forge-engineering.md)）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
+[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用企业底座补丁**——禁用七个官方账号、模型与明文凭据行，`insert:` 段插入凭据加密存储、策略门禁、企业 IAM 与品牌令牌四个插件。研发相关条目（研发设置容器、Issue 交付 Skill、DevOps、Gitee）全部独立收口到 `@heluo/forge-engineering` 组合包（见[企业研发工具套件详细设计](forge-engineering.md)）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -159,7 +156,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-通用底座的 `insert:` 段挂五个面向全体员工的 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 12 动作目录、无 `isolate`）、`@heluo/forge-iam`、`@heluo/forge-brand` 与 `@heluo/forge-skills-manager`。技能管理器以固定行 `heluo-skills-manager` 单次挂载、独立配置和停用；默认未配置 Nacos 时仍提供本地管理，配置与凭据边界见[技能管理器设计](forge-skills-manager.md)。
+通用底座的 `insert:` 段挂四个 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 12 动作目录、无 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-brand`。
 
 **双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装并由宿主装配通用企业登录与模型管理；实际使用仍受配置、存储和宿主能力门禁约束。本包不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
 
@@ -174,7 +171,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 | 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
-**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证，本机也没有企业 IAM 端点。当前凭据包使用值级加密 SQLite 与文件 keyring，存储不可用时拒绝访问，不依赖 OS Keychain 后端。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径（分层后）**：底座 `insert:` 五行（凭据、策略、IAM、品牌、技能管理），独立研发补丁插入五行（共享策略、容器、Skill、DevOps、Gitee）；dump 级断言以 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练的 `install-patch-mounts-base-and-overlay` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
+**边界**：这是**配置组合（dump）级**历史证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证，本机也没有企业 IAM 端点。当前凭据包使用值级加密 SQLite 与文件 keyring，存储不可用时拒绝访问，不依赖 OS Keychain 后端。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径**：enterprise 底座 `insert:` 四行（凭据、策略、IAM、品牌），研发补丁插入五行（共享策略、容器、Skill、DevOps、Gitee）；当前断言见 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练。
 
 #### 5.1.3 企业模型配置入口收敛（2026-11-04）
 
@@ -463,12 +460,12 @@ flowchart TD
 
 ## 实现与验证记录
 
-**实现边界**：企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与凭据/策略/IAM 三插件挂载；内置运行时的两行条件启用（`RUNTIME_ROWS`）；2 个源文件。两行条件启用的到达性证据见[验证记录](../verification/desktop-primary-runtime.md)。
+**实现边界**：企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与品牌/凭据/策略/IAM 四插件挂载；内置运行时的两行条件启用（`RUNTIME_ROWS`）；2 个源文件。两行条件启用的到达性证据见[验证记录](../verification/desktop-primary-runtime.md)。
 
 **验证结果与限制**：`node --test packages/forge-enterprise/test/*.test.mjs`、`tests/bundle-build`/`bundle-closure` 离线闭环；真机安装/升级/回滚/卸载与 `--from-default-profile` 历史实测（2026-10-24 五行口径）；七行扩行后仅由单测覆盖，未复测 DSH 组合层。**未验**：界面功能与角色 preset 粒度；`desktop` profile 在本机不可 dump，按 NOT RUN 记账。
 
 ## 准入核对要点
 
-**设计与接入边界**：通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行，按 id 覆盖内置运行时的两行（条件启用，§5.1.4），并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测。
+**设计与接入边界**：通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行，按 id 覆盖内置运行时的两行（条件启用，§5.1.4），并插入 `forge-brand`、`forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测。
 
 **准入关注点**：版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile。

@@ -79,7 +79,7 @@ export function sourceRepo(t) {
   return { root, commit: git('rev-parse', 'HEAD') };
 }
 
-function neutralPatch({ skills = true } = {}) {
+function neutralPatch({ skills = false } = {}) {
   return [
     '# fixture composition',
     '- insert:',
@@ -98,13 +98,13 @@ function neutralPatch({ skills = true } = {}) {
 }
 
 /** The tarball a real public build produces for `name`: neutral, verifier-matched, closable. */
-export function publicTarball(name = '@heluo/forge-enterprise') {
+export function publicTarball(name = '@heluo/forge-enterprise', { skills = false } = {}) {
   const manifest = { name, version: '0.1.0', license: 'Apache-2.0', dsh: { bundle: { patch: './cordis.patch.yml' } } };
   return writeBundleTarball([
     { path: 'package.json', body: `${JSON.stringify(manifest, null, 2)}\n` },
-    { path: 'cordis.patch.yml', body: neutralPatch({ skills: name === '@heluo/forge-enterprise' }) },
+    { path: 'cordis.patch.yml', body: neutralPatch({ skills }) },
     { path: 'README.md', body: '# fixture\n' },
-    ...(name === '@heluo/forge-enterprise' ? [{
+    ...(skills ? [{
       path: 'node_modules/@heluo/forge-skills-manager/lib/nacos.js',
       body: readFileSync(join(TOOL_ROOT, 'packages/forge-skills-manager/lib/nacos.js')),
     }] : []),

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.9.2 |
+| 版本 | V0.9.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -75,17 +75,15 @@ flowchart LR
 | 输出信息 | 企业包版本、输出目录、目标能力 | 必填项缺失或目标文件已存在时停止 |
 | IAM 企业配置 | 企业 `clientId`、OIDC Discovery 地址（优先，`issuer` 由文档提供）或显式端点模式下的 `issuer` 与授权/token/JWKS 端点、回调路径、端口及地址族；`authMode=confidential`、与登记的 `token_endpoint_auth_method` 一致的 `clientAuthMethod`（`client_secret_basic` 或 `client_secret_post`）及非秘密 `clientSecretRef` | 缺失必填字段、同时在 Discovery URL 之外再固定 `issuer`，或显式端点模式缺少 `issuer` 时停止；原始密钥仅在显式选择 `--embed-client-secret` 时按独立文件流程交付，不写入插件补丁 |
 | 网关企业配置 | 企业网关地址及所启用能力需要的默认配置 | 能力启用而配置缺失时停止 |
-| Nacos 企业配置 | 技能管理器的企业统一连接及专用只读凭据 | 装配该插件时制包必填，包内可读取，仅内部交付；字段见技能库契约 |
 | 其他企业配置 | 企业统一且与个人无关的已启用能力配置 | 按能力检查，未启用能力不强加字段 |
 | 个人数据 | 个人 Key、账号、token、密码 | 不作为企业配置或私版输入 |
 
-真实企业配置保存在仓库根目录被 Git 忽略且未跟踪的 `.env` 中，可由制作人员复用；独立工具链没有 Git 仓库时，配置文件保存在不受版本管理的位置。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。Nacos 专用只读密码按技能库契约进入插件补丁；IAM 客户端密钥仅在显式选择独立文件交付时接受，不进入插件补丁。个人凭据与访问令牌不作为配置输入。制作器复用 IAM 运行时配置校验，并核对配套工具链与公版内校验模块；不匹配时拒绝制作。Discovery 预检的结果与错误不回显企业地址；预览和回执仍包含本地路径，分享前须脱敏。静态校验不证明企业登录、网关或撤销协议可用。
+真实企业配置保存在仓库根目录被 Git 忽略且未跟踪的 `.env` 中，可由制作人员复用；独立工具链没有 Git 仓库时，配置文件保存在不受版本管理的位置。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。IAM 客户端密钥仅在显式选择独立文件交付时接受，不进入插件补丁。个人凭据与访问令牌不作为配置输入。制作器复用 IAM 运行时配置校验，并核对配套工具链与公版内校验模块；不匹配时拒绝制作。Discovery 预检的结果与错误不回显企业地址；预览和回执仍包含本地路径，分享前须脱敏。静态校验不证明企业登录、网关或撤销协议可用。
 
 使用 OIDC Discovery 时私版不固定 `issuer`：运行时采用 Discovery 文档声明的 `issuer`，并以 ID Token 的 `iss` 与其精确比对；制作器校验文档包含合法 issuer 及授权、token、JWKS 端点。显式端点模式不使用 Discovery，必须在私版中提供 `issuer`。同一份配置同时给出 `discoveryUrl` 与 `issuer` 会被制作器拒绝：企业环境已验证，两者不一致时固定 issuer 会使登录无法跳转，Discovery 已是该模式的唯一 issuer 来源。运行时在冷启动恢复已保存会话前解析该文档；文档不可达或声明的 issuer 与记录不一致时不恢复身份并保留记录，需重新启动或重新登录后重试。生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。企业 IAM 登记、S256 和回调行为均须在企业环境验证。
 
-装配技能管理器的正式私版预置企业技能库连接和专用只读凭据；开发联调使用隔离 profile 配置。未装配该插件的企业包不要求 Nacos 配置。具体字段、预检、更新及凭据边界由[Nacos 契约](../contracts/nacos-skills.md#1-连接)维护，操作见[插件打包说明](../../packages/forge-skills-manager/docs/packaging.md)。包内配置可被安装用户读取，不提供配置加密。
 
-Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、客户端认证模式、方法和非秘密引用、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。插件专项说明随独立工具链交付，公共 Skill 与 SOP 保持原样。`release-delivery` 从权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；完整 `.env` 不进入交付物，Nacos 专用只读密码写入私版补丁，IAM 客户端密钥沿用显式选择的独立文件预置流程。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。机密模式下该设置写入 Host 的 `allowInsecureClientAuthHttp: true`。Host 默认要求携带客户端密钥的 POST 使用 HTTPS，并按运行时选中的端点逐次检查。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用）。随后以本次交付版本为准收敛：profile 内没有企业插件时只执行一次 `dsh plugin add`；已装版本与交付版本不同时先 `dsh plugin remove` 卸载旧版本，成功后再 `dsh plugin add`；已装版本与交付版本相同则不再写入。卸载失败即停止，不执行安装、也不留下半程状态。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。包含企业配置的暂存文件与私版插件置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
+Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、客户端认证模式、方法和非秘密引用、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。插件专项说明随独立工具链交付，公共 Skill 与 SOP 保持原样。`release-delivery` 从权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；完整 `.env` 不进入交付物。IAM 客户端密钥沿用显式选择的独立文件预置流程。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。机密模式下该设置写入 Host 的 `allowInsecureClientAuthHttp: true`。Host 默认要求携带客户端密钥的 POST 使用 HTTPS，并按运行时选中的端点逐次检查。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用）。随后以本次交付版本为准收敛：profile 内没有企业插件时只执行一次 `dsh plugin add`；已装版本与交付版本不同时先 `dsh plugin remove` 卸载旧版本，成功后再 `dsh plugin add`；已装版本与交付版本相同则不再写入。卸载失败即停止，不执行安装、也不留下半程状态。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。包含企业配置的暂存文件与私版插件置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
 
 ## 4. 公版构建与本地二次制作
 

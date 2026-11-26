@@ -6,26 +6,26 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-027 |
 | 文档名称 | 企业技能管理器详细设计 |
-| 版本 | V1.0.5 |
+| 版本 | V1.1.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
 | 需求确认 | 当前用户（项目负责人），2026-11-24；开发联调可直接修改 profile，正式制包必须预置 Nacos 地址、命名空间、只读账号和密码，不保留 Nacos HTTP 开关；既有技能详情、下载状态与双入口需求保持 |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-25 |
+| 最后更新 | 2026-11-26 |
 | 门禁 | 本地实现验证；企业环境与三目标联调待验 |
 | 模块状态 | 可用（本地实现与离线制品；企业环境待验） |
 
 > 编制依据：本仓库源码、离线回归与本机隔离安装取证；目标宿主由根 `.dsh-version` 管理。
 >
-> 关联文档：[工程开发约定](../../engineering/development-conventions.md)、[Nacos 契约](../../contracts/nacos-skills.md)、[企业组合设计](forge-enterprise.md)。
+> 关联文档：[工程开发约定](../../engineering/development-conventions.md)、[Nacos 契约](../../contracts/nacos-skills.md)。
 
 ## 1. 定位与准入
 
-`@heluo/forge-skills-manager` 是独立 Host + Client 插件，由企业组合包装配；界面名称为 技能管理。范围以[需求基线 §2](../../requirements/requirements-baseline.md#2-范围边界唯一真源)为准。源码与构建产物在本工作区维护，安装制品不依赖外部源码仓库。
+`@heluo/forge-skills-manager` 是 DSH Host + Client 插件，界面名称为「技能管理」，提供本地技能管理与 Nacos 公共库发现、下载。范围以[需求基线 §2](../../requirements/requirements-baseline.md#2-范围边界唯一真源)为准。源码与构建产物在本工作区维护。
 
-装载使用宿主的 `connection.fetch`、`skills.registerProvider`、会话及浏览器 slots/locale/primitives 接口；目标版本从根 `.dsh-version` 读取。本机历史记录不证明当前企业组合兼容。准入按[插件高阶规范](../../engineering/dsh-plugin-conventions.md)逐项建立可失败的判据，组合安装另以实际制品验证。
+装载使用宿主的 `connection.fetch`、`skills.registerProvider`、会话及浏览器 slots/locale/primitives 接口；目标版本从根 `.dsh-version` 读取。插件用自己的包和 `cordis.patch.yml` 装配。需要身份能力时，可通过 Cordis 动态服务注入使用同一 Host 已安装的 `iam` 服务；当前没有具体 IAM 消费功能，IAM 不属于必需注入或 npm 运行时依赖。准入按[插件高阶规范](../../engineering/dsh-plugin-conventions.md)建立可失败的判据，验证结果见[模块记录](../verification/forge-skills-manager.md)。
 
 插件制品当前为 `0.1.0`，阶段为预览；`engines.dsh` 声明安装下限，精确 SDK 与兼容验收基线由 `.dsh-version` 管理，不推定范围内全部版本可用。文档版本独立于插件与宿主版本。同版本制品用 SHA-256、包体 manifest、源提交及工作区是否含未提交修改追溯，不仅以文件名或版本号判断。源码构建、制品构建、严格兼容和实际宿主试用的结果分别记账。
 
@@ -45,17 +45,17 @@ HTTP 生命周期为运行、关闭中、已关闭。关闭时停止新任务准
 
 全局 DSH、全局公共 Agent 和有效已登记项目的 DSH 来源支持受校验的写操作；Codex、Claude Code 等其他 Agent 源文件只读，本插件策略启停不修改对方文件或对方 Agent 的调用规则。自定义来源只有在配置与安全判定均允许时才可写。Nacos 下载仅写全局 DSH 或已登记项目，不写其他 Agent 目录。默认来源发现使用 Host 用户主目录和相应 `DSH_*_HOME` 配置，单独修改 `DSH_HOME` 不隔离其他来源。
 
-`forge-enterprise` 随包交付技能管理器，独立研发套件 `forge-engineering` 拥有正式企业流程技能。管理器在自己的创建、导入及 Host provider 路径拒绝 `enterprise-*` 个人候选，不修改正式技能的调用策略，既有用户文件保留。正式流程沿用宿主随包技能的 `rank: 600`；原生个人及项目 provider 的同名候选选择遵循宿主规则，管理器不提供宿主全入口的同名覆盖防护或同权插件隔离。
+`forge-engineering` 拥有正式企业流程技能。管理器在自己的创建、导入及 Host provider 路径拒绝 `enterprise-*` 个人候选；不修改正式技能的调用策略，既有用户文件保留。正式流程沿用宿主随包技能的 `rank: 600`；原生个人及项目 provider 的同名候选选择遵循宿主规则，管理器不提供宿主全入口的同名覆盖防护或同权插件隔离。
 
 ## 3. 配置与数据
 
-开发联调包包含企业 IAM 与技能管理器，在隔离 profile 的 `cordis.patch.yml` 修改 Nacos 配置并重启 Host，无需重新制包。装配本插件的正式交付使用私版制作器，强制提供 Nacos 地址、命名空间、只读账号和密码，写入 bundle 内声明 `heluo-skills-manager` 的补丁层；超时可选。HTTP 与 HTTPS 均接受，不保留 Nacos HTTP 开关。公共源码与中性公版不包含部署值。员工 profile 不重复保存这些字段；已有覆盖项由部署人员备份后移除。
+正式交付由本包的 `scripts/package.mjs` 在制包时将 Nacos 地址、命名空间、专用只读账号和密码写入独立 TGZ 的 `cordis.patch.yml`，安装后由本包补丁直接提供配置，不要求员工修改 profile。源码构建的中性 TGZ 不含部署值，仅用于开发与构建核验。开发联调可通过 profile 的 `heluo-skills-manager.config.nacos` 覆盖；未配置时本地管理仍可使用。字段及错误语义见[Nacos 契约](../../contracts/nacos-skills.md)。
 
-DSH「打开配置文件」显示当前 profile 的补丁，不显示 bundle 内部补丁。技能管理不注册 Nacos 配置表单，也不向浏览器返回地址、账号、密码或凭据变量名；技能命名空间仍可展示。包内账号密码可由安装目录或解包读取，不提供本机文件保密或配置加密。安装器仅接受明确声明内嵌 `nacos.password` 的私版回执，不放行其他秘密类别。
+制包入口只接受 Nacos 专用配置，不要求 enterprise、IAM 配置或企业交付器。复用现有 Nacos 字段校验、补丁注入、归档与独立校验器；配置按数据解析，四项缺失、未知键或配置权限过宽时在写入产物前拒绝。POSIX 要求配置权限 0600，Windows 要求禁用继承且 ACL 仅授权当前用户、SYSTEM 和 Administrators。输出必须为仓库外的新目录，先在临时目录构建与校验，全部通过后发布。交付版本须区别于中性包；回执只列字段名、摘要与 `nacos.password` 已内嵌声明，不含原配置文件、密码或令牌。企业安装器与交付器不负责本包。
 
-Nacos 从宿主配置读取账号密码。显式配置任一凭据字段后必须提供完整账号密码，不回落旧环境变量；旧开发环境变量方式仅在未提供显式凭据时兼容。缺失、空白或类型不符时拒绝访问并清除缓存令牌，本地管理仍可用。每次远端操作核对凭据指纹，变化后重新登录；令牌仅缓存于内存。插件不自行加载 `.env`，不接入 IAM 换票。专项制包规则集中在 `scripts/lib/nacos-release.mjs`；未装配本插件的企业包不受 Nacos 必填约束，提供无消费方的 Nacos 字段则拒绝。两个制包入口在摘要确认前核验配置及配套运行文件，写包前再次核验；独立工具链附带本插件打包说明，公共 Skill 保持原样。字段及错误语义见[Nacos 契约](../../contracts/nacos-skills.md)。
+DSH「打开配置文件」显示 profile 补丁；插件不提供 Nacos 配置表单，也不向浏览器返回地址、账号、密码或凭据变量名，技能命名空间仍可展示。本机配置可由同账户用户读取，不提供配置加密。
 
-项目负责人于 2026-11-24 确认仅 Nacos 专用只读账号密码可预置到内部正式交付包，并移除 Nacos HTTP 开关；该确认作为 P8 的限定例外，不放宽其他插件凭据规则，不代表真实企业接口已验收。凭据不进入源码、中性公版、日志、视图或错误体；含凭据的私版仅内部交付。页面不开放命名空间配置或切换，不接入个人 ACL，不把 IAM 令牌发送给 Nacos。
+Nacos 使用专用只读账号，显式配置任一凭据字段后必须提供完整账号密码，不回落旧环境变量。缺失、空白或类型不符时拒绝访问并清除缓存令牌；每次远端操作核对凭据指纹，变化后重新登录，令牌仅缓存于内存。插件不自行加载 `.env`，不接入个人 ACL 或 IAM 换票，不把 IAM 令牌发送给 Nacos。包内专用凭据的授权及可读取边界见契约 §1.3。
 
 管理状态、来源配置、安装记录与回收站存储于 `$DSH_HOME/skills-manager`，技能文件使用宿主全局/项目技能位置。插件以 `heluo-skills-manager` 行单次挂载；安装不自动清理已有数据，卸载不删除用户技能与状态。
 
@@ -103,7 +103,7 @@ Markdown 及其依赖在构建期内联进唯一客户端 bundle，React 复用�
 
 验证分为默认离线回归与显式宿主兼容验证。默认 `test`、`verify` 及根 `check` 覆盖本地管理、Nacos、UI、结构变异、实际 Cordis 生命周期与 SkillRegistry 候选选择；仅为这些用例安装 Cordis 和技能注册 SDK，不引入完整原生调用链。原生 filesystem provider、scope 合并和 `skill.execute` 回归置于 `compat/`，由 `test:compat <installed-dsh-dir>` 单独执行，使用指定已安装 DSH 的 SDK。入口核对宿主及所需 DSH SDK 与根 `.dsh-version` 完全一致，缺少路径、SDK 或版本不符均失败，不从本包开发依赖回落，不以跳过表示兼容通过。发布、升级宿主基线及修改技能发现、优先级或启停逻辑时必须执行该项；其结果与默认回归、真实 CLI 验收分别记录。
 
-`scripts/verify-host.mjs` 接受实际 DSH CLI 入口和已校验的独立或企业组合 tarball，在全新临时 HOME、DSH_HOME 和 profile 内离线安装，并通过真实 CLI 启动仅绑定环回地址的 web 宿主。Nacos 使用独立合成 HTTP 服务，身份、技能及二进制资源均为合成数据；脚本不读取用户默认 profile、凭据或企业服务。验收覆盖已认证路由、并发管理、下载回执及响应丢失、重启恢复、插件禁用和再次装载、卸载后用户数据保留。原始启动令牌和浏览器 Cookie 仅在内存使用，不写入证据。证据记录实际 Node/DSH 版本、制品摘要和每项结果；真实 CLI 的 HTTP 验收、SDK 生命周期用例及浏览器组件用例分别记账，不相互替代。
+`scripts/verify-host.mjs` 接受实际 DSH CLI 入口和已校验的 Skill Manager 独立 tarball，在全新临时 HOME、DSH_HOME 和 profile 内离线安装，并通过真实 CLI 启动仅绑定环回地址的 web 宿主。Nacos 使用独立合成 HTTP 服务，身份、技能及二进制资源均为合成数据；脚本不读取用户默认 profile、凭据或企业服务。验收覆盖已认证路由、并发管理、下载回执及响应丢失、重启恢复、插件禁用和再次装载、卸载后用户数据保留。原始启动令牌和浏览器 Cookie 仅在内存使用，不写入证据。证据记录实际 Node/DSH 版本、制品摘要和每项结果；真实 CLI 的 HTTP 验收、SDK 生命周期用例及浏览器组件用例分别记账，不相互替代。
 
 离线用例覆盖恶意 ZIP、未配置、认证失败、取消、超时、版本变更、并发写、损坏状态、项目越界、回收恢复、正式技能重名、路由销毁及缺依赖。包内 `test/provider-policy.test.mjs` 以实际 SkillRegistry 和合成 provider 验证管理器拒绝保留名称、保留既有文件及宿主候选选择规则，不直接导入研发插件源码，不代表真实研发插件联合验收。结构判据须以故意破坏单 bundle、入口职责或远程来源的变异证明会失败。实现状态唯一入口为[设计索引 §2.2](../README.md#22-实现与验证入口)。
 
@@ -113,9 +113,9 @@ Markdown 及其依赖在构建期内联进唯一客户端 bundle，React 复用�
 
 | 验收项 | 完成条件 | 边界与依赖 |
 |---|---|---|
-| 预览功能收口 | 单包及企业组合制品闭包通过；隔离 profile 验证来源识别、创建导入、下载默认禁用、已下载投影、显式启停、回收恢复、重启和卸载保留数据 | 自动化 HTTP、浏览器操作和双包共存分别留证，不用其中一项替代全部验收 |
+| 预览功能收口 | 独立单包闭包通过；隔离 profile 验证来源识别、创建导入、下载默认禁用、已下载投影、显式启停、回收恢复、重启和卸载保留数据；与 enterprise 共用 Host 时验证 IAM 服务可动态注入 | 自动化 HTTP、浏览器操作和三包共存分别留证，不用其中一项替代全部验收 |
 | 宿主基线兼容 | `test:compat` 在与 `.dsh-version` 精确一致的宿主及所需 SDK 下通过原生发现、scope 和实际调用用例 | 本机其他版本的 CLI 试用单独记录；不能改宽预检或把拒绝记作兼容成功 |
-| 正式凭据接入 | 制包四项必填，预置专用只读账号；验证脱敏、安装器限定例外及凭据变更后重新制包 | 包内凭据可被读取；服务端只读权限须实测，不实现 IAM 换票 |
+| 正式凭据接入 | 独立制包预置四项连接信息；缺项拒绝、回执脱敏、实际 TGZ 离线安装后无需 profile 连接覆盖即可访问 Nacos；轮换以新版本重新制包安装 | 包内配置可被读取；服务端只读权限须实测，不实现 IAM 换票 |
 | 企业 Nacos 联调 | 真实部署核验登录、分页排序、发布过滤、完整 ZIP、只读账号拒写及错误语义 | 本机 Java Nacos 和合成服务不能证明企业服务端权限；真实 IAM、网关联合行为另验 |
 | 目标平台交付 | 按实际交付版本分别记录 Windows、macOS、Linux 及国产目标系统的安装、目录权限、来源发现和重启恢复 | 源码路径规则及 macOS 系统别名模拟不代替实机；POSIX 执行位不恢复的限制须随包说明 |
 
@@ -127,6 +127,6 @@ Markdown 及其依赖在构建期内联进唯一客户端 bundle，React 复用�
 
 ### 6.3 构建与人工调试入口
 
-可执行开发步骤集中在[随包 README](../../../packages/forge-skills-manager/README.md#构建与打包)：固定工具链安装依赖，先将 TypeScript 和构建期库生成到 `lib/`，再使用仓库打包器生成独立或企业 `.tgz`，最后独立校验 manifest 与摘要。[打包方式选择](../../../packages/forge-skills-manager/README.md#打包方式选择)区分开发 profile 配置与正式包内预置；[企业测试包与正式环境包交付](../../../packages/forge-skills-manager/README.md#企业测试包与正式环境包交付)给出正式交付方式下测试/正式两套配置的独立版本与目录、脱敏预检、摘要确认、产物及安装验收步骤。两套环境均要求制包时提供 Nacos 四项配置，不构成第三种开发模式；脚本不提供额外的模式开关。字段判据由[Nacos 契约 §1.1](../../contracts/nacos-skills.md#11-正式制包输入)维护。构建不隐含打包，安装不触发二次编译；正式环境配置不表示生产准入。Windows 源码仓库结构与归档内执行位分别核验；当前源码仓库结构检查通过，IAM tarball 的 bin 执行位审计仍未通过，整体制品验收保持待定，证据见[模块验证记录](../verification/forge-skills-manager.md)。
+构建、TGZ 校验和安装步骤见[制包安装说明](../../../packages/forge-skills-manager/docs/packaging.md)，隔离目录与持续调试见[包内 README](../../../packages/forge-skills-manager/README.md#本地人工调试)。安装使用提交的 `lib/`，终端不执行二次编译；源码修改后须重建、打包、重装并重启测试宿主。
 
-[人工调试流程](../../../packages/forge-skills-manager/README.md#本地人工调试)使用隔离用户目录、Agent 来源、`DSH_HOME`、测试 workspace 和独立 profile；依次安装制品、登记一个 bundle，按制品是否预置配置选择合并开发 patch 或移除旧 Nacos 覆盖项，再启动环回 web 宿主。仅隔离 `DSH_HOME` 且保留真实用户目录的方式可用于本机来源检查，但不属于完全隔离的文件数据验收。修改源码后重新构建、打包、安装并重启该测试宿主，不能依赖浏览器刷新加载仓库源码。`verify-host.mjs` 执行后清理测试进程，人工持续试用使用独立启动流程。
+本地自动化、真实 CLI、SDK 兼容及企业环境验证分别在[模块记录](../verification/forge-skills-manager.md)留证。

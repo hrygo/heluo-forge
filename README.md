@@ -115,7 +115,7 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 | **AIHUB 能力门户** | 在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。 | 产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。 |
 | **Nacos AI 注册中心** | 注册、发现 MCP 服务，注册和获取 Skills。 | 技能管理器已接入 Skills 只读发现与下载，并有本机验证；企业版本与权限仍需核验，MCP 接入另行评估与验证。 |
 | **插件发现与分发** | 通过熟悉的 DSH 入口发现和安装企业提供的扩展。 | 原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md) |
-| **企业技能** | 统一管理本地与项目 Skill，发现适用的企业 Skill，按需安装和启用。 | 技能管理器已有本地预览实现，支持其他 Agent 技能发现及 Nacos 搜索、详情和完整资源下载；可独立安装或随企业组合交付，企业环境与目标终端仍待验证。[技能管理](packages/forge-skills-manager/README.md) |
+| **企业技能** | 统一管理本地与项目 Skill，发现适用的企业 Skill，按需安装和启用。 | 技能管理器已有本地预览实现，支持其他 Agent 技能发现及 Nacos 搜索、详情和完整资源下载；以独立插件安装，企业环境与目标终端仍待验证。[技能管理](packages/forge-skills-manager/README.md) |
 | **智能邮件** | 查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。 | dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155) |
 | **个人记忆** | 员工选择记忆的采集和使用方式，让助理更好地延续工作。 | Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264) |
 | **企业 IM 聊天** | 在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。 | [企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。 |

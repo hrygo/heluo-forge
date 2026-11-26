@@ -15,15 +15,13 @@
     "@heluo/forge-brand": "workspace:*",
     "@heluo/forge-credentials-keychain": "workspace:*",
     "@heluo/forge-iam": "workspace:*",
-    "@heluo/forge-policy": "workspace:*",
-    "@heluo/forge-skills-manager": "workspace:*"
+    "@heluo/forge-policy": "workspace:*"
   },
   "bundledDependencies": [
     "@heluo/forge-brand",
     "@heluo/forge-credentials-keychain",
     "@heluo/forge-iam",
-    "@heluo/forge-policy",
-    "@heluo/forge-skills-manager"
+    "@heluo/forge-policy"
   ],
   "main": "./src/index.mjs",
   "exports": {
