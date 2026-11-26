@@ -343,7 +343,7 @@ test('the first run installs the package, then a window shows the local service 
   assert.equal(outcome.origin, ORIGIN);
   // The installer ran once, with the package, the profile and the embedded runtime.
   assert.equal(fx.installs.length, 1);
-  assert.deepEqual(fx.installs[0].argv, ['--release', join(fx.pkg.directory, 'enterprise-plugin'), '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--json']);
+  assert.deepEqual(fx.installs[0].argv, ['--release', join(fx.pkg.directory, 'enterprise-plugin'), '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--reinstall-on-store-mismatch', '--json']);
   assert.equal(fx.installs[0].exec, fx.exec);
   assert.deepEqual(JSON.parse(readFileSync(join(fx.root, 'userData', 'first-run.json'), 'utf8')), {
     schema: 'heluo-first-run/1',

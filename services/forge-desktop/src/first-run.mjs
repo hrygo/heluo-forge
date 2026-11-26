@@ -218,6 +218,13 @@ export function writeFirstRunMarker(path, { manifestDigest, profile }) {
  * own pnpm for package operations (the shell's entry hands it over), so it
  * looks for none on PATH and installs none.
  *
+ * `--reinstall-on-store-mismatch` tells the installer that the shell owns this
+ * profile. When pnpm refuses the profile's `node_modules` because another pnpm
+ * linked it from another store, the installer then clears that directory and
+ * retries the step once; without the flag it stops and leaves the profile as it is.
+ * The shell may say so because nothing but the shell installs into its profile:
+ * what the directory holds is rebuilt from the employee package.
+ *
  * The installer's whole account travels with a failure (`details`: its code,
  * its reason and remedy, and what it printed), so the shell can show which of
  * several causes stopped the run instead of one text for all of them.
@@ -238,7 +245,7 @@ export async function initializeProfile({ assets, runInit, env, exec, scriptExec
     fail('BAD_ARGUMENT', 'the plugin script executor is a function or nothing');
   }
   const outcome = await runInit({
-    argv: ['--release', assets.pluginDirectory, '--profile', profile, '--dsh', dsh, '--pnpm-from-host', '--json'],
+    argv: ['--release', assets.pluginDirectory, '--profile', profile, '--dsh', dsh, '--pnpm-from-host', '--reinstall-on-store-mismatch', '--json'],
     env,
     exec,
     ...(scriptExec === undefined ? {} : { scriptExec }),

@@ -344,6 +344,8 @@ const EMPLOYEE_GUIDE = `# 河洛 Forge 企业版 · 安装说明
 > 官方 Desktop 应用由 Electron 独占 desktop profile，命令行无法管理它
 > （锁定基线版实测：profile "desktop" is managed exclusively by the Electron application）。
 > 本启动器默认把插件装进 web profile；Desktop 用户按下文「Desktop 用户」单独安装。
+> 河洛 Forge 企业版桌面应用（Windows / macOS 安装包）使用自己的 heluo-desktop profile，
+> 由应用首次启动时自行安装企业插件，不需要运行本启动器。
 
 ## 安装（任选当前系统）
 
@@ -377,7 +379,8 @@ node installer/init-enterprise-plugin.mjs --release enterprise-plugin --profile 
    恢复网络后重跑安装即可重新预置。按企业身份登录后录入**你个人**的网关 Key。
 
 **不要用「打开 Desktop」代替第 1 步**：Desktop 使用自己的 desktop profile，看不到本次
-装进 web profile 的插件。
+装进 web profile 的插件。河洛 Forge 企业版桌面应用同理：它使用 heluo-desktop profile，
+与 web profile 各自安装、各自升级，在本启动器装好插件后仍需单独打开应用完成它自己的安装。
 
 ## Desktop 用户
 
@@ -410,6 +413,7 @@ Desktop 的 desktop profile 由应用独占，本启动器不会写入它（只�
 - 提示卸载旧版本失败：确认没有 dsh 进程占用该 profile（Desktop 用户需完全退出应用含托盘进程），再重跑本文件；本次不会执行安装。
 - Windows 上提示 dsh 安装失败但 npm 正常：npm 全局安装的 dsh.cmd/.bat 会被启动脚本解析成 node 入口直接运行，不需要手工改 PATH；仍失败时看日志里的 dsh 输出。
 - 提示 pnpm 安装失败：确认 npm 能访问企业允许的 registry；也可由管理员预先执行 npm install -g pnpm 后重跑。
+- 提示 PROFILE_STORE_MISMATCH：这个 profile 的 node_modules 是另一个 pnpm 用别的 store 装的。退出所有 DSH 进程（含托盘驻留的），删除 ~/.dsh/profiles/<profile 名>/node_modules，再运行本启动器；该 profile 里其他来源的插件需要能重新获取。启动器不会自动清空它。
 - 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。确认安装脚本输出的 profile 与随后启动的 DSH profile 一致。
 - 页面仍提示「企业登录尚未设置」：确认安装脚本输出 loginReady 或已包含管理员配置，并确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员。
 - 页面提示「凭据存储不可用」：请管理员核对 Host 使用的 SQLite 目录、磁盘空间与权限，以及同级 <目录>.keys/keyring.json 是否可用。

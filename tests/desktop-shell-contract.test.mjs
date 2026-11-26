@@ -14,13 +14,14 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { EMPLOYEE_MANIFEST_FILE, EMPLOYEE_PACKAGE_SCHEMA as BUILT_SCHEMA, buildEmployeePackage } from '../scripts/build-employee-package.mjs';
-import { parseArgs as installerArgs, provisionClientSecret, readPrivateRelease, resolveDshLaunch, runInit } from '../scripts/init-enterprise-plugin.mjs';
+import { ENTRY_PACKAGE, parseArgs as installerArgs, isSupportedProfileName, provisionClientSecret, readPrivateRelease, resolveDshLaunch, runInit } from '../scripts/init-enterprise-plugin.mjs';
 import { EMBEDDED_ENTRY } from '../services/forge-desktop/src/embedded-cli.mjs';
 import {
   CLIENT_SECRET_PATH,
   EMPLOYEE_PACKAGE_SCHEMA as SHELL_SCHEMA,
   firstRunNeeded,
   identifyEmployeePackage,
+  initializeProfile,
   inspectEmployeePackage,
   INSTALLER_PATH,
   manifestDigestOf,
@@ -43,6 +44,18 @@ function builtPackage(t, { withEngineering = false } = {}) {
     withEngineering,
     buildPublicReleaseImpl: fakePublicBuilder({ commit }),
   });
+}
+
+/**
+ * The profile the shell names in `main.mjs`: the profile it installs into on
+ * its first run and then starts. The entry needs Electron and is not run here,
+ * so its one constant is read from the source.
+ */
+function shellProfile() {
+  const main = readFileSync(join(TOOL_ROOT, 'services', 'forge-desktop', 'src', 'main.mjs'), 'utf8');
+  const declared = /^const PROFILE = '([^']+)';$/mu.exec(main);
+  assert.notEqual(declared, null, 'main.mjs names the profile it owns');
+  return declared[1];
 }
 
 test('the shell and the build name the package and its installer the same way', () => {
@@ -95,25 +108,27 @@ test('the shell accepts what the build produces, and no longer needs it once the
   }
 });
 
-test('the shell calls the installer with arguments it understands, through an exec that reaches the embedded runtime', async (t) => {
-  const built = builtPackage(t);
-  const inspected = inspectEmployeePackage(built.output);
-  // What the shell passes as `--dsh`: an executable file, here standing in for the Electron binary.
-  const home = mkdtempSync(join(tmpdir(), 'forge-contract-home-'));
+/** An executable file standing in for the Electron binary the shell names as `--dsh`. */
+function electronStandIn(t, prefix = 'forge-contract-home-') {
+  const home = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const electron = join(home, 'app', 'electron');
   mkdirSync(join(home, 'app'), { recursive: true });
   writeFileSync(electron, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   chmodSync(electron, 0o755);
+  return { home, electron };
+}
+
+test('the shell calls the installer with arguments it understands, through an exec that reaches the embedded runtime', async (t) => {
+  const built = builtPackage(t);
+  const inspected = inspectEmployeePackage(built.output);
+  // What the shell passes as `--dsh`: an executable file, here standing in for the Electron binary.
+  const { home, electron } = electronStandIn(t);
   assert.deepEqual(resolveDshLaunch(electron, 'linux'), { bin: electron, prefix: [] });
-  // The shell's dsh carries its own pnpm, so it tells the installer not to look for one.
-  const argv = ['--release', inspected.pluginDirectory, '--profile', 'web', '--dsh', electron, '--pnpm-from-host', '--json'];
-  const parsed = installerArgs(argv);
-  assert.equal(parsed.release, inspected.pluginDirectory);
-  assert.equal(parsed.profile, 'web');
-  assert.equal(parsed.dsh, electron);
-  assert.equal(parsed.pnpmFromHost, true);
-  assert.equal(parsed.json, true);
+  // The profile is the one the shell really names: a name of its own, which the
+  // installer accepts and, finding no such profile, creates from the web template.
+  const profile = shellProfile();
+  assert.equal(isSupportedProfileName(profile), true, `the installer must accept the profile the shell names ("${profile}")`);
 
   // The real installer, on the real package, with an isolated home and the
   // shell's real executor, which records what it would start, then stops.
@@ -126,19 +141,110 @@ test('the shell calls the installer with arguments it understands, through an ex
       throw Object.assign(new Error('the test stops every command'), { code: 'ESTOP' });
     },
   });
-  // No pnpm and no npm anywhere on PATH: with the flag set the installer must get as far as dsh.
-  const outcome = await runInit({ argv, env: { HOME: home, DSH_HOME: join(home, 'dsh-home'), PATH: '/usr/bin' }, home, exec });
+  // The arguments are the shell's own, not a copy of them: its first-run
+  // initializer runs against the real installer behind a recorder, and what it
+  // handed over is what gets checked.
+  const env = { HOME: home, DSH_HOME: join(home, 'dsh-home'), PATH: '/usr/bin' };
+  let handed;
+  let outcome;
+  await initializeProfile({
+    assets: { pluginDirectory: inspected.pluginDirectory },
+    runInit: async (input) => {
+      handed = input;
+      outcome = await runInit({ ...input, home });
+      return outcome;
+    },
+    env,
+    exec,
+    profile,
+    dsh: electron,
+  }).catch(() => undefined);
+  const parsed = installerArgs(handed.argv);
+  assert.equal(parsed.release, inspected.pluginDirectory);
+  assert.equal(parsed.profile, profile);
+  assert.equal(parsed.dsh, electron);
+  // The shell's dsh carries its own pnpm, so it tells the installer not to look for one.
+  assert.equal(parsed.pnpmFromHost, true);
+  // The shell owns its profile, so it lets the installer clear that profile's
+  // `node_modules` when pnpm refuses it for coming from another store.
+  assert.equal(parsed.reinstallOnStoreMismatch, true);
+  assert.equal(parsed.json, true);
+  assert.equal(handed.env, env);
+  assert.equal(handed.exec, exec);
+
   // Stopped on purpose: what matters is what it tried to run first.
   assert.equal(outcome.code, 1);
   assert.ok(started.length >= 1, 'the installer ran no command');
   assert.equal(started[0].command, electron, 'only the embedded runtime is started');
-  // The shell's entry comes first; it is what hands dsh the bundled pnpm.
-  assert.deepEqual(started[0].args.slice(0, 2), [EMBEDDED_ENTRY, '--profile']);
+  // The profile is absent in the isolated home, so the first command creates it
+  // from the web template. The shell's entry comes first: it is what hands dsh
+  // the bundled pnpm.
+  assert.deepEqual(started[0].args, [EMBEDDED_ENTRY, '--profile', profile, '--from-default-profile', 'web', '--dump-config']);
   assert.equal(started[0].env.ELECTRON_RUN_AS_NODE, '1');
   assert.equal(started.every((call) => call.command === electron), true);
   assert.notEqual(outcome.result?.error?.code, 'PNPM_REQUIRED', 'the installer did not stop for a pnpm it was not asked to find');
   // Nothing was written outside the isolated home.
   assert.equal(inspectEmployeePackage(built.output).ok, true);
+});
+
+/** What pnpm prints when it refuses a `node_modules` that another pnpm linked from another store. */
+const STORE_MISMATCH = [
+  'Error: ERR_PNPM_UNEXPECTED_STORE',
+  '  ╰─▶ Unexpected store location',
+  '  help: The dependencies are currently linked from another store. If you want to use the new store location, reinstall your dependencies with "pnpm install".',
+].join('\n');
+
+test("the shell's first run gets past a profile that another pnpm linked: it has told the installer it owns the profile", async (t) => {
+  const built = builtPackage(t);
+  const inspected = inspectEmployeePackage(built.output);
+  // No IAM in this test: without the secret file the installer skips provisioning,
+  // the way it does on a second run after a successful one.
+  rmSync(join(built.output, CLIENT_SECRET_PATH));
+  const { home, electron } = electronStandIn(t, 'forge-contract-foreign-');
+  const dshHome = join(home, 'dsh-home');
+  const profile = shellProfile();
+  // The shell's profile as another pnpm left it: that pnpm's record, and another plugin.
+  const profileDir = join(dshHome, 'profiles', profile);
+  const modules = join(profileDir, 'node_modules');
+  const manifestPath = join(profileDir, 'package.json');
+  mkdirSync(modules, { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify({ name: `dsh-profile-${profile}`, private: true, dependencies: {}, dsh: { profile: { bundles: [] } } }));
+  writeFileSync(join(modules, '.modules.yaml'), JSON.stringify({ storeDir: join(home, 'another-store', 'v10') }));
+  mkdirSync(join(modules, 'other-plugin'), { recursive: true });
+  const installed = join(modules, ...ENTRY_PACKAGE.split('/'));
+  // A host that refuses every package operation while that record is there, and installs otherwise.
+  const commands = [];
+  const exec = async (bin, args) => {
+    assert.equal(bin, electron);
+    commands.push(args.join(' '));
+    if (args[0] !== 'plugin') return { code: 0, stdout: JSON.stringify({ plugins: [{ name: ENTRY_PACKAGE }] }), stderr: '' };
+    if (existsSync(join(modules, '.modules.yaml'))) return { code: 1, stdout: '', stderr: STORE_MISMATCH };
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.dependencies = { ...manifest.dependencies, [ENTRY_PACKAGE]: `file:${args[4]}` };
+    manifest.dsh.profile.bundles = [...manifest.dsh.profile.bundles, ENTRY_PACKAGE];
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    mkdirSync(installed, { recursive: true });
+    writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: ENTRY_PACKAGE, version: readPrivateRelease(inspected.pluginDirectory).version }));
+    return { code: 0, stdout: 'added', stderr: '' };
+  };
+
+  const outcome = await initializeProfile({
+    assets: { pluginDirectory: inspected.pluginDirectory },
+    runInit: (input) => runInit({ ...input, home }),
+    env: { HOME: home, DSH_HOME: dshHome, PATH: '/usr/bin' },
+    exec,
+    profile,
+    dsh: electron,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  // The same command twice: refused, then let through once the directory was cleared.
+  const adds = commands.filter((command) => command.startsWith('plugin'));
+  assert.equal(adds.length, 2);
+  assert.equal(existsSync(join(modules, '.modules.yaml')), false, "the other pnpm's record is gone");
+  assert.equal(existsSync(join(modules, 'other-plugin')), false, 'what that pnpm left was cleared with it');
+  assert.equal(existsSync(join(installed, 'package.json')), true, 'the enterprise plugin is installed');
+  assert.ok(outcome.warnings.some((line) => line.includes('--reinstall-on-store-mismatch')), 'the conclusion says the directory was cleared');
 });
 
 test('the provisioning command the shell hands the plugin CLI is that CLI itself, not a dsh command line', async (t) => {

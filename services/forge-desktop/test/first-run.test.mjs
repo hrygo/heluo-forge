@@ -241,9 +241,10 @@ test('the installer is handed the package, the profile and the embedded runtime,
   const done = await initializeProfile({ assets, runInit, env, exec, profile: 'web', dsh: '/apps/electron' });
   // A success returns the installer's whole outcome: the conclusion, and what it printed.
   assert.deepEqual(done, { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } });
-  // The shell's dsh carries its own pnpm, so the installer is told not to look for one.
+  // The shell's dsh carries its own pnpm, so the installer is told not to look for one; and the
+  // shell owns the profile, so the installer may clear its node_modules when another pnpm linked it.
   assert.deepEqual(calls[0], {
-    argv: ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--json'],
+    argv: ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--reinstall-on-store-mismatch', '--json'],
     env,
     exec,
   });
