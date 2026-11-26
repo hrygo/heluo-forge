@@ -282,7 +282,7 @@ function verifiedPnpm(pnpmTgz, entry) {
 function tarMembers(file, name) {
   try {
     const listing = execFileSync('tar', ['-tzf', file], { encoding: 'utf8', maxBuffer: TAR_LISTING_BYTES, stdio: ['ignore', 'pipe', 'pipe'] });
-    return listing.split('\n').filter((member) => member !== '');
+    return listing.split(/\r?\n/u).filter((member) => member !== '');
   } catch (error) {
     return fail('ARCHIVE_INVALID', `${name} is not a tarball: ${tail(error?.stderr ?? error?.message)}`);
   }
@@ -305,13 +305,15 @@ function tarExtract(file, name, destination, members) {
 
 /**
  * The standalone interpreter under `dependencies/node`: upstream's payload
- * carries `bin/node` and the license, never the npm, headers or documentation
- * a Node.js distribution also holds.
+ * carries `bin/node` (`bin/node.exe` on Windows, unpacked from the zip root
+ * where official Windows Node.js archives place `node.exe`) and the license,
+ * never the npm, headers or documentation a Node.js distribution also holds.
  */
 function stageNode(archive, dependencies, platform) {
   const root = archive.name.replace(/\.(?:zip|tar\.gz)$/u, '');
   const executable = platform === 'win32' ? 'node.exe' : 'node';
-  const members = [`${root}/bin/${executable}`, `${root}/LICENSE`];
+  const archiveExecutable = platform === 'win32' ? `${root}/${executable}` : `${root}/bin/${executable}`;
+  const members = [archiveExecutable, `${root}/LICENSE`];
   const node = join(dependencies, 'node');
   mkdirSync(join(node, 'bin'), { recursive: true });
   // Reserved the way upstream reserves it: the directory the tool reports for bundled Node packages.
