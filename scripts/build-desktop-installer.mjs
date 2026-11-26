@@ -12,8 +12,7 @@
  *     --resources <staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
  *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] \
  *     [--target dir|mac|win|linux] [--arch x64|arm64|universal] \
- *     [--certificate-file <path>] [--certificate-password <pass>] \
- *     [--config-only] [--json]
+ *     [--certificate-file <path>] [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -49,8 +48,8 @@ const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb', '.fl
 
 /**
  * Third-party packages inside `dsh/node_modules` (outside `@deepseek-ai/`)
- * carry test suites, docs, examples, changelogs and license/notice files that
- * are never needed for internal runtime.
+ * carry test suites, docs, examples and changelogs that are never needed at
+ * runtime; license/notice files are always preserved.
  */
 const THIRD_PARTY_EXCLUDED_DIRS = [
   'test',
@@ -68,15 +67,6 @@ const THIRD_PARTY_EXCLUDED_DIRS = [
 const THIRD_PARTY_EXCLUDED_DIR_SET = new Set(THIRD_PARTY_EXCLUDED_DIRS);
 const THIRD_PARTY_EXCLUDED_DOC_EXTS = new Set(['.md', '.markdown']);
 const THIRD_PARTY_EXCLUDED_DOC_PREFIXES = ['CHANGELOG', 'HISTORY'];
-const THIRD_PARTY_EXCLUDED_CONFIG_PREFIXES = [
-  '.eslintrc',
-  '.prettier',
-  '.editorconfig',
-  '.npmignore',
-  '.flowconfig',
-  '.babelrc',
-  'tsconfig',
-];
 const THIRD_PARTY_EXCLUDED_CONFIG_GLOBS = [
   '.eslintrc*',
   '.prettier*',
@@ -88,6 +78,19 @@ const THIRD_PARTY_EXCLUDED_CONFIG_GLOBS = [
 ];
 const THIRD_PARTY_LICENSE_PREFIXES = ['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'];
 const THIRD_PARTY_LICENSE_GLOBS = ['[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*', '[Nn][Oo][Tt][Ii][Cc][Ee]*', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*'];
+
+/**
+ * Parity rule matching `THIRD_PARTY_EXCLUDED_CONFIG_GLOBS` exactly:
+ * - exact filenames: .editorconfig, .npmignore, .flowconfig
+ * - prefix matches: .eslintrc*, .prettier*, .babelrc*
+ * - typescript config: tsconfig*.json (never non-json like tsconfig-loader.js)
+ */
+export function isExcludedConfigFile(file) {
+  if (file === '.editorconfig' || file === '.npmignore' || file === '.flowconfig') return true;
+  if (file.startsWith('.eslintrc') || file.startsWith('.prettier') || file.startsWith('.babelrc')) return true;
+  if (file.startsWith('tsconfig') && file.endsWith('.json')) return true;
+  return false;
+}
 
 /**
  * The directories that travel exactly as they were staged: the dsh artifact
@@ -158,7 +161,6 @@ export function parseArguments(argv) {
     target: 'dir',
     arch: undefined,
     certificateFile: undefined,
-    certificatePassword: undefined,
     configOnly: false,
     json: false,
   };
@@ -172,7 +174,6 @@ export function parseArguments(argv) {
     ['--target', 'target'],
     ['--arch', 'arch'],
     ['--certificate-file', 'certificateFile'],
-    ['--certificate-password', 'certificatePassword'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -226,17 +227,17 @@ export function isPackaged(relativePath) {
   if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
-  if (isLicense) return false;
+  if (isLicense) return true;
   if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
   if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
-  if (THIRD_PARTY_EXCLUDED_CONFIG_PREFIXES.some((prefix) => file.startsWith(prefix))) return false;
+  if (isExcludedConfigFile(file)) return false;
   return true;
 }
 
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
- * and lets a later pattern override an earlier one, so each verbatim directory
- * is re-included after the exclusions, not before them.
+ * and lets a later pattern override an earlier one, so license files and each
+ * verbatim directory are re-included after the exclusions, not before them.
  */
 export function runtimeFilter() {
   return [
@@ -250,8 +251,8 @@ export function runtimeFilter() {
     '!dsh/node_modules/!(@deepseek-ai)/**/*.markdown',
     '!dsh/node_modules/!(@deepseek-ai)/**/CHANGELOG*',
     '!dsh/node_modules/!(@deepseek-ai)/**/HISTORY*',
-    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
     ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
+    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
     ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
   ];
 }
@@ -295,23 +296,11 @@ export function builderConfig({
   target = 'dir',
   arch,
   afterPackPath = DEFAULT_AFTER_PACK,
-  certificateFile,
-  certificatePassword,
 }) {
   const resolvedArch = resolveTargetArch(target, arch);
   const macArch = target === 'mac' || target === 'dir' ? resolvedArch : 'arm64';
   const linuxArch = target === 'linux' ? resolvedArch : 'x64';
   const macTargets = target === 'mac' ? ['dmg'] : ['dir'];
-  const winConfig = {
-    icon: join(iconsDir, basename(WIN_ICON)),
-    target: [{ target: 'nsis', arch: ['x64'] }],
-  };
-  if (certificateFile !== undefined) {
-    winConfig.certificateFile = resolve(certificateFile);
-  }
-  if (certificatePassword !== undefined) {
-    winConfig.certificatePassword = certificatePassword;
-  }
   return {
     appId: identity.appId,
     productName: identity.productName,
@@ -325,7 +314,7 @@ export function builderConfig({
     afterPack: afterPackPath,
     extraMetadata: { version },
     electronLanguages: [...ELECTRON_LANGUAGES],
-    win: winConfig,
+    win: { icon: join(iconsDir, basename(WIN_ICON)), target: [{ target: 'nsis', arch: ['x64'] }] },
     nsis: {
       guid: identity.upgradeGuid,
       artifactName: `${identity.executableName}-\${version}-setup-\${arch}.\${ext}`,
@@ -382,6 +371,23 @@ export function builderEntry(builderDir, exists = existsSync, read = readFileSyn
   return exists(cli) ? cli : null;
 }
 
+/**
+ * Environment variables for the electron-builder subprocess.
+ *
+ * Code signing credentials must never travel via CLI arguments or get written
+ * to disk in builder-config.json. When --certificate-file is given, the path is
+ * passed to electron-builder via WIN_CSC_LINK in the child environment. The
+ * certificate password travels strictly via WIN_CSC_KEY_PASSWORD in process.env,
+ * which is inherited in memory and never serialized.
+ */
+export function builderEnv(options = {}, env = process.env) {
+  const next = { ...env };
+  if (typeof options?.certificateFile === 'string' && options.certificateFile.trim() !== '') {
+    next.WIN_CSC_LINK = resolve(options.certificateFile);
+  }
+  return next;
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -403,8 +409,6 @@ async function main() {
     outputDir,
     target: options.target,
     arch: options.arch,
-    certificateFile: options.certificateFile,
-    certificatePassword: options.certificatePassword,
   });
   const configPath = join(outputDir, 'builder-config.json');
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -431,7 +435,8 @@ async function main() {
   else if (options.target === 'win') args.push('--win');
   else args.push('--linux');
   args.push(`--${options.arch}`);
-  const run = spawnSync(process.execPath, [builder, ...args], { cwd: appDir, encoding: 'utf8' });
+  const childEnv = builderEnv(options, process.env);
+  const run = spawnSync(process.execPath, [builder, ...args], { cwd: appDir, env: childEnv, encoding: 'utf8' });
   if (run.error !== undefined || run.status !== 0) {
     const outcome = run.error === undefined ? `exited ${run.status}` : `could not start (${run.error.message})`;
     fail('BUILDER_FAILED', `electron-builder ${outcome}\n${(run.stdout ?? '').slice(-4000)}\n${(run.stderr ?? '').slice(-4000)}`);
