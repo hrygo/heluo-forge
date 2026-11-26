@@ -10,6 +10,18 @@ import {
 import { closeAction, quitConfirmation } from './lifecycle.mjs';
 import { assertBindHost } from './loopback.mjs';
 import { classifyTarget, permissionAllowed } from './navigation.mjs';
+import {
+  ACTION_CHANNEL,
+  BRIDGE_TYPE,
+  chromeState,
+  contentBounds,
+  hasTitleBarBridge,
+  isTitleBarRequest,
+  isWindowAction,
+  STATE_CHANNEL,
+  titleBarQuery,
+  windowChrome,
+} from './window-chrome.mjs';
 
 const TITLE = '河洛 Forge 企业版';
 
@@ -32,6 +44,7 @@ const GUIDANCE = Object.freeze({
   STOPPED: '本机服务在就绪前被停止。请重新启动应用。',
   STOPPING: '本机服务正在停止。请等它结束后重新启动应用。',
   EMBEDDED_RUNTIME_MISSING: '找不到内嵌运行时。请重新安装应用。',
+  TITLE_BAR_MISSING: '窗口组件缺失。请重新安装应用。',
   UNKNOWN: '应用无法启动。请重新启动应用；仍然失败时请联系管理员并提供错误码。',
 });
 
@@ -47,15 +60,18 @@ export function guidanceFor(code) {
  *
  * The Electron interface is passed in, so the wiring is tested against a stand-in.
  *
- * @param {{app: object, BrowserWindow: Function, Tray?: Function, Menu: object, nativeImage: object,
- *   session: object, shell: object, dialog: object}} electron
+ * @param {{app: object, BrowserWindow: Function, WebContentsView: Function, ipcMain: object, Tray?: Function,
+ *   Menu: object, nativeImage: object, session: object, shell: object, dialog: object}} electron
  * @param {{platform: string, assetsCandidates: string[], markerPath: string, profile: string, bindHost: string,
  *   embeddedCommand: string, env: object, exec: Function, loadInstaller: Function,
  *   createRuntime: Function, spawnProfile: Function, runtimeOptions?: object, trayIcon?: string,
- *   statusPage?: string, preflight?: Function, failureStopWaitMs?: number,
- *   diagnosticLog?: string, now?: Function, scriptExec?: Function}} options
+ *   statusPage?: string, titleBarPage?: string, titleBarPreload?: string, preflight?: Function,
+ *   failureStopWaitMs?: number, diagnosticLog?: string, now?: Function, scriptExec?: Function}} options
  *   `statusPage` is the shell's own local setup page: loaded while the first
  *   run is pending or has failed, replaced by the workspace when it succeeds.
+ *   `titleBarPage` is the shell's own title bar, loaded into the window itself
+ *   on a platform without a system title bar; `titleBarPreload` is the bridge
+ *   that page is given, and no other page is.
  *   `preflight` runs before anything else and fails the start by throwing; `failureStopWaitMs`
  *   bounds how long a failure report waits for the service to stop.
  *   `diagnosticLog` is the file the first run and every reported failure are
@@ -67,7 +83,21 @@ export function guidanceFor(code) {
 export function startShell(electron, options) {
   const { app } = electron;
   const { platform, assetsCandidates, markerPath, profile, bindHost, embeddedCommand, env, exec, loadInstaller, createRuntime, spawnProfile } = options;
-  const context = { window: null, tray: null, runtime: null, quitting: false, retrying: false, pendingRetry: false, trustedOrigin: null };
+  const context = {
+    window: null,
+    content: null,
+    // Resolved once the title bar is in place; at once where there is none.
+    titleBar: Promise.resolve(),
+    tray: null,
+    runtime: null,
+    quitting: false,
+    retrying: false,
+    pendingRetry: false,
+    trustedOrigin: null,
+    chrome: windowChrome({ platform }),
+    maximized: false,
+    focused: true,
+  };
   const now = options.now ?? (() => new Date());
 
   /** One entry in the log, when there is one; an entry that cannot be written is not a failure of the application. */
@@ -110,12 +140,18 @@ export function startShell(electron, options) {
     record(firstRunDone({ at: now(), outcome }));
   }
 
+  /** The window in front, with the keyboard in the content where the work is, not in the title bar. */
+  function present() {
+    context.window.show();
+    context.content?.webContents.focus();
+  }
+
   /** The status page with what is known about the current state; nothing else is loaded before the workspace. */
   function showStatus(query) {
     if (typeof options.statusPage !== 'string' || context.window === null) return;
-    context.window.loadFile(options.statusPage, { query }).then(
-      () => context.window.show(),
-      () => context.window.show(),
+    context.content.webContents.loadFile(options.statusPage, { query }).then(
+      () => present(),
+      () => present(),
     );
   }
 
@@ -140,8 +176,8 @@ export function startShell(electron, options) {
     const launch = await context.runtime.start();
     context.trustedOrigin = launch.origin;
     createTray();
-    context.window.loadURL(launch.href).then(
-      () => context.window.show(),
+    context.content.webContents.loadURL(launch.href).then(
+      () => present(),
       // A page that cannot be loaded means the service is gone: that is a startup failure, not a quit.
       () => void report({ code: context.runtime.snapshot().failure?.code ?? 'EXITED' }),
     );
@@ -181,6 +217,8 @@ export function startShell(electron, options) {
     openWindow();
     createTray();
     try {
+      // Nothing is shown before the title bar is there, where there is one.
+      await context.titleBar;
       if (needed) {
         showStatus({ state: 'initializing' });
         await performFirstRun();
@@ -188,7 +226,8 @@ export function startShell(electron, options) {
       const launch = await startWorkspace();
       return { started: true, origin: launch.origin };
     } catch (error) {
-      if (!needed) throw error;
+      // A window without its title bar is not a setup that can be retried from the tray.
+      if (!needed || error?.code === 'TITLE_BAR_MISSING') throw error;
       // The enterprise setup is incomplete, not broken: the window stays on the
       // status page and the tray offers an idempotent retry.
       context.pendingRetry = true;
@@ -226,18 +265,83 @@ export function startShell(electron, options) {
     return { started: false, code };
   }
 
+  /** The content follows the window's size and state: below the title bar, or over the whole window in full screen. */
+  function layoutContent() {
+    const window = context.window;
+    if (window === null || context.content === null) return;
+    const [width, height] = window.getContentSize();
+    // Full screen is asked of the window itself, never remembered from an event.
+    const fullscreen = window.isFullScreen();
+    context.content.setBounds(contentBounds({ width, height, barHeight: context.chrome.barHeight, fullscreen }));
+  }
+
+  /** The title bar follows the window's state: the zoom button's glyph, and whether its buttons look active. */
+  function pushChromeState() {
+    if (!context.chrome.frameless || context.window === null) return;
+    const { maximized, focused } = context;
+    context.window.webContents.send(STATE_CHANNEL, chromeState({ maximized, focused }));
+  }
+
   function openWindow() {
     if (context.window !== null) return;
+    const chrome = context.chrome;
     const window = new electron.BrowserWindow({
       width: 1280,
       height: 800,
       title: TITLE,
       show: false,
-      // The renderer gets nothing from the shell: no Node, no preload, an isolated context.
-      webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true },
+      ...chrome.window,
+      // Where the system title bar is gone, the window's own page is the shell's
+      // title bar. It is the one page with a bridge to the shell: three window
+      // actions, none of which takes an argument.
+      webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true, ...(chrome.frameless ? { preload: options.titleBarPreload } : {}) },
     });
     context.window = window;
-    // Only the local web profile loads here. A link or a script that navigates
+    if (chrome.hideSystemButtons) window.setWindowButtonVisibility(false);
+    // Everything the user works in — the status page, the workspace — is this
+    // view. It gets nothing from the shell: no Node, no preload, an isolated context.
+    const content = new electron.WebContentsView({ webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
+    context.content = content;
+    window.contentView.addChildView(content);
+    layoutContent();
+    if (chrome.frameless) {
+      // Without its title bar the window has no controls, and without its bridge
+      // the bar's buttons do nothing: the start waits for both, and does not go
+      // on without them.
+      context.titleBar = window
+        .loadFile(options.titleBarPage, { query: titleBarQuery({ platform, barHeight: chrome.barHeight, title: TITLE }) })
+        .then(() => window.webContents.executeJavaScript(BRIDGE_TYPE))
+        .then(
+          (type) => {
+            if (!hasTitleBarBridge(type)) fail('TITLE_BAR_MISSING', 'the title bar page came up without its bridge');
+            pushChromeState();
+          },
+          () => fail('TITLE_BAR_MISSING', 'the title bar page could not be loaded'),
+        );
+    }
+    // The title bar is one local file, and it carries the bridge: nothing
+    // navigates it, and nothing opens from it, wherever to.
+    const stay = (event) => event.preventDefault();
+    window.webContents.on('will-navigate', stay);
+    window.webContents.on('will-redirect', stay);
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // Where there is no title bar there is no bridge, and so nothing answers it.
+    // Answered once in the life of the process: the shell has the one window, and
+    // openWindow does not run a second time for it.
+    if (chrome.frameless) {
+      electron.ipcMain.handle(ACTION_CHANNEL, (event, action) => {
+        // Only the title bar's own page may ask, and only for what it is given.
+        if (!isTitleBarRequest(event.sender, event.senderFrame, window) || !isWindowAction(action)) return;
+        if (action === 'minimize') window.minimize();
+        else if (action === 'toggle-maximize') {
+          if (window.isMaximized()) window.unmaximize();
+          else window.maximize();
+          // A click may have left the keyboard in the title bar; the work is in the content.
+          content.webContents.focus();
+        } else window.close();
+      });
+    }
+    // Only the local web profile loads in the content. A link or a script that navigates
     // elsewhere, or asks for a new window, hands an http(s) address to the
     // system browser; everything else is stopped before a loader sees it. The
     // trusted origin is set when the workspace starts; until then only the
@@ -250,13 +354,13 @@ export function startShell(electron, options) {
     const refuse = (event, url) => {
       if (guard(url) !== 'load') event.preventDefault();
     };
-    window.webContents.on('will-navigate', refuse);
+    content.webContents.on('will-navigate', refuse);
     // A redirect comes from a server, not from something done on the user's
     // behalf: it is stopped, and nothing is opened in its place.
-    window.webContents.on('will-redirect', (event, url) => {
+    content.webContents.on('will-redirect', (event, url) => {
       if (classifyTarget(url, { origin: context.trustedOrigin ?? undefined }) !== 'load') event.preventDefault();
     });
-    window.webContents.setWindowOpenHandler(({ url }) => {
+    content.webContents.setWindowOpenHandler(({ url }) => {
       guard(url);
       return { action: 'deny' };
     });
@@ -268,6 +372,28 @@ export function startShell(electron, options) {
       event.preventDefault();
       window.hide();
     });
+    window.on('resize', layoutContent);
+    window.on('maximize', () => {
+      context.maximized = true;
+      pushChromeState();
+    });
+    window.on('unmaximize', () => {
+      context.maximized = false;
+      pushChromeState();
+    });
+    window.on('focus', () => {
+      context.focused = true;
+      pushChromeState();
+      // A window that comes to the front starts with the keyboard in its own page, the title bar.
+      content.webContents.focus();
+    });
+    window.on('blur', () => {
+      context.focused = false;
+      pushChromeState();
+    });
+    // Full screen has no title bar: the content has the whole window until it ends.
+    window.on('enter-full-screen', layoutContent);
+    window.on('leave-full-screen', layoutContent);
     return window;
   }
 
@@ -298,7 +424,7 @@ export function startShell(electron, options) {
 
   function reveal() {
     if (context.window === null || context.window.isDestroyed()) return;
-    context.window.show();
+    present();
     context.window.focus();
   }
 

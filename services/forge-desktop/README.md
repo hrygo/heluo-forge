@@ -1,8 +1,8 @@
 # 桌面壳（河洛 Forge 企业版）
 
-状态：可用（开发骨架）。判断逻辑与装配层离线测试齐备；Electron 44.7.0 与 electron-builder 26.0.12 已精确钉版入 devDependencies（package-shape 断言拒绝浮动）；载荷暂存（`scripts/stage-desktop-payload.mjs` + `runtime-lock.json` 台账）与安装包配置（`scripts/build-desktop-installer.mjs`，身份真源消费员工包 `branding/app-identity.json`）具备。2026-11-24 本机 mac `--dir` 构建冒烟：真实 Electron 启动、单实例、首启经安装器建 profile 并装入 `@heluo/forge-enterprise` 0.1.2-corp.1（沙箱 DSH_HOME）、IAM Discovery 止步企业内网边界（设计内降级）、预写标记直启后内嵌 dsh 以 `--profile web --host 127.0.0.1 --no-open` 运行并监听回环 3080、渲染进程启用 sandbox。2026-11-25 随包 pnpm：`runtime-lock.json` 登记 pnpm 11.28.5（与根 `packageManager` 同版），暂存脚本按字节与 SHA-256 核验 npm 制品后解包到 `resources/pnpm/`；壳经自有入口 `src/embedded-cli.mjs` 调用 dsh 公开导出的 `runCli({ packageManager })`，dsh 的每次包操作都以应用二进制为 Node 运行随包 pnpm，不改 DSH。本机 mac `--dir` 构建冒烟：PATH 上没有 node、npm、pnpm 时，首启装入企业插件并进入工作区；同一条件下不带随包 pnpm 的构建停在引导页 `FIRST_RUN_FAILED`。2026-11-25 首启排障明细（负责人确认开发阶段显示）：首启失败时状态页显示安装器的错误码、原因与处理办法以及日志位置；应用数据目录下的 `logs/first-run.log`（0600）记录每次首启尝试的安装器结论、回显与警告，以及每个导致应用退出的失败。安装器在失败结论里带上走到失败为止的回显（`progress`），原因摘要保留真正的报错行而不是调用栈尾部。本机 mac 实测（PATH 上无 node、npm、pnpm）：IAM 不可达时显示 `IAM_DISCOVERY_FAILED` 与 Discovery 地址；IAM 可达且插件完整时停在 `IAM_CLIENT_SECRET_PROVISION_FAILED`，页面与日志直接显示原因 `dsh: invalid profile name`。密钥入库通道同日修复：壳向安装器提供脚本执行器（`src/process.mjs` 的 `embeddedScriptExec`），三条密钥命令以应用二进制为 Node 直接运行插件自带的 forge-iam CLI；本机 mac 实测（PATH 上无 node、npm、pnpm，IAM 以本地服务代替）：首启装插件、核验、密钥入库全部完成并进入工作区，密钥写入隔离凭据库的 `credentials.sqlite`，明文随后删除。2026-11-25 窗口先行改造（负责人裁决：先开界面、页内提示、后续配置）：需要首启或首启失败时，窗口先于运行时打开并加载壳自带本地品牌引导页 `brand/status.html`（无 preload、无外链，状态与错误码经查询串注入，不承载企业配置值），应用驻留，托盘菜单「重试企业配置」幂等续跑，成功后窗口改载 launch URL；不以未打补丁的默认 profile 提前提供界面（O3 官方登录旁路在企业补丁装载前保持敞开），运行时段失败仍走对话框+退出。未做：Win10 x64 VM 安装验收（含随包 pnpm 在 Windows 上的首启）、内置 Node 工具链与 Python/Office 库（P2-4 其余部分）、真实企业网络下的 IAM 登录联调、产物签名（NSIS SmartScreen / mac Gatekeeper 右键打开）。桌面构建已于 2026-11-25 接入 `release-bundle` 流水线（mac-arm64 zip + windows-x64 NSIS exe 挂同一 tag 草稿）。核对日期：2026-11-25。
+状态：可用（开发骨架）。判断逻辑与装配层离线测试齐备；Electron 44.7.0 与 electron-builder 26.0.12 已精确钉版入 devDependencies（package-shape 断言拒绝浮动）；载荷暂存（`scripts/stage-desktop-payload.mjs` + `runtime-lock.json` 台账）与安装包配置（`scripts/build-desktop-installer.mjs`，身份真源消费员工包 `branding/app-identity.json`）具备。2026-11-24 本机 mac `--dir` 构建冒烟：真实 Electron 启动、单实例、首启经安装器建 profile 并装入 `@heluo/forge-enterprise` 0.1.2-corp.1（沙箱 DSH_HOME）、IAM Discovery 止步企业内网边界（设计内降级）、预写标记直启后内嵌 dsh 以 `--profile web --host 127.0.0.1 --no-open` 运行并监听回环 3080、渲染进程启用 sandbox。2026-11-25 随包 pnpm：`runtime-lock.json` 登记 pnpm 11.28.5（与根 `packageManager` 同版），暂存脚本按字节与 SHA-256 核验 npm 制品后解包到 `resources/pnpm/`；壳经自有入口 `src/embedded-cli.mjs` 调用 dsh 公开导出的 `runCli({ packageManager })`，dsh 的每次包操作都以应用二进制为 Node 运行随包 pnpm，不改 DSH。本机 mac `--dir` 构建冒烟：PATH 上没有 node、npm、pnpm 时，首启装入企业插件并进入工作区；同一条件下不带随包 pnpm 的构建停在引导页 `FIRST_RUN_FAILED`。2026-11-25 首启排障明细（负责人确认开发阶段显示）：首启失败时状态页显示安装器的错误码、原因与处理办法以及日志位置；应用数据目录下的 `logs/first-run.log`（0600）记录每次首启尝试的安装器结论、回显与警告，以及每个导致应用退出的失败。安装器在失败结论里带上走到失败为止的回显（`progress`），原因摘要保留真正的报错行而不是调用栈尾部。本机 mac 实测（PATH 上无 node、npm、pnpm）：IAM 不可达时显示 `IAM_DISCOVERY_FAILED` 与 Discovery 地址；IAM 可达且插件完整时停在 `IAM_CLIENT_SECRET_PROVISION_FAILED`，页面与日志直接显示原因 `dsh: invalid profile name`。密钥入库通道同日修复：壳向安装器提供脚本执行器（`src/process.mjs` 的 `embeddedScriptExec`），三条密钥命令以应用二进制为 Node 直接运行插件自带的 forge-iam CLI；本机 mac 实测（PATH 上无 node、npm、pnpm，IAM 以本地服务代替）：首启装插件、核验、密钥入库全部完成并进入工作区，密钥写入隔离凭据库的 `credentials.sqlite`，明文随后删除。2026-11-25 窗口先行改造（负责人裁决：先开界面、页内提示、后续配置）：需要首启或首启失败时，窗口先于运行时打开并加载壳自带本地品牌引导页 `brand/status.html`（无 preload、无外链，状态与错误码经查询串注入，不承载企业配置值），应用驻留，托盘菜单「重试企业配置」幂等续跑，成功后窗口改载 launch URL；不以未打补丁的默认 profile 提前提供界面（O3 官方登录旁路在企业补丁装载前保持敞开），运行时段失败仍走对话框+退出。2026-11-25 无边框窗口（负责人选择自绘按钮）：macOS 与 Windows 隐藏系统标题栏，窗口自身的页面是壳自绘的标题栏 `brand/titlebar.html`（28 / 32 像素，颜色随系统深浅色），引导页与工作区在它的内容视图里，工作区页面不打宿主标记、不注入样式；只有标题栏页面带 preload（`src/window-chrome.preload.cjs`），桥接只有最小化、缩放、关闭三个无参动作，主进程校验调用方，并在该页面上确认桥接已注入才继续启动。本机 mac 实测（深色外观）：标题栏与内容各就其位，三个按钮、最大化与失焦状态推送、全屏收起与恢复、第二份实例把隐藏或最小化的窗口调回均成立，标题栏的偏移、间距与颜色和系统原生逐像素一致；实测修正两处缺陷——启动与回到前台时键盘落在标题栏、最小化被焦点归还撤销。2026-11-26 PR 评审后修正两处（桥接以页面上实际生效为准，全屏布局向窗口询问实际状态），并以主进程报出的窗口事实复验全屏往返、最大化与焦点状态，标题栏与内容页逐项一致。同日补验装载企业插件后的窗口（此前实测预写首启标记，内容是未装载企业插件的 web 界面）：载荷按台账重新暂存（dsh 0.2.2-rc.5），隔离 profile 装入从 HEAD 构建的企业插件并接仓库测试用的模拟 IdP（同 `scripts/probe/run-iam-local-uat.sh` 的做法），壳以沙箱 `HOME` 承载——企业插件要求宿主不低于 0.2.2-rc.5，旧暂存载荷上的 dsh 装不上它；工作区显示企业服务初始化向导，经系统浏览器完成模拟登录后显示企业账号已认证，标题栏与内容各就其位，壳无报错，本机真实凭据库、DSH 目录与应用数据未被触碰。同日再验经壳首启的完整路径：用制包工具从 HEAD 造一份配置指向仓库模拟 IAM 与网关（`scripts/probe/mock-iam-gateway.mjs`）的合成员工包，壳在沙箱 `HOME` 与全新的用户数据目录里首启——状态页显示初始化中，安装器经内嵌入口与随包 pnpm 执行 `dsh plugin --profile web add` 并核验通过，客户端密钥写入沙箱内的凭据库、明文密钥被删除，15 秒内进入工作区并显示企业服务初始化向导，向导三步走完（登录模拟企业账号、保存合成网关凭证并取得企业模型、完成）；缩放、全屏与焦点状态以主进程报出的窗口事实核对一致，壳全程无报错。未做：真实企业 IAM 与网关；带品牌配置的员工包（合成包不含品牌配置，应用内回退上游默认品牌）；拖动（自动化没有系统鼠标事件权限）、浅色外观与原生对照、Windows 上的全部表现；Win10 x64 VM 安装验收（含随包 pnpm 在 Windows 上的首启）、内置 Node 工具链与 Python/Office 库（P2-4 其余部分）、真实企业网络下的 IAM 登录联调、产物签名（NSIS SmartScreen / mac Gatekeeper 右键打开）。桌面构建已于 2026-11-25 接入 `release-bundle` 流水线（mac-arm64 zip + windows-x64 NSIS exe 挂同一 tag 草稿）。核对日期：2026-11-25。
 
-本目录是自有的 Electron 应用工程：一个窗口加载本机 `dsh --profile web`，一个托盘图标驻留。壳不修改 DSH，不编译上游 `apps/desktop`。设计见[桌面壳详细设计](../../docs/design/services/desktop-shell.md)（CORP-DSH-DESIGN-025），实施与验证归[桌面端成套打包工作计划](../../docs/plans/2026-11-19-desktop-bundle-packaging.md)（CORP-DSH-PLAN-026）。
+本目录是自有的 Electron 应用工程：一个窗口，顶部是壳自绘的标题栏，下方加载本机 `dsh --profile web`；一个托盘图标驻留。壳不修改 DSH，不编译上游 `apps/desktop`。设计见[桌面壳详细设计](../../docs/design/services/desktop-shell.md)（CORP-DSH-DESIGN-025），实施与验证归[桌面端成套打包工作计划](../../docs/plans/2026-11-19-desktop-bundle-packaging.md)（CORP-DSH-PLAN-026）。
 
 ## 清单
 
@@ -24,6 +24,9 @@
 | `src/diagnostic.mjs` | 失败时告诉人什么：安装器结论的提取、日志条目、交给状态页的参数 |
 | `src/first-run.mjs` | 企业资产的发现与完整性校验、首启标记、委托安装器初始化 profile |
 | `src/lifecycle.mjs` | 关窗、退出与托盘的判定 |
+| `src/window-chrome.mjs` | 窗口外观的判定：哪些平台由壳自绘标题栏、标题栏与内容如何分占窗口、标题栏可请求的窗口动作与调用方校验、桥接是否在页面上生效 |
+| `src/window-chrome.preload.cjs` | 标题栏页面的桥接：三个无参窗口动作与窗口状态订阅，只交给这一页 |
+| `resources/titlebar.html` | 壳自绘的标题栏页面：拖动区与最小化 / 最大化 / 关闭按钮，macOS 与 Windows 两种外观；暂存为 `brand/titlebar.html` |
 | `src/shell.mjs` | 装配：把以上模块接到注入的 Electron 接口 |
 | `src/main.mjs` | 程序入口：真实 `electron` 与安装后的路径 |
 
@@ -42,7 +45,8 @@
 - 密钥预置不经 dsh：安装器用脚本执行器（`embeddedScriptExec`）以应用二进制为 Node 直接运行插件自带的 `@heluo/forge-iam/bin/heluo-forge.mjs`（set、replace、空目录诊断三处）。该执行器只放行 profile 目录内路径归一的普通文件——dsh 的入口会把这个脚本的路径读成 profile 名，所以它前面什么都不加；终端单独运行安装器时不传该执行器，行为与原先一致。
 - 插件安装、客户端密钥入库与明文删除由员工包内的安装器完成（`scripts/init-enterprise-plugin.mjs` 的 `runInit`）；壳不自己写 profile。向 `web` profile 写入 `cordis.patch.yml` 与企业 npm 源 / 索引 preset 是否需要，待计划 P0 第 6 项结论后确定，在此之前不写入。
 - 子进程的环境是用户登录 shell 的环境，与在终端运行一致，不构成安全边界。壳只剥离会改变内嵌运行时工作方式的 Node 与 Electron 开关；库注入类变量保留，企业的终端管控常经它们注入。
-- 渲染进程不获得任何壳能力：`contextIsolation`、`sandbox`、无 `nodeIntegration`、无 preload；全部权限请求默认拒绝。
+- 加载引导页与工作区的内容视图不获得任何壳能力：`contextIsolation`、`sandbox`、无 `nodeIntegration`、无 preload；全部权限请求默认拒绝。只有壳自有的标题栏页面带 preload，桥接只有最小化、缩放、关闭三个无参动作，主进程校验调用方是该页面的主框架且动作在白名单内；标题栏页面不可导航、不可打开新窗口。
+- macOS 与 Windows 上窗口没有系统标题栏：标题栏是壳自己的页面，工作区页面不打宿主标记、不注入样式，DSH 页面结构变化不会让它错位。红灯关闭与黄灯最小化沿用关窗语义（运行中任务不中断）；绿灯在 macOS 上执行缩放（最大化），全屏经系统快捷键或菜单进入，全屏时标题栏收起，布局直接向窗口询问全屏状态。标题栏页面或它的桥接缺失、或桥接没有在页面上生效时，启动即报 `TITLE_BAR_MISSING`，不显示没有控件的窗口。
 
 ## 未验证项
 
@@ -53,6 +57,8 @@
 - Windows 与 Linux 自承载、三平台打包链、麒麟托盘可用性。
 - 随包 pnpm 在 Windows 与 Linux 上的包操作（本机只在 mac-arm64 实测）。
 - 首启失败明细、日志与密钥入库通道在 Windows 与 Linux 上的表现（本机只在 mac-arm64 实测；SQLite 凭据库在 Electron 内嵌 Node 下可写已在本机证实）。
+- 无边框窗口在 Windows 上的全部表现：拖动、贴靠、最大化边距、Alt+Space 系统菜单、Win10 与 Win11 样式差异（本机只在 mac-arm64 深色外观实测，Windows 外观只做了离线渲染）。macOS 上的拖动（自动化没有系统鼠标事件权限）与浅色外观和原生对照未验。
+- 真实企业 IAM 与网关，以及带品牌配置的员工包：本机的窗口实测用的是仓库测试用的模拟 IAM 与网关、从 HEAD 造的不含品牌配置的合成员工包（应用内回退上游默认品牌）。在本机做首启验证时，凭据库默认落在用户主目录下而不是 `DSH_HOME`，必须把 `HOME` 或 `HELUO_FORGE_STORE_DIRECTORY` 指到沙箱。
 - `main.mjs` 中内嵌运行时与企业资产的路径是打包步骤将要暂存的布局，随首个安装包确认。
 
 ## 检查

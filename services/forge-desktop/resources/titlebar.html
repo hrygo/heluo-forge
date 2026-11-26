@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<!-- 'unsafe-inline' is for the one style block and the one script block in this file, and for nothing else: the page shows text only and brings nothing in. -->
+<title>河洛 Forge 企业版</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bar-height: 0px;
+    /* The bar follows the system appearance, the way a system title bar does. */
+    --bar: #f5f5f5;
+    --content: #ffffff;
+    --title: #1d1d1f;
+    --separator: rgba(0, 0, 0, 0.1);
+    --light: #dddddd;
+    --light-sign: rgba(0, 0, 0, 0.55);
+    --caption-hover: rgba(0, 0, 0, 0.059);
+    --caption-pressed: rgba(0, 0, 0, 0.094);
+    --caption-close: #c42b1c;
+    --caption-close-pressed: #b0270a;
+    --caption-sign: #1a1a1a;
+    --caption-sign-inactive: rgba(0, 0, 0, 0.45);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bar: #2b2b2b;
+      --content: #151517;
+      --title: #f2f2f2;
+      --separator: rgba(255, 255, 255, 0.08);
+      --light: #494949;
+      --caption-hover: rgba(255, 255, 255, 0.07);
+      --caption-pressed: rgba(255, 255, 255, 0.045);
+      --caption-sign: #ffffff;
+      --caption-sign-inactive: rgba(255, 255, 255, 0.45);
+    }
+  }
+  html[data-platform="win32"] { --bar: #f3f3f3; --separator: transparent; }
+  @media (prefers-color-scheme: dark) {
+    html[data-platform="win32"] { --bar: #202020; }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--content); }
+
+  /* The bar is what the window is dragged by; each control takes itself out of that region. */
+  .titlebar {
+    position: fixed; inset: 0 0 auto; height: var(--bar-height);
+    display: flex; align-items: center;
+    background: var(--bar); box-shadow: inset 0 -1px 0 var(--separator);
+    color: var(--title);
+    app-region: drag; -webkit-app-region: drag;
+    user-select: none; -webkit-user-select: none;
+    font: 600 13px/1 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  .title {
+    position: absolute; left: 80px; right: 80px;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: center;
+    pointer-events: none;
+  }
+  html[data-platform="win32"] .title {
+    left: 10px; right: 150px; text-align: left;
+    font: 400 12px/1 "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+
+  .controls {
+    position: absolute; top: 0; height: 100%; display: none; align-items: center;
+    app-region: no-drag; -webkit-app-region: no-drag;
+  }
+  html[data-platform="darwin"] .lights { display: flex; left: 13px; gap: 8px; }
+  html[data-platform="win32"] .caption { display: flex; right: 0; }
+
+  /* macOS: three lights at the left, flat circles like the system's. A window that is not frontmost shows plain grey ones. */
+  .light {
+    position: relative; width: 12px; height: 12px;
+    border: 0; border-radius: 50%;
+    background: var(--light);
+  }
+  html:not([data-inactive]) .light.close { background: #ff5f57; }
+  html:not([data-inactive]) .light.minimize { background: #febc2e; }
+  html:not([data-inactive]) .light.zoom { background: #28c840; }
+  .light svg {
+    position: absolute; inset: 0; margin: auto;
+    fill: none; stroke: var(--light-sign); stroke-width: 1; stroke-linecap: round;
+    opacity: 0;
+  }
+  .light.zoom svg { fill: var(--light-sign); stroke: none; }
+  /* The signs show while the pointer is over the lights, as on macOS. */
+  html:not([data-inactive]) .lights:hover .light svg { opacity: 1; }
+  html:not([data-inactive]) .lights:hover .light { filter: brightness(1.08); }
+  html:not([data-inactive]) .light:active { filter: brightness(0.88); }
+
+  /* Windows: minimize, maximize and close at the right. */
+  .caption button {
+    display: grid; place-items: center;
+    width: 40px; height: 26px; margin: 3px;
+    border: 0; border-radius: 4px; background: transparent;
+  }
+  .caption svg { fill: none; stroke: var(--caption-sign); stroke-width: 1; }
+  html[data-inactive] .caption svg { stroke: var(--caption-sign-inactive); }
+  .caption button:hover { background: var(--caption-hover); }
+  .caption button:active { background: var(--caption-pressed); }
+  .caption button.close:hover { background: var(--caption-close); }
+  .caption button.close:active { background: var(--caption-close-pressed); }
+  .caption button.close:hover svg, .caption button.close:active svg { stroke: #ffffff; }
+  /* A maximized window offers to restore it. */
+  html[data-maximized] .caption .maximize-sign { display: none; }
+  html:not([data-maximized]) .caption .restore-sign { display: none; }
+</style>
+</head>
+<body>
+  <header class="titlebar">
+    <span class="title" id="title"></span>
+    <div class="controls lights">
+      <button type="button" class="light close" data-action="close" aria-label="关闭">
+        <svg width="6" height="6" viewBox="0 0 6 6"><path d="M0.5 0.5 5.5 5.5M5.5 0.5 0.5 5.5"/></svg>
+      </button>
+      <button type="button" class="light minimize" data-action="minimize" aria-label="最小化">
+        <svg width="8" height="8" viewBox="0 0 8 8"><path d="M0 4H8"/></svg>
+      </button>
+      <button type="button" class="light zoom" data-action="toggle-maximize" aria-label="缩放">
+        <svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 0H8V4ZM0 8V4H4Z"/></svg>
+      </button>
+    </div>
+    <div class="controls caption">
+      <button type="button" data-action="minimize" aria-label="最小化">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5H10"/></svg>
+      </button>
+      <button type="button" class="maximize" data-action="toggle-maximize" aria-label="最大化">
+        <svg class="maximize-sign" width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5H9.5V9.5H0.5Z"/></svg>
+        <svg class="restore-sign" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5V0.5H9.5V7.5H7.5M0.5 2.5H7.5V9.5H0.5Z"/></svg>
+      </button>
+      <button type="button" class="close" data-action="close" aria-label="关闭">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 9.5 9.5M9.5 0.5 0.5 9.5"/></svg>
+      </button>
+    </div>
+  </header>
+<script>
+  const root = document.documentElement;
+  const query = new URLSearchParams(location.search);
+  // The shell says which set of buttons this is, how tall the bar is, and what to call the window.
+  root.dataset.platform = query.get('platform') ?? '';
+  const bar = Number.parseInt(query.get('bar') ?? '', 10);
+  root.style.setProperty('--bar-height', `${Number.isNaN(bar) || bar < 0 ? 0 : bar}px`);
+  document.getElementById('title').textContent = query.get('title') ?? document.title;
+
+  const bridge = window.forgeWindow;
+  // A click is all a button does, and it never takes the keyboard out of the content.
+  for (const button of document.querySelectorAll('button[data-action]')) {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => {
+      const action = button.dataset.action;
+      if (action === 'minimize') bridge.minimize();
+      else if (action === 'toggle-maximize') bridge.toggleMaximize();
+      else if (action === 'close') bridge.close();
+    });
+  }
+
+  // The shell reports the state of the window; the bar follows it.
+  function follow(state) {
+    root.toggleAttribute('data-maximized', state.maximized === true);
+    root.toggleAttribute('data-inactive', state.focused === false);
+  }
+  bridge.onState(follow);
+</script>
+</body>
+</html>
