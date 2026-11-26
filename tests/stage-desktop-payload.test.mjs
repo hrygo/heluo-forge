@@ -14,7 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { ASSETS_DIR, DSH_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { dedupeDshClosure, inspectDshClosure, parseArguments, pruneForeignPrebuilds, StageError, stagePayload, unpackPnpm } from '../scripts/stage-desktop-payload.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -81,11 +81,10 @@ function fakeInstaller() {
 }
 
 /** Arguments for one staging run of `root`'s output; the ledger is written separately. */
-function stageArgs(root, dsh, pnpm) {
+function stageArgs(root, dsh) {
   return {
     output: join(root, 'out'),
     dshTgz: dsh.tgz,
-    pnpmTgz: pnpm?.tgz,
     brandDir: BRAND_DIR,
     lockPath: join(root, 'runtime-lock.json'),
     repoRoot: REPO_ROOT,
@@ -93,30 +92,25 @@ function stageArgs(root, dsh, pnpm) {
   };
 }
 
-/** The ledger row that matches a pnpm fixture. */
-const pnpmRow = (artifact, version = '11.28.5-test') => ({ version, sha256: artifact.sha256, bytes: artifact.bytes.length });
-
-/** A ledger naming the dsh fixture, the pnpm row when there is one, and any dsh field to vary. */
-function ledger(dsh, { pnpm, dsh: varied = {} } = {}) {
+/** A ledger naming the dsh fixture, with any dsh field to vary. */
+function ledger(dsh, { dsh: varied = {} } = {}) {
   return {
     schema: 'heluo-desktop-runtime-lock/1',
     dsh: { version: '0.0.0-test', sha256: dsh.sha256, bytes: dsh.bytes.length, ...varied },
-    ...(pnpm === undefined ? {} : { pnpm }),
   };
 }
 
-/** Stage both fixtures against a ledger written to disk: the matching rows, with any field to vary. */
-function stageWith(root, dsh, pnpm, { dsh: variedDsh = {}, pnpm: variedPnpm } = {}) {
-  const args = stageArgs(root, dsh, pnpm);
-  writeFileSync(args.lockPath, `${JSON.stringify(ledger(dsh, { dsh: variedDsh, pnpm: variedPnpm ?? pnpmRow(pnpm) }), null, 2)}\n`);
+/** Stage the dsh fixture against a ledger written to disk: the matching row, with any field to vary. */
+function stageWith(root, dsh, { dsh: variedDsh = {} } = {}) {
+  const args = stageArgs(root, dsh);
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(dsh, { dsh: variedDsh }), null, 2)}\n`);
   return stagePayload(args);
 }
 
-test('暂存布局与 layout.mjs 双向契约：dsh 入口与托盘图标落在 main.mjs 读取的路径', (t) => {
+test('暂存布局与 layout.mjs 双向契约：dsh 入口与托盘图标落在 main.mjs 读取的路径，pnpm 只随内置运行时一份', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
-  const record = stageWith(root, artifact, pnpm);
+  const record = stageWith(root, artifact);
   const resources = join(root, 'out', 'resources');
   assert.equal(existsSync(join(resources, ...DSH_ENTRY_PARTS)), true, 'dsh entry must sit exactly where main.mjs reads it');
   assert.equal(readFileSync(join(resources, ...DSH_ENTRY_PARTS.slice(0, -2), 'lib', 'bin.js')).toString(), 'void 0;\n', 'artifact bytes unpack verbatim');
@@ -142,143 +136,74 @@ test('暂存布局与 layout.mjs 双向契约：dsh 入口与托盘图标落在 
   assert.equal(record.titleBar.source, TITLE_BAR_PARTS.join('/'));
   assert.equal(record.dsh.version, '0.0.0-test');
   assert.equal(record.assets, null);
+  // The pnpm the package operations run is the bundled runtime's one copy:
+  // this stager unpacks none, so nothing sits at the place the old one did.
+  assert.equal(existsSync(join(resources, 'pnpm')), false, 'no pnpm of its own is staged here');
+  assert.equal(record.pnpm, undefined);
+  assert.equal(record.layout.pnpmEntry, undefined);
 });
 
 test('反向：仓库缺标题栏页面即拒绝暂存，不发布台账', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
   // A checkout with the setup page but without the title bar: the shell would open a window nothing can be closed from.
   const bare = temp(t, 'forge-stage-nobar-');
   const pages = ['services', 'forge-desktop', 'resources', ...STATUS_PAGE_PARTS.slice(1)];
   mkdirSync(join(bare, ...pages.slice(0, -1)), { recursive: true });
   writeFileSync(join(bare, ...pages), readFileSync(join(REPO_ROOT, ...pages)));
-  const valid = stageArgs(root, artifact, pnpm);
-  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  const valid = stageArgs(root, artifact);
+  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact), null, 2)}\n`);
   assert.throws(() => stagePayload({ ...valid, repoRoot: bare }), refused('TITLE_BAR_MISSING'));
   assert.equal(existsSync(join(valid.output, 'staging-manifest.json')), false);
-});
-
-test('pnpm 按 PNPM_ENTRY_PARTS 暂存：入口、嵌套文件与执行位原样落地，台账记录摘要', { skip: !POSIX }, (t) => {
-  const root = temp(t);
-  const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root, { executable: true });
-  const record = stageWith(root, artifact, pnpm);
-  const resources = join(root, 'out', 'resources');
-  // The entry is where the shell starts pnpm from, and it is the file the archive carried.
-  assert.equal(existsSync(join(resources, ...PNPM_ENTRY_PARTS)), true, 'pnpm entry must sit exactly where the shell reads it');
-  assert.equal(readFileSync(join(resources, ...PNPM_ENTRY_PARTS)).toString(), "console.log('pnpm');\n");
-  assert.equal(statSync(join(resources, ...PNPM_ENTRY_PARTS)).mode & 0o777, 0o755, 'the executable bit the archive recorded is kept');
-  assert.equal(readFileSync(join(resources, 'pnpm', 'dist', 'nested', 'payload.mjs')).toString(), 'void 0;\n', 'nested files land below the package root');
-  assert.equal(statSync(join(resources, 'pnpm', 'dist', 'nested', 'payload.mjs')).mode & 0o777, 0o644);
-  assert.equal(JSON.parse(readFileSync(join(resources, 'pnpm', 'package.json'), 'utf8')).version, '11.28.5-test', 'the manifest is unpacked verbatim');
-  // Nothing of the archive's `package/` root leaks into the layout.
-  assert.equal(existsSync(join(resources, 'pnpm', 'package')), false);
-  // The record names what was staged, for the build and the audit after it.
-  assert.deepEqual(record.pnpm, { version: '11.28.5-test', sha256: pnpm.sha256, bytes: pnpm.bytes.length, artifact: basename(pnpm.tgz) });
-  assert.equal(record.layout.pnpmEntry, PNPM_ENTRY_PARTS.join('/'));
-  assert.deepEqual(JSON.parse(readFileSync(join(root, 'out', 'staging-manifest.json'), 'utf8')).pnpm, record.pnpm);
 });
 
 test('员工资产目录按 ASSETS_DIR 暂存', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
   const assets = join(root, 'employee');
   mkdirSync(assets, { recursive: true });
   writeFileSync(join(assets, 'employee-manifest.json'), '{}\n');
-  const args = { ...stageArgs(root, artifact, pnpm), employeeAssets: assets };
-  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }))}\n`);
+  const args = { ...stageArgs(root, artifact), employeeAssets: assets };
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact))}\n`);
   const record = stagePayload(args);
   assert.equal(existsSync(join(root, 'out', 'resources', ASSETS_DIR, 'employee-manifest.json')), true);
   assert.equal(record.assets, ASSETS_DIR);
 });
 
-test('反向：dsh 或 pnpm 的摘要、字节数与台账不符即拒绝，且不动已有输出（fail-closed）', (t) => {
+test('反向：dsh 的摘要、字节数与台账不符即拒绝，且不动已有输出（fail-closed）', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
   mkdirSync(join(root, 'out', 'resources'), { recursive: true });
   writeFileSync(join(root, 'out', 'resources', 'leftover.txt'), 'previous run\n');
 
-  assert.throws(() => stageWith(root, artifact, pnpm, { dsh: { sha256: '0'.repeat(64) } }), refused('STAGE_DIGEST_MISMATCH'));
-  assert.throws(() => stageWith(root, artifact, pnpm, { dsh: { bytes: artifact.bytes.length + 1 } }), refused('STAGE_DIGEST_MISMATCH'));
-  assert.throws(() => stageWith(root, artifact, pnpm, { pnpm: { ...pnpmRow(pnpm), sha256: 'f'.repeat(64) } }), refused('STAGE_DIGEST_MISMATCH'));
-  assert.throws(
-    () => stageWith(root, artifact, pnpm, { pnpm: { ...pnpmRow(pnpm), bytes: pnpm.bytes.length + 1 } }),
-    (error) => error.code === 'STAGE_DIGEST_MISMATCH' && /pnpm tarball is/.test(error.message),
-  );
-  // The failure names the artifact it is about.
-  assert.throws(() => stageWith(root, artifact, pnpm, { pnpm: { ...pnpmRow(pnpm), sha256: 'f'.repeat(64) } }), (error) => /pnpm tarball SHA-256/.test(error.message));
+  assert.throws(() => stageWith(root, artifact, { dsh: { sha256: '0'.repeat(64) } }), refused('STAGE_DIGEST_MISMATCH'));
+  assert.throws(() => stageWith(root, artifact, { dsh: { bytes: artifact.bytes.length + 1 } }), refused('STAGE_DIGEST_MISMATCH'));
 
   // Nothing of a refused run reaches the output: the previous content is still there, untouched.
   assert.equal(readFileSync(join(root, 'out', 'resources', 'leftover.txt')).toString(), 'previous run\n');
   assert.equal(existsSync(join(root, 'out', 'staging-manifest.json')), false);
 });
 
-test('反向：pnpm 制品缺失、未交接、台账无行、包内身份不符、归档不合规各自报错', (t) => {
+test('反向：本暂存器不再接 pnpm 制品——参数解析把 pnpm 的交接留给载荷暂存器', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
-  // Every refusal below comes after a ledger that would otherwise admit the handover.
-  const valid = stageArgs(root, artifact, pnpm);
-  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
-
-  assert.throws(() => stagePayload({ ...valid, pnpmTgz: join(root, 'absent.tgz') }), refused('PNPM_TGZ_MISSING'));
-  assert.throws(() => stagePayload({ ...valid, pnpmTgz: undefined }), refused('PNPM_TGZ_MISSING'));
-  // A ledger without the pnpm row is not a staging input, whoever supplied the tarball.
-  const rowless = { ...valid };
-  writeFileSync(rowless.lockPath, `${JSON.stringify(ledger(artifact), null, 2)}\n`);
-  assert.throws(() => stagePayload(rowless), refused('LOCK_INVALID'));
-  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
-
-  // Bytes the ledger matches, but not the package it names: identity is checked on what landed.
-  const older = fixturePnpm(root, { version: '11.28.4-test' });
-  assert.throws(() => stageWith(root, artifact, older), refused('STAGE_PNPM_IDENTITY_MISMATCH'));
-  const foreign = fixturePnpm(root, { name: 'npm' });
-  assert.throws(() => stageWith(root, artifact, foreign), refused('STAGE_PNPM_IDENTITY_MISMATCH'));
-  assert.throws(() => stageWith(root, artifact, older, { pnpm: pnpmRow(older, '11.28.6-test') }), refused('STAGE_PNPM_IDENTITY_MISMATCH'));
-
-  // The right package with no entry to start: the layout contract catches it here, not in the app.
-  const entryless = fixturePnpm(root, { entry: false });
-  assert.throws(() => stageWith(root, artifact, entryless), refused('STAGE_LAYOUT_INVALID'));
-
-  // An archive that is not rooted at `package/` is not a registry artifact.
-  const rooted = fixturePnpm(root, { archiveRoot: 'elsewhere' });
-  assert.throws(() => stageWith(root, artifact, rooted), refused('STAGE_PNPM_ARCHIVE_INVALID'));
-});
-
-test('反向：unpackPnpm 拒绝非归档字节与越出 package/ 的归档，且不写出任何文件', (t) => {
-  const root = temp(t);
-  const destination = join(root, 'pnpm');
-  assert.throws(() => unpackPnpm(Buffer.from('this is not a tarball, not even gzip'), destination), refused('STAGE_PNPM_ARCHIVE_INVALID'));
-  assert.throws(() => unpackPnpm(fixturePnpm(root, { archiveRoot: 'other' }).bytes, destination), refused('STAGE_PNPM_ARCHIVE_INVALID'));
-  assert.equal(existsSync(destination), false, 'a refused archive creates nothing');
-});
-
-test('反向：缺品牌套件与缺 dsh 制品各自报错；参数解析要求并拒绝未知项', (t) => {
-  const root = temp(t);
-  const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
   const brandless = temp(t, 'forge-stage-nobrand-');
   // Artifacts are verified before the brand is looked at, so the ledger on disk is a valid one.
-  const valid = stageArgs(root, artifact, pnpm);
-  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  const valid = stageArgs(root, artifact);
+  writeFileSync(valid.lockPath, `${JSON.stringify(ledger(artifact), null, 2)}\n`);
   assert.throws(() => stagePayload({ ...valid, output: join(brandless, 'out'), brandDir: join(brandless, 'no-brand') }), (error) => error.code === 'BRAND_MISSING');
-  // dsh is reported before pnpm: the handover is refused one artifact at a time, in layout order.
+  // The one artifact this stager refuses is dsh; a pnpm tarball is no longer part of its handover.
   assert.throws(
-    () => stagePayload({ ...valid, output: join(root, 'b'), dshTgz: join(root, 'missing.tgz'), pnpmTgz: join(root, 'also-missing.tgz') }),
+    () => stagePayload({ ...valid, output: join(root, 'b'), dshTgz: join(root, 'missing.tgz') }),
     (error) => error.code === 'DSH_TGZ_MISSING',
   );
   assert.throws(() => parseArguments(['--output', 'x', '--mystery']), (error) => error.code === 'BAD_ARGUMENT');
   assert.throws(() => parseArguments(['--dsh-tgz', 'x.tgz']), (error) => error.code === 'BAD_ARGUMENT');
-  // Both artifacts are part of every handover.
-  assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--pnpm-tgz is required/.test(error.message));
-  assert.throws(() => parseArguments(['--output', 'x', '--pnpm-tgz', 'p.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--dsh-tgz is required/.test(error.message));
-  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--target', 'win-x64', '--max-dsh-bytes', '1024', '--max-dsh-files', '50', '--json']), {
+  // The pnpm artifact belongs to the bundled runtime's stager, not this one.
+  assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /unknown argument --pnpm-tgz/.test(error.message));
+  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--target', 'win-x64', '--max-dsh-bytes', '1024', '--max-dsh-files', '50', '--json']), {
     output: 'x',
     dshTgz: 'x.tgz',
-    pnpmTgz: 'p.tgz',
     target: 'win-x64',
     brandDir: undefined,
     employeeAssets: undefined,
@@ -288,14 +213,23 @@ test('反向：缺品牌套件与缺 dsh 制品各自报错；参数解析要求
     json: true,
   });
   for (const bad of [['--target', 'solaris-x64'], ['--max-dsh-bytes', '0'], ['--max-dsh-bytes', '-1'], ['--max-dsh-files', 'abc']]) {
-    assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', ...bad]), refused('BAD_ARGUMENT'));
+    assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', ...bad]), refused('BAD_ARGUMENT'));
   }
+});
+
+test('反向：unpackPnpm 拒绝非归档字节与越出 package/ 的归档，且不写出任何文件', (t) => {
+  // The pnpm tarball this unpacks is the bundled runtime's now; the reader
+  // itself is still this module's, so its fail-closed rules are still tested here.
+  const root = temp(t);
+  const destination = join(root, 'pnpm');
+  assert.throws(() => unpackPnpm(Buffer.from('this is not a tarball, not even gzip'), destination), refused('STAGE_PNPM_ARCHIVE_INVALID'));
+  assert.throws(() => unpackPnpm(fixturePnpm(root, { archiveRoot: 'other' }).bytes, destination), refused('STAGE_PNPM_ARCHIVE_INVALID'));
+  assert.equal(existsSync(destination), false, 'a refused archive creates nothing');
 });
 
 test('闭包去重、外平台 prebuilds 裁剪、Top 20 统计与预算门禁（正反向）', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
-  const pnpm = fixturePnpm(root);
   const writePkg = (dir, name, version, size = 16) => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name, version })}\n`);
@@ -327,8 +261,8 @@ test('闭包去重、外平台 prebuilds 裁剪、Top 20 统计与预算门禁�
     }
   };
 
-  const args = { ...stageArgs(root, artifact, pnpm), target: 'mac-arm64', installer: nestedInstaller };
-  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  const args = { ...stageArgs(root, artifact), target: 'mac-arm64', installer: nestedInstaller };
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact), null, 2)}\n`);
   const record = stagePayload(args);
   const stagedNm = join(root, 'out', 'resources', 'dsh', 'node_modules');
 
@@ -367,7 +301,7 @@ test('闭包去重、外平台 prebuilds 裁剪、Top 20 统计与预算门禁�
   assert.equal(existsSync(join(winPkgDir, 'darwin-arm64')), false);
 
   // Deterministic closure lock: exact match passes; tampered digest or count fails closed without harming output.
-  const locked = ledger(artifact, { pnpm: pnpmRow(pnpm) });
+  const locked = ledger(artifact);
   locked.dshClosure = { digest: record.dshClosure.digest, packages: record.dshClosure.packages };
   writeFileSync(args.lockPath, `${JSON.stringify(locked, null, 2)}\n`);
   assert.equal(stagePayload(args).dshClosure.digest, record.dshClosure.digest);
@@ -380,21 +314,21 @@ test('闭包去重、外平台 prebuilds 裁剪、Top 20 统计与预算门禁�
   assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on closure mismatch');
 
   // Budget gates (both CLI flags and lock fields) fail closed without destroying existing output.
-  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact), null, 2)}\n`);
   assert.throws(() => stagePayload({ ...args, maxDshBytes: record.dshClosure.bytes - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
   assert.throws(() => stagePayload({ ...args, maxDshFiles: record.dshClosure.files - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
-  const budgetLock = ledger(artifact, { pnpm: pnpmRow(pnpm) });
+  const budgetLock = ledger(artifact);
   budgetLock.dshClosure = { digest: record.dshClosure.digest, packages: record.dshClosure.packages, maxBytes: record.dshClosure.bytes - 1 };
   writeFileSync(args.lockPath, `${JSON.stringify(budgetLock, null, 2)}\n`);
   assert.throws(() => stagePayload(args), refused('STAGE_BUDGET_EXCEEDED'));
   assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on budget refusal');
 
   // Installed dsh version mismatch fails closed.
-  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { dsh: { version: '9.9.9' }, pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { dsh: { version: '9.9.9' } }), null, 2)}\n`);
   assert.throws(() => stagePayload(args), refused('STAGE_DSH_IDENTITY_MISMATCH'));
 });
 
-test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品、按目标裁剪 prebuilds，macOS 产 dmg、Windows 产 exe', () => {
+test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品、只在运行时暂存交接它，按目标裁剪 prebuilds，macOS 产 dmg、Windows 产 exe', () => {
   // The workflow runs only on a tag, behind an approval: a handover it gets wrong would be found late.
   const count = (text, pattern) => (text.match(pattern) ?? []).length;
   // A staged command is a first line ending in a backslash and the lines it is joined to; a one-line call is not a staging.
@@ -411,13 +345,22 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
   assert.equal(count(workflow, /node -p "require\('\.\/services\/forge-desktop\/runtime-lock\.json'\)\.pnpm\.version"/gu), stagings.length, 'the version comes from the ledger');
   assert.equal(count(workflow, /echo "PNPM_TGZ=/gu), stagings.length, 'the artifact path is published to the later steps');
   const handed = (command) => /--pnpm-tgz "\$PNPM_TGZ"/u.test(command);
-  // The bundled runtime is staged from the same pnpm artifact; its one-line lock check is not a staging.
-  const consumers = [...stagings, ...commands(workflow, 'stage-primary-runtime')];
-  for (const command of consumers) assert.equal(handed(command), true, `a staging without the pnpm artifact:\n${command}`);
-  // The guard fails on a workflow that stages without the pnpm artifact.
+  // The payload is the one place pnpm is unpacked: every runtime staging hands the artifact over...
+  const runtimes = commands(workflow, 'stage-primary-runtime');
+  assert.equal(runtimes.length, stagings.length, 'one bundled runtime per desktop job');
+  for (const command of runtimes) assert.equal(handed(command), true, `a runtime staging without the pnpm artifact:\n${command}`);
+  // ...and the payload stager alone: a staging of the shell resources that hands it over would unpack a second copy.
+  for (const command of stagings) assert.equal(handed(command), false, `the shell staging must not hand over the pnpm artifact:\n${command}`);
+  // The guard fails on a workflow whose runtime staging loses the artifact...
   const dropped = workflow.replace('--pnpm-tgz "$PNPM_TGZ"', '');
-  const afterDrop = [...commands(dropped, 'stage-desktop-payload'), ...commands(dropped, 'stage-primary-runtime')];
-  assert.equal(afterDrop.some((command) => !handed(command)), true);
+  assert.equal([...commands(dropped, 'stage-primary-runtime')].some((command) => !handed(command)), true);
+  // ...and on one that hands it to the shell staging as well.
+  const extra = workflow.replace(
+    '          node scripts/stage-desktop-payload.mjs \\\n            --output "$RUNNER_TEMP/staged" \\\n            --dsh-tgz "$DSH_TGZ" \\\n',
+    '          node scripts/stage-desktop-payload.mjs \\\n            --output "$RUNNER_TEMP/staged" \\\n            --dsh-tgz "$DSH_TGZ" \\\n            --pnpm-tgz "$PNPM_TGZ" \\\n',
+  );
+  assert.notEqual(extra, workflow, 'the mutation must land somewhere');
+  assert.equal([...commands(extra, 'stage-desktop-payload')].some((command) => handed(command)), true);
 });
 
 /** Kept pure so the mutation below proves the agreement check fails. */
@@ -429,7 +372,7 @@ function pnpmPinProblems(lock, packageManager) {
   return problems;
 }
 
-test('台账：随包 pnpm 与仓库的 packageManager 钉同一个版本，且锁的是一行真实摘要（变异证明）', () => {
+test('台账：载荷 pnpm 与仓库的 packageManager 钉同一个版本，且锁的是一行真实摘要（变异证明）', () => {
   const lock = JSON.parse(readFileSync(LOCK_PATH, 'utf8'));
   const { packageManager } = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.deepEqual(pnpmPinProblems(lock, packageManager), []);

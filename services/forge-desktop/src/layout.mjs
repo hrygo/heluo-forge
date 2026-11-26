@@ -1,29 +1,42 @@
 /**
- * Resource layout of the packaged shell, shared with the staging tool.
+ * Resource layout of the packaged shell, shared with the staging tools.
  *
  * These relative paths are the contract between `stage-desktop-payload.mjs`
- * (which fills `<resources>/`) and `main.mjs` (which reads it): a change on
- * either side without the other fails the layout contract test instead of a
- * packaged app at first run.
+ * and `stage-primary-runtime.mjs` (which fill `<resources>/`) and `main.mjs`
+ * (which reads it): a change on either side without the other fails the layout
+ * contract test instead of a packaged app at first run.
  */
 
 /** The embedded runtime entry, relative to the resources root. */
 export const DSH_ENTRY_PARTS = ['dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'];
 
 /**
- * The pnpm the app ships, relative to the resources root: the `bin/pnpm.mjs`
- * of the locked npm package. Every dsh package operation runs it with the
- * app's binary as Node, so none of them looks for a pnpm on PATH.
- */
-export const PNPM_ENTRY_PARTS = ['pnpm', 'bin', 'pnpm.mjs'];
-
-/**
  * The primary runtime the app ships, relative to the resources root: upstream's
  * relocatable payload of standalone Node.js, pnpm and CPython with the Office
- * libraries, under its own `runtime.json`. The shell reads nothing inside it;
- * it names the directory to the web profile through `PRIMARY_RUNTIME_VARIABLE`.
+ * libraries, under its own `runtime.json`. The shell names the directory to the
+ * web profile through `PRIMARY_RUNTIME_VARIABLE`, and takes the package
+ * manager's two entries out of it.
  */
 export const PRIMARY_RUNTIME_DIR = 'primary-runtime';
+
+/**
+ * The pnpm of the primary runtime, relative to the resources root: the
+ * `bin/pnpm.mjs` of the payload's pnpm package. Every dsh package operation
+ * runs it with the payload's own Node, so none of them looks for a pnpm on
+ * PATH and the app unpacks no pnpm of its own — the payload is the one copy.
+ */
+export const PRIMARY_RUNTIME_PNPM_PARTS = [PRIMARY_RUNTIME_DIR, 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'];
+
+/**
+ * The Node of the primary runtime, relative to the resources root: `node.exe`
+ * on Windows, `node` elsewhere. The same interpreter the payload's own tools
+ * run is the interpreter of every package operation.
+ *
+ * @param {NodeJS.Platform} [platform] defaults to the running platform
+ */
+export function primaryRuntimeNodeParts(platform = process.platform) {
+  return [PRIMARY_RUNTIME_DIR, 'dependencies', 'node', 'bin', platform === 'win32' ? 'node.exe' : 'node'];
+}
 
 /**
  * The variable the web profile reads the payload's location from. Upstream's

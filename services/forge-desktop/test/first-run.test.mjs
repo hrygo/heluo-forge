@@ -227,6 +227,9 @@ test('the profile is initialized again only when it never was, or the package ch
   assert.equal(firstRunNeeded({ markerPath, manifestDigest: digest, profile: 'web' }), true);
 });
 
+/** An installer module in the current form: an entry and the capabilities it lists. */
+const capableInstaller = (runInit) => ({ runInit, CAPABILITIES: ['pnpm-from-host', 'reinstall-on-store-mismatch', 'pnpm-store'] });
+
 test('the installer is handed the package, the profile and the embedded runtime, and its verdict is final', async (t) => {
   const assets = inspectEmployeePackage(employeePackage(t));
   const calls = [];
@@ -238,7 +241,7 @@ test('the installer is handed the package, the profile and the embedded runtime,
       ? { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } }
       : { code: 1, lines: ['init: 调用 dsh 失败（/some/host/path）'], warnings: [], result: { ok: false, error: { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', message: 'init: 调用 dsh 失败（/some/host/path）' } } };
   };
-  const done = await initializeProfile({ assets, runInit, env, exec, profile: 'web', dsh: '/apps/electron' });
+  const done = await initializeProfile({ assets, installer: capableInstaller(runInit), env, exec, profile: 'web', dsh: '/apps/electron' });
   // A success returns the installer's whole outcome: the conclusion, and what it printed.
   assert.deepEqual(done, { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } });
   // The shell's dsh carries its own pnpm, so the installer is told not to look for one; and the
@@ -254,7 +257,7 @@ test('the installer is handed the package, the profile and the embedded runtime,
   const warnings = ['warn: 一条警告'];
   const stopped = await initializeProfile({
     assets,
-    runInit: async () => ({ code: 1, lines, warnings, result: { ok: false, error: { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', message: 'init: 调用 dsh 失败（/some/host/path）', next: '修复凭据存储后重跑。' } } }),
+    installer: capableInstaller(async () => ({ code: 1, lines, warnings, result: { ok: false, error: { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', message: 'init: 调用 dsh 失败（/some/host/path）', next: '修复凭据存储后重跑。' } } })),
     env,
     exec,
     profile: 'web',
@@ -264,15 +267,81 @@ test('the installer is handed the package, the profile and the embedded runtime,
   assert.deepEqual(stopped.details, { code: 'IAM_CLIENT_SECRET_PROVISION_FAILED', reason: 'init: 调用 dsh 失败（/some/host/path）', next: '修复凭据存储后重跑。', lines, warnings });
   assert.equal(stopped.message.includes('/some/host/path'), false, 'the message itself still repeats only the code');
   // No verdict at all is not success, and nothing is invented in its place.
-  const blank = await initializeProfile({ assets, runInit: async () => undefined, env, exec, profile: 'web', dsh: '/apps/electron' }).catch((error) => error);
+  const blank = await initializeProfile({ assets, installer: capableInstaller(async () => undefined), env, exec, profile: 'web', dsh: '/apps/electron' }).catch((error) => error);
   assert.ok(blank instanceof ShellError && blank.code === 'FIRST_RUN_FAILED');
   assert.match(blank.message, /UNKNOWN/);
   assert.deepEqual(blank.details, { code: 'UNKNOWN', reason: '', next: '', lines: [], warnings: [] });
   // Without the installer or the runtime there is nothing to run.
-  for (const missing of [{ runInit: undefined }, { dsh: '' }, { dsh: undefined }]) {
+  for (const missing of [{ installer: { CAPABILITIES: [] } }, { installer: {} }, { dsh: '' }, { dsh: undefined }]) {
     await assert.rejects(
-      initializeProfile({ assets, runInit, env, exec, profile: 'web', dsh: '/apps/electron', ...missing }),
+      initializeProfile({ assets, installer: capableInstaller(runInit), env, exec, profile: 'web', dsh: '/apps/electron', ...missing }),
       (error) => error instanceof ShellError && error.code === 'BAD_ARGUMENT',
+    );
+  }
+});
+
+test('the installer is asked only for what it says it understands, whichever form it declares that in', async (t) => {
+  const assets = inspectEmployeePackage(employeePackage(t));
+  const exec = () => {};
+  const env = { PATH: '/usr/bin' };
+  const handed = (installer, extra = {}) => {
+    const calls = [];
+    return {
+      calls,
+      run: initializeProfile({
+        assets,
+        installer: { ...installer, runInit: async (input) => { calls.push(input); return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } }; } },
+        env,
+        exec,
+        profile: 'web',
+        dsh: '/apps/electron',
+        ...extra,
+      }),
+    };
+  };
+  const argvOf = (result) => result.calls[0].argv;
+
+  // The released form that already knew both flags exports their echo lines.
+  const legacy = handed({ PNPM_FROM_HOST_LINE: '工具：…', REINSTALL_LINE: '修复：…' });
+  await legacy.run;
+  assert.deepEqual(argvOf(legacy), ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--reinstall-on-store-mismatch', '--json']);
+  // The form between the two flags: it knows the host pnpm, not the repair grant.
+  const middle = handed({ PNPM_FROM_HOST_LINE: '工具：…' });
+  await middle.run;
+  assert.deepEqual(argvOf(middle), ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--json']);
+
+  // A capability list rules over everything; entries that are not strings are not capabilities.
+  const filtered = handed({ CAPABILITIES: ['pnpm-from-host', 'reinstall-on-store-mismatch', 42, null] });
+  await filtered.run;
+  assert.deepEqual(argvOf(filtered), ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--reinstall-on-store-mismatch', '--json']);
+
+  // The store is handed over only when the installer understands it and one was named.
+  const withStore = handed(capableInstaller(() => {}), { pnpmStore: '/store/v10' });
+  await withStore.run;
+  assert.deepEqual(argvOf(withStore), ['--release', assets.pluginDirectory, '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--reinstall-on-store-mismatch', '--pnpm-store', '/store/v10', '--json']);
+  // An installer that never heard of the argument is not given it, store or not.
+  const legacyStore = handed({ PNPM_FROM_HOST_LINE: '工具：…' }, { pnpmStore: '/store/v10' });
+  await legacyStore.run;
+  assert.equal(argvOf(legacyStore).includes('--pnpm-store'), false);
+  // A probe that named no store hands nothing over.
+  const unnamed = handed(capableInstaller(() => {}), { pnpmStore: null });
+  await unnamed.run;
+  assert.equal(argvOf(unnamed).includes('--pnpm-store'), false);
+});
+
+test('an installer older than the shell is refused with the reason, not "unknown argument"', async (t) => {
+  const assets = inspectEmployeePackage(employeePackage(t));
+  const exec = () => {};
+  const env = { PATH: '/usr/bin' };
+  // The form before the flags: an entry, and nothing the probe can read —
+  // whether the list is absent or empty makes no difference.
+  for (const older of [{ runInit: async () => ({ code: 0, lines: [], warnings: [], result: { ok: true } }) }, { runInit: async () => ({ code: 0, lines: [], warnings: [], result: { ok: true } }), CAPABILITIES: [] }]) {
+    await assert.rejects(
+      initializeProfile({ assets, installer: older, env, exec, profile: 'web', dsh: '/apps/electron' }),
+      (error) => error instanceof ShellError
+        && error.code === 'INSTALLER_CAPABILITY_MISSING'
+        && /--pnpm-from-host/.test(error.message)
+        && /employee package built with this application/.test(error.message),
     );
   }
 });

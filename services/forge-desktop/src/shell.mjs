@@ -44,6 +44,7 @@ const GUIDANCE = Object.freeze({
   STOPPED: '本机服务在就绪前被停止。请重新启动应用。',
   STOPPING: '本机服务正在停止。请等它结束后重新启动应用。',
   EMBEDDED_RUNTIME_MISSING: '找不到内嵌运行时。请重新安装应用。',
+  INSTALLER_CAPABILITY_MISSING: '员工包内的安装器不认识本应用交给它的参数。请换用与本应用同一次构建的员工包，然后从托盘菜单重试。',
   TITLE_BAR_MISSING: '窗口组件缺失。请重新安装应用。',
   UNKNOWN: '应用无法启动。请重新启动应用；仍然失败时请联系管理员并提供错误码。',
 });
@@ -66,7 +67,11 @@ export function guidanceFor(code) {
  *   embeddedCommand: string, env: object, exec: Function, loadInstaller: Function,
  *   createRuntime: Function, spawnProfile: Function, runtimeOptions?: object, trayIcon?: string,
  *   statusPage?: string, titleBarPage?: string, titleBarPreload?: string, preflight?: Function,
- *   failureStopWaitMs?: number, diagnosticLog?: string, now?: Function, scriptExec?: Function}} options
+ *   failureStopWaitMs?: number, diagnosticLog?: string, now?: Function, scriptExec?: Function,
+ *   pnpmStore?: Function}} options
+ *   `loadInstaller` returns the installer module of the employee package (its
+ *   `runInit` is the entry, its exports the capability list); `pnpmStore` is
+ *   asked for the store the bundled pnpm resolves whenever a first run is due.
  *   `statusPage` is the shell's own local setup page: loaded while the first
  *   run is pending or has failed, replaced by the workspace when it succeeds.
  *   `titleBarPage` is the shell's own title bar, loaded into the window itself
@@ -131,9 +136,14 @@ export function startShell(electron, options) {
     // consumed part of it. Any other package is verified whole, then installed.
     if (!firstRunNeeded({ markerPath, manifestDigest: current?.manifestDigest ?? null, profile })) return;
     const assets = locateEnterpriseAssets({ candidates: assetsCandidates });
-    // main.mjs resolves the installer through a dynamic import: await it, or
-    // the profile initializer receives a Promise instead of a function.
-    const outcome = await initializeProfile({ assets, runInit: await loadInstaller(assets.installerPath), env, exec, scriptExec: options.scriptExec, profile, dsh: embeddedCommand });
+    // main.mjs resolves the installer module through a dynamic import: await
+    // it, or the profile initializer receives a Promise instead of a module.
+    const installer = await loadInstaller(assets.installerPath);
+    // The store the bundled pnpm resolves for the profile, asked of it only
+    // when a first run is actually due. A probe that cannot name one hands
+    // nothing over; the installer then meets a mismatching store reactively.
+    const pnpmStore = typeof options.pnpmStore === 'function' ? await options.pnpmStore() : undefined;
+    const outcome = await initializeProfile({ assets, installer, env, exec, scriptExec: options.scriptExec, profile, dsh: embeddedCommand, pnpmStore });
     if (writeFirstRunMarker(markerPath, { manifestDigest: assets.manifestDigest, profile }) === null) {
       fail('FIRST_RUN_MARKER', 'the first-run record could not be written');
     }

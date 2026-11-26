@@ -6,12 +6,16 @@
  * layout.mjs` describes it, so a packaged app finds what `main.mjs` expects:
  *
  *   <output>/resources/dsh/node_modules/@deepseek-ai/dsh/...   locked artifact, unpacked verbatim
- *   <output>/resources/pnpm/bin/pnpm.mjs                       locked pnpm, unpacked from its own bytes
  *   <output>/resources/brand/tray.png                           manifest-verified brand icon
  *   <output>/resources/enterprise-assets/                       optional employee package
  *
+ * The pnpm every package operation runs is the one of the primary runtime:
+ * `stage-primary-runtime.mjs` unpacks it from the same `runtime-lock.json` row
+ * into `<output>/resources/primary-runtime/`, so this script stages no pnpm of
+ * its own and the app ships one copy, not two.
+ *
  * Fail-closed rules:
- *   - the dsh and pnpm tarballs must match `runtime-lock.json` by bytes and SHA-256;
+ *   - the dsh tarball must match `runtime-lock.json` by bytes and SHA-256;
  *   - the dsh dependency closure is deduplicated and checked for identity/lock
  *     agreement when pinned;
  *   - the tray icon must match the brand manifest ledger;
@@ -19,7 +23,7 @@
  *     atomically only after every gate passes.
  *
  * 用法：
- *   node scripts/stage-desktop-payload.mjs --output <dir> --dsh-tgz <path.tgz> --pnpm-tgz <path.tgz> \
+ *   node scripts/stage-desktop-payload.mjs --output <dir> --dsh-tgz <path.tgz> \
  *     [--target <mac-arm64|mac-x64|win-x64|linux-x64|linux-arm64>] [--brand-dir <dir>] \
  *     [--employee-assets <dir>] [--lock <runtime-lock.json>] [--max-dsh-bytes <n>] [--max-dsh-files <n>] [--json]
  */
@@ -30,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ArchiveError, readBundleEntries } from './lib/bundle-archive.mjs';
 import { execNpm } from './lib/bundle-rules.mjs';
-import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
+import { ASSETS_DIR, DSH_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const TRAY_ICON_SOURCE = 'sizes/app-icon-256.png';
@@ -78,7 +82,6 @@ export function parseArguments(argv) {
   const options = {
     output: undefined,
     dshTgz: undefined,
-    pnpmTgz: undefined,
     target: undefined,
     brandDir: undefined,
     employeeAssets: undefined,
@@ -90,7 +93,6 @@ export function parseArguments(argv) {
   const valued = new Map([
     ['--output', 'output'],
     ['--dsh-tgz', 'dshTgz'],
-    ['--pnpm-tgz', 'pnpmTgz'],
     ['--target', 'target'],
     ['--brand-dir', 'brandDir'],
     ['--employee-assets', 'employeeAssets'],
@@ -121,7 +123,7 @@ export function parseArguments(argv) {
   if (options.target !== undefined && !Object.hasOwn(PREBUILD_RULES, options.target)) {
     fail('BAD_ARGUMENT', `--target must be one of ${Object.keys(PREBUILD_RULES).join(', ')}`);
   }
-  for (const flag of ['--output', '--dsh-tgz', '--pnpm-tgz']) {
+  for (const flag of ['--output', '--dsh-tgz']) {
     if (typeof options[valued.get(flag)] !== 'string' || options[valued.get(flag)].trim() === '') fail('BAD_ARGUMENT', `${flag} is required`);
   }
   return options;
@@ -426,11 +428,12 @@ function installDshClosure(tgz, destination, { installer, deduper, target } = {}
 }
 
 /**
- * Unpack the verified pnpm archive under `<resources>/pnpm`, each file with
- * the mode the archive records. The archive is read back from its own bytes by
- * the repository's reader, which accepts regular files below `package/` only:
- * nothing can land outside the directory or arrive as a link. No package
- * manager is involved, so no lifecycle script of the archive runs here.
+ * Unpack the verified pnpm archive, each file with the mode the archive
+ * records, into the directory the caller names (the payload's pnpm). The
+ * archive is read back from its own bytes by the repository's reader, which
+ * accepts regular files below `package/` only: nothing can land outside the
+ * directory or arrive as a link. No package manager is involved, so no
+ * lifecycle script of the archive runs here.
  */
 export function unpackPnpm(bytes, destination) {
   let entries;
@@ -448,34 +451,12 @@ export function unpackPnpm(bytes, destination) {
   return entries.length;
 }
 
-/**
- * The unpacked pnpm is the package the ledger named: its entry sits where
- * `layout.mjs` reads it, and its manifest carries the locked name and version.
- * A tarball that matched the digest already proved its bytes; this ties those
- * bytes to the version the shell will report and the lockfile will record.
- */
-function assertPnpmIdentity(resources, version) {
-  const entry = join(resources, ...PNPM_ENTRY_PARTS);
-  if (!existsSync(entry)) fail('STAGE_LAYOUT_INVALID', `the unpacked pnpm carries no ${PNPM_ENTRY_PARTS.join('/')}`);
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(join(resources, PNPM_ENTRY_PARTS[0], 'package.json'), 'utf8'));
-  } catch {
-    fail('STAGE_PNPM_IDENTITY_MISMATCH', 'the unpacked pnpm carries no readable package.json');
-  }
-  if (manifest?.name !== 'pnpm' || manifest?.version !== version) {
-    fail('STAGE_PNPM_IDENTITY_MISMATCH', `the unpacked archive is ${manifest?.name}@${manifest?.version}, the lock names pnpm@${version}`);
-  }
-}
-
-export function stagePayload({ output, dshTgz, pnpmTgz, target, brandDir, employeeAssets, lockPath, repoRoot, installer, deduper, maxDshBytes, maxDshFiles }) {
+export function stagePayload({ output, dshTgz, target, brandDir, employeeAssets, lockPath, repoRoot, installer, deduper, maxDshBytes, maxDshFiles }) {
   const resolvedTarget = target ?? defaultStagingTarget();
   const outputDir = resolve(output);
   const lock = JSON.parse(readFileSync(resolve(lockPath), 'utf8'));
   // dsh first: an incomplete handover is reported one artifact at a time, in the order the layout lists them.
   const dsh = verifiedArtifact(dshTgz, lock.dsh, 'dsh');
-  if (typeof pnpmTgz !== 'string' || pnpmTgz.trim() === '') fail('PNPM_TGZ_MISSING', 'the pnpm tarball was not handed over (--pnpm-tgz)');
-  const pnpm = verifiedArtifact(pnpmTgz, lock.pnpm, 'pnpm');
 
   // Fail fast on a missing brand suite, before the output is rebuilt.
   const brand = resolve(brandDir ?? join(repoRoot, DEFAULT_BRAND_DIR));
@@ -502,9 +483,6 @@ export function stagePayload({ output, dshTgz, pnpmTgz, target, brandDir, employ
       maxBytes: maxDshBytes ?? (Number.isSafeInteger(lock?.dshClosure?.maxBytes) && lock.dshClosure.maxBytes > 0 ? lock.dshClosure.maxBytes : undefined),
       maxFiles: maxDshFiles ?? (Number.isSafeInteger(lock?.dshClosure?.maxFiles) && lock.dshClosure.maxFiles > 0 ? lock.dshClosure.maxFiles : undefined),
     });
-
-    unpackPnpm(pnpm.bytes, join(resources, PNPM_ENTRY_PARTS[0]));
-    assertPnpmIdentity(resources, pnpm.entry.version);
 
     const { byPath } = readManifest(brand);
     const { bytes: trayBytes } = verifyAsset(brand, byPath, TRAY_ICON_SOURCE);
@@ -549,12 +527,11 @@ export function stagePayload({ output, dshTgz, pnpmTgz, target, brandDir, employ
         digest: closure.digest,
         topPackages: closure.topPackages,
       },
-      pnpm: { version: pnpm.entry.version, sha256: pnpm.entry.sha256, bytes: pnpm.entry.bytes, artifact: basename(pnpm.path) },
       tray: { source: TRAY_ICON_SOURCE, bytes: trayBytes.length, sha256: sha256Hex(trayBytes) },
       statusPage: { source: STATUS_PAGE_PARTS.join('/'), bytes: readFileSync(join(resources, ...STATUS_PAGE_PARTS)).length },
       titleBar: { source: TITLE_BAR_PARTS.join('/'), bytes: readFileSync(join(resources, ...TITLE_BAR_PARTS)).length },
       assets,
-      layout: { dshEntry: DSH_ENTRY_PARTS.join('/'), pnpmEntry: PNPM_ENTRY_PARTS.join('/'), trayIcon: TRAY_ICON_PARTS.join('/') },
+      layout: { dshEntry: DSH_ENTRY_PARTS.join('/'), trayIcon: TRAY_ICON_PARTS.join('/') },
     };
     writeFileSync(join(stagingDir, 'staging-manifest.json'), `${JSON.stringify(record, null, 2)}\n`);
 
@@ -572,7 +549,6 @@ async function main() {
   const record = stagePayload({
     output: options.output,
     dshTgz: options.dshTgz,
-    pnpmTgz: options.pnpmTgz,
     target: options.target,
     brandDir: options.brandDir,
     employeeAssets: options.employeeAssets,
@@ -582,7 +558,7 @@ async function main() {
     maxDshFiles: options.maxDshFiles,
   });
   if (options.json) process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
-  else process.stdout.write(`staged: ${resolve(options.output)} (dsh ${record.dsh.version}, closure ${record.dshClosure.packages} pkgs / ${record.dshClosure.bytes} B, pnpm ${record.pnpm.version}, tray ${record.tray.source}${record.assets ? `, assets ${record.assets}` : ''})\n`);
+  else process.stdout.write(`staged: ${resolve(options.output)} (dsh ${record.dsh.version}, closure ${record.dshClosure.packages} pkgs / ${record.dshClosure.bytes} B, tray ${record.tray.source}${record.assets ? `, assets ${record.assets}` : ''})\n`);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
