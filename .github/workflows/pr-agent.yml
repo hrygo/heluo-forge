@@ -113,12 +113,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: &capture_revision |
           node --input-type=module <<'NODE'
           import { appendFile } from 'node:fs/promises';
 
           const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, GITHUB_RUN_ID, PR_NUMBER, EVENT_HEAD,
-            EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
+            EVENT_NAME, COMMENT_BODY, EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
           if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '')) throw new Error('Invalid PR number');
           const api = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}`;
           const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` };
@@ -178,11 +180,14 @@ jobs:
               typeof base !== 'string' || !/^[a-f0-9]{40}$/.test(base)) {
             throw new Error('Invalid target branch revision');
           }
-          await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nbase_ref=${baseRef}\nstarted=${new Date().toISOString()}\n`);
+          // The comment runner dispatches the first command, including the /describe_pr alias.
+          const manualSummary = EVENT_NAME === 'issue_comment' &&
+            /^\/+describe(?:_pr)?(?:[ \t\r\n]|$)/i.test((COMMENT_BODY ?? '').trim());
+          await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nbase_ref=${baseRef}\nstarted=${new Date().toISOString()}\nmanual_summary=${manualSummary}\n`);
           NODE
 
       - name: Run PR-Agent summary
-        if: ${{ github.event_name == 'pull_request' && steps.revision.outputs.head != '' }}
+        if: ${{ steps.revision.outputs.head != '' && (github.event_name == 'pull_request' || steps.revision.outputs.manual_summary == 'true') }}
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: &pr_agent_summary_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -200,7 +205,7 @@ jobs:
       # The summary step can fail the job without preventing review of the PR.
       - name: Run PR-Agent
         id: pr_agent
-        if: ${{ !cancelled() && steps.revision.outcome == 'success' && steps.revision.outputs.head != '' }}
+        if: ${{ !cancelled() && steps.revision.outcome == 'success' && steps.revision.outputs.head != '' && steps.revision.outputs.manual_summary != 'true' }}
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: &pr_agent_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
