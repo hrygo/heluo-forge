@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -89,14 +89,24 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/@scope/pkg/docs/guide.md',
     'dsh/node_modules/@scope/pkg/example/demo.js',
     'dsh/node_modules/@scope/pkg/examples/demo.js',
-  ]) {
-    assert.equal(isPackaged(excluded), false, excluded);
-  }
-  // 第三方包的许可证文件与 @deepseek-ai 作用域下的文档/技能文本必须保留。
-  for (const kept of [
+    'dsh/node_modules/pkg/lib/index.js.flow',
+    'dsh/node_modules/pkg/.eslintrc.json',
+    'dsh/node_modules/pkg/.prettierrc.yml',
+    'dsh/node_modules/pkg/.editorconfig',
+    'dsh/node_modules/pkg/tsconfig.json',
+    'dsh/node_modules/pkg/.github/workflows/ci.yml',
+    'dsh/node_modules/pkg/.vscode/settings.json',
+    'dsh/node_modules/pkg/fixtures/test.json',
+    'dsh/node_modules/pkg/__fixtures__/mock.json',
     'dsh/node_modules/zod/LICENSE.md',
     'dsh/node_modules/pkg/license.txt',
     'dsh/node_modules/pkg/NOTICE',
+    'dsh/node_modules/pkg/COPYING',
+  ]) {
+    assert.equal(isPackaged(excluded), false, excluded);
+  }
+  // @deepseek-ai 作用域下的文档/技能文本、品牌与资产清单必须保留。
+  for (const kept of [
     'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js',
     'dsh/node_modules/@deepseek-ai/dsh-llm/README.md',
     'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
@@ -134,6 +144,15 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/NOTICE',
       'dsh/node_modules/pkg/test/foo.js',
       'dsh/node_modules/@scope/pkg/docs/guide.md',
+      'dsh/node_modules/pkg/lib/index.js.flow',
+      'dsh/node_modules/pkg/.eslintrc.json',
+      'dsh/node_modules/pkg/.prettierrc.yml',
+      'dsh/node_modules/pkg/.editorconfig',
+      'dsh/node_modules/pkg/tsconfig.json',
+      'dsh/node_modules/pkg/.github/workflows/ci.yml',
+      'dsh/node_modules/pkg/.vscode/settings.json',
+      'dsh/node_modules/pkg/fixtures/test.json',
+      'dsh/node_modules/pkg/__fixtures__/mock.json',
       'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
       'enterprise-assets/INSTALL.md',
     ]) {
@@ -152,10 +171,27 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   assert.equal(existsSync(config.afterPack), true, 'afterPack hook script must exist');
   // 本应用不建自动更新 feed，差分形式的归档比 solid 归档大三分之一。
   assert.equal(config.nsis.differentialPackage, false);
+  assert.equal(config.nsis.packElevateHelper, false);
   // 两种拼写各对应一种平台的语言文件名：macOS 用 en / zh_CN / zh_TW，Windows 与 Linux 用 en-US / zh-CN / zh-TW，无重复项。
   assert.deepEqual(config.electronLanguages, ['en', 'en-US', 'zh-CN', 'zh-TW', 'zh_CN', 'zh_TW']);
   assert.equal(new Set(config.electronLanguages).size, config.electronLanguages.length);
   assert.equal(config.nsis.deleteAppDataOnUninstall, false);
+
+  // 代码签名配置：未提供时缺省不写入，提供时规范化解析并注入 win 目标
+  assert.equal(config.win.certificateFile, undefined);
+  assert.equal(config.win.certificatePassword, undefined);
+  const signedConfig = builderConfig({
+    identity: readAppIdentity(identityFile(root)),
+    version: '1.2.3',
+    resourcesDir: join(root, 'resources'),
+    iconsDir: join(BRAND_DIR, 'icons'),
+    appDir: join(REPO_ROOT, 'services', 'forge-desktop'),
+    outputDir: join(root, 'dist'),
+    certificateFile: 'certs/code-sign.pfx',
+    certificatePassword: 'pwd',
+  });
+  assert.equal(signedConfig.win.certificateFile, resolve('certs/code-sign.pfx'));
+  assert.equal(signedConfig.win.certificatePassword, 'pwd');
 });
 
 test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {
@@ -233,9 +269,14 @@ test('图标与品牌 manifest 账本一致；参数解析限定目标', () => {
     brandDir: undefined,
     target: 'dir',
     arch: 'arm64',
+    certificateFile: undefined,
+    certificatePassword: undefined,
     configOnly: false,
     json: false,
   });
+  const parsedSigned = parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--certificate-file', 'cert.pfx', '--certificate-password', 'secret']);
+  assert.equal(parsedSigned.certificateFile, 'cert.pfx');
+  assert.equal(parsedSigned.certificatePassword, 'secret');
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win']).arch, 'x64');
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'mac', '--arch', 'x64']).arch, 'x64');
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'linux', '--arch', 'arm64']).arch, 'arm64');

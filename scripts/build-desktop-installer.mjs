@@ -11,7 +11,9 @@
  *   node scripts/build-desktop-installer.mjs --identity <app-identity.json> \
  *     --resources <staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
  *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] \
- *     [--target dir|mac|win|linux] [--arch x64|arm64|universal] [--config-only] [--json]
+ *     [--target dir|mac|win|linux] [--arch x64|arm64|universal] \
+ *     [--certificate-file <path>] [--certificate-password <pass>] \
+ *     [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -43,17 +45,47 @@ const TARGET_ARCHES = Object.freeze({
  * symbols: only a debugger opens them. electron-builder's own default excludes
  * apply to the app files, not to `extraResources`, where the runtime travels.
  */
-const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb'];
+const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb', '.flow'];
 
 /**
  * Third-party packages inside `dsh/node_modules` (outside `@deepseek-ai/`)
- * carry test suites, docs, examples and changelogs that are never needed at
- * runtime; license/notice files are always preserved.
+ * carry test suites, docs, examples, changelogs and license/notice files that
+ * are never needed for internal runtime.
  */
-const THIRD_PARTY_EXCLUDED_DIRS = ['test', 'tests', '__tests__', 'docs', 'example', 'examples'];
+const THIRD_PARTY_EXCLUDED_DIRS = [
+  'test',
+  'tests',
+  '__tests__',
+  'docs',
+  'example',
+  'examples',
+  '.github',
+  '.vscode',
+  '.idea',
+  'fixtures',
+  '__fixtures__',
+];
 const THIRD_PARTY_EXCLUDED_DIR_SET = new Set(THIRD_PARTY_EXCLUDED_DIRS);
 const THIRD_PARTY_EXCLUDED_DOC_EXTS = new Set(['.md', '.markdown']);
 const THIRD_PARTY_EXCLUDED_DOC_PREFIXES = ['CHANGELOG', 'HISTORY'];
+const THIRD_PARTY_EXCLUDED_CONFIG_PREFIXES = [
+  '.eslintrc',
+  '.prettier',
+  '.editorconfig',
+  '.npmignore',
+  '.flowconfig',
+  '.babelrc',
+  'tsconfig',
+];
+const THIRD_PARTY_EXCLUDED_CONFIG_GLOBS = [
+  '.eslintrc*',
+  '.prettier*',
+  '.editorconfig',
+  '.npmignore',
+  '.flowconfig',
+  '.babelrc*',
+  'tsconfig*.json',
+];
 const THIRD_PARTY_LICENSE_PREFIXES = ['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'];
 const THIRD_PARTY_LICENSE_GLOBS = ['[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*', '[Nn][Oo][Tt][Ii][Cc][Ee]*', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*'];
 
@@ -125,6 +157,8 @@ export function parseArguments(argv) {
     brandDir: undefined,
     target: 'dir',
     arch: undefined,
+    certificateFile: undefined,
+    certificatePassword: undefined,
     configOnly: false,
     json: false,
   };
@@ -137,6 +171,8 @@ export function parseArguments(argv) {
     ['--brand-dir', 'brandDir'],
     ['--target', 'target'],
     ['--arch', 'arch'],
+    ['--certificate-file', 'certificateFile'],
+    ['--certificate-password', 'certificatePassword'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -190,16 +226,17 @@ export function isPackaged(relativePath) {
   if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
-  if (isLicense) return true;
+  if (isLicense) return false;
   if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
   if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
+  if (THIRD_PARTY_EXCLUDED_CONFIG_PREFIXES.some((prefix) => file.startsWith(prefix))) return false;
   return true;
 }
 
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
- * and lets a later pattern override an earlier one, so license files and each
- * verbatim directory are re-included after the exclusions, not before them.
+ * and lets a later pattern override an earlier one, so each verbatim directory
+ * is re-included after the exclusions, not before them.
  */
 export function runtimeFilter() {
   return [
@@ -213,7 +250,8 @@ export function runtimeFilter() {
     '!dsh/node_modules/!(@deepseek-ai)/**/*.markdown',
     '!dsh/node_modules/!(@deepseek-ai)/**/CHANGELOG*',
     '!dsh/node_modules/!(@deepseek-ai)/**/HISTORY*',
-    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
+    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
+    ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
     ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
   ];
 }
@@ -247,11 +285,33 @@ export function summarizeResources(resourcesDir) {
  * travels, which locales ship, how the installer upgrades/preserves user data,
  * and which platform architecture is targeted.
  */
-export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir, target = 'dir', arch, afterPackPath = DEFAULT_AFTER_PACK }) {
+export function builderConfig({
+  identity,
+  version,
+  resourcesDir,
+  iconsDir,
+  appDir,
+  outputDir,
+  target = 'dir',
+  arch,
+  afterPackPath = DEFAULT_AFTER_PACK,
+  certificateFile,
+  certificatePassword,
+}) {
   const resolvedArch = resolveTargetArch(target, arch);
   const macArch = target === 'mac' || target === 'dir' ? resolvedArch : 'arm64';
   const linuxArch = target === 'linux' ? resolvedArch : 'x64';
   const macTargets = target === 'mac' ? ['dmg'] : ['dir'];
+  const winConfig = {
+    icon: join(iconsDir, basename(WIN_ICON)),
+    target: [{ target: 'nsis', arch: ['x64'] }],
+  };
+  if (certificateFile !== undefined) {
+    winConfig.certificateFile = resolve(certificateFile);
+  }
+  if (certificatePassword !== undefined) {
+    winConfig.certificatePassword = certificatePassword;
+  }
   return {
     appId: identity.appId,
     productName: identity.productName,
@@ -265,13 +325,14 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     afterPack: afterPackPath,
     extraMetadata: { version },
     electronLanguages: [...ELECTRON_LANGUAGES],
-    win: { icon: join(iconsDir, basename(WIN_ICON)), target: [{ target: 'nsis', arch: ['x64'] }] },
+    win: winConfig,
     nsis: {
       guid: identity.upgradeGuid,
       artifactName: `${identity.executableName}-\${version}-setup-\${arch}.\${ext}`,
       uninstallDisplayName: `${identity.displayName} \${version}`,
       oneClick: true,
       perMachine: false,
+      packElevateHelper: false,
       // Upgrades converge by uninstalling differing versions and reinstalling;
       // keeping user app data ensures profile markers, logs and local state
       // survive uninstall/reinstall and rollback.
@@ -342,6 +403,8 @@ async function main() {
     outputDir,
     target: options.target,
     arch: options.arch,
+    certificateFile: options.certificateFile,
+    certificatePassword: options.certificatePassword,
   });
   const configPath = join(outputDir, 'builder-config.json');
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
