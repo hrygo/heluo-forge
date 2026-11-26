@@ -56,6 +56,18 @@ export function titleBarQuery({ platform, barHeight, title }) {
 }
 
 /**
+ * Evaluated in the title bar page once it has loaded, before anything is shown:
+ * what its bridge came to. The bridge reaches the page from outside it and can
+ * fail to; a page without it loads all the same, with buttons that do nothing.
+ */
+export const BRIDGE_TYPE = 'typeof window.forgeWindow';
+
+/** Whether what the probe found is the bridge. Nothing else will do. */
+export function hasTitleBarBridge(type) {
+  return type === 'object';
+}
+
+/**
  * Whether an action is one the title bar may ask for. Anything else — another
  * name, an object, a missing value — is not.
  */
@@ -78,8 +90,9 @@ export function isTitleBarRequest(sender, frame, window) {
 
 /**
  * What the title bar is told about the window: which glyph the zoom button
- * carries, whether the bar is out of the way, and whether its buttons look active.
+ * carries, and whether its buttons look active. Full screen is not among them:
+ * the bar is covered then, and the window is asked directly when it is laid out.
  */
-export function chromeState({ maximized, fullscreen, focused }) {
-  return { maximized: maximized === true, fullscreen: fullscreen === true, focused: focused !== false };
+export function chromeState({ maximized, focused }) {
+  return { maximized: maximized === true, focused: focused !== false };
 }

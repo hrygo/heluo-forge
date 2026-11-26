@@ -12,8 +12,10 @@ import vm from 'node:vm';
 
 import {
   ACTION_CHANNEL,
+  BRIDGE_TYPE,
   chromeState,
   contentBounds,
+  hasTitleBarBridge,
   isTitleBarRequest,
   isWindowAction,
   STATE_CHANNEL,
@@ -86,10 +88,24 @@ test('a request is the title bar\'s only when it comes from that page, in its ma
   assert.equal(isTitleBarRequest(webContents, webContents.mainFrame, null), false);
 });
 
-test('what the title bar is told is three plain facts', () => {
-  assert.deepEqual(chromeState({ maximized: true, fullscreen: false, focused: false }), { maximized: true, fullscreen: false, focused: false });
+test('what the title bar is told is two plain facts: zoomed, and frontmost or not', () => {
+  assert.deepEqual(chromeState({ maximized: true, focused: false }), { maximized: true, focused: false });
   // Anything short of exactly `true` is no; a focus that was never reported counts as frontmost.
-  assert.deepEqual(chromeState({ maximized: 'yes', fullscreen: 1 }), { maximized: false, fullscreen: false, focused: true });
+  assert.deepEqual(chromeState({ maximized: 'yes' }), { maximized: false, focused: true });
+});
+
+test('a title bar counts as in place only when its bridge came up on the page', () => {
+  // The probe asks for the type only: nothing of the page is read, and it cannot throw.
+  assert.equal(BRIDGE_TYPE, 'typeof window.forgeWindow');
+  const { evaluate } = loadBridge();
+  assert.equal(evaluate(BRIDGE_TYPE), 'object');
+  // A page whose preload did not take has no bridge, and is not a title bar that can be used.
+  const bare = loadBridge();
+  bare.evaluate('window.forgeWindow = undefined');
+  assert.equal(bare.evaluate(BRIDGE_TYPE), 'undefined');
+  for (const type of ['undefined', 'function', 'string', 'boolean', 'number']) assert.equal(hasTitleBarBridge(type), false, type);
+  assert.equal(hasTitleBarBridge('object'), true);
+  assert.equal(hasTitleBarBridge(undefined), false);
 });
 
 /** The bridge, run against a stand-in for the `electron` a sandboxed page is given. */
@@ -108,14 +124,27 @@ function loadBridge() {
       if (listeners.get(listener) === channel) listeners.delete(listener);
     },
   };
-  const source = read(join(SOURCE, 'window-chrome.preload.cjs'));
-  vm.runInNewContext(source, {
+  // The page the preload runs in. Its `window` is its global, as in a real page,
+  // so an expression can be evaluated there as the shell evaluates one.
+  const context = {
     require: (name) => {
       requires.push(name);
-      return { contextBridge: { exposeInMainWorld: (key, api) => { exposed[key] = api; } }, ipcRenderer };
+      return {
+        contextBridge: {
+          exposeInMainWorld: (key, api) => {
+            exposed[key] = api;
+            context[key] = api;
+          },
+        },
+        ipcRenderer,
+      };
     },
-  }, { filename: 'window-chrome.preload.cjs' });
-  return { exposed, invoked, listeners, requires, source };
+  };
+  context.window = context;
+  vm.createContext(context);
+  const source = read(join(SOURCE, 'window-chrome.preload.cjs'));
+  vm.runInContext(source, context, { filename: 'window-chrome.preload.cjs' });
+  return { exposed, invoked, listeners, requires, source, evaluate: (expression) => vm.runInContext(expression, context) };
 }
 
 test('the bridge hands the title bar three actions and the window\'s state, and nothing else', async () => {

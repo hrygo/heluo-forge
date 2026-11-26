@@ -12,8 +12,10 @@ import { assertBindHost } from './loopback.mjs';
 import { classifyTarget, permissionAllowed } from './navigation.mjs';
 import {
   ACTION_CHANNEL,
+  BRIDGE_TYPE,
   chromeState,
   contentBounds,
+  hasTitleBarBridge,
   isTitleBarRequest,
   isWindowAction,
   STATE_CHANNEL,
@@ -93,7 +95,6 @@ export function startShell(electron, options) {
     pendingRetry: false,
     trustedOrigin: null,
     chrome: windowChrome({ platform }),
-    fullscreen: false,
     maximized: false,
     focused: true,
   };
@@ -264,19 +265,21 @@ export function startShell(electron, options) {
     return { started: false, code };
   }
 
-  /** The content follows the window's size: below the title bar where there is one, over the whole window otherwise. */
+  /** The content follows the window's size and state: below the title bar, or over the whole window in full screen. */
   function layoutContent() {
-    if (context.window === null || context.content === null) return;
-    const [width, height] = context.window.getContentSize();
-    const { barHeight } = context.chrome;
-    context.content.setBounds(contentBounds({ width, height, barHeight, fullscreen: context.fullscreen }));
+    const window = context.window;
+    if (window === null || context.content === null) return;
+    const [width, height] = window.getContentSize();
+    // Full screen is asked of the window itself, never remembered from an event.
+    const fullscreen = window.isFullScreen();
+    context.content.setBounds(contentBounds({ width, height, barHeight: context.chrome.barHeight, fullscreen }));
   }
 
   /** The title bar follows the window's state: the zoom button's glyph, and whether its buttons look active. */
   function pushChromeState() {
     if (!context.chrome.frameless || context.window === null) return;
-    const { maximized, fullscreen, focused } = context;
-    context.window.webContents.send(STATE_CHANNEL, chromeState({ maximized, fullscreen, focused }));
+    const { maximized, focused } = context;
+    context.window.webContents.send(STATE_CHANNEL, chromeState({ maximized, focused }));
   }
 
   function openWindow() {
@@ -302,12 +305,19 @@ export function startShell(electron, options) {
     window.contentView.addChildView(content);
     layoutContent();
     if (chrome.frameless) {
-      // Without its title bar the window has no controls: the start waits for
-      // the bar, and does not go on without it.
-      context.titleBar = window.loadFile(options.titleBarPage, { query: titleBarQuery({ platform, barHeight: chrome.barHeight, title: TITLE }) }).then(
-        () => pushChromeState(),
-        () => fail('TITLE_BAR_MISSING', 'the title bar page could not be loaded'),
-      );
+      // Without its title bar the window has no controls, and without its bridge
+      // the bar's buttons do nothing: the start waits for both, and does not go
+      // on without them.
+      context.titleBar = window
+        .loadFile(options.titleBarPage, { query: titleBarQuery({ platform, barHeight: chrome.barHeight, title: TITLE }) })
+        .then(() => window.webContents.executeJavaScript(BRIDGE_TYPE))
+        .then(
+          (type) => {
+            if (!hasTitleBarBridge(type)) fail('TITLE_BAR_MISSING', 'the title bar page came up without its bridge');
+            pushChromeState();
+          },
+          () => fail('TITLE_BAR_MISSING', 'the title bar page could not be loaded'),
+        );
     }
     // The title bar is one local file, and it carries the bridge: nothing
     // navigates it, and nothing opens from it, wherever to.
@@ -380,16 +390,8 @@ export function startShell(electron, options) {
       pushChromeState();
     });
     // Full screen has no title bar: the content has the whole window until it ends.
-    window.on('enter-full-screen', () => {
-      context.fullscreen = true;
-      layoutContent();
-      pushChromeState();
-    });
-    window.on('leave-full-screen', () => {
-      context.fullscreen = false;
-      layoutContent();
-      pushChromeState();
-    });
+    window.on('enter-full-screen', layoutContent);
+    window.on('leave-full-screen', layoutContent);
     return window;
   }
 

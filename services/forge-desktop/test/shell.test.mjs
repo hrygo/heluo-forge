@@ -16,6 +16,7 @@ import { ShellError } from '../src/errors.mjs';
 import { EMPLOYEE_PACKAGE_SCHEMA } from '../src/first-run.mjs';
 import { createRuntime } from '../src/runtime.mjs';
 import { guidanceFor, startShell } from '../src/shell.mjs';
+import { BRIDGE_TYPE, STATE_CHANNEL } from '../src/window-chrome.mjs';
 
 const TOKEN = 'process-token-7f3a9c';
 const ORIGIN = 'http://127.0.0.1:43210';
@@ -67,7 +68,7 @@ function employeePackage(directory, { version = '1.2.3' } = {}) {
 }
 
 /** A stand-in for the Electron interface that records what the shell does with it. */
-function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails = false, titleBarFails = false } = {}) {
+function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails = false, titleBarFails = false, bridgeMissing = false } = {}) {
   const log = [];
   const handlers = {};
   const windows = [];
@@ -80,13 +81,20 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
 
   /** What the shell uses of a page's web contents: what it loads, what it is told, and what it asks for. */
   class Page {
-    constructor({ failLoads = false, failFiles = false } = {}) {
+    constructor({ failLoads = false, failFiles = false, bridgeType = 'object' } = {}) {
       this.failLoads = failLoads;
       this.failFiles = failFiles;
+      this.bridgeType = bridgeType;
       this.own = {};
       this.sent = [];
       this.loads = [];
       this.mainFrame = { page: this };
+    }
+    /** What the shell asks the page directly, as it does to learn whether the bridge took. */
+    executeJavaScript(expression) {
+      this.probes ??= [];
+      this.probes.push(expression);
+      return Promise.resolve(expression === BRIDGE_TYPE ? this.bridgeType : undefined);
     }
     on(event, handler) {
       this.own[event] = handler;
@@ -119,7 +127,7 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
       this.own = {};
       this.size = [1280, 800];
       // The window's own page (the title bar, where there is one), and the views laid out over it.
-      this.webContents = new Page({ failFiles: titleBarFails });
+      this.webContents = new Page({ failFiles: titleBarFails, bridgeType: bridgeMissing ? 'undefined' : 'object' });
       this.contentView = { children: [], addChildView: (view) => this.contentView.children.push(view) };
     }
     on(event, handler) {
@@ -164,6 +172,9 @@ function fakeElectron({ lock = true, tray = true, loadFails = false, dialogFails
     }
     isMaximized() {
       return this.maximized === true;
+    }
+    isFullScreen() {
+      return this.fullscreen === true;
     }
     /** The view the work is in: the first view laid over the window. */
     get page() {
@@ -793,6 +804,8 @@ for (const [platform, bar] of FRAMELESS) {
     assert.deepEqual(window.webContents.fileLoads, [
       { path: '/brand/titlebar.html', query: { platform, bar: String(bar), title: '河洛 Forge 企业版' } },
     ]);
+    // Before anything was shown, the shell asked that page whether its bridge took.
+    assert.deepEqual(window.webContents.probes, [BRIDGE_TYPE]);
     // It is the one page with a bridge to the shell, and hardened like every other.
     assert.equal(window.options.webPreferences.preload, '/apps/window-chrome.preload.cjs');
     assert.equal(window.options.webPreferences.sandbox, true);
@@ -865,27 +878,47 @@ test('the title bar is told what the window came to, and full screen takes the b
   const [content] = fx.views;
   const told = () => window.webContents.sent.map((message) => message.state);
   // It is told the state it starts in, so the bar never has to guess.
-  assert.deepEqual(window.webContents.sent, [{ channel: 'forge:window-state', state: { maximized: false, fullscreen: false, focused: true } }]);
+  assert.deepEqual(window.webContents.sent, [{ channel: STATE_CHANNEL, state: { maximized: false, focused: true } }]);
   window.own.maximize();
   window.own.blur();
   assert.deepEqual(told().slice(-2), [
-    { maximized: true, fullscreen: false, focused: true },
-    { maximized: true, fullscreen: false, focused: false },
+    { maximized: true, focused: true },
+    { maximized: true, focused: false },
   ]);
   window.own.unmaximize();
   window.own.focus();
-  assert.deepEqual(told().at(-1), { maximized: false, fullscreen: false, focused: true });
+  assert.deepEqual(told().at(-1), { maximized: false, focused: true });
   // A window that comes to the front would start with the keyboard in the title bar: it is handed to the content.
   const focused = content.webContents.focusCount;
   window.own.focus();
   assert.equal(content.webContents.focusCount, focused + 1);
-  // Full screen has no title bar: the content takes the whole window, then gives the bar its place back.
+
+  // Full screen has no title bar: the content takes the whole window.
+  window.fullscreen = true;
   window.own['enter-full-screen']();
   assert.deepEqual(content.bounds, { x: 0, y: 0, width: 1280, height: 800 });
-  assert.equal(told().at(-1).fullscreen, true);
-  window.own['leave-full-screen']();
+  // The layout asks the window what it is. It does not remember an event: a
+  // resize in full screen stays full even if that event never came, and one
+  // after the window left full screen gets the bar its place back.
+  window.own.resize();
+  assert.deepEqual(content.bounds, { x: 0, y: 0, width: 1280, height: 800 });
+  window.fullscreen = false;
+  window.own.resize();
   assert.deepEqual(content.bounds, { x: 0, y: 32, width: 1280, height: 768 });
-  assert.equal(told().at(-1).fullscreen, false);
+  // The bar is not told about full screen: it is covered the whole time.
+  assert.equal(JSON.stringify(window.webContents.sent).includes('fullscreen'), false);
+});
+
+test('a title bar whose bridge did not take is said before anything is shown', async (t) => {
+  // The page loads and the bridge's file is there; the bridge just is not on the page.
+  const fx = world(t, { electron: { platform: 'darwin', bridgeMissing: true } });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'TITLE_BAR_MISSING' });
+  assert.match(fx.messages[0].message, /窗口组件缺失/);
+  assert.deepEqual(fx.windows[0].webContents.probes, [BRIDGE_TYPE]);
+  assert.equal(fx.windows[0].visible, false, 'a window whose buttons do nothing is never shown');
+  assert.equal(fx.installs.length, 0);
+  assert.equal(fx.processes.length, 0);
+  assert.equal(fx.log.at(-1), 'quit');
 });
 
 test('nothing navigates the title bar and nothing opens from it: it is the page that carries the bridge', async (t) => {
