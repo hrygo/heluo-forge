@@ -57,6 +57,7 @@ export function createPreStepGuard(ports) {
     : DEFAULT_MAX_ACTIVE_TURNS;
 
   const activeTurns = new Map();
+  const activeTokens = new Map();
 
   function pruneExpiredTurns() {
     const at = now();
@@ -64,6 +65,7 @@ export function createPreStepGuard(ports) {
       if (at >= entry.expiresAt) {
         activeTurns.delete(id);
         if (entry?.selectionToken) {
+          if (activeTokens.get(entry.selectionToken) === id) activeTokens.delete(entry.selectionToken);
           try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
         }
       }
@@ -77,6 +79,7 @@ export function createPreStepGuard(ports) {
       }
     }
     activeTurns.clear();
+    activeTokens.clear();
   }
 
   /**
@@ -174,6 +177,16 @@ export function createPreStepGuard(ports) {
       });
     }
 
+    if (activeTokens.has(binding.selectionToken)) {
+      return Object.freeze({
+        allowed: false,
+        expertBound: false,
+        code: 'EXPERT_SELECTION_INVALID',
+        preserveDraft: true,
+        draft,
+      });
+    }
+
     const turnId = randomBytes(16).toString('hex');
     const createdAt = now();
     activeTurns.set(turnId, {
@@ -187,6 +200,7 @@ export function createPreStepGuard(ports) {
       createdAt,
       expiresAt: createdAt + turnTtlMs,
     });
+    activeTokens.set(binding.selectionToken, turnId);
 
     return Object.freeze({
       allowed: true,
@@ -245,11 +259,22 @@ export function createPreStepGuard(ports) {
       return Object.freeze({ status: 'unbound', expertParticipated: false, completed: false, preserveDraft: false });
     }
     activeTurns.delete(cleanTurnId);
+    if (activeTokens.get(turn.selectionToken) === cleanTurnId) {
+      activeTokens.delete(turn.selectionToken);
+    }
 
     if (isNonEmptyString(delegatedTaskId)) {
       turn.delegatedTaskId = delegatedTaskId.trim();
       // Belt-and-suspenders single-use cleanup in case a custom host finalized without consuming via dispatchTask.
       try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
+      try {
+        ports.onTurnFinalized?.({
+          sessionId: turn.sessionId,
+          expertId: turn.expertId,
+          status: 'delegated',
+          preserveDraft: false,
+        });
+      } catch { /* best effort */ }
       return Object.freeze({
         status: 'delegated',
         expertParticipated: true,
