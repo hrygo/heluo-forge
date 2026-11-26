@@ -6,6 +6,26 @@
 
 本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间、专用只读账号与密码，安装后无需填写连接配置；中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。本机 DSH 0.2.2-rc.2 三包离线安装、装配与 manager HTTP 启动通过；企业权限、完整三包装卸及目标平台仍待验。
 
+## 2026-11-26 精确版本准入与 ZIP 完整性
+
+Nacos 目录仅展示已启用、latest 精确版本状态为 `online` 的条目；版本列表缺失时只补查当前页候选的元数据。详情及安装复核名称、命名空间、latest 与精确版本状态，通过 Client API 显式指定版本下载。上传及企业下载共用内联 yauzl 读取器，按流检查实际长度、CRC32、单项及累计输出预算，全部验证通过后才交给解析或写入；保留便携路径规则和既有错误码。读取器及传递依赖的许可证随生成模块保留。设计与 Nacos 契约同步，包内 README 保持功能和使用说明职责，根 README 未修改。
+
+固定 Node 24.21.0 / npm 11.19.0 / pnpm 11.28.5，本机 Windows；下表为本地证据。
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| `node --test packages/forge-skills-manager/test/p1-resource-admission.test.mjs`；隔离副本替换为修复前 `3758dce` 的生成模块，运行同一组可比较用例 | 修复前 7 项中 5 因原缺陷失败，截断归档拒绝和正常资源 2 项通过，约 0.67 秒；修复后 8 项全部通过，约 0.78 秒。覆盖所选版本下线但技能启用、latest 不变且其他版本在线，下载前临时下线，缺失或未知版本状态，CRC、声明长度、结构及预算；拒绝路径核对既有技能、策略和安装记录不变 |
+| 包目录：`node --run verify` | 最终 157 项通过，无失败或跳过，测试约 99.6 秒、整体约 105.5 秒；含 25 个生成文件一致性、类型、全部管理/Nacos/UI 回归、跨平台路径及结构变异 |
+| 生成物检查及 `node --test test/build-output.test.mjs test/p1-resource-admission.test.mjs`（包目录） | 提交钩子将第三方 CP437 表的数字字母表误报为电话；生成器改用等价字符串连接，不修改扫描规则。10 项通过，测试约 2.1 秒、含生成物检查约 4.1 秒；逐字符比对原库编码表、核验两个依赖许可证，并复测两项 P1 |
+| `node --test tests/skills-manager-package.test.mjs tests/skills-manager-iam.test.mjs` | 5 项通过，约 14.9 秒；含正式预置 TGZ、空缓存离线安装、运行入口导入及同 Host IAM 动态注入 |
+| 同一上述根测试另加 `tests/private-bundle-boundary.test.mjs`，并用隔离 `3758dce` 源码对照该文件 | 合计 31 项中 23 通过、8 失败，约 15.5 秒；隔离基线约 0.99 秒，8 个失败名称逐项一致，均为 Windows 配置权限或链接夹具限制，未新增失败 |
+| 中性独立 TGZ 构建及 `verify-host.mjs`，仓库外仅适配为官方 Electron 执行 ASAR CLI | 11 项通过，宿主演练约 21.9 秒；真实 DSH 0.2.2-rc.2、合成 Nacos、新 HOME/profile 和空 npm 缓存，覆盖已认证读取、Client 下载、完整资源、默认禁用、回执、重启、热停启及卸载保留数据 |
+| 当前客户端连接本机真实 Nacos 3.2.3，使用既有专用只读账号 | 通过，约 1 秒；登录、列表及元数据读取返回 3 个在线技能，精确状态值为小写 `online`；Client API 读取 2 项资源并生成完整摘要，未调用 Admin 下载接口。未修改演示技能发布状态或本地安装数据 |
+| 根目录：`pnpm check` | 约 43.9 秒后在 enterprise/IAM 的 bin 0644 归档执行位审计失败；此前生成物、类型、文档、结构和技能检查通过，未进入全库单测，不记全库通过 |
+| `node scripts/check-docs.mjs`、`node scripts/check-repo.mjs`、`node scripts/dsh-version.mjs check`、`git diff --check` | 通过，约 4.6 秒；记录补写后的文档与最终差异另作复核 |
+
+真实企业 Nacos 权限、企业 IAM、目标 DSH 0.2.1-rc.3 及其他操作系统未验。本机实际账号可使用新读取路径；单版本下线和下载竞争通过合成服务回归验证，未在用户正在使用的 Nacos 实例中修改版本状态。现有 DSH Web/profile 与演示技能保持原样。其余 P2 评审项不在本次修复范围；项目级安装器与交付器未修改。
+
 ## 2026-11-26 企业发布输入与安装说明复核
 
 统一员工包的环境配置白名单与 `release-bundle` 工作流不映射 Nacos 字段；环境中遗留的 Nacos 值不进入企业私版配置、补丁或元数据。独立 Skill Manager 仍在自己的制包入口要求四项连接配置，历史组合制品保留既有必填、原值与凭据声明校验。企业安装器和交付器的实现未修改。README 人工调试步骤区分中性开发包与预配置交付包：交付包直接使用包内配置，旧 profile 覆盖项需先备份并移除；开发包按需配置，包内连接更新通过新版本重新制包。

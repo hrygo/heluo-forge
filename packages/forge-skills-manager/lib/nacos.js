@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseSkillDoc } from "./skill-document.js";
-import { unzipSync } from "./zip.js";
+import { readZip, ZipReadError } from "./zip.js";
 import { createPortablePathSet, isPortableFileSegment } from "./filesystem-paths.js";
 class NacosError extends Error {
   code;
@@ -150,6 +150,22 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
       throw caught;
     }
   }
+  async function online(item, name, version, signal, auth) {
+    const namespace = settings().namespace;
+    let meta = item;
+    if (!Array.isArray(meta.versions)) {
+      const result = json(await request("/v3/admin/ai/skills", { namespaceId: namespace, skillName: name }, signal, auth));
+      if (result.code === 401 || result.code === 403) {
+        token = void 0;
+        throw error("auth", "\u4F01\u4E1A\u6280\u80FD\u5E93\u53EA\u8BFB\u8D26\u53F7\u6743\u9650\u4E0D\u8DB3", 403);
+      }
+      if (result.code !== 0 || !object(result.data)) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u8BE6\u60C5\u683C\u5F0F\u4E0D\u517C\u5BB9");
+      meta = result.data;
+    }
+    validateNamespace(meta, namespace);
+    if (meta.name !== name) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u8BE6\u60C5\u540D\u79F0\u4E0D\u5339\u914D");
+    return meta.enable === true && object(meta.labels) && meta.labels.latest === version && Array.isArray(meta.versions) && meta.versions.some((v) => object(v) && v.version === version && v.status === "online");
+  }
   async function load(input, signal) {
     const selected = validateNacosSelection(input);
     return run(signal, async (combined) => {
@@ -161,19 +177,16 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
         throw error("auth", "\u4F01\u4E1A\u6280\u80FD\u5E93\u53EA\u8BFB\u8D26\u53F7\u6743\u9650\u4E0D\u8DB3", 403);
       }
       if (metadata.code !== 0 || !object(metadata.data) || !Array.isArray(metadata.data.pageItems)) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u5217\u8868\u683C\u5F0F\u4E0D\u517C\u5BB9");
-      const published = metadata.data.pageItems.some((item) => {
-        if (!object(item) || item.name !== selected.name) return false;
-        validateNamespace(item, cfg.namespace);
-        return item.enable === true && object(item.labels) && item.labels.latest === selected.version;
-      });
-      if (!published) throw error("notFound", "\u6280\u80FD\u7248\u672C\u5DF2\u53D8\u66F4\u3001\u4E0B\u7EBF\u6216\u672A\u53D1\u5E03\uFF0C\u8BF7\u5237\u65B0\u516C\u5171\u5E93", 404);
-      const bytes = await request("/v3/admin/ai/skills/version/download", { namespaceId: cfg.namespace, skillName: selected.name, version: selected.version }, combined, auth, void 0, 10 << 20);
+      const item = metadata.data.pageItems.find((item2) => object(item2) && item2.name === selected.name);
+      if (object(item)) validateNamespace(item, cfg.namespace);
+      if (!object(item) || item.enable !== true || !object(item.labels) || item.labels.latest !== selected.version || !await online(item, selected.name, selected.version, combined, auth)) throw error("notFound", "\u6280\u80FD\u7248\u672C\u5DF2\u53D8\u66F4\u3001\u4E0B\u7EBF\u6216\u672A\u53D1\u5E03\uFF0C\u8BF7\u5237\u65B0\u516C\u5171\u5E93", 404);
+      const bytes = await request("/v3/client/ai/skills", { namespaceId: cfg.namespace, name: selected.name, version: selected.version }, combined, auth, void 0, 10 << 20);
       const entries = [];
       const seen = createPortablePathSet();
       let count = 0, total = 0;
       let files;
       try {
-        files = unzipSync(bytes, { filter(info) {
+        files = await readZip(bytes, { filter(info) {
           const path = info.name.replace(/\/$/, "");
           const parts = path.split("/");
           if (!path || path.length > 512 || parts.length > 64 || parts.some((p) => !isPortableFileSegment(p))) throw 0;
@@ -181,7 +194,7 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
           return !info.name.endsWith("/");
         } });
       } catch (caught) {
-        if (caught !== 0 && (!object(caught) || !Number.isInteger(caught.code) || Number(caught.code) < 0 || Number(caught.code) > 14)) throw caught;
+        if (caught !== 0 && !(caught instanceof ZipReadError)) throw caught;
         throw error("package", "\u6280\u80FD ZIP \u5305\u65E0\u6548\u3001\u8DEF\u5F84\u4E0D\u5B89\u5168\u6216\u5927\u5C0F\u8D85\u9650");
       }
       const names = Object.keys(files);
@@ -206,7 +219,8 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
       if (!config) return { configured: false, items: [], total: 0, page, pageSize: 20 };
       return run(signal, async (combined) => {
         const namespace = settings().namespace;
-        const v = json(await request("/v3/admin/ai/skills/list", { namespaceId: namespace, skillName: query, search: "blur", orderBy: "download_count", pageNo: String(page), pageSize: "20" }, combined, await access(combined)));
+        const auth = await access(combined);
+        const v = json(await request("/v3/admin/ai/skills/list", { namespaceId: namespace, skillName: query, search: "blur", orderBy: "download_count", pageNo: String(page), pageSize: "20" }, combined, auth));
         if (v.code === 401 || v.code === 403) {
           token = void 0;
           throw error("auth", "\u4F01\u4E1A\u6280\u80FD\u5E93\u53EA\u8BFB\u8D26\u53F7\u6743\u9650\u4E0D\u8DB3", 403);
@@ -220,6 +234,7 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
           if (!object(item.labels)) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u6761\u76EE\u683C\u5F0F\u4E0D\u517C\u5BB9");
           if (!validVersion(item.labels.latest)) continue;
           validateNamespace(item, namespace);
+          if (!await online(item, item.name, item.labels.latest, combined, auth)) continue;
           items.push({
             name: item.name,
             description: item.description,

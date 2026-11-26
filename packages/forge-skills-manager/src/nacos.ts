@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseSkillDoc } from "./skill-document.js";
 import type { CatalogInstallation, UploadInput } from "./types.js";
-import { unzipSync } from "./zip.js";
+import { readZip, ZipReadError } from "./zip.js";
 import { createPortablePathSet,isPortableFileSegment } from "./filesystem-paths.js";
 
 export interface NacosConfig {
@@ -148,6 +148,20 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
       throw caught;
     }
   }
+  async function online(item: Record<string, unknown>, name: string, version: string, signal: AbortSignal, auth: string) {
+    const namespace = settings().namespace;
+    let meta = item;
+    if (!Array.isArray(meta.versions)) {
+      const result = json(await request("/v3/admin/ai/skills", { namespaceId: namespace, skillName: name }, signal, auth));
+      if (result.code === 401 || result.code === 403) { token = undefined; throw error("auth", "企业技能库只读账号权限不足", 403); }
+      if (result.code !== 0 || !object(result.data)) throw error("response", "企业技能库详情格式不兼容");
+      meta = result.data;
+    }
+    validateNamespace(meta, namespace);
+    if (meta.name !== name) throw error("response", "企业技能库详情名称不匹配");
+    return meta.enable === true && object(meta.labels) && meta.labels.latest === version &&
+      Array.isArray(meta.versions) && meta.versions.some(v => object(v) && v.version === version && v.status === "online");
+  }
   async function load(input: NacosSelection, signal?: AbortSignal) {
     const selected = validateNacosSelection(input);
     return run(signal, async combined => {
@@ -156,19 +170,18 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
       const metadata = json(await request("/v3/admin/ai/skills/list", { namespaceId: cfg.namespace, skillName: selected.name, search: "accurate", pageNo: "1", pageSize: "20" }, combined, auth));
       if (metadata.code === 401 || metadata.code === 403) { token = undefined; throw error("auth", "企业技能库只读账号权限不足", 403); }
       if (metadata.code !== 0 || !object(metadata.data) || !Array.isArray(metadata.data.pageItems)) throw error("response", "企业技能库列表格式不兼容");
-      const published = metadata.data.pageItems.some(item => {
-        if (!object(item) || item.name !== selected.name) return false;
-        validateNamespace(item, cfg.namespace);
-        return item.enable === true && object(item.labels) && item.labels.latest === selected.version;
-      });
-      if (!published) throw error("notFound", "技能版本已变更、下线或未发布，请刷新公共库", 404);
-      const bytes = await request("/v3/admin/ai/skills/version/download", { namespaceId: cfg.namespace, skillName: selected.name, version: selected.version }, combined, auth, undefined, 10 << 20);
+      const item = metadata.data.pageItems.find(item => object(item) && item.name === selected.name);
+      if (object(item)) validateNamespace(item, cfg.namespace);
+      if (!object(item) || item.enable !== true || !object(item.labels) || item.labels.latest !== selected.version ||
+          !await online(item, selected.name, selected.version, combined, auth)) throw error("notFound", "技能版本已变更、下线或未发布，请刷新公共库", 404);
+      // Client API enforces the exact version's online state again at download.
+      const bytes = await request("/v3/client/ai/skills", { namespaceId: cfg.namespace, name: selected.name, version: selected.version }, combined, auth, undefined, 10 << 20);
       const entries: NonNullable<UploadInput["entries"]> = [];
       const seen = createPortablePathSet();
       let count = 0, total = 0;
       let files: Record<string, Uint8Array>;
       try {
-        files = unzipSync(bytes, { filter(info) {
+        files = await readZip(bytes, { filter(info) {
           const path = info.name.replace(/\/$/, "");
           const parts = path.split("/");
           if (!path || path.length > 512 || parts.length > 64 || parts.some(p => !isPortableFileSegment(p))) throw 0;
@@ -176,7 +189,7 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
           return !info.name.endsWith("/");
         } });
       } catch (caught) {
-        if (caught !== 0 && (!object(caught) || !Number.isInteger(caught.code) || Number(caught.code) < 0 || Number(caught.code) > 14)) throw caught;
+        if (caught !== 0 && !(caught instanceof ZipReadError)) throw caught;
         throw error("package", "技能 ZIP 包无效、路径不安全或大小超限");
       }
       // Nacos wraps exports in <skillName>/. Accept root layout too, without flattening resources.
@@ -202,7 +215,8 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
       if (!config) return { configured: false, items: [], total: 0, page, pageSize: 20 };
       return run(signal, async combined => {
         const namespace = settings().namespace;
-        const v = json(await request("/v3/admin/ai/skills/list", { namespaceId: namespace, skillName: query, search: "blur", orderBy: "download_count", pageNo: String(page), pageSize: "20" }, combined, await access(combined)));
+        const auth = await access(combined);
+        const v = json(await request("/v3/admin/ai/skills/list", { namespaceId: namespace, skillName: query, search: "blur", orderBy: "download_count", pageNo: String(page), pageSize: "20" }, combined, auth));
         if (v.code === 401 || v.code === 403) { token = undefined; throw error("auth", "企业技能库只读账号权限不足", 403); }
         const data = v.data;
         if (v.code !== 0 || !object(data) || !Array.isArray(data.pageItems) || data.pageItems.length > 20 || !Number.isSafeInteger(data.totalCount) || Number(data.totalCount) < 0) throw error("response", "企业技能库列表格式不兼容");
@@ -214,6 +228,7 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
           if (!object(item.labels)) throw error("response", "企业技能库条目格式不兼容");
           if (!validVersion(item.labels.latest)) continue;
           validateNamespace(item, namespace);
+          if (!await online(item, item.name, item.labels.latest, combined, auth)) continue;
           items.push({ name: item.name, description: item.description, version: item.labels.latest, namespaceId: namespace,
             ...(Number.isSafeInteger(item.downloadCount) && Number(item.downloadCount) >= 0 ? { downloadCount: Number(item.downloadCount) } : {}) });
         }

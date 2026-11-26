@@ -1,4 +1,4 @@
-// dsh-skills-manager core 单元测试（临时根；ZIP 用例复用生产依赖 fflate）
+// dsh-skills-manager core 单元测试（临时根；ZIP 夹具由开发依赖 fflate 生成）
 // 运行：node test/core-test.mjs
 
 import {

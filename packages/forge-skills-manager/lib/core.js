@@ -26,7 +26,7 @@ import {
   validDiscoveryName
 } from "./readonly-discovery.js";
 import { estimateTokens, truncateCatalogDescription } from "./token-count.js";
-import { unzipSync } from "./zip.js";
+import { readZip, ZipReadError } from "./zip.js";
 const KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const EXTERNAL_SOURCE_ORDER = [
   "ccswitch",
@@ -3168,7 +3168,10 @@ async function writeUploadedZip(contentRoot, encoded) {
   let files;
   const seen = createPortablePathSet();
   try {
-    files = unzipSync(archive, {
+    files = await readZip(archive, {
+      maxEntries: MAX_UPLOAD_ENTRIES,
+      maxEntryBytes: MAX_UPLOAD_ENTRY_BYTES,
+      maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES,
       filter(info) {
         const normalized = normalizeUploadPath(info.name);
         if (!seen.add(normalized.path))
@@ -3199,6 +3202,11 @@ async function writeUploadedZip(contentRoot, encoded) {
   } catch (caught) {
     const error = caught;
     if (error && /^error\./.test(String(error.code || ""))) throw error;
+    if (caught instanceof ZipReadError && caught.reason === "size")
+      throw codedError("ZIP \u89E3\u538B\u5185\u5BB9\u8D85\u51FA\u5927\u5C0F\u9650\u5236", "error.upload.tooLarge");
+    if (caught instanceof ZipReadError && caught.reason === "entries")
+      throw codedError("ZIP \u6761\u76EE\u8FC7\u591A", "error.upload.tooMany");
+    if (!(caught instanceof ZipReadError)) throw caught;
     throw codedError(
       `ZIP \u65E0\u6CD5\u89E3\u538B: ${String(error && error.message ? error.message : error)}`,
       "error.upload.zipInvalid"

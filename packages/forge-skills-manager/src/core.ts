@@ -6,7 +6,7 @@ import { createManagerStateStore } from "./manager-state.js";
 import { isExpectedOperationError } from "./operation-errors.js";
 import { createPortablePathSet,isPortableFileSegment,isSafeAncestorDirectory } from "./filesystem-paths.js";
 import type { CodedError,CreateInput,Diagnostic,DiscoveredEntry,EntryLocation,ImportCandidate,ImportConflict,ImportFailure,ImportPending,ImportResult,Log,ManagerState,MutationOptions,OperationError,ParsedSkill,Policy,PolicyResult,RenameOptions,RepositoryDestination,RootInput,RootView,Scan,ScopeOptions,SkillEntry,SkillItem,SkillRoot,SkillView,UploadInput,ViewItem } from "./types.js";
-// dsh-skills-manager core —— 纯 Node 技能文件管理核心（仅 ZIP 解压使用 fflate，可独立单测）
+// dsh-skills-manager core —— 纯 Node 技能文件管理核心（ZIP 使用内联读取器，可独立单测）
 //
 // 覆盖 DSH 用户级与活动 Session 项目级技能根：
 //   - 用户根目录：~/.dsh/skills 与常见 Agent 用户目录
@@ -40,7 +40,7 @@ discoverReadonlyEntries,
 validDiscoveryName,
 } from "./readonly-discovery.js";
 import { estimateTokens,truncateCatalogDescription } from "./token-count.js";
-import { unzipSync } from "./zip.js";
+import { readZip, ZipReadError } from "./zip.js";
 
 const KEBAB_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // 项目来源集中定义，路径校验、策略身份和展示共用，避免新增目录只可见却不可加载。
@@ -3764,7 +3764,10 @@ async function writeUploadedZip(contentRoot: string, encoded: string) {
   let files;
   const seen = createPortablePathSet();
   try {
-    files = unzipSync(archive, {
+    files = await readZip(archive, {
+      maxEntries: MAX_UPLOAD_ENTRIES,
+      maxEntryBytes: MAX_UPLOAD_ENTRY_BYTES,
+      maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES,
       filter(info) {
         const normalized = normalizeUploadPath(info.name);
         if (!seen.add(normalized.path))
@@ -3794,6 +3797,11 @@ async function writeUploadedZip(contentRoot: string, encoded: string) {
     });
   } catch (caught) { const error = caught as CodedError;
     if (error && /^error\./.test(String(error.code || ""))) throw error;
+    if (caught instanceof ZipReadError && caught.reason === "size")
+      throw codedError("ZIP 解压内容超出大小限制", "error.upload.tooLarge");
+    if (caught instanceof ZipReadError && caught.reason === "entries")
+      throw codedError("ZIP 条目过多", "error.upload.tooMany");
+    if (!(caught instanceof ZipReadError)) throw caught;
     throw codedError(
       `ZIP 无法解压: ${String(error && error.message ? error.message : error)}`,
       "error.upload.zipInvalid",

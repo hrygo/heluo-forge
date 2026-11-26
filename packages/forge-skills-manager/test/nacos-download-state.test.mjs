@@ -73,7 +73,7 @@ test('download badges use persisted exact-source/version records, survive Host r
   assert.deepEqual(await ui.states(), [{ state: 'downloaded' }], 'fresh manager reads durable records');
   const detail = await ui.request('/nacos/detail', selection);
   assert.deepEqual(detail.data.installations, [{ state: 'downloaded' }]);
-  const downloads = () => ui.fixture.calls.filter(call => call.url.pathname.endsWith('/skills/version/download')).length;
+  const downloads = () => ui.fixture.calls.filter(call => call.url.pathname === '/nacos/v3/client/ai/skills').length;
   const before = downloads();
   await ui.states(); await ui.states();
   assert.equal(downloads(), before, 'list projection does not download remote resources');

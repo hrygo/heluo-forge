@@ -55,7 +55,12 @@ const nacos = createServer(async (req, res) => {
       return;
     }
     assert.equal(req.headers.authorization, 'Bearer synthetic-read-token');
-    const name = url.searchParams.get('skillName');
+    const name = url.searchParams.get('skillName') ?? url.searchParams.get('name');
+    if (url.pathname === '/nacos/v3/admin/ai/skills') {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ code: 0, data: { name, namespaceId: 'public', enable: true, labels: { latest: '1.0.0' }, versions: [{ version: '1.0.0', status: 'online' }] } }));
+      return;
+    }
     if (url.pathname.endsWith('/skills/list')) {
       const selected = name ? names.filter(item => item === name) : names;
       res.setHeader('content-type', 'application/json');
@@ -63,7 +68,8 @@ const nacos = createServer(async (req, res) => {
         pageItems: selected.map(item => ({ name: item, description: 'Synthetic probe', namespaceId: 'public', downloadCount: 1, enable: true, labels: { latest: '1.0.0' } })) } }));
       return;
     }
-    assert.ok(url.pathname.endsWith('/skills/version/download') && names.includes(name));
+    assert.ok(url.pathname === '/nacos/v3/client/ai/skills' && names.includes(name));
+    assert.equal(url.searchParams.get('version'), '1.0.0');
     downloads.set(name, (downloads.get(name) ?? 0) + 1);
     if (name === 'pending-skill') { enteredDownload(); await pendingRelease; }
     res.setHeader('content-type', 'application/zip');

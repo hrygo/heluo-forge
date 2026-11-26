@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-SKILLS-001 |
 | 文档名称 | Nacos 公共技能库契约 |
-| 版本 | V1.3.0 |
+| 版本 | V1.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
@@ -71,9 +71,10 @@ Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `script
 |---|---|
 | `POST /v3/auth/user/login` | 表单 username/password；响应 accessToken、tokenTtl；Host 缓存令牌 |
 | `GET /v3/admin/ai/skills/list` | namespaceId、skillName、search、pageNo、pageSize；浏览列表固定 orderBy=download_count；响应 code=0、data.pageItems、totalCount |
-| `GET /v3/admin/ai/skills/version/download` | namespaceId、skillName、version；返回完整 ZIP |
+| `GET /v3/admin/ai/skills` | namespaceId、skillName；读取技能元数据及 versions[].version/status |
+| `GET /v3/client/ai/skills` | namespaceId、name、显式 version；仅返回 online 版本的完整 ZIP |
 
-读取携带 `Authorization: Bearer`；不接受页面指定任意 API 路径或凭据，不自动跳转。条目字段为 name、description、enable、labels.latest；缺少发布标签或已禁用的条目不提供安装。安装前用 accurate 查询复验选定版本仍为 latest。服务端 PUBLIC 可见性和读取权限必须由部署方实际配置，不由客户端改变 scope。
+读取携带 `Authorization: Bearer`；不接受页面指定任意 API 路径或凭据，不自动跳转。条目须启用、带有效 latest 标签，且 versions 中该精确版本的 status 为 `online`；其他版本在线不构成放行依据，缺少版本或状态时不提供安装。列表未携带 versions 时，仅对本页候选补查技能元数据，不下载资源、不扫描其他页。详情和安装先用 accurate 查询复验名称、命名空间、启用状态、latest 及精确版本在线状态，再通过 Client API 显式指定版本下载；下载时下线仍由服务端拒绝，不调用可读取下线资源的 Admin 下载接口。服务端 PUBLIC 可见性和读取权限必须由部署方实际配置，不由客户端改变 scope。
 
 列表向浏览器提供条目的 `namespaceId` 与可选 `downloadCount`。列表、详情和安装复验中的命名空间均须与本次查询一致，服务端省略时使用查询命名空间；不向页面开放命名空间切换。下载次数仅接受非负安全整数，缺失、null 或异常值不展示，不补零。它是 Nacos 的资源下载统计，不表示安装人数或使用次数；当前详情读取也调用完整资源下载接口。
 
@@ -104,6 +105,8 @@ Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `script
 `trash-restore` 对带来源记录的技能保存恢复前的来源身份、位置及完整资源摘要，包含本地编辑。正常管理视图读取可执行既有本地恢复；随后操作回执只读核验原记录已确认、回收目录已移除、来源和目标有效且资源与恢复前摘要一致，满足后返回 succeeded 并解除提交锁。仅有完成标记或同名文件不足以确认，核验失败保持 pending；回执查询不执行恢复、不写盘、不重复移动资源。
 
 企业库压缩包上限 10 MiB、最多 1000 条 ZIP 条目（含目录）、单文件 32 MiB、解压合计 64 MiB；路径长度最多 512 个 JavaScript 字符串代码单元、最多 64 层。拒绝路径穿越、控制字符、Windows 保留字符及设备名、末尾点或空格；路径按 Unicode NFC 规范化并忽略大小写判重，同一父目录的不同大小写或规范化拼写也拒绝，写入保留原始名称。不匹配的技能名称同样拒绝；保留子目录和二进制内容，不还原 POSIX 执行位、所有者或链接元数据，脚本须通过已安装解释器调用。以上是企业 ZIP 下载限制；浏览器本地上传的压缩包上限为 32 MiB，承载 Base64 资源的上传 HTTP 请求体上限另为 88 MiB，三者不可混用。`SKILL.md` 必须有效且名称、说明与所选技能一致；摘要只用于完整性及恢复判断，不证明发布者签名。
+
+本地上传和企业下载共用严格 ZIP 读取器，在返回文件或写入资源前完成容器解析、每项实际解压长度与目录声明长度一致性及 CRC32 校验。条目数、单项和累计输出预算在读取时执行，过滤掉的目录或条目也计入预算；不按伪造的声明长度提前分配完整输出缓冲。文件名按 UTF-8 解码后执行既有路径规则。任意损坏条目使整个包拒绝；企业读取返回 `error.nacos.package`，本地上传返回 `error.upload.zipInvalid`，大小和数量超限保留既有上传错误码。CRC32 检查数据一致性，不提供发布者认证。
 
 固定业务码以 `error.nacos.` 开头：unconfigured/config/auth/notFound/response/size/package/query/cancelled/timeout/unavailable。未知编程异常保持可辨识的 500，不伪装成网络不可达。列表未配置可返回 configured=false；其他失败不报告成功、不同步旧数据覆盖 Host。
 

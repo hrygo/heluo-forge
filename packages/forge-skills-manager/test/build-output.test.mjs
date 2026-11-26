@@ -4,6 +4,8 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { runInNewContext } from 'node:vm';
 import { buildPlugin, packageRoot } from '../scripts/build.mjs';
 import { normalizeDependencyIds } from '../scripts/build-identities.mjs';
 
@@ -27,6 +29,12 @@ test('build output is identical with dependencies linked from another checkout',
     const rebuilt = join(directory, 'rebuilt');
     await buildPlugin(baseline);
     await buildPlugin(rebuilt, relocated);
+    const reader = await readFile(createRequire(import.meta.url).resolve('yauzl'), 'utf8');
+    const emitted = await readFile(join(baseline, 'zip.js'), 'utf8');
+    const table = source => runInNewContext('(' + source.match(/var cp437 = ([^\r\n]+);/u)[1] + ')');
+    assert.equal(table(emitted), table(reader), 'emitted CP437 expression preserves every character');
+    assert.match(emitted, /Copyright \(c\) 2014 Josh Wolfe/u);
+    assert.match(emitted, /Copyright \(c\) 2014 Andrew Kelley/u);
     const files = (await readdir(baseline)).sort();
     assert.deepEqual((await readdir(rebuilt)).sort(), files);
     for (const file of files) {

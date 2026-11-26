@@ -20,7 +20,13 @@ export function fakeNacos(origin = "https://nacos.corp.example") {
     if (state.status !== 200) return new Response("synthetic-server-secret", { status: state.status });
     if (u.pathname.endsWith("/auth/user/login")) return Response.json({ accessToken: state.token, tokenTtl: 18000 });
     if (u.pathname.endsWith("/skills/list")) return Response.json(state.listData ?? { code: 0, data: { totalCount: 1, pageNumber: 1, pagesAvailable: 1, pageItems: [{ name: state.name, description: "合成测试技能", labels: { latest: state.version }, enable: state.enable }] } });
-    if (u.pathname.endsWith("/skills/version/download")) {
+    if (u.pathname === "/nacos/v3/admin/ai/skills") {
+      const items = state.listData?.data?.pageItems ?? [{ name: state.name, labels: { latest: state.version }, enable: state.enable }];
+      const item = items.find(item => item.name === u.searchParams.get("skillName"));
+      return Response.json({ code: 0, data: { ...item, versions: [{ version: item?.labels?.latest, status: "online" }] } });
+    }
+    if (u.pathname === "/nacos/v3/client/ai/skills") {
+      if (u.searchParams.get("name") !== state.name || u.searchParams.get("version") !== state.version) return new Response(null, { status: 404 });
       if (state.hold) await state.hold(options.signal);
       return new Response(state.bytes ?? zipSync({ [`${state.name}/SKILL.md`]: strToU8(skillDocument(state.name)), [`${state.name}/scripts/example.txt`]: strToU8("resource"), [`${state.name}/assets/binary.dat`]: new Uint8Array([0, 255, 17]) }), { headers: { "content-type": "application/zip" } });
     }

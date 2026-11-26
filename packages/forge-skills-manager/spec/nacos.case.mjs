@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { zipSync, strToU8 } from "fflate";
 import { createNacosClient } from "../lib/nacos.js";
+import { readZip } from "../lib/zip.js";
 import { fakeNacos, nacosConfig, skillDocument, useNacosEnvironment } from "./fixtures/nacos.mjs";
 beforeEach(context => useNacosEnvironment(context));
 const fixture = () => { const f = fakeNacos(); return { ...f, client: createNacosClient(nacosConfig, f.fetcher) }; };
@@ -17,14 +18,9 @@ test("配置、解码和解压中的程序缺陷保留原异常", async () => {
     globalThis.TextDecoder = class extends originalDecoder { decode() { throw defect; } };
     await assert.rejects(fixture().client.list(), caught => caught === defect);
   } finally { globalThis.TextDecoder = originalDecoder; }
-  const originalSplit = String.prototype.split;
-  try {
-    String.prototype.split = function (separator, limit) {
-      if (separator === "/" && this.startsWith("example-skill/")) throw defect;
-      return originalSplit.call(this, separator, limit);
-    };
-    await assert.rejects(fixture().client.load(selected), caught => caught === defect);
-  } finally { String.prototype.split = originalSplit; }
+  await assert.rejects(readZip(zipSync({ "example-skill/SKILL.md": strToU8(skillDocument("example-skill")) }), {
+    filter() { throw defect; },
+  }), caught => caught === defect);
 });
 
 test("未配置时返回配置提示且零网络", async () => {
@@ -40,7 +36,7 @@ test("默认和显式环境变量名均从 Host 进程读取账号密码", async
   assert.equal(new URLSearchParams(first.calls[0].options.body).get("username"), "svc-ci");
   const explicit = fakeNacos();
   assert.equal((await createNacosClient({ ...config, usernameEnv, passwordEnv }, explicit.fetcher).list()).configured, true);
-  assert.equal(explicit.calls.length, 2);
+  assert.equal(explicit.calls.length, 3);
 });
 test("仅使用登录和只读白名单，凭据不进 URL，令牌缓存", async () => {
   const { client, calls } = fixture();
@@ -74,7 +70,7 @@ test("下线、草稿、旧版本不能经直接请求绕过发现页", async ()
   await rejects(client.load(selected), "notFound");
   state.enable = true;
   await rejects(client.load({ ...selected, version: "draft" }), "notFound");
-  assert.ok(!calls.some(c => c.url.pathname.endsWith("/download")));
+  assert.ok(!calls.some(c => c.url.pathname === "/nacos/v3/client/ai/skills"));
 });
 test("拒绝不安全的服务端配置，未读密码不发送请求", async () => {
   const withCredentials = new URL("https://nacos.corp.example");
@@ -162,7 +158,7 @@ test("搜索、刷新和跨页均请求服务端下载降序，不重排或抓�
     const result = await client.list("skill", page);
     assert.deepEqual(result.items.map(item => item.name), ["first-skill", "second-skill"], "Host preserves the server's order");
     assert.equal(result.total, 45); assert.equal(result.page, page);
-    assert.equal(calls.at(-1).url.searchParams.get("pageNo"), String(page));
+    assert.equal(calls.filter(call => call.url.pathname.endsWith("/skills/list")).at(-1).url.searchParams.get("pageNo"), String(page));
   }
   const requests = calls.filter(call => call.url.pathname.endsWith("/skills/list"));
   assert.equal(requests.length, 3);

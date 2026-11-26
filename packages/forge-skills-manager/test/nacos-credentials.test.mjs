@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import { Context } from '@deepseek-ai/cordis';
 import { fakeNacos, nacosConfig, useNacosEnvironment } from '../spec/fixtures/nacos.mjs';
@@ -12,7 +14,10 @@ beforeEach(context => useNacosEnvironment(context));
 
 const sourceModule = async name => {
   const result = await build({ entryPoints: [fileURLToPath(new URL(`../src/${name}.ts`, import.meta.url))],
-    bundle: true, write: false, format: 'esm', platform: 'node', target: 'node24', logLevel: 'silent' });
+    bundle: true, write: false, format: 'esm', platform: 'node', target: 'node24', logLevel: 'silent',
+    plugins: [{ name: 'node-zip-reader', setup(builder) {
+      builder.onResolve({ filter: /^yauzl$/ }, args => ({ path: pathToFileURL(createRequire(args.importer).resolve('yauzl')).href, external: true }));
+    } }] });
   return import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 };
 const { createNacosClient } = await sourceModule('nacos');
@@ -103,11 +108,11 @@ test('credential removal blocks cached-token list, detail and download; rotation
   process.env.TEST_NACOS_PASSWORD = 'synthetic-rotated-password';
   await client.list();
   assert.equal(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).length, 3);
-  assert.equal(new URLSearchParams(fixture.calls.at(-2).options.body).get('password'), process.env.TEST_NACOS_PASSWORD);
+  assert.equal(new URLSearchParams(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).at(-1).options.body).get('password'), process.env.TEST_NACOS_PASSWORD);
   process.env.TEST_NACOS_USER = 'synthetic-rotated-user';
   await client.list();
   assert.equal(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).length, 4);
-  assert.equal(new URLSearchParams(fixture.calls.at(-2).options.body).get('username'), process.env.TEST_NACOS_USER);
+  assert.equal(new URLSearchParams(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).at(-1).options.body).get('username'), process.env.TEST_NACOS_USER);
 });
 
 test('already cancelled requests do not log in or access the remote library', async () => {
@@ -204,5 +209,5 @@ test('explicit credential removal invalidates cached tokens; rotation requires l
   config.password = 'synthetic-rotated-password';
   await client.list();
   assert.equal(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).length, 2);
-  assert.equal(new URLSearchParams(fixture.calls.at(-2).options.body).get('password'), config.password);
+  assert.equal(new URLSearchParams(fixture.calls.filter(call => call.url.pathname.endsWith('/login')).at(-1).options.body).get('password'), config.password);
 });
