@@ -4,8 +4,9 @@
 
 | 平台 | 形态 | 一期范围 | 当前 |
 |---|---|---|---|
-| Windows | 桌面应用，MSI 预置企业组合包 | 约 400 人 | 未构建、未签名、未验证 |
-| 银河麒麟 aarch64 | `dsh --profile web` + 浏览器，仅绑定 `127.0.0.1` | 约 400 台 | 未构建、未实机验证 |
+| Windows x64 | 自建 Electron 桌面壳 NSIS 安装包（`heluo-forge-enterprise-<version>-setup-x64.exe`），内嵌锁定版 dsh 运行时与随包企业资产 | 约 400 人 | CI 已产草稿包；未签名、未做 VM 与企业终端实机验收 |
+| macOS arm64 / x64 | 同源桌面壳 `.zip` / `.dmg`（未签名、未公证） | 按需交付 | `arm64` CI 已产草稿包；`x64` 与双架构安装待验收 |
+| 银河麒麟 aarch64 / x86_64 | 同源桌面壳 `.deb`（含 `systemd --user` 单元）；若 Electron 兼容性探针受阻则回退 `dsh --profile web` + 浏览器方案 | 约 400 台 | 未构建、未实机验证 |
 
 ## Web 浏览器
 
@@ -17,16 +18,28 @@ Web 端建议使用支持 `AbortSignal.any()` 的新版 Chrome 或 Chromium；Ch
 
 | 资产 | 用途 | 状态 |
 |---|---|---|
-| Windows 安装包与静默安装参数 | 自助安装与 MDM 推送 | 待构建 |
-| 麒麟 deb/apt 包与 `systemd --user` 单元 | 安装、开机启动、`dsh-web-open` 启动脚本 | 待构建 |
-| 企业组合包与默认配置 | 预置 `@heluo/forge-enterprise` 与私有源 | 待构建 |
-| 升级与回退脚本 | 版本切换与失败回退 | 待构建 |
+| Windows NSIS 安装包与静默安装参数 | 自助安装与无交互安装 | CI 已产草稿包；VM 与实机未验 |
+| macOS arm64 / x64 安装包与首开引导 | 自助安装（Gatekeeper 未签名绕过指引） | `arm64` CI 已产草稿包；`x64` 与实机未验 |
+| 麒麟 deb/apt 包与 `systemd --user` 单元 | Electron 桌面端安装与开机自启（或 web deb 兜底） | 待构建、未实机验证 |
+| 随包企业资产目录（`enterprise-assets/`） | 首启自动装载 `@heluo/forge-enterprise` 与凭据入库 | 已随统一构建产出 |
+| 升级与回退语义 | 异版本先卸载再安装并保留用户数据 | 见下文参数与配置；实机未验 |
+
+## Windows NSIS 静默安装与升级参数
+
+Windows 安装包基于 electron-builder NSIS（`oneClick: true`、`perMachine: false`、`deleteAppDataOnUninstall: false`）：
+
+| 参数 | 作用 | 说明 |
+|---|---|---|
+| `/S` | 静默安装 / 静默卸载 | 无界面完成安装或卸载；需在 Windows VM 实测确认 |
+| `/D=<绝对路径>` | 指定安装目录 | NSIS 标准约定：必须放在命令行最后、不加引号、且仅作用于用户级可写目录 |
+| 升级 / 回退语义 | 异版本先卸载再安装 | 安装目录随版本更新，`%APPDATA%` 与 `$DSH_HOME` 下的 `first-run.json`、日志及凭据库保留（`deleteAppDataOnUninstall: false`） |
+
+> 注：企业无统一 MDM，本节仅面向自助安装与本地排障参考，不随包分发批量推送脚本；上述静默参数待离线 Win10 x64 虚拟机实测取证。
 
 ## 边界
 
-- 不构建 Linux 桌面客户端；麒麟使用本机 Web，仅监听回环地址。
-- 安装包与配置不得内置用户凭据或共享密钥。
-- 签名、公证、MDM 与软件源由 IT 确认，仓库只保存可审查的构建与配置输入。
+- 全平台桌面客户端共用自有 Electron 壳（`services/forge-desktop/`），仅加载本机 `dsh --profile web`（仅监听 `127.0.0.1`），不修改或重编译上游 `apps/desktop`；桌面壳仅消费随包内嵌或同目录自动探测到的 `enterprise-assets/`。
+- 自有壳不签名、不公证、不建自动更新 feed；SmartScreen 与 Gatekeeper 未签名首开路径按目标环境实测记录。
 - 两端凭据与执行隔离须实机验证，配置文本不能证明隔离有效。
 
 ## IAM 安装准入

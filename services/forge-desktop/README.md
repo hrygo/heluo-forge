@@ -8,7 +8,7 @@
 
 `package.json` 的 `devDependencies` 精确钉 `electron@44.7.0`（dsh 的原生加载器带 Electron 指纹白名单，浮动解析会被拒绝启动）与 `electron-builder@26.0.12`；二者是构建期工具，壳的 npm 形态（`files: ["src","README.md"]`）不夹带工具链，产物是打包后的安装包。`runtime-lock.json` 同时锁定随包 pnpm，版本须与根 `packageManager` 一致（暂存用例断言）。`primary-runtime-lock.json` 逐字节钉住上游为同一 dsh 版本发布的内置运行时锁（Node.js、CPython 与各 wheel），其中的 Node.js 与根 `.node-version` 同版（用例断言）。工作区为 `@electron/node-gyp` 的 git 引用钉回 npm 发布版（pnpm 11 拒绝 git 型子依赖），`onlyBuiltDependencies` 只放行 electron 的二进制下载 postinstall。Electron 二进制与 builder 自身依赖默认源可达性依环境而异，可用 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR` 指向镜像（环境配置，不入库）。清单里的 `engines.dsh` 是仓库检查器对服务清单的要求，取值与内嵌运行时的锁定版一致；壳本身不是 DSH 插件。仓库的离线检查不安装依赖，全部用例不需要 `electron`。
 
-安装包只携带运行时会读取的文件，规则写在 `scripts/build-desktop-installer.mjs` 的打包配置里。`extraResources.filter` 排除 TypeScript 源码与类型声明、source map 和调试符号：内嵌 Node 拒绝为 `node_modules` 内的 `.ts` 剥离类型，壳又从子进程环境里剥离 `NODE_OPTIONS`，source map 不会被加载；`runtime-lock.json` 钉定的 `@deepseek-ai/dsh` 目录原样随包。内置运行时所在的 `primary-runtime/` 目录同样原样随包：它是暂存后检查过、并按文件数与字节数记入构建记录的那棵树（electron-builder 自己的默认规则仍会丢弃其中的空 `.gitkeep` 占位文件）。NSIS 归档关闭差分包、按 solid 压缩：差分形式只服务 electron-updater，本应用不建更新 feed。Electron 语言包只保留英文与简繁中文；electron-builder 26 在 macOS 上不裁语言包，因为 Electron 44 把它们放在 Framework 内。构建摘要的 `resources` 记录暂存资源的文件数与字节数，以及其中被规则排除的部分。
+安装包只携带运行时会读取的文件，规则写在 `scripts/build-desktop-installer.mjs` 的打包配置里。`extraResources.filter` 排除 TypeScript 源码与类型声明、source map 和调试符号：内嵌 Node 拒绝为 `node_modules` 内的 `.ts` 剥离类型，壳又从子进程环境里剥离 `NODE_OPTIONS`，source map 不会被加载；`runtime-lock.json` 钉定的 `@deepseek-ai/dsh` 目录原样随包。内置运行时所在的 `primary-runtime/` 目录同样原样随包：它是暂存后检查过、并按文件数与字节数记入构建记录的那棵树（electron-builder 自己的默认规则仍会丢弃其中的空 `.gitkeep` 占位文件）。暂存脚本 `scripts/stage-desktop-payload.mjs` 在安装后执行同版本嵌套依赖去重、闭包清单校验及字节/文件数预算门禁。NSIS 归档关闭差分包、按 solid 压缩，并配置 `deleteAppDataOnUninstall: false` 以在异版本重装与回退时保留用户数据；安装脚本支持 `--arch` 指定 `macOS x64` 与 `linux arm64/x64` 目标。Electron 语言包只保留英文与简繁中文（去重后 6 项：`en`、`en-US`、`zh-CN`、`zh-TW`、`zh_CN`、`zh_TW`）；electron-builder 26 在 macOS 上不裁语言包，因为 Electron 44 把它们放在 Framework 内。构建摘要的 `resources` 记录暂存资源的文件数与字节数，以及其中被规则排除的部分。
 
 ## 模块
 
@@ -52,16 +52,16 @@
 
 ## 未验证项
 
-以下结论出来之前不产出安装包：
+`release-bundle` 已随 tag 构建 macOS arm64 与 Windows x64 桌面安装包供内部构建验证；在以下项全部收口前，产物不进入正式对外分发：
 
-- 锁定版 dsh 的 launch URL 输出行与命令行选项（当前依据 0.2.2-rc.5 的静态阅读）。
-- Electron 44.7.0 内嵌 Node 下 `node:sqlite` 与凭据存储的可用性。
-- Windows 与 Linux 自承载、三平台打包链、麒麟托盘可用性。
+- `@deepseek-ai/dsh` 0.2.2-rc.5 的 `runCli({ packageManager })`、`dsh-web-app`（`--host`/`--port`/`--no-open` 与 `dsh web: <url>`）及 `node-addon-require-builtin` 白名单（含 `44.7.0`）已于 2026-11-26 离线核验；但其在 Windows 与 Linux 上的真实自承载启动仍未实测。
+- Electron 44.7.0 内嵌 Node 下 `node:sqlite` 与凭据存储在 Windows 与 Linux 上的可用性（macOS 本机已证实可写）。
+- Windows x64 VM 端到端安装、NSIS 静默参数实测与升级数据保留、麒麟双架构打包链与托盘可用性。
 - 随包 pnpm 在 Windows 与 Linux 上的包操作（本机只在 mac-arm64 实测）。
-- 首启失败明细、日志与密钥入库通道在 Windows 与 Linux 上的表现（本机只在 mac-arm64 实测；SQLite 凭据库在 Electron 内嵌 Node 下可写已在本机证实）。
+- 首启失败明细、日志与密钥入库通道在 Windows 与 Linux 上的表现（本机只在 mac-arm64 实测）。
+- 终端 CLI 与壳并发使用同一 `web` profile 的安全性。
 - 无边框窗口在 Windows 上的全部表现：拖动、贴靠、最大化边距、Alt+Space 系统菜单、Win10 与 Win11 样式差异（本机只在 mac-arm64 深色外观实测，Windows 外观只做了离线渲染）。macOS 上的拖动（自动化没有系统鼠标事件权限）与浅色外观和原生对照未验。
 - 真实企业 IAM 与网关，以及带品牌配置的员工包：本机的窗口实测用的是仓库测试用的模拟 IAM 与网关、从 HEAD 造的不含品牌配置的合成员工包（应用内回退上游默认品牌）。在本机做首启验证时，凭据库默认落在用户主目录下而不是 `DSH_HOME`，必须把 `HOME` 或 `HELUO_FORGE_STORE_DIRECTORY` 指到沙箱。
-- `main.mjs` 中内嵌运行时与企业资产的路径是打包步骤将要暂存的布局，随首个安装包确认。
 - 内置运行时在 Windows 与 Linux 上的构建与运行；压缩后的安装包体积增量；签名构建下载荷里的 Mach-O 文件如何处理。
 
 ## 检查

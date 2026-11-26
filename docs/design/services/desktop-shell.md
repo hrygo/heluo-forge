@@ -17,7 +17,7 @@
 | 门禁 | G2 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
-> 编制依据：实施计划 [CORP-DSH-PLAN-026 §4.3](../../plans/2026-11-19-desktop-bundle-packaging.md#43-p2-壳工程核心实现与-windows-x64-打包g2)。已核验方式为 2026-11-23 的静态阅读：本机 `@deepseek-ai/dsh` 0.2.2-rc.5 的命令行形态（`dsh --profile web`，web 应用的 `--host`、`--port`、`--no-open` 选项，以及 stdout 输出的 `dsh web: <认证地址>` 行）、仓库安装器 `scripts/init-enterprise-plugin.mjs` 的写入面与可编程入口、私版 tgz 经 `dsh.bundle.patch` 随包携带配置的装载方式。未核验：锁定版 0.2.1-rc.3 的同一命令行形态；Electron 44.7.0 内嵌 Node 下 `node:sqlite` 与凭据存储的可用性；Windows 与 Linux 自承载；三平台打包链。按项目负责人 2026-11-23 的决定，本模块的实现先于计划 P0 探针进行，上述未核验项以计划 P0 探针结论为准。按项目负责人 2026-11-24 的决定，本目录先建立 `package.json` 并标「状态：可用」，Electron 运行与打包链的验证后置；「可用」指模块、用例与清单已具备，不表示可分发。内置运行时部分以 2026-11-26 在同一锁定版上的本机实测为依据（上游 `web` profile 补丁层里的相关两行、已发布包导出的载荷布局函数、Electron 44.7.0 Node 模式下的到达性），记录见 [验证记录](../verification/desktop-primary-runtime.md)。
+> 编制依据：实施计划 [CORP-DSH-PLAN-026 §4.3](../../plans/2026-11-19-desktop-bundle-packaging.md#43-p2-壳工程核心实现与-windows-x64-打包g2)。已核验（2026-11-23 及 2026-11-26 离线包核验 `@deepseek-ai/dsh` 0.2.2-rc.5）：`lib/bin.js` 导出 `runCli({ packageManager })`、`@deepseek-ai/dsh-web-app` 的 `--host`/`--port`/`--no-open` 与 stdout `dsh web: <认证地址>` 行、`node-addon-require-builtin-darwin-arm64@0.1.10` 的 Electron 指纹白名单含 `44.7.0`（`{43.0.0, 44.0.0, 44.7.0, 44.11.5, 45.0.0-alpha.6}`）；以及仓库安装器 `scripts/init-enterprise-plugin.mjs`、私版 tgz 经 `dsh.bundle.patch` 随包携带配置的装载方式。本机 macOS 开发构建已证实 Electron 44.7.0 自承载启动内嵌 dsh、随包 pnpm 安装企业插件及内嵌 Node 下 `node:sqlite` 凭据写入。未核验：Windows 与 Linux 自承载及 `node:sqlite` 实机表现、`web` profile 与终端 CLI 并发安全性、三平台实机安装与打包链。按项目负责人 2026-11-23 的决定，本模块的实现先于计划 P0 探针进行，上述未核验项以计划 P0 探针结论为准。按项目负责人 2026-11-24 的决定，本目录先建立 `package.json` 并标「状态：可用」，Electron 跨平台运行与打包链的验证后置；「可用」指模块、用例与清单已具备，不表示可分发。内置运行时部分以 2026-11-26 在同一锁定版上的本机实测为依据（上游 `web` profile 补丁层里的相关两行、已发布包导出的载荷布局函数、Electron 44.7.0 Node 模式下的到达性），记录见 [验证记录](../verification/desktop-primary-runtime.md)。
 >
 > 关联文档：[总体架构](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md)、[设计索引](../README.md)、[公版插件、企业私有包与官方 DSH 集成方案](../../architecture/public-enterprise-bundle.md)、[工程开发与发布约定](../../engineering/development-conventions.md)、[DSH 插件高阶规范](../../engineering/dsh-plugin-conventions.md)。
 
@@ -27,7 +27,7 @@
 
 应用随包携带上游的内置运行时：独立 Node.js、pnpm、CPython 与 Office 创作库组成的一份可搬迁载荷。壳对它只做一件事——把它的位置交给 `web` profile；读取、安装与运行都由上游自己的工具完成，企业底座的补丁层只是让那两行对 `web` profile 生效。
 
-进入可分发状态还缺三项，均属计划 P0 与 P2 的验证：锁定版的启动输出形态、Electron 内嵌 Node 下的凭据存储、三平台打包链。在这些结论出来之前不产出安装包。
+进入可分发状态仍须完成计划 P0 与 P2–P4 的跨平台验证：Windows 与 Linux 自承载及凭据存储、内置运行时在 Windows 与 Linux 上的载荷构建与运行、并发使用 `web` profile、第三方组件再分发许可书面结论与三平台安装包验收。在此之前已接入的 CI 构建产物仅作内部构建验证，不可对外分发。
 
 ## 2. 目标与非目标
 
@@ -208,7 +208,7 @@ stateDiagram-v2
 
 | 场景 | 行为 | 用户可见结果 | 是否可重试 |
 |---|---|---|---|
-| 未找到可用的企业资产 | 抛 `ASSETS_NOT_FOUND`，提示指定员工包 | 错误提示，无工作区 | 是 |
+| 未找到可用的企业资产 | 抛 `ASSETS_NOT_FOUND`，提示补齐随包 `enterprise-assets` 后从托盘菜单重试 | 错误提示，无工作区 | 是 |
 | 当前员工包不完整：清单或摘要清单缺失、摘要不符、列出的路径是符号链接 | 抛 `ASSETS_INVALID`，不改用其他候选 | 错误提示，无工作区 | 是 |
 | 内嵌运行时、随包 pnpm 或内置运行时缺失，或内置运行时不是为本机构建 | 启动前拒绝，`EMBEDDED_RUNTIME_MISSING` | 错误提示，无工作区 | 重新安装应用 |
 | 标题栏页面或它的桥接缺失，或页面加载后桥接没有生效 | 启动前拒绝或停在显示任何界面之前，`TITLE_BAR_MISSING`：没有标题栏的窗口没有控件，不显示 | 错误提示，无工作区 | 重新安装应用 |
@@ -259,8 +259,7 @@ launch URL 的查询串与片段、客户端密钥、环境变量取值不进入
 
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
-| 锁定版 0.2.1-rc.3 的 launch URL 输出形态与命令行选项是否与 0.2.2-rc.5 一致 | 平台组（计划 P0 #10） | `launch-url` 的解析规则 |
-| Electron 44.7.0 内嵌 Node 下 `node:sqlite` 与凭据存储是否可用 | 平台组（计划 P0 #7） | 方案是否成立 |
+| Electron 44.7.0 内嵌 Node 下 `node:sqlite` 与凭据存储在 Windows / Linux 的实机表现（macOS 本机已证实可写） | 平台组（计划 P0 #10） | 跨平台方案是否成立 |
 | 企业 npm 源 / 索引 preset 的内容与写入位置 | 平台组（计划 P0 #6） | 首启是否增加 preset 与 profile 级补丁层写入 |
 | 终端 CLI 与壳并发使用同一 `web` profile 是否安全 | 平台组（计划 P0 #9） | 壳是否改用独立 profile |
 | 内置运行时在 Windows 与 Linux 上的构建与运行 | 平台组（计划 G3、G4） | 两平台的安装包是否携带可用的载荷；目前只有 mac-arm64 在本机构建并运行过 |

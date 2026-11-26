@@ -14,7 +14,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { APP_IDENTITY } from '../scripts/release-delivery.mjs';
-import { builderConfig, builderEntry, isPackaged, normalizeVersion, parseArguments, readAppIdentity, summarizeResources } from '../scripts/build-desktop-installer.mjs';
+import { builderConfig, builderEntry, isPackaged, normalizeVersion, parseArguments, readAppIdentity, resolveTargetArch, summarizeResources } from '../scripts/build-desktop-installer.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -38,7 +38,7 @@ test('身份读取：schema 与五元组必填，缺字段即拒', (t) => {
   assert.throws(() => readAppIdentity(identityFile(root, { schema: 'other/1' })), (error) => error.code === 'IDENTITY_INVALID');
 });
 
-test('配置逐字段来自身份真源：appId/GUID/productName/可执行名/产物名', (t) => {
+test('配置逐字段来自身份真源：appId/GUID/productName/可执行名/产物名/卸载展示名', (t) => {
   const root = temp(t);
   const identity = readAppIdentity(identityFile(root));
   const config = builderConfig({ identity, version: '1.2.3', resourcesDir: join(root, 'resources'), iconsDir: join(BRAND_DIR, 'icons'), appDir: join(REPO_ROOT, 'services', 'forge-desktop'), outputDir: join(root, 'dist') });
@@ -46,6 +46,8 @@ test('配置逐字段来自身份真源：appId/GUID/productName/可执行名/�
   assert.equal(config.productName, APP_IDENTITY.productName);
   assert.equal(config.executableName, APP_IDENTITY.executableName);
   assert.equal(config.nsis.guid, APP_IDENTITY.upgradeGuid);
+  assert.equal(config.nsis.uninstallDisplayName, `${APP_IDENTITY.displayName} \${version}`);
+  assert.equal(config.nsis.deleteAppDataOnUninstall, false);
   assert.equal(config.artifactName, 'heluo-forge-enterprise-${version}-${arch}.${ext}');
   assert.equal(config.nsis.artifactName, 'heluo-forge-enterprise-${version}-setup-${arch}.${ext}');
   assert.equal(config.extraMetadata.version, '1.2.3');
@@ -58,9 +60,9 @@ test('配置逐字段来自身份真源：appId/GUID/productName/可执行名/�
 test('配置反向：换掉身份任一字段，配置随之偏离真源（判据会失败）', (t) => {
   const root = temp(t);
   const real = builderConfig({ identity: readAppIdentity(identityFile(root)), version: '1', resourcesDir: 'r', iconsDir: 'i', appDir: 'a', outputDir: 'o' });
-  for (const field of ['appId', 'upgradeGuid', 'productName', 'executableName']) {
+  for (const field of ['appId', 'upgradeGuid', 'productName', 'executableName', 'displayName']) {
     const doctored = builderConfig({ identity: readAppIdentity(identityFile(root, { [field]: 'doctored' })), version: '1', resourcesDir: 'r', iconsDir: 'i', appDir: 'a', outputDir: 'o' });
-    const differs = real.appId !== doctored.appId || real.nsis.guid !== doctored.nsis.guid || real.productName !== doctored.productName || real.executableName !== doctored.executableName || real.artifactName !== doctored.artifactName;
+    const differs = real.appId !== doctored.appId || real.nsis.guid !== doctored.nsis.guid || real.nsis.uninstallDisplayName !== doctored.nsis.uninstallDisplayName || real.productName !== doctored.productName || real.executableName !== doctored.executableName || real.artifactName !== doctored.artifactName;
     assert.equal(differs, true, `tampering ${field} must change the configuration`);
   }
 });
@@ -94,8 +96,24 @@ test('打包配置：过滤规则与判定同源且顺序正确；关闭差分�
   assert.deepEqual(config.extraResources[0].filter, ['**/*', '!**/*.ts', '!**/*.cts', '!**/*.mts', '!**/*.map', '!**/*.pdb', 'dsh/node_modules/@deepseek-ai/dsh/**', 'primary-runtime/**']);
   // 本应用不建自动更新 feed，差分形式的归档比 solid 归档大三分之一。
   assert.equal(config.nsis.differentialPackage, false);
-  // 两种拼写各对应一种平台的语言文件名：macOS 用 en / zh_CN / zh_TW，Windows 与 Linux 用 en-US / zh-CN / zh-TW。
-  assert.deepEqual(config.electronLanguages, ['en', 'en-US', 'zh-CN', 'zh_TW', 'zh-TW', 'zh_CN']);
+  // 两种拼写各对应一种平台的语言文件名：macOS 用 en / zh_CN / zh_TW，Windows 与 Linux 用 en-US / zh-CN / zh-TW，无重复项。
+  assert.deepEqual(config.electronLanguages, ['en', 'en-US', 'zh-CN', 'zh-TW', 'zh_CN', 'zh_TW']);
+  assert.equal(new Set(config.electronLanguages).size, config.electronLanguages.length);
+  assert.equal(config.nsis.deleteAppDataOnUninstall, false);
+});
+
+test('目标与架构矩阵：macOS x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {
+  const root = temp(t);
+  const identity = readAppIdentity(identityFile(root));
+  const common = { identity, version: '1.2.3', resourcesDir: join(root, 'resources'), iconsDir: join(BRAND_DIR, 'icons'), appDir: join(REPO_ROOT, 'services', 'forge-desktop'), outputDir: join(root, 'dist') };
+  const macX64 = builderConfig({ ...common, target: 'mac', arch: 'x64' });
+  assert.deepEqual(macX64.mac.target, [{ target: 'dmg', arch: ['x64'] }, { target: 'zip', arch: ['x64'] }]);
+  const linuxArm = builderConfig({ ...common, target: 'linux', arch: 'arm64' });
+  assert.deepEqual(linuxArm.linux.target, [{ target: 'deb', arch: ['arm64'] }]);
+  assert.equal(resolveTargetArch('linux'), 'x64');
+  assert.equal(resolveTargetArch('win'), 'x64');
+  assert.throws(() => resolveTargetArch('win', 'arm64'), (error) => error.code === 'BAD_ARGUMENT');
+  assert.throws(() => resolveTargetArch('linux', 'universal'), (error) => error.code === 'BAD_ARGUMENT');
 });
 
 test('体积摘要：逐文件分类，数字取自真实文件', (t) => {
@@ -122,8 +140,22 @@ test('图标与品牌 manifest 账本一致；参数解析限定目标', () => {
     const bytes = readFileSync(join(BRAND_DIR, rel));
     assert.equal(bytes.length, entry.bytes, rel);
   }
-  assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o']).target, 'dir');
-  assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win']).target, 'win');
+  assert.deepEqual(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o']), {
+    identity: 'i',
+    resources: 'r',
+    version: 'v',
+    output: 'o',
+    appDir: undefined,
+    brandDir: undefined,
+    target: 'dir',
+    arch: 'arm64',
+    configOnly: false,
+    json: false,
+  });
+  assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win']).arch, 'x64');
+  assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'mac', '--arch', 'x64']).arch, 'x64');
+  assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'linux', '--arch', 'arm64']).arch, 'arm64');
+  assert.throws(() => parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win', '--arch', 'arm64']), (error) => error.code === 'BAD_ARGUMENT');
   assert.throws(() => parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'zip']), (error) => error.code === 'BAD_ARGUMENT');
   assert.throws(() => parseArguments(['--identity', 'i']), (error) => error.code === 'BAD_ARGUMENT');
 });
