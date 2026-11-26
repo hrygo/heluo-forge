@@ -346,7 +346,7 @@ test('manual describe commands select only the summary action', async () => {
     ['pull_request', '', [true, true]],
     ['issue_comment', '/describe', [true, false]],
     ['issue_comment', '/describe\u00a0', [true, false]],
-    ['issue_comment', '  /DESCRIBE_PR\n--pr_description.enable_help_text=true', [true, false]],
+    ['issue_comment', '  /DESCRIBE_PR\n', [true, false]],
     ['issue_comment', '/review --pr_reviewer.inline_key_issues=true', [false, true]],
     ['issue_comment', '/ask what does /describe do?', [false, true]],
     ['issue_comment', `/ask ${longCommentText}`, [false, true]],
@@ -359,6 +359,25 @@ test('manual describe commands select only the summary action', async () => {
       const github = { event_name: event, event: { comment: { body } } };
       const steps = { revision: { outcome: 'success', outputs: revision } };
       assert.deepEqual(canRun.map((matches) => matches(github, steps, () => false)), expected, body.slice(0, 60) || event);
+    }
+  });
+});
+
+test('manual summary arguments are rejected before either model step can run', async () => {
+  const commands = [
+    '/describe --config.reasoning_effort=medium --config.max_output_tokens=12000',
+    '/describe_pr --config.max_model_tokens=64000',
+    '/describe --pr_description.max_ai_calls=5',
+    '/describe --pr_description.enable_help_text=true',
+    '/de"scribe" --config={max_output_tokens: 12000}',
+    '/de\\scribe --config__max_output_tokens=12000',
+    '\u0085/describe --config.reasoning_effort=medium',
+  ];
+  await withGitHub(async ({ env }) => {
+    for (const command of commands) {
+      const manual = await commentEvent(env, command);
+      await assert.rejects(capture(manual), { stderr: /Error: Use \/describe or \/describe_pr without arguments/u });
+      assert.equal(await readFile(env.GITHUB_OUTPUT, 'utf8'), '');
     }
   });
 });

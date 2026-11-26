@@ -24,9 +24,9 @@ run-name: '洛神 · PR #${{ github.event.pull_request.number || github.event.is
 # check is not required by branch protection, so merges are unaffected while
 # the switch is off.
 #
-# Manual commands in a PR comment (only while the switch is on): `/describe`,
-# `/review`, `/improve`, `/ask "<question>"`. Comments are only obeyed from
-# owner, member or collaborator accounts.
+# Owner, member or collaborator accounts can run `/describe`, `/describe_pr`,
+# `/review`, `/improve`, and `/ask "<question>"` while the switch is on.
+# Manual summaries accept a command without arguments to enforce the summary budget.
 #
 # Fork PRs are skipped on purpose: `pull_request` from a fork receives neither
 # repository secrets nor a writable token, and the repository's workflow rules
@@ -179,12 +179,17 @@ jobs:
               typeof base !== 'string' || !/^[a-f0-9]{40}$/.test(base)) {
             throw new Error('Invalid target branch revision');
           }
-          // The comment runner dispatches the first command, including the /describe_pr alias.
           const commentBody = EVENT_NAME === 'issue_comment'
             ? JSON.parse(await readFile(GITHUB_EVENT_PATH, 'utf8'))?.comment?.body
             : '';
-          const manualSummary = typeof commentBody === 'string' &&
-            /^\/+describe(?:_pr)?(?:[ \t\r\n]|$)/i.test(commentBody.trim());
+          // Include the extra whitespace recognized by PR-Agent's Python strip().
+          const comment = typeof commentBody === 'string' ? commentBody.replace(/[\u001c-\u001f\u0085]/gu, ' ').trim() : '';
+          const command = comment.split(/[ \t\r\n]/u, 1)[0];
+          // The upstream parser accepts quotes and escapes inside a command word.
+          const manualSummary = comment.startsWith('/') && /^\/+describe(?:_pr)?$/iu.test(command.replace(/["\\]/gu, ''));
+          if (manualSummary && comment !== command) {
+            throw new Error('Use /describe or /describe_pr without arguments. Manual summary budgets are fixed.');
+          }
           await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nbase_ref=${baseRef}\nstarted=${new Date().toISOString()}\nmanual_summary=${manualSummary}\n`);
           NODE
 
