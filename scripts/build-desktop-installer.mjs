@@ -25,6 +25,7 @@ const WIN_ICON = 'icons/app-icon.ico';
 const MAC_ICON = 'icons/app-icon.icns';
 const DEFAULT_BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
 const DEFAULT_APP_DIR = join('services', 'forge-desktop');
+const DEFAULT_AFTER_PACK = fileURLToPath(new URL('./lib/desktop-after-pack.mjs', import.meta.url));
 
 const TARGET_ARCHES = Object.freeze({
   dir: ['arm64', 'x64', 'universal'],
@@ -45,6 +46,18 @@ const TARGET_ARCHES = Object.freeze({
 const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb'];
 
 /**
+ * Third-party packages inside `dsh/node_modules` (outside `@deepseek-ai/`)
+ * carry test suites, docs, examples and changelogs that are never needed at
+ * runtime; license/notice files are always preserved.
+ */
+const THIRD_PARTY_EXCLUDED_DIRS = ['test', 'tests', '__tests__', 'docs', 'example', 'examples'];
+const THIRD_PARTY_EXCLUDED_DIR_SET = new Set(THIRD_PARTY_EXCLUDED_DIRS);
+const THIRD_PARTY_EXCLUDED_DOC_EXTS = new Set(['.md', '.markdown']);
+const THIRD_PARTY_EXCLUDED_DOC_PREFIXES = ['CHANGELOG', 'HISTORY'];
+const THIRD_PARTY_LICENSE_PREFIXES = ['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'];
+const THIRD_PARTY_LICENSE_GLOBS = ['[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*', '[Nn][Oo][Tt][Ii][Cc][Ee]*', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*'];
+
+/**
  * The directories that travel exactly as they were staged: the dsh artifact
  * `runtime-lock.json` pins by digest, and the bundled runtime, whose staged
  * bytes are the ones its checks ran against and its record counts. Everything
@@ -56,9 +69,8 @@ const VERBATIM_RUNTIME_DIRS = Object.freeze([`${DSH_ENTRY_PARTS.slice(0, 4).join
  * The locales Electron keeps, each named the way the platform names its locale
  * file: Windows and Linux write `en-US.pak`, `zh-CN.pak`, `zh-TW.pak`; macOS
  * writes `en.lproj`, `zh_CN.lproj`, `zh_TW.lproj`. A system in any other locale
- * is served Electron's `en-US` resources. On macOS this list currently changes
- * nothing: electron-builder 26 looks for `*.lproj` in the app's Resources,
- * while Electron 44 keeps them inside its framework.
+ * is served Electron's `en-US` resources. On macOS `desktop-after-pack.mjs`
+ * removes unwanted `.lproj` directories inside `Electron Framework.framework`.
  */
 const ELECTRON_LANGUAGES = ['en', 'en-US', 'zh-CN', 'zh-TW', 'zh_CN', 'zh_TW'];
 
@@ -163,21 +175,47 @@ export function readAppIdentity(path) {
 
 /**
  * Whether a staged file reaches the package. `relativePath` is `/`-separated
- * from the resources root, and the extension match is exact, like the glob
- * that carries the same rule to electron-builder.
+ * from the resources root, and the rule matches `runtimeFilter()` identically.
  */
 export function isPackaged(relativePath) {
   if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
-  return !RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath));
+  if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
+  if (!relativePath.startsWith('dsh/node_modules/') || relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
+    return true;
+  }
+  const segments = relativePath.slice('dsh/node_modules/'.length).split('/');
+  const file = segments.at(-1) ?? '';
+  const upperFile = file.toUpperCase();
+  const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
+  if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
+    return false;
+  }
+  if (isLicense) return true;
+  if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
+  if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
+  return true;
 }
 
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
- * and lets a later pattern override an earlier one, so each verbatim directory
- * is re-included after the exclusions, not before them.
+ * and lets a later pattern override an earlier one, so license files and each
+ * verbatim directory are re-included after the exclusions, not before them.
  */
-function runtimeFilter() {
-  return ['**/*', ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`), ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`)];
+export function runtimeFilter() {
+  return [
+    '**/*',
+    ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`),
+    ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
+      `!dsh/node_modules/!(@deepseek-ai)/**/${dir}`,
+      `!dsh/node_modules/!(@deepseek-ai)/**/${dir}/**`,
+    ]),
+    '!dsh/node_modules/!(@deepseek-ai)/**/*.md',
+    '!dsh/node_modules/!(@deepseek-ai)/**/*.markdown',
+    '!dsh/node_modules/!(@deepseek-ai)/**/CHANGELOG*',
+    '!dsh/node_modules/!(@deepseek-ai)/**/HISTORY*',
+    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
+    ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
+  ];
 }
 
 /**
@@ -209,11 +247,11 @@ export function summarizeResources(resourcesDir) {
  * travels, which locales ship, how the installer upgrades/preserves user data,
  * and which platform architecture is targeted.
  */
-export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir, target = 'dir', arch }) {
+export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir, target = 'dir', arch, afterPackPath = DEFAULT_AFTER_PACK }) {
   const resolvedArch = resolveTargetArch(target, arch);
   const macArch = target === 'mac' || target === 'dir' ? resolvedArch : 'arm64';
   const linuxArch = target === 'linux' ? resolvedArch : 'x64';
-  const macTargets = target === 'mac' ? ['dmg', 'zip'] : ['dir'];
+  const macTargets = target === 'mac' ? ['dmg'] : ['dir'];
   return {
     appId: identity.appId,
     productName: identity.productName,
@@ -223,6 +261,8 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     files: ['src/**/*', 'package.json', 'runtime-lock.json'],
     extraResources: [{ from: resolve(resourcesDir), to: '.', filter: runtimeFilter() }],
     asar: true,
+    compression: 'maximum',
+    afterPack: afterPackPath,
     extraMetadata: { version },
     electronLanguages: [...ELECTRON_LANGUAGES],
     win: { icon: join(iconsDir, basename(WIN_ICON)), target: [{ target: 'nsis', arch: ['x64'] }] },
@@ -243,6 +283,8 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
       differentialPackage: false,
     },
     mac: { icon: join(iconsDir, basename(MAC_ICON)), target: macTargets.map((kind) => ({ target: kind, arch: [macArch] })) },
+    // `compression: maximum` selects UDBZ (bzip2) DMG; skip blockmap since there is no update feed.
+    dmg: { writeUpdateInfo: false },
     linux: { icon: join(iconsDir), target: [{ target: 'deb', arch: [linuxArch] }], category: 'Development' },
   };
 }

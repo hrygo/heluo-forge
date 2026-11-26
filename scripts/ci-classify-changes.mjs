@@ -137,6 +137,7 @@ const ISOLATED_NON_PLATFORM_FILES = new Set([
   'scripts/derive-brand-icons.mjs',
   'scripts/stage-desktop-payload.mjs',
   'scripts/stage-primary-runtime.mjs',
+  'scripts/lib/desktop-after-pack.mjs',
   'scripts/lib/primary-runtime.mjs',
   'scripts/lib/primary-runtime-smoke.py',
   'scripts/lib/zip-archive.mjs',

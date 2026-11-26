@@ -15,7 +15,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
-import { dedupeDshClosure, inspectDshClosure, parseArguments, StageError, stagePayload, unpackPnpm } from '../scripts/stage-desktop-payload.mjs';
+import { dedupeDshClosure, inspectDshClosure, parseArguments, pruneForeignPrebuilds, StageError, stagePayload, unpackPnpm } from '../scripts/stage-desktop-payload.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -275,18 +275,24 @@ test('反向：缺品牌套件与缺 dsh 制品各自报错；参数解析要求
   // Both artifacts are part of every handover.
   assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--pnpm-tgz is required/.test(error.message));
   assert.throws(() => parseArguments(['--output', 'x', '--pnpm-tgz', 'p.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--dsh-tgz is required/.test(error.message));
-  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--json']), {
+  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--target', 'win-x64', '--max-dsh-bytes', '1024', '--max-dsh-files', '50', '--json']), {
     output: 'x',
     dshTgz: 'x.tgz',
     pnpmTgz: 'p.tgz',
+    target: 'win-x64',
     brandDir: undefined,
     employeeAssets: undefined,
     lock: undefined,
+    maxDshBytes: 1024,
+    maxDshFiles: 50,
     json: true,
   });
+  for (const bad of [['--target', 'solaris-x64'], ['--max-dsh-bytes', '0'], ['--max-dsh-bytes', '-1'], ['--max-dsh-files', 'abc']]) {
+    assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', ...bad]), refused('BAD_ARGUMENT'));
+  }
 });
 
-test('闭包去重与锁校验：去重嵌套同版依赖、保留不同版本阴影、锁定闭包与版本校验（正反向）', (t) => {
+test('闭包去重、外平台 prebuilds 裁剪、Top 20 统计与预算门禁（正反向）', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
   const pnpm = fixturePnpm(root);
@@ -297,7 +303,7 @@ test('闭包去重与锁校验：去重嵌套同版依赖、保留不同版本�
   };
 
   // Build an installer that lays down nested duplicate copies of zod@4.4.3 and @scope/leaf@1.0.0,
-  // plus a shadowed zod@3.22.0 inside pkg-legacy that must remain intact.
+  // a shadowed zod@3.22.0 inside pkg-legacy, plus multi-platform prebuilds and >20 packages.
   const nestedInstaller = (tgz, dest) => {
     fakeInstaller()(tgz, dest);
     const nm = join(dest, 'node_modules');
@@ -308,9 +314,20 @@ test('闭包去重与锁校验：去重嵌套同版依赖、保留不同版本�
     writePkg(join(nm, 'pkg-b', 'node_modules', '@scope', 'leaf'), '@scope/leaf', '1.0.0', 60);
     writePkg(join(nm, 'pkg-legacy', 'node_modules', 'zod'), 'zod', '3.22.0', 80);
     writePkg(join(nm, 'pkg-legacy', 'node_modules', 'sub', 'node_modules', 'zod'), 'zod', '4.4.3', 100);
+    // Multi-platform prebuilds on a third-party native wrapper vs verbatim @deepseek-ai/dsh.
+    writePkg(join(nm, 'native-wrap'), 'native-wrap', '1.0.0', 50);
+    for (const [plat, bytes] of [['darwin-arm64', 40], ['darwin-x64+arm64', 45], ['win32-x64', 90], ['linux-x64', 85], ['android-arm64', 70], ['custom-metadata', 12]]) {
+      mkdirSync(join(nm, 'native-wrap', 'prebuilds', plat), { recursive: true });
+      writeFileSync(join(nm, 'native-wrap', 'prebuilds', plat, 'node.napi.node'), Buffer.alloc(bytes));
+    }
+    mkdirSync(join(nm, '@deepseek-ai', 'dsh', 'prebuilds', 'win32-x64'), { recursive: true });
+    writeFileSync(join(nm, '@deepseek-ai', 'dsh', 'prebuilds', 'win32-x64', 'keep.node'), Buffer.alloc(8));
+    for (let i = 1; i <= 20; i += 1) {
+      writePkg(join(nm, `extra-pkg-${String(i).padStart(2, '0')}`), `extra-pkg-${i}`, '1.0.0', i * 10);
+    }
   };
 
-  const args = { ...stageArgs(root, artifact, pnpm), installer: nestedInstaller };
+  const args = { ...stageArgs(root, artifact, pnpm), target: 'mac-arm64', installer: nestedInstaller };
   writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
   const record = stagePayload(args);
   const stagedNm = join(root, 'out', 'resources', 'dsh', 'node_modules');
@@ -322,9 +339,32 @@ test('闭包去重与锁校验：去重嵌套同版依赖、保留不同版本�
   assert.equal(existsSync(join(stagedNm, 'pkg-b', 'node_modules', '@scope', 'leaf')), false, 'sibling duplicate @scope/leaf pruned after hoist');
   assert.equal(existsSync(join(stagedNm, 'pkg-legacy', 'node_modules', 'zod')), true, 'different-version zod@3.22.0 kept');
   assert.equal(existsSync(join(stagedNm, 'pkg-legacy', 'node_modules', 'sub', 'node_modules', 'zod')), true, 'nested zod@4.4.3 below zod@3.22.0 kept');
+  assert.equal(existsSync(join(stagedNm, 'native-wrap', 'prebuilds', 'darwin-arm64')), true, 'matching prebuild kept');
+  assert.equal(existsSync(join(stagedNm, 'native-wrap', 'prebuilds', 'darwin-x64+arm64')), true, 'universal mac prebuild kept');
+  assert.equal(existsSync(join(stagedNm, 'native-wrap', 'prebuilds', 'custom-metadata')), true, 'non-platform prebuild dir untouched');
+  for (const foreign of ['win32-x64', 'linux-x64', 'android-arm64']) {
+    assert.equal(existsSync(join(stagedNm, 'native-wrap', 'prebuilds', foreign)), false, `foreign ${foreign} prebuild pruned`);
+  }
+  assert.equal(existsSync(join(stagedNm, '@deepseek-ai', 'dsh', 'prebuilds', 'win32-x64', 'keep.node')), true, 'verbatim dsh never pruned');
+  assert.deepEqual(record.dshClosure.prunedPrebuilds, { removedDirs: 3, removedFiles: 3, removedBytes: 245 });
   assert.equal(record.dshClosure.hoisted, 1);
   assert.equal(record.dshClosure.deduped, 3);
+  assert.equal(record.dshClosure.topPackages.length, 20);
+  assert.ok(record.dshClosure.topPackages[0].bytes >= record.dshClosure.topPackages[1].bytes);
   assert.match(record.dshClosure.digest, /^[0-9a-f]{64}$/u);
+
+  // Target-specific prebuild pruning on win-x64 keeps win32-x64 and prunes darwin-arm64.
+  const winRoot = temp(t);
+  const winPkgDir = join(winRoot, 'node_modules', 'native-wrap', 'prebuilds');
+  mkdirSync(join(winPkgDir, 'win32-x64'), { recursive: true });
+  mkdirSync(join(winPkgDir, 'darwin-arm64'), { recursive: true });
+  mkdirSync(join(winRoot, 'node_modules', 'native-wrap'), { recursive: true });
+  writeFileSync(join(winRoot, 'node_modules', 'native-wrap', 'package.json'), '{"name":"native-wrap","version":"1.0.0"}\n');
+  writeFileSync(join(winPkgDir, 'win32-x64', 'a.node'), 'ok');
+  writeFileSync(join(winPkgDir, 'darwin-arm64', 'b.node'), 'bad');
+  assert.equal(pruneForeignPrebuilds(join(winRoot, 'node_modules'), 'win-x64').removedDirs, 1);
+  assert.equal(existsSync(join(winPkgDir, 'win32-x64', 'a.node')), true);
+  assert.equal(existsSync(join(winPkgDir, 'darwin-arm64')), false);
 
   // Deterministic closure lock: exact match passes; tampered digest or count fails closed without harming output.
   const locked = ledger(artifact, { pnpm: pnpmRow(pnpm) });
@@ -339,12 +379,22 @@ test('闭包去重与锁校验：去重嵌套同版依赖、保留不同版本�
   assert.throws(() => stagePayload(args), refused('STAGE_CLOSURE_MISMATCH'));
   assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on closure mismatch');
 
+  // Budget gates (both CLI flags and lock fields) fail closed without destroying existing output.
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  assert.throws(() => stagePayload({ ...args, maxDshBytes: record.dshClosure.bytes - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
+  assert.throws(() => stagePayload({ ...args, maxDshFiles: record.dshClosure.files - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
+  const budgetLock = ledger(artifact, { pnpm: pnpmRow(pnpm) });
+  budgetLock.dshClosure = { digest: record.dshClosure.digest, packages: record.dshClosure.packages, maxBytes: record.dshClosure.bytes - 1 };
+  writeFileSync(args.lockPath, `${JSON.stringify(budgetLock, null, 2)}\n`);
+  assert.throws(() => stagePayload(args), refused('STAGE_BUDGET_EXCEEDED'));
+  assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on budget refusal');
+
   // Installed dsh version mismatch fails closed.
   writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { dsh: { version: '9.9.9' }, pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
   assert.throws(() => stagePayload(args), refused('STAGE_DSH_IDENTITY_MISMATCH'));
 });
 
-test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品，两个暂存工具各拿一份', () => {
+test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品、按目标裁剪 prebuilds，macOS 产 dmg、Windows 产 exe', () => {
   // The workflow runs only on a tag, behind an approval: a handover it gets wrong would be found late.
   const count = (text, pattern) => (text.match(pattern) ?? []).length;
   // A staged command is a first line ending in a backslash and the lines it is joined to; a one-line call is not a staging.
@@ -352,6 +402,12 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
   const workflow = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-bundle.yml'), 'utf8');
   const stagings = commands(workflow, 'stage-desktop-payload');
   assert.equal(stagings.length, 2, 'one desktop job per platform');
+  assert.equal(stagings.some((cmd) => /--target mac-arm64/u.test(cmd)), true, 'mac job stages for mac-arm64');
+  assert.equal(stagings.some((cmd) => /--target win-x64/u.test(cmd)), true, 'win job stages for win-x64');
+  const installers = commands(workflow, 'build-desktop-installer');
+  assert.equal(installers.some((cmd) => /--target mac/u.test(cmd) && /--arch arm64/u.test(cmd)), true, 'mac job builds dmg');
+  assert.equal(/ditto -c -k/u.test(workflow), false, 'mac job no longer repacks .app with ditto zip');
+  assert.equal(/heluo-forge-enterprise-\*-arm64\.dmg/u.test(workflow), true, 'mac job uploads dmg');
   assert.equal(count(workflow, /node -p "require\('\.\/services\/forge-desktop\/runtime-lock\.json'\)\.pnpm\.version"/gu), stagings.length, 'the version comes from the ledger');
   assert.equal(count(workflow, /echo "PNPM_TGZ=/gu), stagings.length, 'the artifact path is published to the later steps');
   const handed = (command) => /--pnpm-tgz "\$PNPM_TGZ"/u.test(command);
