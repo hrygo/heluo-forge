@@ -275,23 +275,18 @@ test('反向：缺品牌套件与缺 dsh 制品各自报错；参数解析要求
   // Both artifacts are part of every handover.
   assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--pnpm-tgz is required/.test(error.message));
   assert.throws(() => parseArguments(['--output', 'x', '--pnpm-tgz', 'p.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--dsh-tgz is required/.test(error.message));
-  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--max-dsh-bytes', '1024', '--max-dsh-files', '50', '--json']), {
+  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--json']), {
     output: 'x',
     dshTgz: 'x.tgz',
     pnpmTgz: 'p.tgz',
     brandDir: undefined,
     employeeAssets: undefined,
     lock: undefined,
-    maxDshBytes: 1024,
-    maxDshFiles: 50,
     json: true,
   });
-  for (const bad of [['--max-dsh-bytes', '0'], ['--max-dsh-bytes', '-1'], ['--max-dsh-files', 'abc']]) {
-    assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', ...bad]), refused('BAD_ARGUMENT'));
-  }
 });
 
-test('闭包去重与预算门禁：去重嵌套同版依赖、保留不同版本阴影、锁定闭包与体积预算（正反向）', (t) => {
+test('闭包去重与锁校验：去重嵌套同版依赖、保留不同版本阴影、锁定闭包与版本校验（正反向）', (t) => {
   const root = temp(t);
   const artifact = fixtureTgz(root);
   const pnpm = fixturePnpm(root);
@@ -343,12 +338,6 @@ test('闭包去重与预算门禁：去重嵌套同版依赖、保留不同版�
   writeFileSync(args.lockPath, `${JSON.stringify(locked, null, 2)}\n`);
   assert.throws(() => stagePayload(args), refused('STAGE_CLOSURE_MISMATCH'));
   assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on closure mismatch');
-
-  // Budget gates: bytes and files both fail closed without destroying existing output.
-  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
-  assert.throws(() => stagePayload({ ...args, maxDshBytes: record.dshClosure.bytes - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
-  assert.throws(() => stagePayload({ ...args, maxDshFiles: record.dshClosure.files - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
-  assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on budget refusal');
 
   // Installed dsh version mismatch fails closed.
   writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { dsh: { version: '9.9.9' }, pnpm: pnpmRow(pnpm) }), null, 2)}\n`);

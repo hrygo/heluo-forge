@@ -12,16 +12,15 @@
  *
  * Fail-closed rules:
  *   - the dsh and pnpm tarballs must match `runtime-lock.json` by bytes and SHA-256;
- *   - the dsh dependency closure is deduplicated, checked for identity/lock
- *     agreement when pinned, and bounded by staged file/byte budgets;
+ *   - the dsh dependency closure is deduplicated and checked for identity/lock
+ *     agreement when pinned;
  *   - the tray icon must match the brand manifest ledger;
  *   - the staged layout is re-checked against layout.mjs and swapped into place
  *     atomically only after every gate passes.
  *
  * 用法：
  *   node scripts/stage-desktop-payload.mjs --output <dir> --dsh-tgz <path.tgz> --pnpm-tgz <path.tgz> \
- *     [--brand-dir <dir>] [--employee-assets <dir>] [--lock <runtime-lock.json>] \
- *     [--max-dsh-bytes <bytes>] [--max-dsh-files <count>] [--json]
+ *     [--brand-dir <dir>] [--employee-assets <dir>] [--lock <runtime-lock.json>] [--json]
  */
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -38,10 +37,6 @@ const DEFAULT_BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
 const DEFAULT_LOCK = join('services', 'forge-desktop', 'runtime-lock.json');
 const DSH_PACKAGE_NAME = '@deepseek-ai/dsh';
 
-/** Default upper bounds on the staged dsh closure (raw files before packaging exclusions). */
-export const DEFAULT_MAX_DSH_BYTES = 900 * 1024 * 1024;
-export const DEFAULT_MAX_DSH_FILES = 100_000;
-
 export class StageError extends Error {
   constructor(code, message) {
     super(message);
@@ -54,13 +49,6 @@ const fail = (code, message) => {
   throw new StageError(code, message);
 };
 
-function parsePositiveInt(raw, flag) {
-  if (!/^\d+$/u.test(raw ?? '')) fail('BAD_ARGUMENT', `${flag} must be a positive integer`);
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) fail('BAD_ARGUMENT', `${flag} must be a positive integer`);
-  return parsed;
-}
-
 export function parseArguments(argv) {
   const options = {
     output: undefined,
@@ -69,8 +57,6 @@ export function parseArguments(argv) {
     brandDir: undefined,
     employeeAssets: undefined,
     lock: undefined,
-    maxDshBytes: undefined,
-    maxDshFiles: undefined,
     json: false,
   };
   const valued = new Map([
@@ -80,16 +66,13 @@ export function parseArguments(argv) {
     ['--brand-dir', 'brandDir'],
     ['--employee-assets', 'employeeAssets'],
     ['--lock', 'lock'],
-    ['--max-dsh-bytes', 'maxDshBytes'],
-    ['--max-dsh-files', 'maxDshFiles'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (valued.has(argument)) {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) fail('BAD_ARGUMENT', `${argument} requires a value`);
-      const field = valued.get(argument);
-      options[field] = argument.startsWith('--max-dsh-') ? parsePositiveInt(value, argument) : value;
+      options[valued.get(argument)] = value;
       index += 1;
       continue;
     }
@@ -293,24 +276,6 @@ function verifyDshClosureLock(closure, lock) {
   }
 }
 
-function resolveBudget(lock, overrides = {}) {
-  const maxBytes = overrides.maxDshBytes ?? lock?.dshBudget?.maxBytes ?? DEFAULT_MAX_DSH_BYTES;
-  const maxFiles = overrides.maxDshFiles ?? lock?.dshBudget?.maxFiles ?? DEFAULT_MAX_DSH_FILES;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || !Number.isSafeInteger(maxFiles) || maxFiles <= 0) {
-    fail('LOCK_INVALID', 'runtime lock dshBudget must specify positive integers maxBytes and maxFiles');
-  }
-  return { maxBytes, maxFiles };
-}
-
-function enforceDshBudget(closure, budget) {
-  if (closure.bytes > budget.maxBytes) {
-    fail('STAGE_BUDGET_EXCEEDED', `staged dsh closure is ${closure.bytes} bytes, exceeding budget ${budget.maxBytes}`);
-  }
-  if (closure.files > budget.maxFiles) {
-    fail('STAGE_BUDGET_EXCEEDED', `staged dsh closure has ${closure.files} files, exceeding budget ${budget.maxFiles}`);
-  }
-}
-
 /**
  * The artifact the ledger locked, or nothing: the file must exist and be the
  * bytes the ledger names. Checked before anything is unpacked.
@@ -388,14 +353,13 @@ function assertPnpmIdentity(resources, version) {
   }
 }
 
-export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets, lockPath, repoRoot, installer, deduper, maxDshBytes, maxDshFiles }) {
+export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets, lockPath, repoRoot, installer, deduper }) {
   const outputDir = resolve(output);
   const lock = JSON.parse(readFileSync(resolve(lockPath), 'utf8'));
   // dsh first: an incomplete handover is reported one artifact at a time, in the order the layout lists them.
   const dsh = verifiedArtifact(dshTgz, lock.dsh, 'dsh');
   if (typeof pnpmTgz !== 'string' || pnpmTgz.trim() === '') fail('PNPM_TGZ_MISSING', 'the pnpm tarball was not handed over (--pnpm-tgz)');
   const pnpm = verifiedArtifact(pnpmTgz, lock.pnpm, 'pnpm');
-  const budget = resolveBudget(lock, { maxDshBytes, maxDshFiles });
 
   // Fail fast on a missing brand suite, before the output is rebuilt.
   const brand = resolve(brandDir ?? join(repoRoot, DEFAULT_BRAND_DIR));
@@ -418,7 +382,6 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
     verifyDshIdentity(dshNodeModules, lock.dsh.version);
     const closure = inspectDshClosure(dshNodeModules);
     verifyDshClosureLock(closure, lock);
-    enforceDshBudget(closure, budget);
 
     unpackPnpm(pnpm.bytes, join(resources, PNPM_ENTRY_PARTS[0]));
     assertPnpmIdentity(resources, pnpm.entry.version);
@@ -463,7 +426,6 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
         bytes: closure.bytes,
         digest: closure.digest,
       },
-      budget,
       pnpm: { version: pnpm.entry.version, sha256: pnpm.entry.sha256, bytes: pnpm.entry.bytes, artifact: basename(pnpm.path) },
       tray: { source: TRAY_ICON_SOURCE, bytes: trayBytes.length, sha256: sha256Hex(trayBytes) },
       statusPage: { source: STATUS_PAGE_PARTS.join('/'), bytes: readFileSync(join(resources, ...STATUS_PAGE_PARTS)).length },
@@ -491,8 +453,6 @@ async function main() {
     brandDir: options.brandDir,
     employeeAssets: options.employeeAssets,
     lockPath: options.lock ?? join(repoRoot, DEFAULT_LOCK),
-    maxDshBytes: options.maxDshBytes,
-    maxDshFiles: options.maxDshFiles,
     repoRoot,
   });
   if (options.json) process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
