@@ -33,7 +33,8 @@ function bundledCredentials(): { username: string; password: string } {
   const invalid = () => error("config", "企业技能库包内凭据不可用，请联系维护人员", 503);
   let descriptor: number | undefined;
   try {
-    const directory = lstatSync(new URL("../private/", import.meta.url));
+    // A trailing slash makes POSIX follow directory links even for lstat.
+    const directory = lstatSync(new URL("../private", import.meta.url));
     const path = new URL("../private/nacos-credentials.json", import.meta.url);
     if (!directory.isDirectory() || directory.isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw invalid();
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));

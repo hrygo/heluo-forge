@@ -6,6 +6,19 @@
 
 本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间和固定凭据引用；账号密码写入包内 `private/nacos-credentials.json`，Host 运行时读取，不写回配置对象，安装后无需填写连接配置。中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。独立预置 TGZ 在目标 DSH 0.2.2-rc.5 的隔离 profile 装载与诊断脱敏通过；三包离线装配的历史实测宿主为 0.2.2-rc.2；企业权限、完整三包装卸及目标平台仍待验。
 
+## 2026-11-26 PR 465 Linux 凭据目录链接校验
+
+包内凭据目录以不带末尾斜杠的固定路径执行 `lstat`，拒绝符号链接或 junction 后才读取凭据文件。POSIX 对带末尾斜杠的目录路径会跟随链接，原路径使目录链接被当成普通目录；修复同步源码与 `lib/nacos.js`，保留既有行为回归用例，不调整凭据交付方式和错误契约。
+
+固定 Node 24.21.0 / pnpm 11.28.5；Windows 自动化使用合成凭据与临时目录，Linux 路径探针在本机 WSL 隔离目录执行：
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| 修复前 [Ubuntu CI](https://github.com/hrygo/heluo-forge/actions/runs/45787743527/job/139798835330) | 5478 项中 5469 通过、1 失败、8 跳过，测试约 91.6 秒；既有 `a linked private directory is rejected before remote access` 用例因未拒绝目录链接而失败 |
+| `node packages/forge-skills-manager/scripts/build.mjs`；`node --test packages/forge-skills-manager/test/bundled-credentials.test.mjs packages/forge-skills-manager/test/nacos-credentials.test.mjs` | 构建通过，仅更新 Nacos 生成模块；17 项全部通过，测试约 1.0 秒，覆盖目录链接拒绝、正常包内凭据、旧显式/环境配置、远端读取、凭据失效和令牌轮换 |
+| WSL 隔离目录建立符号链接，分别对带与不带末尾斜杠的路径执行 `stat -c '%F'` 并断言类型 | 通过，约 7.3 秒；原路径识别为目标目录，修复路径识别为符号链接。该项是 Linux 文件系统语义探针，不代替 Node 自动化或企业环境验收 |
+| 根目录 `pnpm check` | 生成物一致性、类型、文档、结构、技能、12 个包的 618 文件归档审计及版本检查通过；5469 项中 5297 通过、108 失败、64 跳过，整体约 405.0 秒、测试约 358.8 秒。失败涉及 Windows 下的 IAM 锁等待、路径、权限及 POSIX 工具等，失败明细未列出 Skill Manager 包内用例；本轮未逐项主线对照，不将全量检查记为通过 |
+
 ## 2026-11-26 PR 465 冲突与宿主基线集成
 
 分支以本地 rebase 集成主线 `b4e393a`，保留主线 `DSH_PRIMARY_RUNTIME` 两行条件装配、Windows bin 模式归一化与发布文件名处理；保留 enterprise 四插件、engineering 五行与独立 Skill Manager 一行的分层，按 id 合并为九行。Skill Manager 的运行时代码、凭据隔离及自身补丁与集成前逐字一致。24 个分支提交由 `post-rewrite` 重新扫描并签名。随后集成主线 `cb8c4dd`（新增的 PR 审查配置、CI 分类白名单与桌面载荷预算调整），25 个分支提交再次由钩子扫描、签名，未引入 merge commit。开发 SDK 与安装下限同步根基线 `0.2.2-rc.5`，锁文件随依赖重建；构建后 26 个生成文件未变化。

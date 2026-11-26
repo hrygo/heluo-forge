@@ -20,7 +20,7 @@ function bundledCredentials() {
   const invalid = () => error("config", "\u4F01\u4E1A\u6280\u80FD\u5E93\u5305\u5185\u51ED\u636E\u4E0D\u53EF\u7528\uFF0C\u8BF7\u8054\u7CFB\u7EF4\u62A4\u4EBA\u5458", 503);
   let descriptor;
   try {
-    const directory = lstatSync(new URL("../private/", import.meta.url));
+    const directory = lstatSync(new URL("../private", import.meta.url));
     const path = new URL("../private/nacos-credentials.json", import.meta.url);
     if (!directory.isDirectory() || directory.isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw invalid();
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
