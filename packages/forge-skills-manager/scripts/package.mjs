@@ -91,16 +91,22 @@ export function packageSkillsManager({ configText, output, version, dryRun = fal
     const patch = skillsPatchEntry(entries);
     const gate = checkNacosRelease(entries, config, { installed: patch !== undefined, runtimePath: 'lib/nacos.js', toolRoot: root, fail });
     if (!patch) fail('PUBLIC_TARBALL_INVALID', 'Skill Manager has no effective insert row');
-    const rewritten = injectPatchConfig(patch.content.toString('utf8'), 'heluo-skills-manager', config);
-    const manifest = { ...neutral.manifest, version };
+    const { username, password, ...connection } = config.nacos;
+    const credentialsPath = 'private/nacos-credentials.json';
+    const credentials = stableJson({ username, password });
+    if (Buffer.byteLength(credentials, 'utf8') > 16 << 10) fail('CONFIG_INVALID', 'bundled credentials exceed the 16 KiB limit');
+    if (entries.some(e => e.path === credentialsPath)) fail('PUBLIC_UNSAFE', 'neutral package must not contain bundled credentials');
+    const rewritten = injectPatchConfig(patch.content.toString('utf8'), 'heluo-skills-manager', { nacos: { ...connection, credentialsRef: 'bundled' } });
+    const manifest = { ...neutral.manifest, version, files: [...neutral.manifest.files, credentialsPath] };
     const metadata = {
       schema: 'heluo-skills-manager-package/1', entry: { name: ENTRY, version },
       base: { version: neutral.manifest.version, sha256: sha256(readFileSync(neutral.tarball)) },
-      config: { keys: Object.keys(config.nacos).map(k => `nacos.${k}`).sort(), embeddedSecrets: gate.embeddedSecrets, secretEmbedded: true, clientSecretEmbedded: false },
+      config: { keys: Object.keys(config.nacos).map(k => `nacos.${k}`).sort(), credentialsStorage: 'bundled-file', embeddedSecrets: gate.embeddedSecrets, secretEmbedded: true, clientSecretEmbedded: false },
     };
     const files = entries.map(e => ({ path: e.path, mode: Number.parseInt(e.mode, 8), body:
       e.path === 'package.json' ? stableJson(manifest) : e.path === patch.path ? rewritten : e.content }));
     files.push({ path: 'private-release.json', mode: 0o644, body: stableJson(metadata) });
+    files.push({ path: credentialsPath, mode: 0o600, body: credentials });
     const sensitive = scanReleaseFiles(files, { publicOnly: false });
     if (sensitive.length) fail('ARTIFACT_SENSITIVE', sensitive.join('\n'));
     const bytes = writeBundleTarball(files);

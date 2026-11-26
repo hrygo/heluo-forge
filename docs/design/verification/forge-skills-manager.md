@@ -4,7 +4,27 @@
 
 ## 当前实现
 
-本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间、专用只读账号与密码，安装后无需填写连接配置；中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。本机 DSH 0.2.2-rc.2 三包离线安装、装配与 manager HTTP 启动通过；企业权限、完整三包装卸及目标平台仍待验。
+本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间和固定凭据引用；账号密码写入包内 `private/nacos-credentials.json`，Host 运行时读取，不写回配置对象，安装后无需填写连接配置。中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。本机 DSH 0.2.2-rc.2 三包离线安装、装配与 manager HTTP 启动通过；企业权限、完整三包装卸及目标平台仍待验。
+
+## 2026-11-26 PR 465 配置诊断凭据隔离
+
+独立预置包把账号密码放入 UTF-8 JSON，最大 16 KiB、归档模式 0600；补丁只含非敏感连接字段及 `credentialsRef: bundled`。运行时读取固定包内文件，拒绝任意引用、链接、混用旧明文/环境字段、损坏或缺失文件，不回落环境凭据。移除文件后即使存在缓存令牌也拒绝远端访问；恢复或轮换后重新登录。本地管理保留。员工排障说明只收集装载状态和公开错误分类，独立包不经过项目级安装器或交付器；这两个工具与公共发布流程未修改。设计、契约、包 README 与制包说明同步，根 README 的产品受众职责保持。
+
+固定 Node 24.21.0 / pnpm 11.28.5，本机 Windows，代码回归使用合成凭据、全新 profile 和临时目录；正式私版制包单独沿用本机 Nacos 配置。未改动用户现用 DSH/Nacos：
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| 根目录：`node --test --test-reporter=spec --test-name-pattern='private TGZ' tests/skills-manager-package.test.mjs`，修复前执行新增断言 | 因补丁仍含账号密码且缺少引用，1 项按原缺陷失败，约 5.5 秒；修复后同入口通过，约 11.5 秒 |
+| 根目录：`node packages/forge-skills-manager/scripts/build.mjs` | 通过，更新跟踪的 `lib/nacos.js`；未单独计时 |
+| 根目录：`node --test packages/forge-skills-manager/test/bundled-credentials.test.mjs` | 5 项通过，约 1.3 秒；覆盖冻结 Host 配置、列表/详情/下载、精确保留凭据字节、缺失/损坏/超限/编码/字段错误、混用拒绝、缓存撤销/恢复/轮换及目录链接拒绝 |
+| 包目录：`node --run verify` | 176 项全部通过，无跳过，测试约 102.2 秒；26 个生成文件一致、类型检查通过，包含既有明文与环境凭据、管理/Nacos/UI 回归、并发与结构变异 |
+| 根目录：`node --test tests/skills-manager-package.test.mjs tests/skills-manager-iam.test.mjs tests/employee-skills-boundary.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs packages/forge-skills-manager/test/independent-package.test.mjs` | 16 项通过，约 32.7 秒；最终预置 TGZ、归档模式、清单保留凭据文件、其他条目无凭据、摘要与回执脱敏、空缓存离线安装及超限拒绝；保持 enterprise 装配和同 Host IAM 服务绑定 |
+| 根目录：`node packages/forge-skills-manager/scripts/verify-preset-host.mjs <installed-dsh-cli.js> <official-electron-executable>` | 首轮及补充 npm stderr 核验后的重跑均为 3 项通过；首轮约 20.5 秒。该入口自行构建最终预置 TGZ，以全新 HOME/profile/空缓存离线安装，实际 DSH 为 0.2.2-rc.2。合成账号登录成功；错误环境凭据无效；启动前后 `--dump-config`、npm 输出、HTTP 成功/失败响应和 Host 日志无账号密码原值；文件删除后返回 503/config，本地状态仍可读，排障回执仅装载状态与错误分类 |
+| 根目录：`node packages/forge-skills-manager/scripts/package.mjs --config <existing-private-nacos.env> --version 0.1.0-corp.20261126.3 --output <new-output-dir>`，先 `--dry-run` 后正式写出，再运行 `verify-enterprise-bundle.mjs` 独立核验；仓库外本机验证脚本对最终 TGZ 离线安装和启动真实 Host | 制包与独立核验通过，约 8.0 秒，34 文件；归档 SHA-256 为 `08fa01098a49a1306367d8c7d31918f4b71d2636265c471e5970d677074b99aa`。沿用已有本机私有配置且未打印凭据，凭据文件 0600、补丁仅引用；新 HOME/profile/空缓存，实际 DSH 0.2.2-rc.2，3 项通过，约 7.8 秒；本机 Nacos 登录及列表 HTTP 200，首屏 3 项，安装输出及启动前后配置诊断无凭据，profile 补丁无回写。测试 Host 已停止。构建来源为 `51fd504` 加本地未提交修改，制品目录保存源状态与回执；不是企业环境取证 |
+| 根目录：`pnpm check` | 生成物、类型、文档、结构与技能检查通过；在既有 enterprise/IAM 的 bin 0644 归档审计失败，未进入全库单测，不记全库通过；未单独计时 |
+| 根目录：`node scripts/check-docs.mjs`、`node scripts/check-repo.mjs`、`node scripts/dsh-version.mjs check`、`git diff --check` | 同步验证记录前通过，约 4.2 秒；最终文档补写后另行复核 |
+
+配置诊断隔离仅适用于本轮独立预置包且 profile 无旧明文覆盖的场景；历史组合制品仍按旧契约。实际 Host 不是 `.dsh-version` 的精确基线，不能据此宣称严格兼容通过。归档 0600 不等于 npm 安装后的 POSIX 模式或 Windows ACL；目标安装权限收紧仍待验。未验证企业 Nacos 只读权限、真实 IAM 认证、完整桌面 GUI 或国产平台。持包人、同账户进程和同权插件仍可读取凭据，不提供加密隔离。
 
 ## 2026-11-26 PR 465 其余 P2 修复
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { parseSkillDoc } from "./skill-document.js";
 import type { CatalogInstallation, UploadInput } from "./types.js";
 import { readZip, ZipReadError } from "./zip.js";
@@ -11,6 +12,7 @@ export interface NacosConfig {
   password?: string;
   usernameEnv?: string;
   passwordEnv?: string;
+  credentialsRef?: "bundled";
   timeoutMs?: number;
 }
 export interface NacosSkill { name: string; description: string; version: string; namespaceId?: string; downloadCount?: number; installations?: CatalogInstallation[] }
@@ -26,6 +28,37 @@ const error = (code: string, message: string, status = 502) => new NacosError(`e
 const validName = (v: unknown): v is string => typeof v === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v) && v.length <= 64;
 const validVersion = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** Fixed package-owned location; secrets never become properties of Host config. */
+function bundledCredentials(): { username: string; password: string } {
+  const invalid = () => error("config", "企业技能库包内凭据不可用，请联系维护人员", 503);
+  let descriptor: number | undefined;
+  try {
+    const directory = lstatSync(new URL("../private/", import.meta.url));
+    const path = new URL("../private/nacos-credentials.json", import.meta.url);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw invalid();
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+    const info = fstatSync(descriptor), limit = 16 << 10;
+    if (!info.isFile() || info.size > limit) throw invalid();
+    const bytes = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(descriptor, bytes, length, bytes.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+    if (length > limit) throw invalid();
+    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)));
+    if (!object(value) || Object.keys(value).sort().join(",") !== "password,username" ||
+        typeof value.username !== "string" || !value.username.trim() || typeof value.password !== "string" || !value.password.trim()) throw invalid();
+    return { username: value.username, password: value.password };
+  } catch (caught) {
+    // Only file/encoding/JSON failures are sanitized; programming defects stay visible.
+    if (caught instanceof SyntaxError || (caught instanceof TypeError && "code" in caught && caught.code === "ERR_ENCODING_INVALID_ENCODED_DATA") ||
+        (caught instanceof Error && !(caught instanceof TypeError) && !(caught instanceof ReferenceError) && "code" in caught &&
+          typeof caught.code === "string" && /^(?:ENOENT|ENOTDIR|EACCES|EPERM|ELOOP|EISDIR|EIO|EMFILE|ENFILE)$/.test(caught.code))) throw invalid();
+    throw caught;
+  } finally { if (descriptor !== undefined) closeSync(descriptor); }
+}
 function validateNamespace(item: Record<string, unknown>, namespace: string) {
   if (item.namespaceId != null && item.namespaceId !== namespace) throw error("response", "企业技能库条目命名空间不匹配");
 }
@@ -49,6 +82,8 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
       if (url.username || url.password || url.search || url.hash || !["https:", "http:"].includes(url.protocol)) throw 0;
       const namespace = config.namespaceId ?? "public";
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespace)) throw 0;
+      if (config.credentialsRef !== undefined && (config.credentialsRef !== "bundled" ||
+          [config.username, config.password, config.usernameEnv, config.passwordEnv].some(value => value !== undefined))) throw 0;
       const usernameEnv = config.usernameEnv ?? "FORGE_NACOS_USERNAME";
       const passwordEnv = config.passwordEnv ?? "FORGE_NACOS_PASSWORD";
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(usernameEnv) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(passwordEnv)) throw 0;
@@ -62,6 +97,10 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
   }
   function credentials() {
     const cfg = settings();
+    if (config?.credentialsRef === "bundled") {
+      try { return bundledCredentials(); }
+      catch (caught) { token = undefined; throw caught; }
+    }
     const explicit = config?.username !== undefined || config?.password !== undefined;
     const username = explicit ? config?.username : process.env[cfg.usernameEnv];
     const password = explicit ? config?.password : process.env[cfg.passwordEnv];

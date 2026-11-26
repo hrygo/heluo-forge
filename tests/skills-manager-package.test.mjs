@@ -16,10 +16,10 @@ import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 const configuration = (url = 'http://nacos.corp.example/nacos') => [
   `HELUO_NACOS_SERVER_URL=${url}`, 'HELUO_NACOS_NAMESPACE_ID=public',
-  'HELUO_NACOS_USERNAME=svc-ci', 'HELUO_NACOS_PASSWORD=" synthetic password "',
+  'HELUO_NACOS_USERNAME=svc-preset-fixture', 'HELUO_NACOS_PASSWORD=" synthetic password "',
 ].join('\n');
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
-const readPreset = text => ({ nacos: Object.fromEntries([...text.matchAll(/^\s+(serverUrl|namespaceId|username|password|timeoutMs): (.+)$/gmu)].map(([, key, value]) => [key, JSON.parse(value)])) });
+const readPreset = text => ({ nacos: Object.fromEntries([...text.matchAll(/^\s+(serverUrl|namespaceId|username|password|credentialsRef|timeoutMs): (.+)$/gmu)].map(([, key, value]) => [key, JSON.parse(value)])) });
 
 test('standalone preset requires all four Nacos fields and rejects unrelated inputs without values in errors', () => {
   assert.equal(parsePackageConfig(configuration()).nacos.password, ' synthetic password ');
@@ -76,7 +76,7 @@ test('private TGZ carries working Nacos credentials and installs offline without
     if (req.url.endsWith('/auth/user/login')) {
       let body = ''; for await (const chunk of req) body += chunk;
       const form = new URLSearchParams(body);
-      assert.equal(form.get('username'), 'svc-ci'); assert.equal(form.get('password'), ' synthetic password ');
+      assert.equal(form.get('username'), 'svc-preset-fixture'); assert.equal(form.get('password'), ' synthetic password ');
       res.end(JSON.stringify({ accessToken: 'synthetic-read-token', tokenTtl: 1000 }));
     } else { assert.equal(req.headers.authorization, 'Bearer synthetic-read-token'); res.end(JSON.stringify({ code: 0, data: { pageItems: [], totalCount: 0, pagesAvailable: 0, pageNumber: 1 } })); }
   });
@@ -94,7 +94,19 @@ test('private TGZ carries working Nacos credentials and installs offline without
     assert.equal(entries.find(entry => entry.path === 'lib/THIRD-PARTY-NOTICES.txt').content.toString('utf8'), readFileSync(join(repo, 'packages/forge-skills-manager/lib/THIRD-PARTY-NOTICES.txt'), 'utf8'));
     assert.ok(!entries.some(e => e.path.includes('forge-enterprise') || e.path.includes('forge-iam') || e.path.includes('.env')));
     const config = readPreset(entries.find(e => e.path === 'cordis.patch.yml').content.toString());
-    assert.deepEqual(config, parsePackageConfig(configText));
+    const { username, password, ...connection } = parsePackageConfig(configText).nacos;
+    for (const text of [JSON.stringify(preview), JSON.stringify(made), ...['packaging-receipt.json', 'bundle-manifest.json', 'SHA256SUMS'].map(name => readFileSync(join(output, name), 'utf8')),
+      ...entries.filter(e => e.path !== 'private/nacos-credentials.json').map(e => e.content.toString('utf8'))]) {
+      assert.ok(!text.includes(username)); assert.ok(!text.includes(password));
+    }
+    assert.deepEqual(config, { nacos: { ...connection, credentialsRef: 'bundled' } });
+    assert.ok(!JSON.stringify(config).includes(username));
+    assert.ok(!JSON.stringify(config).includes(password));
+    const credentials = entries.find(e => e.path === 'private/nacos-credentials.json');
+    assert.equal(credentials.mode, '0600');
+    assert.deepEqual(JSON.parse(credentials.content), { username, password });
+    const manifest = JSON.parse(entries.find(e => e.path === 'package.json').content);
+    assert.ok(manifest.files.includes('private/nacos-credentials.json'), 'repacking must retain the credential file');
     const neutral = buildBundle({ entry: '@heluo/forge-skills-manager', destination: join(work, 'neutral') });
     const before = readBundleEntries(neutral.tarball, { withContent: true });
     // Negative control: the former neutral-only flow fails the exact preset assertion.
@@ -106,9 +118,10 @@ test('private TGZ carries working Nacos credentials and installs offline without
     }
     const project = join(work, 'install'); mkdirSync(project);
     writeFileSync(join(work, 'empty-npmrc'), '');
-    execNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', made.tarball], {
+    const installation = execNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false', made.tarball], {
       cwd: project, env: { ...process.env, npm_config_cache: join(work, 'empty-cache'), npm_config_userconfig: join(work, 'empty-npmrc'), npm_config_registry: 'http://127.0.0.1:9' }, stdio: 'pipe', timeout: 60000,
     });
+    assert.ok(!String(installation).includes(username)); assert.ok(!String(installation).includes(password));
     const installed = join(project, 'node_modules', '@heluo', 'forge-skills-manager');
     assert.equal(existsSync(join(project, 'node_modules', '@heluo', 'forge-enterprise')), false);
     assert.equal(existsSync(join(project, 'node_modules', '@heluo', 'forge-iam')), false);
@@ -116,6 +129,10 @@ test('private TGZ carries working Nacos credentials and installs offline without
     const { createNacosClient } = await import(pathToFileURL(join(installed, 'lib/nacos.js')).href);
     const client = createNacosClient(config.nacos);
     assert.deepEqual((await client.list()).items, []);
+    assert.deepEqual(config, { nacos: { ...connection, credentialsRef: 'bundled' } }, 'runtime must not populate Host config with secrets');
+    const oversized = join(work, 'oversized');
+    assert.throws(() => packageSkillsManager({ configText: configText.replace(' synthetic password ', 'x'.repeat(16 << 10)), output: oversized, version: '0.1.0-corp.test' }), { code: 'CONFIG_INVALID' });
+    assert.equal(existsSync(oversized), false);
     assert.throws(() => packageSkillsManager({ configText, output, version: '0.1.0-corp.test' }), { code: 'OUTPUT_EXISTS' });
     assert.throws(() => packageSkillsManager({ configText, output: join(work, 'same-version'), version: '0.1.0' }), { code: 'VERSION_UNCHANGED' });
     const unsafe = join(work, 'unsafe.env'); writeFileSync(unsafe, configText, { mode: 0o644 });

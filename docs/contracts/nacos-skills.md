@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-SKILLS-001 |
 | 文档名称 | Nacos 公共技能库契约 |
-| 版本 | V1.3.2 |
+| 版本 | V1.3.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
@@ -27,15 +27,16 @@ Host 连接 Nacos 3.2 AI Skill API，使用专用只读账号，不使用管理�
 |---|---|---|
 | `nacos.serverUrl` | string | 无；未配置时发现页显示未配置 |
 | `nacos.namespaceId` | string | 开发默认 `public`；正式制包必须显式提供 |
-| `nacos.username` | string | 无；正式制包必填，只读账号 |
-| `nacos.password` | string | 无；正式制包必填，保留非空原值 |
+| `nacos.credentialsRef` | string | 正式独立包固定为 `bundled`，读取本包 `private/nacos-credentials.json`；不接受其他值 |
+| `nacos.username` | string | 旧开发直配；正式独立包不写入宿主配置 |
+| `nacos.password` | string | 旧开发直配；正式独立包不写入宿主配置 |
 | `nacos.usernameEnv` | string | `FORGE_NACOS_USERNAME`，Host 进程环境变量名 |
 | `nacos.passwordEnv` | string | `FORGE_NACOS_PASSWORD`，Host 进程环境变量名 |
 | `nacos.timeoutMs` | integer | 15000 |
 
 ### 1.1 正式制包输入
 
-Skill Manager 正式交付由包内 `scripts/package.mjs` 读取下列配置，预置到独立 TGZ 的 `heluo-skills-manager` 补丁行；员工安装时无需填写连接信息。该入口仅接收表中的 Nacos 字段，不要求 enterprise 或 IAM 配置。中性源码构建不要求部署值，用于开发和构建核验。
+Skill Manager 正式交付由包内 `scripts/package.mjs` 读取下列配置。独立 TGZ 的 `heluo-skills-manager` 补丁行预置地址、命名空间、可选超时与 `credentialsRef: bundled`，账号密码预置到固定的 `private/nacos-credentials.json`；员工安装时无需填写连接信息。该入口仅接收表中的 Nacos 字段，不要求 enterprise 或 IAM 配置。中性源码构建不要求部署值，用于开发和构建核验。
 
 `make-private-bundle.mjs` 与 `release-delivery.mjs` 对装配 `heluo-skills-manager` 的企业公版要求下列四项配置；测试环境私版与正式环境私版采用同一判据。未装配技能管理器的企业包无需提供 Nacos 字段，回执不声明内嵌 Nacos 密码；向该类包提供 Nacos 字段时拒绝，不静默丢弃。中性企业公版的源码构建不要求部署值。
 
@@ -43,13 +44,13 @@ Skill Manager 正式交付由包内 `scripts/package.mjs` 读取下列配置，�
 |---|---|---|
 | `HELUO_NACOS_SERVER_URL` | `nacos.serverUrl` | 必填；HTTP/HTTPS 绝对 URL，不含 userinfo、query、fragment；不设置 HTTP 开关 |
 | `HELUO_NACOS_NAMESPACE_ID` | `nacos.namespaceId` | 必填；1–128 位字母数字、点、下划线或连字符，首位为字母数字；不默认补 `public` |
-| `HELUO_NACOS_USERNAME` | `nacos.username` | 必填；非空且非全空白的专用只读账号 |
-| `HELUO_NACOS_PASSWORD` | `nacos.password` | 必填；非空且非全空白；带首尾空格时用引号保留原值 |
+| `HELUO_NACOS_USERNAME` | 独立包凭据文件的 `username` | 必填；非空且非全空白的专用只读账号；历史组合工具仍写 `nacos.username` |
+| `HELUO_NACOS_PASSWORD` | 独立包凭据文件的 `password` | 必填；非空且非全空白，带首尾空格时用引号保留；历史组合工具仍写 `nacos.password` |
 | `HELUO_NACOS_TIMEOUT_MS` | `nacos.timeoutMs` | 可选；100–120000 的整数，单位毫秒；未填时运行默认 15000 |
 
 专用文件按 `KEY=VALUE` 数据解析，不接受 `export`、重复键、未知键及命令/展开语法；引号仅用于包裹值，不执行 shell 或转义求值。旧制包字段 `HELUO_NACOS_USERNAME_ENV`、`HELUO_NACOS_PASSWORD_ENV`、`HELUO_NACOS_ALLOW_INSECURE_HTTP` 不在白名单中，报 `CONFIG_UNKNOWN_KEY`。缺少四项必填值或校验失败报 `CONFIG_INVALID`，不回显原值。
 
-正式制包从未跟踪、受 Git 忽略的专用配置读取上述字段，写入 bundle 内声明 `heluo-skills-manager` 的补丁层。代码及中性公版不包含部署值。员工不再注入环境变量；完整配置文件不进入交付物，预检和回执只列字段名，明确标记已内嵌 Nacos 密码。
+正式制包从未跟踪、受 Git 忽略的专用配置读取上述字段；独立包分别写入有效补丁和凭据文件，完整输入文件不进入交付物。凭据 JSON 只含 `username`、`password` 两个字符串，采用 UTF-8，最大 16 KiB，归档模式为 0600；私版清单声明并校验该文件。代码及中性公版不包含部署值。员工无需注入环境变量；预检和回执只列字段名，明确标记已内嵌 Nacos 密码。
 
 私版元数据的 `config.embeddedSecrets` 仅列包内 Nacos 密码（`["nacos.password"]` 或 `[]`）；`config.clientSecretEmbedded` 单独声明是否采用现有 IAM 客户端密钥独立文件交付，`config.secretEmbedded` 是两者的合计布尔值。Nacos 密码不触发 IAM 绑定文件读取；两者同时交付时，安装器分别核验 Nacos 必填字段和 IAM 绑定文件。旧版仅以 `secretEmbedded: true` 声明的 IAM 交付继续要求有效绑定文件。IAM 客户端密钥不写入插件补丁或元数据，仍按其独立流程预置到目标凭据库。
 
@@ -57,13 +58,15 @@ Nacos 专项字段解析、完整性与运行文件匹配判据集中在 `script
 
 ### 1.2 开发配置与生效方式
 
-安装后在目标 profile 的 `cordis.patch.yml` 配置 `heluo-skills-manager.config.nacos` 并重启 Host，无需重新编译或打包。旧开发环境可继续使用 `usernameEnv`、`passwordEnv`；只要显式提供了 `username` 或 `password` 任一字段，就必须提供完整账号密码，不回落环境变量。缺失、空白或类型不符时返回 `error.nacos.config`（503），不发送远端请求，也不复用缓存令牌。本地管理仍可使用。凭据变化后重新登录，令牌仅缓存于内存。插件不自行加载 `.env`，也不实现 IAM 换票。
+安装后在目标 profile 的 `cordis.patch.yml` 配置 `heluo-skills-manager.config.nacos` 并重启 Host，无需重新编译或打包。旧开发环境可继续使用 `usernameEnv`、`passwordEnv`；只要显式提供了 `username` 或 `password` 任一字段，就必须提供完整账号密码，不回落环境变量。引用模式只接受 `bundled` 且禁止混用上述直配和环境字段；每次远端操作读取自身包内固定文件。文件不存在、不可读、链接、损坏、超限或字段无效时返回固定 `error.nacos.config`（503），错误不包含文件内容、路径或解析异常；不发送远端请求，不复用缓存令牌，不回落旧配置。本地管理仍可使用。凭据变化后重新登录，令牌仅缓存于内存。插件不自行加载 `.env`，也不实现 IAM 换票。
 
 正式交付 TGZ 已包含部署值；更新包内配置须使用新私版版本重新预检和安装，并备份、移除会遮盖预置值的旧 profile 覆盖项。profile 直配仅作为开发联调覆盖。安装时不读取或注入制包 `.env`。完整命令见[随包打包说明](../../packages/forge-skills-manager/docs/packaging.md)。
 
 ### 1.3 凭据与交付边界
 
-制包预检和配置注入使用根清单 `dsh.bundle.patch` 声明的单个路径或有序路径列表，不从未声明的同名文件选取挂载行。Skill Manager 须有且只有一个有效插入行，ID 为 `heluo-skills-manager`、包名为 `@heluo/forge-skills-manager` 且未禁用；缺失、覆盖或身份不符时拒绝制包。正式包的部署值仍写入该有效行的 `config.nacos`。
+制包预检和配置注入使用根清单 `dsh.bundle.patch` 声明的单个路径或有序路径列表，不从未声明的同名文件选取挂载行。Skill Manager 须有且只有一个有效插入行，ID 为 `heluo-skills-manager`、包名为 `@heluo/forge-skills-manager` 且未禁用；缺失、覆盖或身份不符时拒绝制包。独立包仅将非敏感连接字段及固定引用写入有效行的 `config.nacos`，Host 不将所读取的凭据写回配置；未叠加旧 profile 明文覆盖时，宿主配置诊断不含包内账号密码。旧开发直配和历史组合制品不具备这一诊断隔离保证。
+
+独立包凭据文件由制包器以归档模式 0600 交付；安装后的 POSIX 模式和 Windows ACL 须按目标包管理器及 profile 目录权限核验，归档模式不等于跨平台访问隔离。该机制防止凭据随配置诊断误带出，不能防止持包人解包、同账户进程或同权 Host 插件读取。企业安装器和交付器不消费当前独立包，本项不修改它们。项目负责人于 2026-11-26 确认独立包采用包内凭据文件与固定引用，仍在制包时预置全部四项配置；适用范围仅为 Skill Manager 独立交付。
 
 项目负责人于 2026-11-24 确认 Nacos 账号密码随内部正式交付包预置、四项制包必填及移除 Nacos HTTP 开关，适用范围仅为此专用只读账号；这是当前用户明确指定的限定要求，与[高阶规范 P8](../engineering/dsh-plugin-conventions.md#38-p8-安全边界不因可禁用而放宽)及[公共打包 Skill](../../.agents/skills/heluo-forge-release-bundle/SKILL.md#不可让步的边界)的通用凭据边界存在差异；公共 Skill 及配套 SOP 保持原样，不将本项描述为公共规约已有的许可。该要求不扩展到 IAM client secret、个人 Key 或访问令牌。包内配置可被解包读取，不提供加密保密；HTTP 传输不提供 TLS 保护。凭据及含凭据的制品不提交源码仓库或公开发布；真实服务端只读权限及企业联调仍须实测。
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { parseSkillDoc } from "./skill-document.js";
 import { readZip, ZipReadError } from "./zip.js";
 import { createPortablePathSet, isPortableFileSegment } from "./filesystem-paths.js";
@@ -15,6 +16,34 @@ const error = (code, message, status = 502) => new NacosError(`error.nacos.${cod
 const validName = (v) => typeof v === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v) && v.length <= 64;
 const validVersion = (v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v);
 const object = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function bundledCredentials() {
+  const invalid = () => error("config", "\u4F01\u4E1A\u6280\u80FD\u5E93\u5305\u5185\u51ED\u636E\u4E0D\u53EF\u7528\uFF0C\u8BF7\u8054\u7CFB\u7EF4\u62A4\u4EBA\u5458", 503);
+  let descriptor;
+  try {
+    const directory = lstatSync(new URL("../private/", import.meta.url));
+    const path = new URL("../private/nacos-credentials.json", import.meta.url);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || lstatSync(path).isSymbolicLink()) throw invalid();
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+    const info = fstatSync(descriptor), limit = 16 << 10;
+    if (!info.isFile() || info.size > limit) throw invalid();
+    const bytes = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(descriptor, bytes, length, bytes.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+    if (length > limit) throw invalid();
+    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)));
+    if (!object(value) || Object.keys(value).sort().join(",") !== "password,username" || typeof value.username !== "string" || !value.username.trim() || typeof value.password !== "string" || !value.password.trim()) throw invalid();
+    return { username: value.username, password: value.password };
+  } catch (caught) {
+    if (caught instanceof SyntaxError || caught instanceof TypeError && "code" in caught && caught.code === "ERR_ENCODING_INVALID_ENCODED_DATA" || caught instanceof Error && !(caught instanceof TypeError) && !(caught instanceof ReferenceError) && "code" in caught && typeof caught.code === "string" && /^(?:ENOENT|ENOTDIR|EACCES|EPERM|ELOOP|EISDIR|EIO|EMFILE|ENFILE)$/.test(caught.code)) throw invalid();
+    throw caught;
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+}
 function validateNamespace(item, namespace) {
   if (item.namespaceId != null && item.namespaceId !== namespace) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u6761\u76EE\u547D\u540D\u7A7A\u95F4\u4E0D\u5339\u914D");
 }
@@ -36,6 +65,7 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
       if (url.username || url.password || url.search || url.hash || !["https:", "http:"].includes(url.protocol)) throw 0;
       const namespace = config.namespaceId ?? "public";
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespace)) throw 0;
+      if (config.credentialsRef !== void 0 && (config.credentialsRef !== "bundled" || [config.username, config.password, config.usernameEnv, config.passwordEnv].some((value) => value !== void 0))) throw 0;
       const usernameEnv = config.usernameEnv ?? "FORGE_NACOS_USERNAME";
       const passwordEnv = config.passwordEnv ?? "FORGE_NACOS_PASSWORD";
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(usernameEnv) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(passwordEnv)) throw 0;
@@ -49,6 +79,14 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
   }
   function credentials() {
     const cfg = settings();
+    if (config?.credentialsRef === "bundled") {
+      try {
+        return bundledCredentials();
+      } catch (caught) {
+        token = void 0;
+        throw caught;
+      }
+    }
     const explicit = config?.username !== void 0 || config?.password !== void 0;
     const username = explicit ? config?.username : process.env[cfg.usernameEnv];
     const password = explicit ? config?.password : process.env[cfg.passwordEnv];

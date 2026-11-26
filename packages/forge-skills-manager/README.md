@@ -36,13 +36,13 @@
 
 ### Nacos 配置
 
-正式交付 TGZ 在制包时预置 Nacos 地址、命名空间、只读账号和密码，安装后由包内补丁直接提供，无需填写 profile。源码中性包供开发使用，未配置时仍可使用本地管理。Nacos 接受 HTTP 和 HTTPS。
+正式交付 TGZ 在制包时预置 Nacos 地址、命名空间、只读账号和密码，无需员工填写 profile。地址和命名空间写入补丁，账号密码写入包内 `private/nacos-credentials.json`，补丁仅声明 `credentialsRef: bundled`；Host 在运行时读取，不把敏感值写入配置对象。归档内凭据文件权限为 0600，安装后的实际权限须按目标系统核验。源码中性包供开发使用，未配置时仍可使用本地管理。Nacos 接受 HTTP 和 HTTPS。
 
 配置字段及错误语义见[Nacos 契约 §1](../../docs/contracts/nacos-skills.md#1-连接)，制包安装步骤见[安装说明](docs/packaging.md)。
 
 ### 开发 profile 配置
 
-开发联调在隔离 profile 的现有 `cordis.patch.yml` 合并以下内容；真实账号密码只放本机私有配置，不提交仓库：
+中性开发包联调时，在隔离 profile 的现有 `cordis.patch.yml` 合并以下内容，并通过启动进程环境提供凭据，不提交仓库：
 
 ```yaml
 - id: heluo-skills-manager
@@ -50,11 +50,11 @@
     nacos:
       serverUrl: http://nacos.corp.example/nacos
       namespaceId: public
-      username: svc-ci
-      password: '<只读账号密码>'
+      usernameEnv: FORGE_NACOS_USERNAME
+      passwordEnv: FORGE_NACOS_PASSWORD
 ```
 
-修改上述字段后重启同一 profile 的 DSH，无需重新制包。Nacos 使用专用只读账号，不使用个人 IAM 权限。旧开发环境变量方式保留兼容；显式提供任一账号密码字段后必须两项完整，不回落环境变量。
+修改上述字段后重启同一 profile 的 DSH，无需重新制包。Nacos 使用专用只读账号，不使用个人 IAM 权限。旧明文开发字段保留兼容，但会进入配置诊断，勿用于员工交付。`credentialsRef: bundled` 不接受混用明文或环境变量字段；文件缺失或无效时拒绝远端访问，不回落环境变量。
 
 ### profile 配置生效
 
@@ -107,6 +107,12 @@ node packages/forge-skills-manager/scripts/verify-host.mjs <installed-dsh-cli.js
 ```
 
 该命令离线安装到全新临时 profile，启动仅绑定环回地址的真实 web 宿主，核对认证路由、并发管理、下载中断回执、重启恢复、同进程禁用/重载及卸载保留数据。Nacos 为合成 HTTP 服务，不读取用户默认配置；证据写入命令返回的临时目录。使用 Skill Manager 独立制品执行。运行环境须提供与 Node 配套的 npm；浏览器交互、企业权限及目标平台另行验收。命令结束后停止测试宿主和合成 Nacos，不是持续运行的人工调试服务器。
+
+最终预置 TGZ 的凭据与诊断回归入口如下。该入口自行制包，全部使用合成凭据与隔离目录，验证真实 Host 登录、启动前后配置诊断、安装输出及文件缺失时的错误分类；可选第二参数指定官方 Electron 执行文件，通过 ASAR CLI 运行时仅为测试子进程设置 `ELECTRON_RUN_AS_NODE=1`：
+
+```sh
+node packages/forge-skills-manager/scripts/verify-preset-host.mjs <installed-dsh-cli.js> [node-or-electron-executable]
+```
 
 ## 本地人工调试
 
