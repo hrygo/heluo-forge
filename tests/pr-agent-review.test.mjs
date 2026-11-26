@@ -325,6 +325,12 @@ test('reviews use medium effort and cap input and generated tokens', async () =>
   assert.match(settings, /^reasoning_effort = "medium"$/mu);
 });
 
+test('repository reviews publish findings inline by default', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  const reviewerSettings = settings.split(/^\[pr_reviewer\]$/mu)[1]?.split(/^\[/mu)[0] ?? '';
+  assert.ok(/^inline_key_issues = true$/mu.test(reviewerSettings), 'pr_reviewer.inline_key_issues must default to true');
+});
+
 test('automatic summaries use low effort, smaller budgets and skip review-only context', () => {
   const summary = stepDefinition('Run PR-Agent summary');
   assert.match(summary, /^ {10}CONFIG__REASONING_EFFORT: "low"$/mu);
@@ -347,6 +353,7 @@ test('manual describe commands select only the summary action', async () => {
     ['issue_comment', '/describe', [true, false]],
     ['issue_comment', '/describe\u00a0', [true, false]],
     ['issue_comment', '  /DESCRIBE_PR\n', [true, false]],
+    ['issue_comment', '/review', [false, true]],
     ['issue_comment', '/review --pr_reviewer.inline_key_issues=true', [false, true]],
     ['issue_comment', '/ask what does /describe do?', [false, true]],
     ['issue_comment', `/ask ${longCommentText}`, [false, true]],

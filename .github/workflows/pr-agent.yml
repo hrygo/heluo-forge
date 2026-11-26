@@ -9,8 +9,8 @@ run-name: '洛神 · PR #${{ github.event.pull_request.number || github.event.is
 # One-time setup per repository:
 #   1. Settings > Secrets and variables > Actions > New repository secret:
 #      `OPENAI_API_KEY` = an OpenAI project key with Chat Completions access.
-#   2. Merge this workflow and `.pr_agent.toml` to the PR's base branch. The
-#      Action loads repository settings from that branch on subsequent runs.
+#   2. Merge this workflow and `.pr_agent.toml` to the default branch. The
+#      Action reads the repository settings from the default branch.
 #
 # Enable/disable switch: the `review` job runs only while the repository
 # variable `PR_AGENT_ENABLED` is `true`. GitHub compares strings ignoring case,
