@@ -15,7 +15,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { ASSETS_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from '../services/forge-desktop/src/layout.mjs';
-import { parseArguments, StageError, stagePayload, unpackPnpm } from '../scripts/stage-desktop-payload.mjs';
+import { dedupeDshClosure, inspectDshClosure, parseArguments, StageError, stagePayload, unpackPnpm } from '../scripts/stage-desktop-payload.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -275,15 +275,84 @@ test('反向：缺品牌套件与缺 dsh 制品各自报错；参数解析要求
   // Both artifacts are part of every handover.
   assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--pnpm-tgz is required/.test(error.message));
   assert.throws(() => parseArguments(['--output', 'x', '--pnpm-tgz', 'p.tgz']), (error) => error.code === 'BAD_ARGUMENT' && /--dsh-tgz is required/.test(error.message));
-  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--json']), {
+  assert.deepEqual(parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', '--max-dsh-bytes', '1024', '--max-dsh-files', '50', '--json']), {
     output: 'x',
     dshTgz: 'x.tgz',
     pnpmTgz: 'p.tgz',
     brandDir: undefined,
     employeeAssets: undefined,
     lock: undefined,
+    maxDshBytes: 1024,
+    maxDshFiles: 50,
     json: true,
   });
+  for (const bad of [['--max-dsh-bytes', '0'], ['--max-dsh-bytes', '-1'], ['--max-dsh-files', 'abc']]) {
+    assert.throws(() => parseArguments(['--output', 'x', '--dsh-tgz', 'x.tgz', '--pnpm-tgz', 'p.tgz', ...bad]), refused('BAD_ARGUMENT'));
+  }
+});
+
+test('闭包去重与预算门禁：去重嵌套同版依赖、保留不同版本阴影、锁定闭包与体积预算（正反向）', (t) => {
+  const root = temp(t);
+  const artifact = fixtureTgz(root);
+  const pnpm = fixturePnpm(root);
+  const writePkg = (dir, name, version, size = 16) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name, version })}\n`);
+    writeFileSync(join(dir, 'index.js'), 'x'.repeat(size));
+  };
+
+  // Build an installer that lays down nested duplicate copies of zod@4.4.3 and @scope/leaf@1.0.0,
+  // plus a shadowed zod@3.22.0 inside pkg-legacy that must remain intact.
+  const nestedInstaller = (tgz, dest) => {
+    fakeInstaller()(tgz, dest);
+    const nm = join(dest, 'node_modules');
+    writePkg(join(nm, 'zod'), 'zod', '4.4.3', 100);
+    writePkg(join(nm, 'pkg-a', 'node_modules', 'zod'), 'zod', '4.4.3', 100);
+    writePkg(join(nm, 'pkg-b', 'node_modules', 'zod'), 'zod', '4.4.3', 100);
+    writePkg(join(nm, 'pkg-a', 'node_modules', '@scope', 'leaf'), '@scope/leaf', '1.0.0', 60);
+    writePkg(join(nm, 'pkg-b', 'node_modules', '@scope', 'leaf'), '@scope/leaf', '1.0.0', 60);
+    writePkg(join(nm, 'pkg-legacy', 'node_modules', 'zod'), 'zod', '3.22.0', 80);
+    writePkg(join(nm, 'pkg-legacy', 'node_modules', 'sub', 'node_modules', 'zod'), 'zod', '4.4.3', 100);
+  };
+
+  const args = { ...stageArgs(root, artifact, pnpm), installer: nestedInstaller };
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  const record = stagePayload(args);
+  const stagedNm = join(root, 'out', 'resources', 'dsh', 'node_modules');
+
+  assert.equal(existsSync(join(stagedNm, 'pkg-a', 'node_modules', 'zod')), false, 'duplicate zod@4.4.3 pruned');
+  assert.equal(existsSync(join(stagedNm, 'pkg-b', 'node_modules', 'zod')), false, 'sibling duplicate zod@4.4.3 pruned');
+  assert.equal(existsSync(join(stagedNm, '@scope', 'leaf', 'package.json')), true, 'missing root leaf hoisted');
+  assert.equal(existsSync(join(stagedNm, 'pkg-a', 'node_modules', '@scope')), false, 'empty @scope directory cleaned');
+  assert.equal(existsSync(join(stagedNm, 'pkg-b', 'node_modules', '@scope', 'leaf')), false, 'sibling duplicate @scope/leaf pruned after hoist');
+  assert.equal(existsSync(join(stagedNm, 'pkg-legacy', 'node_modules', 'zod')), true, 'different-version zod@3.22.0 kept');
+  assert.equal(existsSync(join(stagedNm, 'pkg-legacy', 'node_modules', 'sub', 'node_modules', 'zod')), true, 'nested zod@4.4.3 below zod@3.22.0 kept');
+  assert.equal(record.dshClosure.hoisted, 1);
+  assert.equal(record.dshClosure.deduped, 3);
+  assert.match(record.dshClosure.digest, /^[0-9a-f]{64}$/u);
+
+  // Deterministic closure lock: exact match passes; tampered digest or count fails closed without harming output.
+  const locked = ledger(artifact, { pnpm: pnpmRow(pnpm) });
+  locked.dshClosure = { digest: record.dshClosure.digest, packages: record.dshClosure.packages };
+  writeFileSync(args.lockPath, `${JSON.stringify(locked, null, 2)}\n`);
+  assert.equal(stagePayload(args).dshClosure.digest, record.dshClosure.digest);
+
+  const marker = join(root, 'out', 'resources', 'keep.txt');
+  writeFileSync(marker, 'untouched\n');
+  locked.dshClosure = { digest: '0'.repeat(64), packages: record.dshClosure.packages };
+  writeFileSync(args.lockPath, `${JSON.stringify(locked, null, 2)}\n`);
+  assert.throws(() => stagePayload(args), refused('STAGE_CLOSURE_MISMATCH'));
+  assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on closure mismatch');
+
+  // Budget gates: bytes and files both fail closed without destroying existing output.
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  assert.throws(() => stagePayload({ ...args, maxDshBytes: record.dshClosure.bytes - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
+  assert.throws(() => stagePayload({ ...args, maxDshFiles: record.dshClosure.files - 1 }), refused('STAGE_BUDGET_EXCEEDED'));
+  assert.equal(readFileSync(marker, 'utf8'), 'untouched\n', 'existing output preserved on budget refusal');
+
+  // Installed dsh version mismatch fails closed.
+  writeFileSync(args.lockPath, `${JSON.stringify(ledger(artifact, { dsh: { version: '9.9.9' }, pnpm: pnpmRow(pnpm) }), null, 2)}\n`);
+  assert.throws(() => stagePayload(args), refused('STAGE_DSH_IDENTITY_MISMATCH'));
 });
 
 test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品，两个暂存工具各拿一份', () => {

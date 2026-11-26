@@ -10,10 +10,10 @@
  * 用法：
  *   node scripts/build-desktop-installer.mjs --identity <app-identity.json> \
  *     --resources <staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
- *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] [--target dir|mac|win] [--config-only] [--json]
+ *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] \
+ *     [--target dir|mac|win|linux] [--arch x64|arm64|universal] [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,13 @@ const WIN_ICON = 'icons/app-icon.ico';
 const MAC_ICON = 'icons/app-icon.icns';
 const DEFAULT_BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
 const DEFAULT_APP_DIR = join('services', 'forge-desktop');
+
+const TARGET_ARCHES = Object.freeze({
+  dir: ['arm64', 'x64', 'universal'],
+  mac: ['arm64', 'x64', 'universal'],
+  win: ['x64'],
+  linux: ['x64', 'arm64'],
+});
 
 /**
  * File types the packaged runtime never reads. TypeScript sources and
@@ -47,13 +54,13 @@ const VERBATIM_RUNTIME_DIRS = Object.freeze([`${DSH_ENTRY_PARTS.slice(0, 4).join
 
 /**
  * The locales Electron keeps, each named the way the platform names its locale
- * file: Windows and Linux write `en-US.pak` and `zh-CN.pak`, macOS writes
- * `en.lproj` and `zh_CN.lproj`. A system in any other locale is served
- * Electron's `en-US` resources. On macOS this list currently changes nothing:
- * electron-builder 26 looks for `*.lproj` in the app's Resources, while
- * Electron 44 keeps them inside its framework.
+ * file: Windows and Linux write `en-US.pak`, `zh-CN.pak`, `zh-TW.pak`; macOS
+ * writes `en.lproj`, `zh_CN.lproj`, `zh_TW.lproj`. A system in any other locale
+ * is served Electron's `en-US` resources. On macOS this list currently changes
+ * nothing: electron-builder 26 looks for `*.lproj` in the app's Resources,
+ * while Electron 44 keeps them inside its framework.
  */
-const ELECTRON_LANGUAGES = ['en', 'en-US', 'zh-CN', 'zh_TW', 'zh-TW', 'zh_CN'];
+const ELECTRON_LANGUAGES = ['en', 'en-US', 'zh-CN', 'zh-TW', 'zh_CN', 'zh_TW'];
 
 export class InstallerBuildError extends Error {
   constructor(code, message) {
@@ -66,6 +73,21 @@ export class InstallerBuildError extends Error {
 const fail = (code, message) => {
   throw new InstallerBuildError(code, message);
 };
+
+/**
+ * Resolve and validate `--arch` against `--target`. Each target has one default
+ * architecture matching its primary build matrix entry and rejects unsupported
+ * architectures before electron-builder runs.
+ */
+export function resolveTargetArch(target, arch) {
+  const supported = TARGET_ARCHES[target];
+  if (supported === undefined) fail('BAD_ARGUMENT', '--target must be dir, mac, win or linux');
+  if (arch === undefined) return supported[0];
+  if (!supported.includes(arch)) {
+    fail('BAD_ARGUMENT', `--arch ${arch} is not supported for --target ${target} (allowed: ${supported.join(', ')})`);
+  }
+  return arch;
+}
 
 /**
  * The application version the installer carries, without the tag's leading `v`.
@@ -82,7 +104,18 @@ export function normalizeVersion(version) {
 }
 
 export function parseArguments(argv) {
-  const options = { identity: undefined, resources: undefined, version: undefined, output: undefined, appDir: undefined, brandDir: undefined, target: 'dir', configOnly: false, json: false };
+  const options = {
+    identity: undefined,
+    resources: undefined,
+    version: undefined,
+    output: undefined,
+    appDir: undefined,
+    brandDir: undefined,
+    target: 'dir',
+    arch: undefined,
+    configOnly: false,
+    json: false,
+  };
   const valued = new Map([
     ['--identity', 'identity'],
     ['--resources', 'resources'],
@@ -91,6 +124,7 @@ export function parseArguments(argv) {
     ['--app-dir', 'appDir'],
     ['--brand-dir', 'brandDir'],
     ['--target', 'target'],
+    ['--arch', 'arch'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -111,7 +145,7 @@ export function parseArguments(argv) {
     }
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
   }
-  if (!['dir', 'mac', 'win'].includes(options.target)) fail('BAD_ARGUMENT', '--target must be dir, mac or win');
+  options.arch = resolveTargetArch(options.target, options.arch);
   for (const key of ['identity', 'resources', 'version', 'output']) {
     if (typeof options[key] !== 'string' || options[key].trim() === '') fail('BAD_ARGUMENT', `missing required option for ${key}`);
   }
@@ -171,10 +205,15 @@ export function summarizeResources(resourcesDir) {
 /**
  * The electron-builder configuration derived from the identity truth. Kept
  * pure: the identity fields are literals of the identity, the paths are the
- * ones this tool was handed, and the packaging rules are the three this file
- * owns — what travels, which locales ship, how the archive is compressed.
+ * ones this tool was handed, and the rules are what this file owns — what
+ * travels, which locales ship, how the installer upgrades/preserves user data,
+ * and which platform architecture is targeted.
  */
-export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir }) {
+export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir, target = 'dir', arch }) {
+  const resolvedArch = resolveTargetArch(target, arch);
+  const macArch = target === 'mac' || target === 'dir' ? resolvedArch : 'arm64';
+  const linuxArch = target === 'linux' ? resolvedArch : 'x64';
+  const macTargets = target === 'mac' ? ['dmg', 'zip'] : ['dir'];
   return {
     appId: identity.appId,
     productName: identity.productName,
@@ -190,16 +229,21 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     nsis: {
       guid: identity.upgradeGuid,
       artifactName: `${identity.executableName}-\${version}-setup-\${arch}.\${ext}`,
+      uninstallDisplayName: `${identity.displayName} \${version}`,
       oneClick: true,
       perMachine: false,
+      // Upgrades converge by uninstalling differing versions and reinstalling;
+      // keeping user app data ensures profile markers, logs and local state
+      // survive uninstall/reinstall and rollback.
+      deleteAppDataOnUninstall: false,
       // The differential form exists for electron-updater, and this app ships
       // no update feed: an upgrade reinstalls. Its block-map layout (non-solid,
       // 1 MB dictionary) is what makes the archive a third larger than a solid
       // one, which also decodes faster.
       differentialPackage: false,
     },
-    mac: { icon: join(iconsDir, basename(MAC_ICON)), target: [{ target: 'dir', arch: ['arm64'] }] },
-    linux: { icon: join(iconsDir), target: [{ target: 'deb', arch: ['x64'] }] },
+    mac: { icon: join(iconsDir, basename(MAC_ICON)), target: macTargets.map((kind) => ({ target: kind, arch: [macArch] })) },
+    linux: { icon: join(iconsDir), target: [{ target: 'deb', arch: [linuxArch] }], category: 'Development' },
   };
 }
 
@@ -254,6 +298,8 @@ async function main() {
     iconsDir: join(brandDir, 'icons'),
     appDir,
     outputDir,
+    target: options.target,
+    arch: options.arch,
   });
   const configPath = join(outputDir, 'builder-config.json');
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -263,6 +309,7 @@ async function main() {
     identity: { appId: identity.appId, productName: identity.productName, executableName: identity.executableName, guid: identity.upgradeGuid, displayName: identity.displayName },
     version,
     target: options.target,
+    arch: options.arch,
     config: configPath,
     resources: summarizeResources(options.resources),
   };
@@ -276,14 +323,16 @@ async function main() {
   const args = ['--config', configPath];
   if (options.target === 'dir') args.push('--mac', '--dir');
   else if (options.target === 'mac') args.push('--mac');
-  else args.push('--win');
+  else if (options.target === 'win') args.push('--win');
+  else args.push('--linux');
+  args.push(`--${options.arch}`);
   const run = spawnSync(process.execPath, [builder, ...args], { cwd: appDir, encoding: 'utf8' });
   if (run.error !== undefined || run.status !== 0) {
     const outcome = run.error === undefined ? `exited ${run.status}` : `could not start (${run.error.message})`;
     fail('BUILDER_FAILED', `electron-builder ${outcome}\n${(run.stdout ?? '').slice(-4000)}\n${(run.stderr ?? '').slice(-4000)}`);
   }
   summary.builderLog = `${run.stdout ?? ''}`.trim().split('\n').slice(-3).join(' | ');
-  process.stdout.write(options.json ? `${JSON.stringify(summary, null, 2)}\n` : `built: ${outputDir} (${options.target})\n`);
+  process.stdout.write(options.json ? `${JSON.stringify(summary, null, 2)}\n` : `built: ${outputDir} (${options.target}/${options.arch})\n`);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
