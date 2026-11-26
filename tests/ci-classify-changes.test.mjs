@@ -206,6 +206,79 @@ test('existing portable Unicode documentation can be edited without running plat
   assert.equal(classify(repo, base, repo.commitStaged()).run_platforms, false);
 });
 
+test('allows isolated desktop, deploy and skill edits to skip platform jobs while guarding shared boundaries', async (t) => {
+  const skipPaths = [
+    'services/forge-desktop/src/main.mjs',
+    'services/forge-desktop/README.md',
+    'scripts/stage-desktop-payload.mjs',
+    'scripts/stage-primary-runtime.mjs',
+    'scripts/build-desktop-installer.mjs',
+    'scripts/derive-brand-icons.mjs',
+    'scripts/lib/primary-runtime.mjs',
+    'scripts/lib/zip-archive.mjs',
+    'scripts/probe/run-primary-runtime-probe.mjs',
+    'tests/stage-desktop-payload.test.mjs',
+    'tests/build-desktop-installer.test.mjs',
+    'tests/desktop-shell-contract.test.mjs',
+    'deploy/clients/README.md',
+    '.agents/skills/heluo-forge-release-bundle/SKILL.md',
+  ];
+
+  await t.test('isolated desktop/deploy/skill changes plus docs skip platforms', (child) => {
+    const repo = fixture(child);
+    repo.write('docs/guide.md', '# revised\n');
+    for (const path of skipPaths) repo.write(path, '// updated\n');
+    const result = classify(repo, repo.base, repo.commit());
+    assert.equal(result.run_platforms, false);
+    assert.match(result.reason, /isolated non-platform/u);
+  });
+
+  const requiredPlatformPaths = [
+    'packages/forge-credentials-keychain/src/index.mjs',
+    'packages/forge-iam/src/service.mjs',
+    'packages/forge-enterprise/package.json',
+    'packages/forge-brand/src/index.mjs',
+    'packages/forge-policy/src/index.mjs',
+    'packages/forge-devops/cordis.patch.yml',
+    'scripts/build-enterprise-bundle.mjs',
+    'scripts/verify-enterprise-bundle.mjs',
+    'scripts/link-workspace.mjs',
+    'scripts/lib/bundle-rules.mjs',
+    'scripts/probe/installed-credential-smoke.mjs',
+    'scripts/sensitive-scan/scan.mjs',
+    '.node-version',
+    'package.json',
+  ];
+
+  for (const path of requiredPlatformPaths) {
+    await t.test(`mixing desktop change with ${path} still runs platforms`, (child) => {
+      const repo = fixture(child);
+      repo.write('services/forge-desktop/src/main.mjs', '// desktop\n');
+      repo.write(path, '// platform-relevant\n');
+      const result = classify(repo, repo.base, repo.commit());
+      assert.equal(result.run_platforms, true);
+    });
+  }
+
+  await t.test('non-portable path, collision, or executable mode inside desktop directory runs platforms', (child) => {
+    const repo = fixture(child);
+    repo.write('services/forge-desktop/CON.mjs', '// reserved\n');
+    assert.equal(classify(repo, repo.base, repo.commit()).run_platforms, true);
+
+    const repoCase = fixture(child);
+    repoCase.write('services/forge-desktop/layout.mjs', '// lower\n');
+    const base = repoCase.commit();
+    stageIndexFile(repoCase, 'services/forge-desktop/LAYOUT.mjs', repoCase.git('rev-parse', `${base}:services/forge-desktop/layout.mjs`));
+    assert.equal(classify(repoCase, base, repoCase.commitStaged()).run_platforms, true);
+
+    const repoExec = fixture(child);
+    repoExec.write('services/forge-desktop/run.mjs', '// exec\n');
+    repoExec.git('add', '--', 'services/forge-desktop/run.mjs');
+    repoExec.git('update-index', '--chmod=+x', '--', 'services/forge-desktop/run.mjs');
+    assert.equal(classify(repoExec, repoExec.base, repoExec.commitStaged()).run_platforms, true);
+  });
+});
+
 test('runs platforms for any change outside the exact documentation allowlist', async (t) => {
   const paths = [
     'AGENTS.md',

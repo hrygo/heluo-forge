@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.9.9 |
+| 版本 | V0.9.10 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-25 |
+| 最后更新 | 2026-11-26 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：仓库结构、`package.json`、`pnpm-workspace.yaml`、检查脚本、测试与 GitHub Actions 工作流；工具链版本以 `.node-version` 和 `package.json` 为准。托管平台的实际执行结果以对应工作流记录为准。
@@ -99,7 +99,7 @@
 - `check:tarballs` 校验真实 tarball 内容与模式位。
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。
 - CI 的 `repository checks` 工作流使用 `.github/workflows/check.yml` 的 `verify (ubuntu-x64)` 作业执行 `node --run check`，是全量离线检查与全部用例的唯一执行点；默认 `contents: read`、`issues: read` 与 `pull-requests: read`，PR 正文须引用本仓库已有 Issue（`Closes #编号` 或 `Part of #编号`），正文编辑时重新检查。常规检查不使用 `pull_request_target`。该作业在检出 PR 代码前拒绝 head 仓库不是本仓库的 fork PR：审查、重签与强制重放收敛在仓库内分支，fork 分支不在分支保护与提交钩子的约束范围内；判定只作用于 `pull_request`，`main` 推送、合并队列与手动运行不受影响。与分类同理，该判定在工作流内执行且工作流定义取自 PR 合并提交，不构成防止恶意 PR 修改工作流的安全边界；不可绕过的是基线加载的 `sensitive-attestation` 与 CODEOWNERS 评审。触发与依赖固定策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
-- `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增 `docs/` 中普通 Markdown 与根 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时允许跳过平台作业；新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
+- `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增白名单内的隔离路径——即 `docs/` 中普通 Markdown、根 `README.md` / `CONTRIBUTING.md` / `SECURITY.md`、`.agents/skills/`、`deploy/`、`services/forge-desktop/` 及桌面打包/运行时暂存/图标派生相关脚本与用例（不触及 `packages/`、`scripts/sensitive-scan/`、企业包构建链路、`.github/workflows/`、`.node-version` 与 `package.json`）——时允许跳过平台作业；`verify (ubuntu-x64)` 仍全量运行。新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
 - 平台作业运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。`repository checks` 的必需平台检查为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、`SQLite and IAM (win32-x64, windows-2022)` 和 `SQLite and IAM (win32-arm64, windows-11-arm)`。
 - 独立的 `macOS compatibility checks` 工作流使用 `.github/workflows/check-macos.yml` 执行 `SQLite and IAM (darwin-arm64, macos-15)` 和 `SQLite and IAM (darwin-x64, macos-15-intel)`。两项均为可选检查，继续执行相同的平台测试，并分别使用 2 分钟和 4 分钟的执行超时。runner 排队取消和作业执行超时保留在该工作流的记录中。
 - Linux 和 macOS 作业构建、核验并离线安装企业组合包；Windows 作业打包并离线安装凭据独立包。安装冒烟使用临时 SQLite 存储和合成值，不代表 Windows 已安装企业组合包。凭据使用值级加密 SQLite 和文件 keyring，不使用系统钥匙串或原生 addon；文件权限与隔离边界见[凭据包说明](../../packages/forge-credentials-keychain/README.md)。
