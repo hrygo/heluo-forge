@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  CAPABILITIES,
   DEFAULT_HOST_VERSION,
   ENTRY_PACKAGE,
   InitError,
@@ -16,6 +17,7 @@ import {
   METADATA_FILE,
   PROFILE_NAMES,
   PNPM_FROM_HOST_LINE,
+  PNPM_STORE_LINE,
   REINSTALL_LINE,
   RELEASE_SCHEMA,
   USAGE,
@@ -24,6 +26,7 @@ import {
   locateDsh,
   locateDshLaunch,
   locateNpmLaunch,
+  normalizedStoreDirectory,
   parseArgs,
   credentialStoreDirectory,
   ensureStoreDirectory,
@@ -39,6 +42,7 @@ import {
   runInit,
   sha256File,
   shimEntryOf,
+  storePreflight,
 } from '../scripts/init-enterprise-plugin.mjs';
 import { readDshVersion } from '../scripts/lib/dsh-version.mjs';
 
@@ -785,6 +789,116 @@ test('--reinstall-on-store-mismatch 演练：写明修复已获准，不执行�
   assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
   assert.equal(outcome.result.status, 'dry-run');
   assert.ok(outcome.lines.includes(REINSTALL_LINE));
+});
+
+test('parseArgs：--pnpm-store 接受绝对目录、拒绝相对与缺值；能力清单只列真实存在的参数', () => {
+  const base = ['--release', '/r', '--profile', 'web'];
+  assert.equal(parseArgs(base).pnpmStore, undefined);
+  assert.equal(parseArgs([...base, '--pnpm-store', '/store/v10']).pnpmStore, '/store/v10');
+  assert.throws(() => parseArgs([...base, '--pnpm-store', 'store/v10']), (error) => error.code === 'BAD_ARGUMENT' && /绝对目录/.test(error.message));
+  assert.throws(() => parseArgs([...base, '--pnpm-store']), (error) => error.code === 'BAD_ARGUMENT' && /需要一个值/.test(error.message));
+  assert.ok(USAGE.includes('--pnpm-store'), '用法说明须列出该参数');
+  // The capability list the shell probes names the arguments the parser really accepts.
+  assert.deepEqual([...CAPABILITIES], ['pnpm-from-host', 'reinstall-on-store-mismatch', 'pnpm-store']);
+  for (const capability of CAPABILITIES) {
+    const argv = capability === 'pnpm-store' ? [...base, '--pnpm-store', '/store/v10'] : [...base, `--${capability}`];
+    assert.ok(parseArgs(argv) !== undefined, `${capability} 必须是安装器真实接受的参数`);
+  }
+});
+
+test('storePreflight 与 normalizedStoreDirectory：声明了才比对，比对按归一化路径，读不出时如实说', (t) => {
+  const root = tempRoot(t);
+  const profile = { dir: root, name: 'p' };
+  // 未声明（终端形态）与空值都不比对。
+  assert.equal(storePreflight(profile, {}), null);
+  assert.equal(storePreflight(profile, { pnpmStore: '' }), null);
+  // profile 没有记录 store：全新或已清空。
+  assert.deepEqual(storePreflight(profile, { pnpmStore: '/store/v10' }), { verdict: 'absent', provided: '/store/v10', providedLabel: '/store/v10' });
+  // 记录了且一致：斜杠尾与已存在目录的真实路径不构成差异。
+  mkdirSync(join(root, 'node_modules'), { recursive: true });
+  writeFileSync(join(root, 'node_modules', '.modules.yaml'), JSON.stringify({ storeDir: join(root, 'store', 'v10') }));
+  assert.deepEqual(storePreflight(profile, { pnpmStore: `${join(root, 'store', 'v10')}/` }), { verdict: 'consistent', provided: join(root, 'store', 'v10'), providedLabel: `${join(root, 'store', 'v10')}/`, recorded: join(root, 'store', 'v10') });
+  // 记录了且不一致。
+  const mismatch = storePreflight(profile, { pnpmStore: join(root, 'host-store', 'v10') });
+  assert.equal(mismatch.verdict, 'mismatch');
+  assert.equal(mismatch.recorded, join(root, 'store', 'v10'));
+  // 归一化：非字符串与空白读不出；斜杠尾按归一化收敛。
+  assert.equal(normalizedStoreDirectory(42), null);
+  assert.equal(normalizedStoreDirectory(null), null);
+  assert.equal(normalizedStoreDirectory('  '), null);
+  assert.equal(normalizedStoreDirectory('/store/a/'), normalizedStoreDirectory('/store/a'));
+});
+
+test('--pnpm-store 预检：授权时在首个包操作之前清空，宿主一次被拒都不会遇到', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, modules } = seedForeignProfile(root);
+  const host = hostOverForeignStore({ profileDir });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--pnpm-store', join(root, 'host-store', 'v10'), '--json'], host.exec);
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  // 预检先清空，包操作一次通过：没有「先撞一次 store 不一致」的那条被拒命令。
+  assert.deepEqual(host.packageActions(), ['add']);
+  assert.equal(existsSync(join(modules, '.modules.yaml')), false);
+  assert.equal(existsSync(join(modules, 'other-plugin')), false);
+  assert.equal(existsSync(join(modules, ...ENTRY_PACKAGE.split('/'), 'package.json')), true, '插件装上了');
+  // 结论写明预检做过比对、也做过清空。
+  assert.ok(outcome.lines.includes(PNPM_STORE_LINE));
+  assert.ok(outcome.lines.includes(`store 预检：profile「${OWNED_PROFILE}」的 node_modules 由另一个 pnpm store 装入（记录的 store：${anotherStore(root)}；本次将用：${join(root, 'host-store', 'v10')}）`), outcome.lines.join('\n'));
+  assert.ok(outcome.lines.includes(`store 预检：先清空 profiles/${OWNED_PROFILE}/node_modules（--reinstall-on-store-mismatch）`), outcome.lines.join('\n'));
+  assert.ok(outcome.warnings.some((line) => line.startsWith(`warn: store 预检发现不一致，已按 --reinstall-on-store-mismatch 先行清空 profiles/${OWNED_PROFILE}/node_modules`)), outcome.warnings.join('\n'));
+});
+
+test('--pnpm-store 预检：未获修复授权时在改动 profile 之前停下，一条包命令都不发', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, modules } = seedForeignProfile(root);
+  const host = hostOverForeignStore({ profileDir });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--pnpm-store', join(root, 'host-store', 'v10'), '--json'], host.exec);
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'PROFILE_STORE_MISMATCH');
+  assert.ok(outcome.result.error.message.includes('store 预检'), outcome.result.error.message);
+  assert.ok(outcome.result.error.message.includes(`（记录的 store：${anotherStore(root)}；本次将用：${join(root, 'host-store', 'v10')}）`), outcome.result.error.message);
+  assert.ok(/未改动 profile/.test(outcome.result.error.message));
+  // 一条包命令都没有发出：比对先于一切包操作。
+  assert.deepEqual(host.packageActions(), []);
+  assert.equal(existsSync(join(modules, '.modules.yaml')), true, '未获授权不得动 node_modules');
+  assert.equal(existsSync(join(modules, 'other-plugin', 'package.json')), true);
+});
+
+test('--pnpm-store 预检：声明一致时不清空，别的 pnpm 留下的内容原样，正常安装', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, modules } = seedForeignProfile(root);
+  // 这台机器的 pnpm 解析出的正是记录里的那个 store：比对通过，无需处理。
+  const host = hostOverForeignStore({ profileDir });
+
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--pnpm-store', anotherStore(root), '--json'], host.exec);
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  // 宿主替身只在记录存在时拒绝：记录还在，所以第一条 add 被拒——预检漏报（比对判了一致）
+  // 时，反应式自愈仍是同一条修复路径。这正是漏报回落的形状。
+  assert.deepEqual(host.packageActions(), ['add', 'add']);
+  assert.ok(outcome.lines.includes(PNPM_STORE_LINE), outcome.lines.join('\n'));
+  assert.ok(outcome.lines.includes(`store 预检：profile「${OWNED_PROFILE}」记录的 store 与本次将用的一致（${anotherStore(root)}）`), outcome.lines.join('\n'));
+});
+
+test('--pnpm-store 预检演练：把计划写全，不执行任何命令', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home } = seedForeignProfile(root);
+  const outcome = await ownedRun(release, writeDsh(root), home, ['--reinstall-on-store-mismatch', '--pnpm-store', join(root, 'host-store', 'v10'), '--dry-run', '--json'], async () => assert.fail('演练不得调用 exec'));
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'dry-run');
+  assert.ok(outcome.lines.includes(PNPM_STORE_LINE));
+  assert.ok(outcome.lines.includes(`dry-run：store 不一致，将先清空 profiles/${OWNED_PROFILE}/node_modules 再执行包操作`), outcome.lines.join('\n'));
+  // 未获授权的演练同样只写计划。
+  const refused = await ownedRun(release, writeDsh(root), home, ['--pnpm-store', join(root, 'host-store', 'v10'), '--dry-run', '--json'], async () => assert.fail('演练不得调用 exec'));
+  assert.equal(refused.code, 0, JSON.stringify(refused.result));
+  assert.ok(refused.lines.includes('dry-run：store 不一致且未获修复授权，将以 PROFILE_STORE_MISMATCH 停止且不改动 profile'), refused.lines.join('\n'));
 });
 
 test('recordedStoreDirectory 与 resetProfileNodeModules：两种记录格式都读得出，目录不存在时无事可做', (t) => {

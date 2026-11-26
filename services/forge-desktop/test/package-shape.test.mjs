@@ -124,16 +124,17 @@ export function portProblem(value) {
 }
 
 /**
- * dsh is started only through the shell's own entry, which hands it the bundled
- * pnpm; and both entries come from layout.mjs. Kept pure so the mutation cases
- * below prove each guard fails.
+ * dsh is started only through the shell's own entry, which hands it the pnpm
+ * of the bundled runtime; and all entry paths come from layout.mjs. Kept pure
+ * so the mutation cases below prove each guard fails.
  */
 export function entryProblems(main, cli, layout) {
   const problems = [];
-  if (!/export const PNPM_ENTRY_PARTS/u.test(layout)) problems.push('layout.mjs must export PNPM_ENTRY_PARTS');
+  if (!/export const PRIMARY_RUNTIME_PNPM_PARTS/u.test(layout)) problems.push('layout.mjs must export PRIMARY_RUNTIME_PNPM_PARTS');
+  if (!/export function primaryRuntimeNodeParts/u.test(layout)) problems.push('layout.mjs must export primaryRuntimeNodeParts');
   if (!/export const DSH_ENTRY_PARTS/u.test(layout)) problems.push('layout.mjs must export DSH_ENTRY_PARTS');
-  // The entry takes both resource paths from the layout, and runs as Node: no Electron in it.
-  if (!/\{ DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS \} from '\.\/layout\.mjs'/u.test(cli)) problems.push('embedded-cli.mjs must read both entries from layout.mjs');
+  // The entry takes its resource paths from the layout, and runs as Node: no Electron in it.
+  if (!/\{ DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts \} from '\.\/layout\.mjs'/u.test(cli)) problems.push('embedded-cli.mjs must read both entries from layout.mjs');
   if (/from 'electron'|import\('electron'\)/u.test(cli)) problems.push('embedded-cli.mjs runs as Node and must not import electron');
   // main.mjs starts the entry for the profile and for the installer, never dsh's own file.
   if (!/\{ EMBEDDED_ENTRY \} from '\.\/embedded-cli\.mjs'/u.test(main)) problems.push("main.mjs must import EMBEDDED_ENTRY from './embedded-cli.mjs'");
@@ -141,10 +142,10 @@ export function entryProblems(main, cli, layout) {
   if (!/embeddedExec\(\{ command: process\.execPath, entry: EMBEDDED_ENTRY, env \}\)/u.test(main)) problems.push('the installer executor must start EMBEDDED_ENTRY');
   if (/\[DSH_ENTRY,/u.test(main)) problems.push('dsh entry must not be started directly: it would look for pnpm on PATH');
   // The entries' paths are the layout's, never spelled out here.
-  if (!/\{ ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS \} from '\.\/layout\.mjs'/u.test(main)) {
+  if (!/\{ ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS, primaryRuntimeNodeParts \} from '\.\/layout\.mjs'/u.test(main)) {
     problems.push('main.mjs must read the resource paths from layout.mjs');
   }
-  if (/'pnpm', 'bin'|'node_modules', '@deepseek-ai'/u.test(`${main}\n${cli}`)) problems.push('resource paths must come from layout.mjs, not be inlined');
+  if (/'pnpm', 'bin'|'node_modules', '@deepseek-ai'|'primary-runtime', 'dependencies'/u.test(`${main}\n${cli}`)) problems.push('resource paths must come from layout.mjs, not be inlined');
   // The title bar page is a staged resource like the others; its bridge is app code, read from beside main.mjs.
   if (!/titleBarPage: join\(process\.resourcesPath, \.\.\.TITLE_BAR_PARTS\)/u.test(main)) problems.push('main.mjs must read the title bar page path from layout.mjs');
   if (!/titleBarPreload: TITLE_BAR_PRELOAD/u.test(main)) problems.push('main.mjs must hand the shell the title bar bridge');
@@ -172,7 +173,7 @@ test('布局契约：main.mjs 消费 layout.mjs 的导出，不内联资源路�
   assert.equal(await readFile(join(PKG_ROOT, 'src', 'window-chrome.preload.cjs'), 'utf8').then((source) => source.length > 0), true);
 });
 
-test('入口契约：dsh 只经壳的入口启动（随包 pnpm 由此交给 dsh），两处入口路径都取自 layout.mjs', async () => {
+test('入口契约：dsh 只经壳的入口启动（载荷 pnpm 由此交给 dsh），入口路径都取自 layout.mjs', async () => {
   const [main, cli, layout] = await Promise.all(['main.mjs', 'embedded-cli.mjs', 'layout.mjs'].map((name) => readFile(join(PKG_ROOT, 'src', name), 'utf8')));
   assert.deepEqual(entryProblems(main, cli, layout), []);
 });
@@ -182,11 +183,12 @@ test('入口契约反向：绕过壳的入口、内联路径、入口内引用 e
   const variants = [
     [main.replace('spawn(process.execPath, [EMBEDDED_ENTRY, ', 'spawn(process.execPath, [DSH_ENTRY, '), cli, layout, /must be started through EMBEDDED_ENTRY|\[DSH_ENTRY,/],
     [main.replace('entry: EMBEDDED_ENTRY, env', 'entry: DSH_ENTRY, env'), cli, layout, /must start EMBEDDED_ENTRY/],
-    [main.replace(', PNPM_ENTRY_PARTS', ''), cli, layout, /must read the resource paths from layout\.mjs/],
+    [main.replace(', PRIMARY_RUNTIME_PNPM_PARTS', ''), cli, layout, /must read the resource paths from layout\.mjs/],
     [main, cli.replace("import { join } from 'node:path';", "import { join } from 'node:path';\nimport { app } from 'electron';"), layout, /must not import electron/],
-    [main, cli.replace('{ DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS }', '{ DSH_ENTRY_PARTS }'), layout, /must read both entries from layout\.mjs/],
-    [main, cli.replace('join(resources, ...PNPM_ENTRY_PARTS)', "join(resources, 'pnpm', 'bin', 'pnpm.mjs')"), layout, /not be inlined/],
-    [main, cli, layout.replace('export const PNPM_ENTRY_PARTS', 'export const PACKAGE_MANAGER_PARTS'), /must export PNPM_ENTRY_PARTS/],
+    [main, cli.replace('{ DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts }', '{ DSH_ENTRY_PARTS, primaryRuntimeNodeParts }'), layout, /must read both entries from layout\.mjs/],
+    [main, cli.replace('join(resources, ...PRIMARY_RUNTIME_PNPM_PARTS)', "join(resources, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')"), layout, /not be inlined/],
+    [main, cli, layout.replace('export const PRIMARY_RUNTIME_PNPM_PARTS', 'export const PACKAGE_MANAGER_PARTS'), /must export PRIMARY_RUNTIME_PNPM_PARTS/],
+    [main, cli, layout.replace('export function primaryRuntimeNodeParts', 'export function runtimeNodeParts'), /must export primaryRuntimeNodeParts/],
     [main.replace(', TITLE_BAR_PARTS', ''), cli, layout, /must read the resource paths from layout\.mjs/],
     [main.replace('titleBarPage: join(process.resourcesPath, ...TITLE_BAR_PARTS)', "titleBarPage: join(process.resourcesPath, 'brand', 'titlebar.html')"), cli, layout, /must read the title bar page path/],
     [main.replace('titleBarPreload: TITLE_BAR_PRELOAD', 'titleBarPreload: PRELOAD'), cli, layout, /must hand the shell the title bar bridge/],

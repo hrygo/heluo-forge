@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { EMPLOYEE_MANIFEST_FILE, EMPLOYEE_PACKAGE_SCHEMA as BUILT_SCHEMA, buildEmployeePackage } from '../scripts/build-employee-package.mjs';
-import { ENTRY_PACKAGE, parseArgs as installerArgs, isSupportedProfileName, provisionClientSecret, readPrivateRelease, resolveDshLaunch, runInit } from '../scripts/init-enterprise-plugin.mjs';
+import { CAPABILITIES, ENTRY_PACKAGE, parseArgs as installerArgs, isSupportedProfileName, provisionClientSecret, readPrivateRelease, resolveDshLaunch, runInit } from '../scripts/init-enterprise-plugin.mjs';
 import { EMBEDDED_ENTRY } from '../services/forge-desktop/src/embedded-cli.mjs';
 import {
   CLIENT_SECRET_PATH,
@@ -149,11 +149,11 @@ test('the shell calls the installer with arguments it understands, through an ex
   let outcome;
   await initializeProfile({
     assets: { pluginDirectory: inspected.pluginDirectory },
-    runInit: async (input) => {
+    installer: { runInit: async (input) => {
       handed = input;
       outcome = await runInit({ ...input, home });
       return outcome;
-    },
+    }, CAPABILITIES },
     env,
     exec,
     profile,
@@ -230,7 +230,7 @@ test("the shell's first run gets past a profile that another pnpm linked: it has
 
   const outcome = await initializeProfile({
     assets: { pluginDirectory: inspected.pluginDirectory },
-    runInit: (input) => runInit({ ...input, home }),
+    installer: { runInit: (input) => runInit({ ...input, home }), CAPABILITIES },
     env: { HOME: home, DSH_HOME: dshHome, PATH: '/usr/bin' },
     exec,
     profile,
@@ -245,6 +245,83 @@ test("the shell's first run gets past a profile that another pnpm linked: it has
   assert.equal(existsSync(join(modules, 'other-plugin')), false, 'what that pnpm left was cleared with it');
   assert.equal(existsSync(join(installed, 'package.json')), true, 'the enterprise plugin is installed');
   assert.ok(outcome.warnings.some((line) => line.includes('--reinstall-on-store-mismatch')), 'the conclusion says the directory was cleared');
+});
+
+test('every capability the installer lists is an argument it really parses', () => {
+  // The shell passes only what the list names; a list naming an argument the
+  // parser refuses would turn a capability into a BAD_ARGUMENT at first run.
+  const base = ['--release', '/release', '--profile', 'web', '--dsh', '/apps/electron'];
+  const forms = {
+    'pnpm-from-host': [...base, '--pnpm-from-host'],
+    'reinstall-on-store-mismatch': [...base, '--reinstall-on-store-mismatch'],
+    'pnpm-store': [...base, '--pnpm-store', '/store/v10'],
+  };
+  assert.deepEqual([...CAPABILITIES], Object.keys(forms), 'the capabilities the shell may probe are all covered here');
+  for (const [capability, argv] of Object.entries(forms)) {
+    const parsed = installerArgs(argv);
+    assert.ok(parsed !== undefined, `${capability} parses`);
+  }
+  // The valued capability is validated like every other valued argument.
+  assert.throws(() => installerArgs([...base, '--pnpm-store', 'relative/store']), (error) => error.code === 'BAD_ARGUMENT');
+  assert.throws(() => installerArgs([...base, '--pnpm-store']), (error) => error.code === 'BAD_ARGUMENT' && /需要一个值/u.test(error.message));
+});
+
+test('a store the shell has named is compared before any package operation: the mismatch is healed up front, not reacted to', async (t) => {
+  const built = builtPackage(t);
+  const inspected = inspectEmployeePackage(built.output);
+  rmSync(join(built.output, CLIENT_SECRET_PATH));
+  const { home, electron } = electronStandIn(t, 'forge-contract-preflight-');
+  const dshHome = join(home, 'dsh-home');
+  const profile = shellProfile();
+  const profileDir = join(dshHome, 'profiles', profile);
+  const modules = join(profileDir, 'node_modules');
+  const manifestPath = join(profileDir, 'package.json');
+  // The same foreign profile as the reactive case: another pnpm's record and another plugin.
+  mkdirSync(modules, { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify({ name: `dsh-profile-${profile}`, private: true, dependencies: {}, dsh: { profile: { bundles: [] } } }));
+  writeFileSync(join(modules, '.modules.yaml'), JSON.stringify({ storeDir: join(home, 'another-store', 'v10') }));
+  mkdirSync(join(modules, 'other-plugin'), { recursive: true });
+  const installed = join(modules, ...ENTRY_PACKAGE.split('/'));
+  // A host that would refuse a package operation while the record is there: with the
+  // pre-check it never gets the chance, and the test can see that in the commands.
+  const commands = [];
+  const exec = async (bin, args) => {
+    assert.equal(bin, electron);
+    commands.push(args.join(' '));
+    if (args[0] !== 'plugin') return { code: 0, stdout: JSON.stringify({ plugins: [{ name: ENTRY_PACKAGE }] }), stderr: '' };
+    assert.equal(existsSync(join(modules, '.modules.yaml')), false, 'a package operation ran before the mismatch was healed');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.dependencies = { ...manifest.dependencies, [ENTRY_PACKAGE]: `file:${args[4]}` };
+    manifest.dsh.profile.bundles = [...manifest.dsh.profile.bundles, ENTRY_PACKAGE];
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    mkdirSync(installed, { recursive: true });
+    writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: ENTRY_PACKAGE, version: readPrivateRelease(inspected.pluginDirectory).version }));
+    return { code: 0, stdout: 'added', stderr: '' };
+  };
+
+  const outcome = await initializeProfile({
+    assets: { pluginDirectory: inspected.pluginDirectory },
+    installer: { runInit: (input) => runInit({ ...input, home }), CAPABILITIES },
+    env: { HOME: home, DSH_HOME: dshHome, PATH: '/usr/bin' },
+    exec,
+    profile,
+    dsh: electron,
+    // What the shell's probe would have named: a store other than the one the profile records.
+    pnpmStore: join(home, 'host-store', 'v10'),
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  // Not one package operation met the foreign record: the healing happened before the first.
+  const adds = commands.filter((command) => command.startsWith('plugin'));
+  assert.equal(adds.length, 1, 'a single, already-healthy install command');
+  assert.match(adds[0], /^plugin --profile heluo-desktop add /u, adds[0]);
+  assert.equal(existsSync(join(modules, '.modules.yaml')), false, 'the other pnpm record is gone');
+  assert.equal(existsSync(join(modules, 'other-plugin')), false, 'what that pnpm left was cleared with it');
+  assert.equal(existsSync(join(installed, 'package.json')), true, 'the enterprise plugin is installed');
+  // The conclusion says the pre-check did the healing, so the log reads as what it was.
+  assert.ok(outcome.lines.some((line) => line.startsWith('store 预检：profile「heluo-desktop」的 node_modules 由另一个 pnpm store 装入')), outcome.lines.join('\n'));
+  assert.ok(outcome.lines.includes(`store 预检：先清空 profiles/${profile}/node_modules（--reinstall-on-store-mismatch）`), outcome.lines.join('\n'));
+  assert.ok(outcome.warnings.some((line) => line.startsWith(`warn: store 预检发现不一致，已按 --reinstall-on-store-mismatch 先行清空 profiles/${profile}/node_modules`)), outcome.warnings.join('\n'));
 });
 
 test('the provisioning command the shell hands the plugin CLI is that CLI itself, not a dsh command line', async (t) => {

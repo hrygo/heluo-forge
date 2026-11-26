@@ -18,7 +18,8 @@ import * as electron from 'electron';
 import { diagnosticLogPath } from './diagnostic.mjs';
 import { fail } from './errors.mjs';
 import { EMBEDDED_ENTRY } from './embedded-cli.mjs';
-import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS } from './layout.mjs';
+import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS, primaryRuntimeNodeParts } from './layout.mjs';
+import { resolvePnpmStore } from './pnpm-store.mjs';
 import { embeddedExec, embeddedScriptExec, runCommand } from './process.mjs';
 import { primaryRuntimeVariable } from './primary-runtime.mjs';
 import { createRuntime } from './runtime.mjs';
@@ -50,7 +51,10 @@ const BIND_HOST = '127.0.0.1';
  */
 const PORT = '30810';
 const DSH_ENTRY = join(process.resourcesPath, ...DSH_ENTRY_PARTS);
-const PNPM_ENTRY = join(process.resourcesPath, ...PNPM_ENTRY_PARTS);
+// The package manager of every dsh package operation: the Node and the pnpm of
+// the bundled runtime, whose manifest the environment assembly already accepted.
+const RUNTIME_NODE = join(process.resourcesPath, ...primaryRuntimeNodeParts(process.platform));
+const RUNTIME_PNPM = join(process.resourcesPath, ...PRIMARY_RUNTIME_PNPM_PARTS);
 const TRAY_ICON = join(process.resourcesPath, ...TRAY_ICON_PARTS);
 // The title bar's bridge is app code, not a staged resource: it ships beside this file.
 const TITLE_BAR_PRELOAD = join(dirname(fileURLToPath(import.meta.url)), 'window-chrome.preload.cjs');
@@ -115,12 +119,12 @@ async function main() {
     diagnosticLog: diagnosticLogPath(electron.app.getPath('userData')),
     profile: PROFILE,
     bindHost: BIND_HOST,
-    // The embedded runtime is where the installer put it, and so is the pnpm
-    // every package operation runs. Said here, that is an explanation; found
-    // missing later, each is a service that leaves at once.
+    // The embedded runtime is where the installer put it, and every package
+    // operation runs the pnpm of the bundled runtime. Said here, that is an
+    // explanation; found missing later, each is a service that leaves at once.
     preflight: () => {
       if (!existsSync(DSH_ENTRY)) fail('EMBEDDED_RUNTIME_MISSING', 'the embedded runtime entry is missing');
-      if (!existsSync(PNPM_ENTRY)) fail('EMBEDDED_RUNTIME_MISSING', 'the bundled pnpm entry is missing');
+      if (!existsSync(RUNTIME_NODE) || !existsSync(RUNTIME_PNPM)) fail('EMBEDDED_RUNTIME_MISSING', 'the bundled runtime entry the package operations run from is missing');
       if (!existsSync(TITLE_BAR_PRELOAD)) fail('TITLE_BAR_MISSING', 'the title bar bridge is missing');
     },
     embeddedCommand: process.execPath,
@@ -131,7 +135,14 @@ async function main() {
     // path as a profile name, so nothing of dsh is put in front of it.
     exec: embeddedExec({ command: process.execPath, entry: EMBEDDED_ENTRY, env }),
     scriptExec: embeddedScriptExec({ command: process.execPath, profileDir: profileDirectory(env), env }),
-    loadInstaller: (path) => import(pathToFileURL(path).href).then((module) => module.runInit),
+    // The whole installer module, not just its entry: the first run reads from
+    // it what the installer is able to accept before handing anything over.
+    loadInstaller: (path) => import(pathToFileURL(path).href),
+    // The store the bundled pnpm resolves for the shell's profile, asked of
+    // that pnpm once per first-run attempt in the setting the package
+    // operations will see. A store it cannot name is simply not handed over:
+    // the installer then meets a mismatching store the reactive way.
+    pnpmStore: () => resolvePnpmStore({ nodeEntry: RUNTIME_NODE, pnpmEntry: RUNTIME_PNPM, cwd: profileDirectory(env), env }),
     createRuntime,
     spawnProfile: spawnProfile(env),
     trayIcon: TRAY_ICON,

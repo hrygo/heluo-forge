@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { fail } from './errors.mjs';
-import { DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS } from './layout.mjs';
+import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts } from './layout.mjs';
 
 /**
  * The one entry the shell starts whenever it needs dsh: the web profile, and
@@ -13,20 +13,22 @@ import { DSH_ENTRY_PARTS, PNPM_ENTRY_PARTS } from './layout.mjs';
 export const EMBEDDED_ENTRY = fileURLToPath(import.meta.url);
 
 /**
- * How dsh reaches pnpm for every package operation: the app's own binary as
- * Node, running the pnpm the app ships. Left to itself dsh looks for a `pnpm`
- * on PATH, so a machine without one could not install the enterprise plugin.
- * The environment holds only the Node switch: dsh merges it into the child's
- * environment itself.
+ * How dsh reaches pnpm for every package operation: the Node and the pnpm of
+ * the primary runtime the app ships, as one plain child process. Left to
+ * itself dsh looks for a `pnpm` on PATH, so a machine without one could not
+ * install the enterprise plugin. The payload's Node — the interpreter its own
+ * tools run — is the interpreter here too, so the app keeps a single copy of
+ * pnpm and no `ELECTRON_RUN_AS_NODE` switch: the binary is a Node already.
+ * Nothing is added to the environment; dsh merges what is here itself.
  *
- * @param {{command: string, pnpmEntry: string}} input
- *   `command` is the app binary; `pnpmEntry` is the staged `bin/pnpm.mjs`.
+ * @param {{nodeEntry: string, pnpmEntry: string}} input
+ *   `nodeEntry` is the payload's Node binary; `pnpmEntry` is its `bin/pnpm.mjs`.
  */
-export function packageManagerFor({ command, pnpmEntry }) {
-  if (typeof command !== 'string' || command === '' || typeof pnpmEntry !== 'string' || pnpmEntry === '') {
-    fail('BAD_ARGUMENT', 'the package manager needs the app binary and the staged pnpm entry');
+export function packageManagerFor({ nodeEntry, pnpmEntry }) {
+  if (typeof nodeEntry !== 'string' || nodeEntry === '' || typeof pnpmEntry !== 'string' || pnpmEntry === '') {
+    fail('BAD_ARGUMENT', 'the package manager needs the bundled runtime Node and its pnpm entry');
   }
-  return { command, args: [pnpmEntry], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  return { command: nodeEntry, args: [pnpmEntry], env: {} };
 }
 
 /** `import()` of the dsh entry; an injection point for the offline tests. */
@@ -37,18 +39,18 @@ const loadEntry = (path) => import(pathToFileURL(path).href);
  * manager. dsh's public entry takes the package manager as an option, which is
  * how the install reaches pnpm: nothing of dsh is modified or wrapped.
  *
- * @param {{command: string, dshEntry: string, pnpmEntry: string, load?: Function}} input
+ * @param {{dshEntry: string, nodeEntry: string, pnpmEntry: string, load?: Function}} input
  *   `load` is an injection point for tests.
  */
-export async function runEmbeddedCli({ command, dshEntry, pnpmEntry, load = loadEntry }) {
+export async function runEmbeddedCli({ dshEntry, nodeEntry, pnpmEntry, load = loadEntry }) {
   const entry = await load(dshEntry);
   if (typeof entry?.runCli !== 'function') fail('EMBEDDED_RUNTIME_MISSING', 'the embedded runtime does not provide the command line entry');
-  await entry.runCli({ packageManager: packageManagerFor({ command, pnpmEntry }) });
+  await entry.runCli({ packageManager: packageManagerFor({ nodeEntry, pnpmEntry }) });
 }
 
 /**
- * Where the packaged app keeps the two entries; outside it there is nothing to
- * run. Both are looked for before anything is imported, so a missing one is
+ * Where the packaged app keeps the three entries; outside it there is nothing
+ * to run. All are looked for before anything is imported, so a missing one is
  * refused as such, not reported as a load error.
  */
 function entryPaths() {
@@ -58,10 +60,11 @@ function entryPaths() {
   }
   const paths = {
     dshEntry: join(resources, ...DSH_ENTRY_PARTS),
-    pnpmEntry: join(resources, ...PNPM_ENTRY_PARTS),
+    nodeEntry: join(resources, ...primaryRuntimeNodeParts(process.platform)),
+    pnpmEntry: join(resources, ...PRIMARY_RUNTIME_PNPM_PARTS),
   };
-  if (!existsSync(paths.dshEntry) || !existsSync(paths.pnpmEntry)) {
-    fail('EMBEDDED_RUNTIME_MISSING', 'this entry runs only from the packaged application: the embedded runtime or the bundled pnpm is missing');
+  if (!existsSync(paths.dshEntry) || !existsSync(paths.nodeEntry) || !existsSync(paths.pnpmEntry)) {
+    fail('EMBEDDED_RUNTIME_MISSING', 'this entry runs only from the packaged application: the embedded runtime, or the bundled runtime its pnpm runs from, is missing');
   }
   return paths;
 }
@@ -69,7 +72,7 @@ function entryPaths() {
 if (import.meta.main) {
   Promise.resolve()
     .then(entryPaths)
-    .then((paths) => runEmbeddedCli({ command: process.execPath, ...paths }))
+    .then((paths) => runEmbeddedCli(paths))
     .catch((error) => {
       // What the command printed is on the streams already; this is only why it ended.
       process.stderr.write(`${error?.stack ?? String(error)}\n`);

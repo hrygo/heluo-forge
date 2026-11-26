@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-025 |
 | 文档名称 | 河洛 Forge 企业版桌面壳详细设计 |
-| 版本 | V0.2.2 |
+| 版本 | V0.2.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -62,9 +62,9 @@
 |---|---|---|---|
 | Electron | 运行时 | 精确 `44.7.0`：dsh 原生加载器带 Electron 指纹白名单，浮动解析会被拒绝启动 | 壳不启动；版本断言是包体检查的一部分 |
 | `@deepseek-ai/dsh` | 内嵌运行时 | [.dsh-version](../../../.dsh-version) 锁定版，npm 制品字节原样并校验 SHA-256 | 缺失或摘要不符时拒绝启动 |
-| pnpm | 随包工具 | 与根 `package.json` 的 `packageManager` 同版（现 `11.28.5`）；npm 制品按 `runtime-lock.json` 核验字节与 SHA-256 后解包到 `resources/pnpm/` | 暂存拒绝；运行时缺失则壳拒绝启动 |
+| pnpm | 载荷内工具 | 内置运行时载荷里的 pnpm，与根 `package.json` 的 `packageManager` 同版（现 `11.28.5`）；npm 制品按 `runtime-lock.json` 核验字节与 SHA-256 后随载荷解包到 `primary-runtime/dependencies/pnpm/`，壳不再另解包一份 `resources/pnpm` | 暂存拒绝；运行时缺失则壳拒绝启动 |
 | 员工包企业资产 | 随包目录 | `enterprise-plugin/`（私版 tgz、`private-release.json`、可选的客户端密钥文件）与 `installer/` | 首启失败，不进入工作区 |
-| 安装器 `scripts/init-enterprise-plugin.mjs` | 随包脚本 | 员工包 `installer/` 内的那一份，经摘要清单校验 | 首启失败 |
+| 安装器 `scripts/init-enterprise-plugin.mjs` | 随包脚本 | 员工包 `installer/` 内的那一份，经摘要清单校验；须声明壳探测的能力（`CAPABILITIES` 导出，或旧版安装器的回显行常量） | 首启失败（`INSTALLER_CAPABILITY_MISSING`） |
 | 内置运行时 | 随包载荷 | 上游为同一 dsh 版本锁定的 primary runtime，钉在 `primary-runtime-lock.json`：Node.js 与 `.node-version` 同版（现 `24.21.0`）、CPython 3.12.14、pnpm 与 `runtime-lock.json` 的同一制品，每个归档核对 SHA-256 | 缺失、清单不可读或不是为本机构建时壳拒绝启动 |
 | 企业 npm 源 / 索引 preset、profile 级补丁层 | 企业资产 | 尚未定义 | 不写入；见 §12 |
 
@@ -75,7 +75,7 @@
 | 形态 | 独立 Electron 应用，代码位置 `services/forge-desktop/` |
 | 运行位置 | 用户本机；子进程为本机 `dsh --profile heluo-desktop` |
 | 目标运行时 | Electron 44.7.0（自承载 Node）+ 锁定版 dsh + 随包 pnpm；另随包携带供 agent 使用的内置运行时，它不参与壳自身的运行 |
-| 使用的 seam | dsh 命令行与 stdout 的 launch URL 行；dsh 公开导出的 `runCli({ packageManager })`，用来指定包操作所用的 pnpm；安装器的 `runInit`（带 `--pnpm-from-host` 与 `--reinstall-on-store-mismatch`）与 `scriptExec`（壳以应用二进制为 Node 运行插件自带的 CLI）；环境变量 `DSH_PRIMARY_RUNTIME`，上游的工具行按它读取内置运行时的位置 |
+| 使用的 seam | dsh 命令行与 stdout 的 launch URL 行；dsh 公开导出的 `runCli({ packageManager })`，包操作所用的 pnpm 由壳指定为载荷的 Node 运行载荷的 `bin/pnpm.mjs`；安装器模块（`runInit` 入口与 `CAPABILITIES` 能力清单，壳带 `--pnpm-from-host`、`--reinstall-on-store-mismatch` 与 `--pnpm-store` 调用）与 `scriptExec`（壳以应用二进制为 Node 运行插件自带的 CLI）；环境变量 `DSH_PRIMARY_RUNTIME`，上游的工具行按它读取内置运行时的位置 |
 | 不修改的核心 | DSH 运行时、`heluo-desktop` 之外的一切 profile（含终端的 `web`）、上游 `apps/desktop` |
 
 每个模块是一份状态的唯一可写所有者，模块之间不互相 import；装配层只装配，跨模块只经参数与回调传递。
@@ -88,8 +88,9 @@
 | `src/navigation.mjs` | 窗口对目标地址的处置判定与权限请求判定 | 窗口操作 |
 | `src/shell-env.mjs` | 登录 shell 环境解析、合并与子进程环境净化 | 启动 shell（由调用方注入） |
 | `src/process.mjs` | 一次性子命令的执行与超时；交给安装器的两个执行器 | 命令内容 |
-| `src/embedded-cli.mjs` | dsh 的唯一入口：以 Node 运行，把随包 pnpm 作为包管理器交给 dsh 的命令行 | 窗口、托盘与首启判断 |
+| `src/embedded-cli.mjs` | dsh 的唯一入口：以 Node 运行，把载荷的 Node 与 pnpm 作为包管理器交给 dsh 的命令行 | 窗口、托盘与首启判断 |
 | `src/primary-runtime.mjs` | 校验随包的内置运行时，给出交给子进程的环境变量 | 读取载荷内容；安装或运行其中的解释器 |
+| `src/pnpm-store.mjs` | 向载荷的 pnpm 问一次它为本机的 profile 解析出的 store 目录，交给首启 | 比对 store（安装器的职责）；修复（安装器的职责） |
 | `src/diagnostic.mjs` | 失败时告诉人什么：安装器结论的提取、日志条目、交给状态页的参数 | 窗口、日志文件的位置（由装配层给） |
 | `src/first-run.mjs` | 企业资产的发现、校验与首启初始化 | 安装细节（委托安装器） |
 | `src/lifecycle.mjs` | 关窗、退出与托盘的判定 | 界面 |
@@ -119,19 +120,24 @@ createRuntime({ spawn, findLaunchUrl, startTimeoutMs, stopGraceMs, onEvent })
 ```js title="first-run：企业资产与首启"
 locateEnterpriseAssets({ candidates })            // 第一个通过校验的员工包目录，否则抛 ASSETS_NOT_FOUND
 firstRunNeeded({ markerPath, manifestDigest })    // 已完成且员工包未变时为 false
-initializeProfile({ assets, runInit, env, exec }) // 委托安装器（带 --pnpm-from-host 与 --reinstall-on-store-mismatch）；非零结论抛 FIRST_RUN_FAILED
+installerCapabilities(installer)                  // 安装器模块声明的能力（CAPABILITIES，旧版回退到回显行常量）
+initializeProfile({ assets, installer, env, exec, pnpmStore }) // 按能力传参（--pnpm-from-host 为硬前提）；非零结论抛 FIRST_RUN_FAILED
 
 **首启未完成时的窗口语义（2026-11-25）**：需要首启或首启失败时，窗口先于运行时打开并加载壳自带的本地品牌引导页（`brand/status.html`，无 preload、无外链，页面文件不承载企业配置值；状态、错误码与安装器结论经查询串注入，页面只以文本显示）。首启失败不退出应用：托盘菜单提供「重试企业配置」，重试复用同一安装器幂等续跑；成功后写入首启标记并转入正常启动（窗口改载 launch URL）。禁止以未打补丁的默认 profile 提前提供界面：官方登录旁路（O3）只有在企业补丁装载后才算关闭。
 
 **首启失败时显示的明细**：状态页给出安装器的错误码、原因与处理办法，以及日志文件的位置；安装器没有给出处理办法时，显示壳对该错误码的指引。每段文字是一行且有长度上限（原因 600 字、处理 400 字），完整内容在日志里。这是开发阶段的决定：安装器的原文可能含本机路径与 Discovery 地址，正式分发前决定是否收起。
 ```
 
-```js title="embedded-cli：dsh 的唯一入口"
-packageManagerFor({ command, pnpmEntry })     // { command: 应用二进制, args: [随包 pnpm 的 bin/pnpm.mjs], env: { ELECTRON_RUN_AS_NODE: '1' } }
-runEmbeddedCli({ command, dshEntry, pnpmEntry }) // 调用 dsh 导出的 runCli({ packageManager })；命令行参数原样，不改 dsh
+```js title="pnpm-store：向载荷的 pnpm 问一次 store"
+resolvePnpmStore({ nodeEntry, pnpmEntry, cwd, env }) // 以载荷 Node 运行 `pnpm store path`（cwd 为 profile 目录）；解析不出时返回 null
 ```
 
-壳需要 dsh 的每个场合（启动 `heluo-desktop` profile、安装器走 dsh 的命令）都启动这一个入口。dsh 的每次包操作因此都以应用二进制为 Node 运行随包的 pnpm，员工机器上有没有 Node 或 pnpm 都不影响插件安装。
+```js title="embedded-cli：dsh 的唯一入口"
+packageManagerFor({ nodeEntry, pnpmEntry })   // { command: 载荷的 node, args: [载荷 pnpm 的 bin/pnpm.mjs], env: {} }
+runEmbeddedCli({ dshEntry, nodeEntry, pnpmEntry }) // 调用 dsh 导出的 runCli({ packageManager })；命令行参数原样，不改 dsh
+```
+
+壳需要 dsh 的每个场合（启动 `heluo-desktop` profile、安装器走 dsh 的命令）都启动这一个入口。dsh 的每次包操作因此都由载荷自己的 Node 运行载荷自己的 pnpm，员工机器上有没有 Node 或 pnpm 都不影响插件安装；应用里不再有第二份 pnpm，包操作与载荷内的 agent 工具共用同一份制品与同一个解释器。
 
 ```js title="primary-runtime：内置运行时的位置"
 primaryRuntimeVariable(resources)   // { DSH_PRIMARY_RUNTIME: <resources>/primary-runtime }
@@ -140,7 +146,7 @@ primaryRuntimeVariable(resources)   // { DSH_PRIMARY_RUNTIME: <resources>/primar
 
 内置运行时是上游为同一 dsh 版本锁定的载荷，布局为 `primary-runtime/runtime.json` 与 `dependencies/{node,pnpm,python}`。壳不读载荷内部，也不在载荷里拼任何路径：它只在子进程环境里写出上表的变量，上游的 `load_workspace_dependencies` 工具与 Office 技能的配置行按这个变量生效。上游自己只把这两行对名为 `desktop` 的 profile 打开；`@heluo/forge-enterprise` 的补丁层按 id 覆盖它们，去掉 profile 名这一条限制，其余语义不变。没有这个变量时工具行保持停用、Office 技能指向用户自己的 Python，所以终端的 `web` profile 不受影响。
 
-工具在首次被调用时把载荷复制到 `$DSH_HOME/dsh-runtimes/dsh-primary-runtime` 并复用，直到 `runtime.json` 变化；这是上游的行为，壳不参与。载荷自带的 pnpm 与壳直接启动的 `resources/pnpm` 是同一制品的两份解包，前者只供 agent 使用。
+工具在首次被调用时把载荷复制到 `$DSH_HOME/dsh-runtimes/dsh-primary-runtime` 并复用，直到 `runtime.json` 变化；这是上游的行为，壳不参与。载荷的 pnpm 只解包这一份：agent 的工具行与 dsh 的每次包操作运行的都是它，壳不再另带一份。
 
 插件自带的 CLI 不经这个入口：安装器预置密钥（set、replace、空目录诊断三处）直接运行已安装插件的 `@heluo/forge-iam/bin/heluo-forge.mjs`。壳为此另给安装器一个脚本执行器（`embeddedScriptExec`）：以同一应用二进制为 Node 运行该脚本，前面什么都不加——dsh 的入口会把这个脚本的路径读成 profile 名。执行器只放行 profile 目录内路径归一的普通文件，profile 之外、目录与链接一律拒绝；终端单独运行安装器时不传它，行为与原先一致。
 
@@ -171,6 +177,7 @@ hasTitleBarBridge(type)                               // 标题栏页面加载�
 | 首启标记 | 应用用户数据目录下的 `first-run.json`，记录员工包清单摘要与 profile | 直到员工包或 profile 变化 | 缺失即重做首启 |
 | profile 归属 | 壳只创建、安装与启动 `$DSH_HOME/profiles/heluo-desktop`；终端的 `web` 与官方 Desktop 的 `desktop` 不读不写。profile 不存在时由安装器经内嵌运行时从 web 模板创建 | 随 `$DSH_HOME` | 创建失败即 `FIRST_RUN_FAILED`，不进入工作区 |
 | pnpm store 不一致 | 壳独占的 profile 里仍可能留着由另一个 pnpm 的 store 链接的 `node_modules`（上一版壳换了随包 pnpm 的 store 布局，或有人在终端用别的 pnpm 动过它），pnpm 拒绝在上面继续安装（`ERR_PNPM_UNEXPECTED_STORE`；触发条件是 store 目录不同，与 pnpm 版本无关）。壳向安装器声明拥有该 profile（`--reinstall-on-store-mismatch`），安装器据此清空 `profiles/heluo-desktop/node_modules` 并重试该步一次：只删这一个目录，目录内的链接只删链接本身；`node_modules` 本身是链接或不是目录时不动它。整次首启只修复一次，清空后仍不一致即停止 | 随 `$DSH_HOME` | `PROFILE_RESET_FAILED` 或 `PROFILE_STORE_MISMATCH`，结论的回显与警告写明清空过 |
+| store 预检 | 首启前壳以载荷的 Node 运行载荷的 pnpm，在 profile 目录里问一次它解析出的 store（`pnpm store path`，与包操作同一工作目录与环境），把结果作为 `--pnpm-store` 交给安装器；安装器在执行任何包操作之前先与 profile 的 `node_modules` 记录的 store 比对（按归一化路径）。不一致且已获修复授权：先清空再卸载/安装，「先删后装」两侧都是确认过健康的操作；不一致且未获授权：以 `PROFILE_STORE_MISMATCH` 停止且不改动 profile。探测失败或未声明（终端形态）时不传该参数，回落到失败后修复；预检误判一致时同样回落——反应式自愈保留。探测是输入不是前提，全新 profile（目录尚不存在）探测自然失败，属正常 | 随首启尝试 | 探测失败静默回落；比对结论随安装器回显 |
 | 与终端共享的状态 | 会话（`$DSH_HOME/sessions`）与官方凭据（`$DSH_HOME/.credentials.yaml`）在 `$DSH_HOME` 顶层，同一 `$DSH_HOME` 下的所有 profile 共用；设置与默认模型写入各 profile 自己的 `cordis.patch.yml`，不共用 | 随 `$DSH_HOME` | — |
 | 企业会话在其他 profile 中的可见性 | 企业插件的管控范围是装载它的 profile。同一 `$DSH_HOME` 下不带企业插件的 profile（例如未运行启动器的终端 `web`）能列出壳产生的会话，并在该 profile 里改用它自己的模型续写。合规要求企业会话不出现在其他界面时，壳改用独立的 `DSH_HOME`，代价是不再与终端企业版共用会话（§12） | — | 接受，不处理 |
 | 窗口按源保存的界面状态 | Web 客户端把会话草稿与视图选择（`dsh.conversation.<会话>`）、快捷键覆盖（`dsh.keybindings.v1`）、右侧栏状态、日程的常用时区和终端 shell 选择存在窗口的 `localStorage`，按源隔离而源含端口。壳的端口固定，窗口的源跨启动不变，这些状态得以保留；端口若交由系统分配，每次启动的源都不同，它们会在每次启动时重置（静态阅读内嵌运行时 0.2.1-rc.3 的客户端得出，未实跑）。上游 Desktop 从固定源 `dsh-app://app/` 加载界面，同样不受端口影响 | 随应用数据目录下的窗口会话存储 | — |
@@ -179,7 +186,8 @@ hasTitleBarBridge(type)                               // 标题栏页面加载�
 | 员工包的信任模型 | 摘要校验证明包与其写出时一致，不证明来源：清单文件与摘要清单不带签名，能改写包的人同样能改写它们。壳自身的代码与包在同一安装目录、受同一保护，所以完整性由分发渠道与安装位置守护。不做签名验签：验签公钥若随包或随壳交付，不构成外部信任锚；安装包签名与公证是本计划的非目标 | — | 见 §8 |
 | 企业资产的路径 | 摘要清单列出的每个路径都必须是包内的普通文件；任一级是符号链接即拒绝，否则校验会落到包外的文件上，该文件随后还会以包内身份被使用 | — | `ASSETS_INVALID` |
 | 客户端密钥文件 | 安装器把密钥写入本机凭据库后删除明文文件；完整性校验只容忍这一个文件的缺失，其余列出的文件缺失即拒绝 | 写入后明文即消失 | 首启失败，保留文件供重跑 |
-| 随包 pnpm | dsh 的每次包操作（首启安装、应用内安装插件）都运行随包的 `bin/pnpm.mjs`，不查找 PATH 上的 pnpm；不改 PATH、环境变量或包管理器配置，pnpm 自己的全局目录与 store 沿用用户设置。包脚本若需要 PATH 上的 `node`（例如原生插件构建），不在随包 pnpm 的覆盖范围内 | 随应用 | 缺失即拒绝启动（`EMBEDDED_RUNTIME_MISSING`） |
+| 随包 pnpm | dsh 的每次包操作（首启安装、应用内安装插件）都由载荷的 Node 运行载荷的 `bin/pnpm.mjs`，不查找 PATH 上的 pnpm；不改 PATH、环境变量或包管理器配置，pnpm 自己的全局目录与 store 沿用用户设置。包脚本若需要 PATH 上的 `node`（例如原生插件构建），不在载荷 pnpm 的覆盖范围内 | 随应用（载荷内） | 缺失即拒绝启动（`EMBEDDED_RUNTIME_MISSING`） |
+| 安装器能力 | 壳动态加载员工包内的安装器模块后先读其能力清单（`CAPABILITIES`；旧版安装器以回显行常量声明），按清单传参：`--pnpm-from-host` 是硬前提，缺失即报 `INSTALLER_CAPABILITY_MISSING` 而不是让安装器撞「未知参数」；`--reinstall-on-store-mismatch` 与 `--pnpm-store` 按能力可选。认识随包 pnpm 但不认识修复授权的中间版本安装器照常运行，只是失去对应的自愈 | 随员工包 | `INSTALLER_CAPABILITY_MISSING`，引导页按错误码给出换包指引 |
 | 内置运行时的位置 | `DSH_PRIMARY_RUNTIME` 由壳在合并完继承环境之后设置，并从 GUI 与登录 shell 两处继承的环境里剥离：用户 shell 配置里的同名值到不了 `heluo-desktop` profile，到达子进程的只有应用随包的那一份。壳不读载荷内容；首次调用时由上游工具复制到 `DSH_HOME` 下 | 随应用；安装副本随 `DSH_HOME` | 缺失、清单不可读或目标不符时拒绝启动（`EMBEDDED_RUNTIME_MISSING`） |
 | 登录 shell 环境 | 合并进子进程的环境是用户自己的环境，与在终端运行 dsh 相同，不构成安全边界。壳只剥离会改变内嵌运行时工作方式的 Node 与 Electron 开关，以及内置运行时的位置变量。库注入类变量（`LD_PRELOAD`、`DYLD_*` 等）保留：企业的终端管控常经它们注入，剥离会让内嵌运行时脱离企业自身的管控，而用户 profile 本身就是可执行代码 | 随用户环境 | — |
 
@@ -207,7 +215,7 @@ stateDiagram-v2
 
 **不确定时**：任何无法确认的情形都停留在当前状态，不重发命令、不返回旧地址、不报告成功。
 
-**首启**（装配层）：候选目录中第一个带清单文件的即为当前员工包，首启记录与首跑判断用的是同一份清单摘要。记录缺失或对不上时，校验该包完整并调用安装器完成插件安装与密钥入库，然后写入首启记录；记录对得上时不再触碰员工包，因为安装器已消耗其中一部分。当前员工包不完整时启动失败，不改用其他候选。安装器带 `--pnpm-from-host` 运行：pnpm 由壳经 dsh 交给每次包操作，安装器既不在 PATH 查找，也不补装。壳同时带 `--reinstall-on-store-mismatch`：pnpm 因该 profile 的 `node_modules` 来自另一个 store 而拒绝包操作时，安装器清空该目录并重试这一步一次（§6），回显与警告里写明清空过。记录在安装器之后、写入之前丢失时，下次启动重跑一次安装器；安装器对同版本与已入库的密钥都是幂等的。全部成功后才创建窗口并启动子进程。
+**首启**（装配层）：候选目录中第一个带清单文件的即为当前员工包，首启记录与首跑判断用的是同一份清单摘要。记录缺失或对不上时，校验该包完整并调用安装器完成插件安装与密钥入库，然后写入首启记录；记录对得上时不再触碰员工包，因为安装器已消耗其中一部分。当前员工包不完整时启动失败，不改用其他候选。壳先读安装器模块的能力清单再传参：`--pnpm-from-host` 是硬前提（pnpm 由壳经 dsh 交给每次包操作，安装器既不在 PATH 查找，也不补装），能力缺失时以 `INSTALLER_CAPABILITY_MISSING` 停下并指引换用同批次员工包，而不是让安装器撞「未知参数」。安装器声明相应能力时，壳另带 `--reinstall-on-store-mismatch` 与 `--pnpm-store`（store 探测的结果，§6）：前者授权安装器在该 profile 的 `node_modules` 来自另一个 store 时清空并重试一次；后者让比对与处理发生在任何包操作之前。记录在安装器之后、写入之前丢失时，下次启动重跑一次安装器；安装器对同版本与已入库的密钥都是幂等的。全部成功后才创建窗口并启动子进程。
 
 **退出**（装配层）：征求确认后先 `stop()`，子进程确认退出后应用才退出；`stop()` 未完成时应用不退出。
 
@@ -245,12 +253,12 @@ launch URL 的查询串与片段、客户端密钥、环境变量取值不进入
 
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
-| 单元 | 状态机的全部迁移、重复启动与重复停止、超时、端口占用；launch URL 解析；导航与权限判定；环境合并与净化；子命令执行；入口把随包 pnpm 交给 dsh；入口声明的 profile 名、固定端口与启动参数（独占 profile、窗口的源跨启动不变）；失败结论的提取、日志条目与状态页参数；状态页只以文本显示明细；企业资产校验；关窗与退出判定；窗口外观判定、桥接是否生效的判定、标题栏桥接与页面约束（全工程只向标题栏发出一个 preload） | `node --test services/forge-desktop/test` |
+| 单元 | 状态机的全部迁移、重复启动与重复停止、超时、端口占用；launch URL 解析；导航与权限判定；环境合并与净化；子命令执行；入口把载荷的 Node 与 pnpm 交给 dsh；入口声明的 profile 名、固定端口与启动参数（独占 profile、窗口的源跨启动不变）；失败结论的提取、日志条目与状态页参数；状态页只以文本显示明细；企业资产校验；安装器能力探测（三种声明形态、按能力传参、能力缺失的结论）；store 探测（成功、失败回落、末行解析）；关窗与退出判定；窗口外观判定、桥接是否生效的判定、标题栏桥接与页面约束（全工程只向标题栏发出一个 preload） | `node --test services/forge-desktop/test` |
 | 载荷暂存 | `scripts/stage-primary-runtime.mjs`：布局、逐归档摘要、有界重试、台账防篡改、外平台原生包与上游测试目录的裁剪、冒烟只写副本 | `node --test tests/stage-primary-runtime.test.mjs tests/zip-archive.test.mjs` |
 | 运行层 | 内置运行时到达 agent：注册、可见、首次调用安装、技能指向、agent 的 shell 运行；带基线对照。`--app` 以打出来的应用包为准 | `node scripts/probe/run-primary-runtime-probe.mjs --resources <暂存目录>` 或 `--app <.app>` |
 | 装配 | 以接口对象替代 Electron：单实例、首启失败不进入工作区、导航与权限处理器的接线、关窗隐藏、退出前先停子进程；标题栏与内容视图的分工、标题栏就位以桥接生效为准、窗口动作的调用方校验、窗口状态推送、全屏与尺寸跟随、键盘焦点归属 | 同上 |
 | 集成 | Electron 44.7.0 自承载内嵌 dsh，窗口渲染 | 以下冒烟均在壳改用独占 profile `heluo-desktop` 与固定端口之前取得（`--profile web` 与默认端口 3080），新形态尚无真机证据。部分执行（2026-11-24 mac 本机：`--dir` 构建、单实例、首启装入企业插件、内嵌 dsh 回环 `127.0.0.1` 监听、sandbox 渲染进程；IAM 登录止步企业网络边界。2026-11-25 mac 本机：PATH 上没有 node、npm、pnpm 时，首启经随包 pnpm 装入企业插件并进入工作区；同一条件下不带随包 pnpm 的构建停在 `FIRST_RUN_FAILED`。2026-11-25 mac 本机深色外观，无边框窗口（预写首启标记，内容是未装载企业插件的 web 界面）：标题栏与内容视图各就其位，工作区页面无桥接、无宿主标记；关闭、最小化、缩放三个按钮经桥接生效，最大化与失焦状态推送到标题栏，全屏收起并恢复标题栏，第二份实例把隐藏或最小化的窗口调回；标题栏的偏移、间距与颜色与系统原生逐像素核对一致。2026-11-26 mac 本机同一构建：以主进程报出的窗口事实为准，全屏往返、最大化与焦点状态变化时标题栏与内容页的表现逐项一致，启动在页面上确认桥接已注入。2026-11-26 mac 本机，装载企业插件后的窗口：载荷按台账重新暂存（dsh 0.2.2-rc.5），隔离 profile 装入从 HEAD 构建的企业插件并接仓库测试用的模拟 IdP（同 `scripts/probe/run-iam-local-uat.sh` 的做法），壳以沙箱 `HOME` 承载该 profile——工作区先显示企业服务初始化向导，经系统浏览器完成模拟登录后显示企业账号已认证；工作区页面仍无桥接、无宿主标记，标题栏与内容各就其位，壳无报错，开发者本机的真实凭据库、DSH 目录与应用数据未被触碰（运行前后指纹一致）。2026-11-26 mac 本机，经壳首启装载企业插件的完整路径：用制包工具从 HEAD 造一份配置指向仓库模拟 IAM 与网关（`scripts/probe/mock-iam-gateway.mjs`）的合成员工包，壳在沙箱 `HOME` 与全新的用户数据目录里首启——状态页显示初始化中，安装器经壳的内嵌入口与随包 pnpm 执行 `dsh plugin --profile web add` 并核验通过，客户端密钥写入沙箱内的凭据库、交付目录内的明文密钥被删除，首启标记写出，15 秒内进入工作区并显示企业服务初始化向导；向导三步走完（经系统浏览器登录模拟企业账号、保存合成网关凭证并取得企业模型、完成），缩放、全屏与焦点状态以主进程报出的窗口事实核对一致，壳全程无报错，开发者本机的真实数据未被触碰。未验：真实企业 IAM 与网关；带品牌配置的员工包（合成包不含品牌配置，应用内回退上游默认品牌）；拖动（自动化没有系统鼠标事件权限）；浅色外观与原生对照；Windows 全部。2026-11-26 mac 本机：带内置运行时的 `--dir` 构建，包内载荷经企业底座包到达 standard preset 的 agent，别名链接与文件摘要与暂存一致） |
-| 契约 | 壳的 profile 名是安装器接受的自定义名；profile 缺失时安装器经壳的入口从 web 模板创建它；壳声明的参数即安装器理解的参数（随包 pnpm、profile 所有权）；壳声明所有权后，安装器对 store 不一致清空 `node_modules` 并重试 | `node --test tests/desktop-shell-contract.test.mjs` |
+| 契约 | 壳的 profile 名是安装器接受的自定义名；profile 缺失时安装器经壳的入口从 web 模板创建它；壳传的参数即安装器声明的能力、安装器解析的参数（随包 pnpm、profile 所有权、store 声明）；壳声明所有权后，安装器对 store 不一致清空 `node_modules` 并重试，声明了 store 时在首个包操作之前完成 | `node --test tests/desktop-shell-contract.test.mjs` |
 | 端到端 | 三平台安装、首启、托盘与退出 | 未执行（计划 G2、G3、G4） |
 
 ## 11. 打包、升级与回退
@@ -263,7 +271,7 @@ launch URL 的查询串与片段、客户端密钥、环境变量取值不进入
 | 可执行文件名 | `heluo-forge-enterprise` | 可执行文件、deb 包名与 `StartupWMClass` |
 | 显示名 | 河洛 Forge 企业版 | 快捷方式、开始菜单、desktop entry 与关于页 |
 
-本模块不是 DSH 插件。清单里的 `engines.dsh` 是仓库检查器对服务清单的要求，取值与内嵌运行时的锁定版一致；对宿主版本的约束由内嵌的锁定版运行时本身承担。清单只在 devDependencies 精确钉 `electron`（`44.7.0`）与 `electron-builder` 两个构建期工具，不声明运行时依赖；仓库的离线检查不安装依赖，用例也不需要它们。构建入口是计划 §4.0 的统一构建：`scripts/stage-desktop-payload.mjs` 按 `runtime-lock.json` 核验并暂存 dsh、pnpm 与员工包；`scripts/stage-primary-runtime.mjs` 随后按钉住的上游锁暂存内置运行时，布局取自暂存好的 dsh 闭包，为本机构建时先运行再报告；`scripts/build-desktop-installer.mjs` 从员工包的身份文件生成打包配置，并把内置运行时所在的目录列为原样随包。安装包形态与升级语义（异版本先卸载再安装）由计划 §1 与 §4.3 规定。
+本模块不是 DSH 插件。清单里的 `engines.dsh` 是仓库检查器对服务清单的要求，取值与内嵌运行时的锁定版一致；对宿主版本的约束由内嵌的锁定版运行时本身承担。清单只在 devDependencies 精确钉 `electron`（`44.7.0`）与 `electron-builder` 两个构建期工具，不声明运行时依赖；仓库的离线检查不安装依赖，用例也不需要它们。构建入口是计划 §4.0 的统一构建：`scripts/stage-desktop-payload.mjs` 按 `runtime-lock.json` 核验并暂存 dsh 与员工包；`scripts/stage-primary-runtime.mjs` 随后按钉住的上游锁暂存内置运行时（pnpm 制品也由它按 `runtime-lock.json` 的同一行核验并随载荷解包），布局取自暂存好的 dsh 闭包，为本机构建时先运行再报告；`scripts/build-desktop-installer.mjs` 从员工包的身份文件生成打包配置，并把内置运行时所在的目录列为原样随包。安装包形态与升级语义（异版本先卸载再安装）由计划 §1 与 §4.3 规定。
 
 ## 12. 未决事项
 
@@ -276,7 +284,7 @@ launch URL 的查询串与片段、客户端密钥、环境变量取值不进入
 | 同一会话被壳与终端 `dsh web` 同时打开时的行为 | 平台组 | 是否需要提示或保护 |
 | 企业会话可被不带企业插件的终端 `dsh web` 列出并续写（§6） | 项目负责人 | 已接受；合规另有要求时壳改用独立的 `DSH_HOME`，不再与终端企业版共用会话 |
 | 内置运行时在 Windows 与 Linux 上的构建与运行 | 平台组（计划 G3、G4） | 两平台的安装包是否携带可用的载荷；目前只有 mac-arm64 在本机构建并运行过 |
-| 包操作改用载荷里的 Node.js 与 pnpm，去掉 `resources/pnpm` 这一份 | 项目负责人 | 安装包体积少约 23 MiB（解包）；需改动首启与壳入口的既有契约 |
+| 包操作改用载荷 Node 与 pnpm 后的跨平台实机表现：Windows 的 `node.exe` 启动、`pnpm store path` 的输出形态、store 预检在两平台的落点 | 平台组（计划 P0 #8、P2） | 统一 pnpm 一轮只有 mac-arm64 冒烟与离线用例；真机首启复测后收口 |
 | 退出前是否能查询运行中任务的状态 | 平台组 | 退出提示文案；此前一律提示 |
 | 托盘在麒麟桌面环境下的可用性 | 平台组（计划 P4） | 关窗行为 |
 | 自绘标题栏在 Windows 上的实机表现：拖动、贴靠、最大化边距、Alt+Space 系统菜单、Win10 与 Win11 样式差异 | 项目负责人（Win10 x64 VM，计划 G2） | Windows 的栏高、悬停色与按钮尺寸是否需要微调 |

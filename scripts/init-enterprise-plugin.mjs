@@ -10,12 +10,13 @@
  * 先卸载再安装）、`dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、shell:false、固定 argv）、
  * 安装成功后在本 profile 目录下写一份制品证据（`profiles/<p>/.heluo-enterprise-install.json`：
  * 本次 tgz 摘要 + 已安装目录摘要），供下次同版本重跑判断"已安装的是不是这份交付"；以及
- * pnpm 报 store 不一致（node_modules 由另一个 pnpm 的 store 链接）且调用方以
- * `--reinstall-on-store-mismatch` 声明拥有该 profile 时，清空 `profiles/<p>/node_modules`
- * 后重试一次。同版本重跑保持零写入；版本不同时按交付包升级或回退，命令都经官方 CLI
+ * 清空 `profiles/<p>/node_modules`（pnpm 的链接产物，不是用户文件）：调用方以
+ * `--reinstall-on-store-mismatch` 声明拥有该 profile 时，pnpm 报 store 不一致
+ * （node_modules 由另一个 pnpm 的 store 链接）后重试一次；调用方再以 `--pnpm-store`
+ * 声明本次将用的 store 且预检发现与 profile 记录的不一致时，则发生在任何包操作之前。
+ * 同版本重跑保持零写入；版本不同时按交付包升级或回退，命令都经官方 CLI
  * 转发 pnpm。缺失的 profile 只经官方宿主的 web 模板创建。脚本不启动或重启宿主、不直接
- * 编辑 profile 清单、不改 plugin_manager 权限、不删除用户文件（`node_modules` 是 pnpm 的
- * 链接产物，不是用户文件）。
+ * 编辑 profile 清单、不改 plugin_manager 权限、不删除用户文件。
  *
  * 核验只到脚本能证明的层次：L1 安装命令退出码、L2 `--dump-config` 含本插件且 profile
  * 记录对齐；L3 运行期挂载只输出 `mounted=unknown`，必须由员工在设置页确认。
@@ -96,6 +97,18 @@ export const STORE_MISMATCH_CODE = 'ERR_PNPM_UNEXPECTED_STORE';
 /** `--reinstall-on-store-mismatch` 的回显：修复是否获准写进结论，读日志的人才知道 node_modules 可能被清空。 */
 export const REINSTALL_LINE = '修复：pnpm 报 store 不一致时，清空目标 profile 的 node_modules 后重试一次（--reinstall-on-store-mismatch）';
 
+/** `--pnpm-store` 的回显：预检的依据写进结论，读日志的人才知道 store 是调用方声明、安装器比对的。 */
+export const PNPM_STORE_LINE = '预检：--pnpm-store 由拥有该 pnpm 的调用方声明本次将用的 store，安装器在改动 profile 之前先比对';
+
+/**
+ * 本安装器理解的、面向调用方的可选参数。调用方（企业版桌面壳动态加载本模块）先读这份
+ * 清单，再决定传哪些参数：清单里有的才传，清单外的一个都不传。早于本导出的安装器没有
+ * 这份清单，但其中认识「随包 pnpm」与「修复授权」两个参数的版本导出了对应的回显行常量，
+ * 调用方以它们作回退判据——由此，比调用方更旧的安装器得到的是「能力缺失」的准确结论，
+ * 而不是「未知参数」。新增面向调用方的参数时同步本清单与调用方的探测。
+ */
+export const CAPABILITIES = Object.freeze(['pnpm-from-host', 'reinstall-on-store-mismatch', 'pnpm-store']);
+
 export const USAGE = [
   '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto|名称>',
   '        [--sha256 <hex>] [--dsh <path>] [--install-host] [--host-version <ver>]',
@@ -113,6 +126,10 @@ export const USAGE = [
   '                     pnpm 报 store 不一致（该 profile 的 node_modules 由另一个 pnpm 的 store 装入）',
   '                     时，清空 profiles/<名>/node_modules 后重试一次；只由拥有该 profile 的调用方',
   '                     传入（企业版桌面壳）。不带该参数时报 PROFILE_STORE_MISMATCH，不动 profile',
+  '  --pnpm-store <目录> 拥有本次所用 pnpm 的调用方（企业版桌面壳）声明该 pnpm 解析出的 store',
+  '                     目录（绝对路径）。安装器在执行任何包操作之前先与 profile 的 node_modules',
+  '                     记录的 store 比对：不一致且已获修复授权时先清空 node_modules，未获授权时',
+  '                     以 PROFILE_STORE_MISMATCH 停止且不改动 profile；未提供时保持失败后修复',
   '  --install-host     找不到 dsh 时用 npm 全局安装官方宿主（需要 npm 与网络）',
   '  --host-version <v> 安装宿主时锁定的版本；缺省 ' + DEFAULT_HOST_VERSION,
   '  --dry-run          只打印将执行的命令与核验点，不写入',
@@ -215,6 +232,7 @@ export function parseArgs(argv) {
     hostVersion: DEFAULT_HOST_VERSION,
     pnpmFromHost: false,
     reinstallOnStoreMismatch: false,
+    pnpmStore: undefined,
     dryRun: false,
     json: false,
     help: false,
@@ -225,6 +243,7 @@ export function parseArgs(argv) {
     ['--sha256', 'sha256'],
     ['--dsh', 'dsh'],
     ['--host-version', 'hostVersion'],
+    ['--pnpm-store', 'pnpmStore'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -289,6 +308,9 @@ export function parseArgs(argv) {
       throw new InitError('DIGEST_INVALID', 'init: --sha256 不是 64 位十六进制摘要', '从可信渠道取得摘要后重跑；不要用制品同目录的自证摘要。');
     }
     options.sha256 = options.sha256.toLowerCase();
+  }
+  if (options.pnpmStore !== undefined && !isAbsolute(options.pnpmStore)) {
+    throw new InitError('BAD_ARGUMENT', 'init: --pnpm-store 需要一个绝对目录', '调用方传入该 pnpm 解析出的绝对 store 目录后重跑。');
   }
   return options;
 }
@@ -1344,6 +1366,48 @@ export function recordedStoreDirectory(profileDir) {
   return match === null ? null : match[1].replace(/^"(.*)"$/u, '$1');
 }
 
+/**
+ * 归一化 store 目录供比对：解析为绝对路径，存在时以真实路径（跟随符号链接）为准，
+ * Windows 上大小写不敏感。读不出（非字符串或空白）返回 null。
+ *
+ * @param {string} value 调用方声明或 profile 记录的 store 目录
+ * @returns {string|null}
+ */
+export function normalizedStoreDirectory(value) {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const trimmed = value.trim();
+  let resolved;
+  try {
+    resolved = realpathSync(trimmed);
+  } catch {
+    resolved = resolve(trimmed);
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * store 预检（只读）：把调用方以 `--pnpm-store` 声明的、本次将用的 store，与 profile 的
+ * node_modules 记录的 store 比对。调用方没有声明（或值不可用）时返回 null；否则返回：
+ *   - `consistent`：一致，无需处理；
+ *   - `absent`：profile 未记录 store（全新或已清空）；
+ *   - `mismatch`：不一致——预检的全部价值：让处理发生在任何包操作之前。
+ * 误报只会让已授权的清空提前发生（与反应式自愈同一个动作）；漏报则回落到反应式自愈。
+ *
+ * @param {{dir: string, name: string}} profile
+ * @param {{pnpmStore?: string}} [options]
+ * @returns {{verdict: 'consistent'|'absent'|'mismatch', provided: string, providedLabel: string, recorded?: string}|null}
+ */
+export function storePreflight(profile, options = {}) {
+  if (typeof options?.pnpmStore !== 'string' || options.pnpmStore.trim() === '') return null;
+  const providedLabel = options.pnpmStore.trim();
+  const provided = normalizedStoreDirectory(providedLabel);
+  if (provided === null) return null;
+  const recorded = recordedStoreDirectory(profile.dir);
+  if (recorded === null) return { verdict: 'absent', provided, providedLabel };
+  const recordedKey = normalizedStoreDirectory(recorded) ?? recorded;
+  return { verdict: recordedKey === provided ? 'consistent' : 'mismatch', provided, providedLabel, recorded };
+}
+
 /** 清空 node_modules 失败时的结论：多半是文件被进程占用，退出后重跑会再清一次。 */
 function resetFailure(error, path) {
   return new InitError(
@@ -1596,11 +1660,29 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       lines.push(`状态：已安装 ${replacing}，与交付版本 ${release.version} 不同，先卸载再安装`);
       lines.push(`卸载：dsh ${removeCommand.join(' ')}`);
     }
+    // store 预检（--pnpm-store）：这里只做只读比对并把结论带进回显；据此采取的动作写在
+    // 演练的计划里，在真实执行里发生在首个包操作之前（见 dry-run 之后）。
+    const preflight = storePreflight(profile, options);
+    if (preflight !== null) {
+      lines.push(PNPM_STORE_LINE);
+      if (preflight.verdict === 'consistent') {
+        lines.push(`store 预检：profile「${profile.name}」记录的 store 与本次将用的一致（${preflight.recorded}）`);
+      } else if (preflight.verdict === 'absent') {
+        lines.push(`store 预检：profiles/${profile.name}/node_modules 未记录 store（全新或已清空），无需处理`);
+      } else {
+        lines.push(`store 预检：profile「${profile.name}」的 node_modules 由另一个 pnpm store 装入（记录的 store：${preflight.recorded}；本次将用：${preflight.providedLabel}）`);
+      }
+    }
     lines.push(`命令：dsh ${command.join(' ')}`);
     if (options.dryRun) {
       lines.push(replacing === null ? 'dry-run：未执行安装，未写入 profile' : 'dry-run：未执行卸载与安装，未写入 profile');
       if (options.pnpmFromHost) lines.push(PNPM_FROM_HOST_LINE);
       if (options.reinstallOnStoreMismatch) lines.push(REINSTALL_LINE);
+      if (preflight?.verdict === 'mismatch') {
+        lines.push(options.reinstallOnStoreMismatch
+          ? `dry-run：store 不一致，将先清空 profiles/${profile.name}/node_modules 再执行包操作`
+          : 'dry-run：store 不一致且未获修复授权，将以 PROFILE_STORE_MISMATCH 停止且不改动 profile');
+      }
       if (release.secret !== null) lines.push('dry-run：安装完成后会把交付目录内的 IAM 客户端密钥写入本机凭据库，并删除该密钥文件');
       lines.push(...verificationPoints(profile));
       return {
@@ -1630,6 +1712,24 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     // 声明拥有该 profile，就清空 node_modules 重试一次；否则带着原因停下，不动 profile。
     // 整次初始化只修复一次：修复之后仍不一致，说明两次包操作解析出了不同的 store。
     let storeRepaired = false;
+    // 预检发现不一致：未获修复授权，就在改动 profile 之前停下；已获授权，就先清空再执行
+    // 卸载与安装——「先删后装」的两侧因此都是确认过健康的操作。反应式自愈保留：预检漏报
+    // （比对误判一致）时，包操作撞上的仍是同一条修复路径，只是晚一步。
+    if (preflight !== null && preflight.verdict === 'mismatch') {
+      if (!options.reinstallOnStoreMismatch) {
+        throw new InitError(
+          'PROFILE_STORE_MISMATCH',
+          `init: store 预检：profile「${profile.name}」的 node_modules 由另一个 pnpm store 装入（记录的 store：${preflight.recorded}；本次将用：${preflight.providedLabel}），未获修复授权，未改动 profile`,
+          `退出占用该 profile 的 DSH 进程，删除 profiles/${profile.name}/node_modules 后重跑；该 profile 里其他来源的插件须仍能重新获取。`,
+        );
+      }
+      storeRepaired = true;
+      lines.push(`store 预检：先清空 profiles/${profile.name}/node_modules（--reinstall-on-store-mismatch）`);
+      lines.push(resetProfileNodeModules(profile.dir) === 'removed'
+        ? `已清空 profiles/${profile.name}/node_modules`
+        : `profiles/${profile.name}/node_modules 已不存在`);
+      warnings.push(`warn: store 预检发现不一致，已按 --reinstall-on-store-mismatch 先行清空 profiles/${profile.name}/node_modules；该 profile 里不由本次交付装入的插件需要重新安装。`);
+    }
     const mismatch = (args, detail, next) => new InitError('PROFILE_STORE_MISMATCH', `init: dsh plugin ${args[3]} 失败：${detail}`, next);
     const packageStep = async (args, failureCode) => {
       const run = () => runStep(cli, launch, args, INSTALL_TIMEOUT_MS, failureCode, { env: pnpm.env });

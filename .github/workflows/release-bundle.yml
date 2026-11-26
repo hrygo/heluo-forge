@@ -190,7 +190,6 @@ jobs:
           node scripts/stage-desktop-payload.mjs \
             --output "$RUNNER_TEMP/staged" \
             --dsh-tgz "$DSH_TGZ" \
-            --pnpm-tgz "$PNPM_TGZ" \
             --target mac-arm64 \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
       - name: Stage the bundled runtime
@@ -306,7 +305,6 @@ jobs:
           node scripts/stage-desktop-payload.mjs \
             --output "$RUNNER_TEMP/staged" \
             --dsh-tgz "$DSH_TGZ" \
-            --pnpm-tgz "$PNPM_TGZ" \
             --target win-x64 \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
       - name: Stage the bundled runtime

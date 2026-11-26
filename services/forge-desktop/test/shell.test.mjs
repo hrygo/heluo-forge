@@ -291,8 +291,16 @@ function webProfile() {
   };
 }
 
+/**
+ * The installer modules the tests stand in for. The shell hands the first run
+ * the module the package ships, so a stub that is a bare entry is wrapped the
+ * way the released installers look to the capability probe: an entry plus the
+ * echo lines of the two flags it understands.
+ */
+const asInstallerModule = (runInit) => ({ runInit, PNPM_FROM_HOST_LINE: '工具：pnpm 由宿主提供', REINSTALL_LINE: '修复：清空后重试' });
+
 /** A whole shell world: package, marker, installer, web profile and the Electron stand-in. */
-function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller, diagnosticLog, now } = {}) {
+function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller, diagnosticLog, now, pnpmStore } = {}) {
   const fx = fakeElectron(electron);
   const root = temp(t);
   // `assets` reuses a package that already exists (typically one a first run consumed).
@@ -309,11 +317,12 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
     embeddedCommand: '/apps/electron',
     env: { PATH: '/usr/bin' },
     exec,
-    loadInstaller: loadInstaller ?? (() => installer ?? (async (input) => {
+    loadInstaller: loadInstaller ?? (() => asInstallerModule(installer ?? (async (input) => {
       installs.push(input);
       pkg.consumeSecret();
       return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } };
-    })), 
+    }))),
+    ...(pnpmStore === undefined ? {} : { pnpmStore }),
     createRuntime,
     spawnProfile: spawnProfile ?? (() => {
       const process = webProfile();
@@ -393,20 +402,51 @@ test('the first run installs the package, then a window shows the local service 
 });
 
 test('a loader that hands back a promise (the main.mjs wiring) is awaited before the first run', async (t) => {
-  // main.mjs wires `loadInstaller: (path) => import(path).then((m) => m.runInit)`:
-  // the shell must await it, or the first run sees a Promise instead of the
-  // installer function and dies with BAD_ARGUMENT (issue #463 follow-up).
+  // main.mjs wires `loadInstaller: (path) => import(path)`: the shell must
+  // await it, or the first run sees a Promise instead of the installer module
+  // and dies with BAD_ARGUMENT (issue #463 follow-up).
   const invoked = [];
   const fx = world(t, {
-    loadInstaller: async () => (input) => {
+    loadInstaller: async () => asInstallerModule((input) => {
       invoked.push(input);
       return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } };
-    },
+    }),
   });
   const outcome = await fx.shell.outcome;
   assert.equal(outcome.started, true, `the shell must start, not report ${outcome.code}`);
   assert.equal(invoked.length, 1, 'the promised installer must have run exactly once');
   assert.equal(existsSync(fx.markerPath ?? join(fx.root, 'userData', 'first-run.json')), true);
+});
+
+test('the store the shell\'s probe names reaches the installer that understands it, and only then', async (t) => {
+  // An installer in the current form, told the store the probe named.
+  const installs = [];
+  const fx = world(t, {
+    loadInstaller: () => ({ runInit: async (input) => { installs.push(input); return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } }; }, CAPABILITIES: ['pnpm-from-host', 'reinstall-on-store-mismatch', 'pnpm-store'] }),
+    pnpmStore: async () => '/dsh/store/v10',
+  });
+  assert.equal((await fx.shell.outcome).started, true);
+  assert.deepEqual(installs[0].argv, ['--release', join(fx.pkg.directory, 'enterprise-plugin'), '--profile', 'web', '--dsh', '/apps/electron', '--pnpm-from-host', '--reinstall-on-store-mismatch', '--pnpm-store', '/dsh/store/v10', '--json']);
+  // A probe that named no store hands nothing over: the installer meets a mismatching store reactively.
+  const without = [];
+  const quiet = world(t, {
+    loadInstaller: () => ({ runInit: async (input) => { without.push(input); return { code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } }; }, CAPABILITIES: ['pnpm-from-host', 'reinstall-on-store-mismatch', 'pnpm-store'] }),
+    pnpmStore: async () => null,
+  });
+  assert.equal((await quiet.shell.outcome).started, true);
+  assert.equal(without[0].argv.includes('--pnpm-store'), false);
+});
+
+test('a first run against an installer older than the shell is refused with the capability verdict', async (t) => {
+  const fx = world(t, {
+    // An installer that exports nothing but its entry: older than --pnpm-from-host.
+    loadInstaller: () => ({ runInit: async () => ({ code: 0, lines: [], warnings: [], result: { ok: true, status: 'installed' } }) }),
+  });
+  assert.deepEqual(await fx.shell.outcome, { started: false, code: 'INSTALLER_CAPABILITY_MISSING', retryable: true });
+  assert.equal(existsSync(join(fx.root, 'userData', 'first-run.json')), false, 'no record without a run');
+  const query = { ...fx.windows[0].page.webContents.fileLoads.at(-1).query };
+  assert.equal(query.code, 'INSTALLER_CAPABILITY_MISSING');
+  assert.equal(query.remedy, guidanceFor('INSTALLER_CAPABILITY_MISSING'));
 });
 
 test('the tray retry finishes the setup later and moves the window onto the workspace', async (t) => {
