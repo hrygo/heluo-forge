@@ -290,12 +290,42 @@ test('pushes refresh the summary and review, including bot and merge commits', a
   assert.match(settings, /push_trigger_ignore_merge_commits = false/u);
 });
 
-test('model requests use a smaller budget than the custom model context window', async () => {
+test('the pinned runner uses GPT-6.2 Sol directly with no model fallback', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
-  assert.match(workflow, /^ {6}CONFIG__CUSTOM_MODEL_MAX_TOKENS: "256000"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__MODEL: "openai\/gpt-6\.2-sol"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__FALLBACK_MODELS: '\[\]'$/mu);
+  assert.match(workflow, /^ {6}CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS: "gpt-6\.2-sol"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__NO_TEMPERATURE_MODELS: "gpt-6\.2-sol"$/mu);
+  for (const name of ['Run PR-Agent summary', 'Run PR-Agent']) {
+    assert.match(stepDefinition(name), /^ {10}OPENAI__KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}$/mu);
+  }
+  assert.doesNotMatch(workflow, /OPENAI__API_BASE|OPENCODE_GO_API_KEY|x-opencode-session/u);
+  assert.match(settings, /^model = "openai\/gpt-6\.2-sol"$/mu);
+  assert.match(settings, /^fallback_models = \[\]$/mu);
+  assert.match(settings, /^additional_reasoning_effort_models = \["gpt-6\.2-sol"\]$/mu);
+  assert.match(settings, /^no_temperature_models = \["gpt-6\.2-sol"\]$/mu);
+});
+
+test('reviews use medium effort and cap input and generated tokens', async () => {
+  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
+  assert.match(workflow, /^ {6}CONFIG__CUSTOM_MODEL_MAX_TOKENS: "922000"$/mu);
   assert.match(workflow, /^ {6}CONFIG__MAX_MODEL_TOKENS: "64000"$/mu);
-  assert.match(settings, /^custom_model_max_tokens = 256000$/mu);
+  assert.match(workflow, /^ {6}CONFIG__MAX_OUTPUT_TOKENS: "12000"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__REASONING_EFFORT: "medium"$/mu);
+  assert.match(settings, /^custom_model_max_tokens = 922000$/mu);
   assert.match(settings, /^max_model_tokens = 64000$/mu);
+  assert.match(settings, /^max_output_tokens = 12000$/mu);
+  assert.match(settings, /^reasoning_effort = "medium"$/mu);
+});
+
+test('automatic summaries use low effort, smaller budgets and skip review-only context', () => {
+  const summary = stepDefinition('Run PR-Agent summary');
+  assert.match(summary, /^ {10}CONFIG__REASONING_EFFORT: "low"$/mu);
+  assert.match(summary, /^ {10}CONFIG__MAX_MODEL_TOKENS: "32000"$/mu);
+  assert.match(summary, /^ {10}CONFIG__MAX_OUTPUT_TOKENS: "6000"$/mu);
+  assert.match(summary, /^ {10}CONFIG__MAX_COMMITS_TOKENS: "-1"$/mu);
+  assert.match(summary, /^ {10}CONFIG__REPO_CONTEXT_FILES: '\[\]'$/mu);
+  assert.match(workflow, /^ {6}PR_DESCRIPTION__MAX_AI_CALLS: "2"$/mu);
 });
 
 test('large reviews use bounded chunking and show coverage gaps', async () => {
@@ -304,30 +334,25 @@ test('large reviews use bounded chunking and show coverage gaps', async () => {
   assert.match(action, /^ {10}PR_REVIEWER__ENABLE_LARGE_PR_CHUNKING: "true"$/mu);
   assert.match(action, /^ {10}PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"$/mu);
   assert.match(action, /^ {10}PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"$/mu);
+  assert.match(action, /^ {10}PR_REVIEWER__REQUIRE_PRIORITY_FILES: "true"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__OUTPUT_RUN_DETAILS: "true"$/mu);
   assert.match(settings, /^enable_large_pr_chunking = true$/mu);
   assert.match(settings, /^max_number_of_calls = 5$/mu);
   assert.match(settings, /^enable_review_coverage_footer = true$/mu);
+  assert.match(settings, /^require_priority_files = true$/mu);
+  assert.match(settings, /^output_run_details = true$/mu);
 });
 
-test('model timeouts advance to fallback and exhausted attempts fail the action', async () => {
+test('provider retries are bounded and exhausted attempts fail the action', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   assert.match(workflow, /^ {6}CONFIG__AI_TIMEOUT: "180"$/mu);
+  assert.match(workflow, /^ {6}CONFIG__NUM_RETRIES: "1"$/mu);
   assert.match(workflow, /^ {6}CONFIG__RETRY_SAME_MODEL_ON_TIMEOUT: "false"$/mu);
   assert.match(workflow, /^ {6}CONFIG__PROPAGATE_TOOL_ERRORS: "true"$/mu);
   assert.match(workflow, /^ {6}GITHUB_ACTION_CONFIG__FAIL_ON_TOOL_ERRORS: "true"$/mu);
-  assert.match(settings, /^fallback_models = \["openai\/deepseek-v4\.1-flash"\]$/mu);
   assert.match(settings, /^ai_timeout = 180$/mu);
   assert.match(settings, /^retry_same_model_on_timeout = false$/mu);
   assert.match(settings, /^propagate_tool_errors = true$/mu);
-});
-
-test('a base branch without PR-Agent settings gets the same fallback as a configured base', async () => {
-  const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
-  const configured = /^fallback_models = (.+)$/mu.exec(settings)?.[1];
-  const bootstrap = /^ {6}CONFIG__FALLBACK_MODELS: "([^"]+)"$/mu.exec(workflow)?.[1];
-  assert.ok(bootstrap, 'the workflow must provide a fallback before the base has .pr_agent.toml');
-  // The pinned runner accepts a comma-separated fallback string even with Dynaconf auto-casting disabled.
-  assert.deepEqual(bootstrap.split(',').map((model) => model.trim()), JSON.parse(configured));
 });
 
 test('a failing automatic summary still allows review and keeps the attempt failed', () => {
@@ -713,10 +738,21 @@ test('a target branch advance while checking synchronized comments invalidates t
   });
 });
 
-test('a fork pull request does not change formal reviews', async () => {
+test('manual review of a fork or deleted head repository skips both model steps', async () => {
   await withGitHub(async ({ state, env }) => {
-    state.pr.head.repo.full_name = 'outside/fork';
+    const manualReview = { ...env, EVENT_NAME: 'issue_comment', COMMENT_BODY: '/review' };
+    for (const repo of [{ full_name: 'outside/fork' }, null]) {
+      state.pr.head.repo = repo;
+      assert.deepEqual(await capture(manualReview), {});
+    }
+    assert.ok(state.requests.every(({ url }) => url === '/repos/corp/example/pulls/42'));
+  });
+});
+
+test('a head repository that changes during a run does not change formal reviews', async () => {
+  await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
+    state.pr.head.repo.full_name = 'outside/fork';
     await submit(env, revision, '{"merge_recommendation":"changes_required"}');
     assert.equal(state.requests.filter((request) => request.method === 'POST').length, 0);
   });
