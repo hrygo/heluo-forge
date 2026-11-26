@@ -1,6 +1,6 @@
 ---
 name: heluo-forge-release-bundle
-description: 供打包人员规划和制作企业 DSH 私版与员工包。公开仓 release-bundle 统一构建由 v* tag 产出员工包并挂草稿 Release（经 release-bundle 环境审批，配置取自该环境的 Secrets）；回退路径的两段式流程使用本机未跟踪的 .env、现有制包脚本及终端 SQLite 凭据预置。
+description: 供打包人员规划和制作企业 DSH 私版与员工包。公开仓 release-bundle 统一构建由 v* tag 产出员工包及桌面端草稿包（macOS arm64 zip、Windows x64 NSIS exe）并挂草稿 Release（经 release-bundle 环境审批，配置取自该环境的 Secrets）；回退路径的两段式流程使用本机未跟踪的 .env、现有制包脚本及终端 SQLite 凭据预置。
 ---
 # 企业 DSH 交付包制作
 
@@ -10,7 +10,7 @@ description: 供打包人员规划和制作企业 DSH 私版与员工包。公�
 
 现有 `release-delivery` 脚本负责预览、配置注入、校验和组装员工 zip。下文的本机步骤用于两段式私版制作（已核验的公版制品加本机 `.env`）及排查，是统一构建的回退路径。
 
-公开源码仓库的 `release-bundle` 工作流执行统一构建：推 `v*` tag 或在该 tag 上手动触发后，经 `release-bundle` 环境审批，从源码构建企业插件、注入配置、组装员工包，并挂到该 tag 的草稿 Release。产物不入库、不公开，工作流不发布 Release。打包人员的准备是把配置清单逐键存为该环境的 Environment Secrets（键名与注入位置见 [CORP-DSH-PLAN-026](../../../docs/plans/2026-11-19-desktop-bundle-packaging.md) §4.0），并设置仓库变量 `HELUO_PUBLIC_LICENSE` 与 `HELUO_WITH_ENGINEERING`。该链路尚未远端实测，首次推 tag 时取证。
+公开源码仓库的 `release-bundle` 工作流执行统一构建：推 `v*` tag 或在该 tag 上手动触发后，经 `release-bundle` 环境审批，从源码构建企业插件、注入配置、组装员工包，并同步构建 macOS arm64 桌面应用包（`.zip`）与 Windows x64 NSIS 安装包（`.exe`），统一挂载到该 tag 的草稿 Release。产物不入库、不公开，工作流不发布 Release。打包人员的准备是把配置清单逐键存为该环境的 Environment Secrets（键名与注入位置见 [CORP-DSH-PLAN-026](../../../docs/plans/2026-11-19-desktop-bundle-packaging.md) §4.0），并设置仓库变量 `HELUO_PUBLIC_LICENSE` 与 `HELUO_WITH_ENGINEERING`。该工作流已在公开仓 `v*` tag（`v0.1.1` 起至当前 `v*` 发布基线）完成远端草稿创建、Secrets 注入与桌面端产物上传验证；Windows 与目标终端实际安装、登录与并发验收仍待实机取证。
 
 ## 角色
 

@@ -18,11 +18,11 @@
 | 确认日期 | 2026-11-23 |
 | 确认事项 | 确认本计划为实施依据；代码与脚本先于 P0 探针实施，验证后置 |
 | 适用范围 | 实施顺序。G0 各项在验证前保持未测，不因实现先行视为通过；本计划的门禁规则与回退预案不变 |
-| 门禁 | 计划文档；统一构建（§4.0 改造清单第 1–5、7 项）、壳工程判断逻辑与品牌图标派生脚本已实现并通过离线用例，实施记录见 §4.2；P0 十项探针中第 6 项（内置运行时接入）已有 mac 本机结论，其余九项未执行；远端构建链未实测，任何安装包未构建；内置运行时载荷只在 mac-arm64 上构建并运行过；凭据存储、Windows / Linux 自承载、`web` profile 并发、壳内认证闭环与麒麟 Electron 兼容性均以 P0 探针结论为准 |
-| 交付门禁 | 统一构建链与壳工程只有离线用例及本机冒烟证据，不可分发；Electron / Chromium 及内置运行时的再分发许可、三平台壳打包链、公开仓 Secrets 统一构建链、全部 P0 探针与目标机安装均未实测 |
+| 门禁 | 计划文档；统一构建（§4.0 改造清单第 1–7 项）、壳工程逻辑与装配层、载荷暂存（去重/闭包校验/预算门禁）、多架构安装包配置、内置运行时暂存/解锁补丁及品牌图标闭环已实现并通过离线用例，macOS 本机完成 Electron 44.7.0 自承载、随包 pnpm、`node:sqlite` 写入、内置运行时探针（P0 #6 mac 本机结论）与 `0.2.2-rc.5` 接缝离线核验，远端 `release-bundle` 已接入 mac-arm64 与 win-x64 草稿构建；仍未实测或未出书面结论项：第三方再分发许可书面结论、内置运行时 Windows / Linux 载荷与运行、Windows / Linux 自承载与 VM 安装验收、`web` profile 并发、真实企业 IAM 联调与麒麟 Electron 兼容性 |
+| 交付门禁 | 统一构建链与壳工程只有离线用例、macOS 本机冒烟及 CI 草稿构建证据，不可正式分发；Electron / Chromium 及内置运行时的再分发许可书面结论、三平台目标机实测验收均未完成 |
 | 文档层级 | L2 实施计划；范围由需求基线承担，安装路径选型收敛后回写需求基线 D3 与受控架构文档 |
 
-> 编制依据：上游打包体系参考开源仓库 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的 `apps/desktop`（electron-builder，仅作构建形态与工程纪律借鉴，不进入交付）。目标 DSH 版本以根 [.dsh-version](<../../.dsh-version>) 的当前取值为准。本计划构成桌面分发路线与品牌定制层级的立项依据；受控文档同步留待 G0 通过后按 §4.6 执行；计划批准待 P0 探针结果后另行记录，审核 / 批准维持待定。
+> 编制依据：上游打包体系参考开源仓库 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的 `apps/desktop`（electron-builder，仅作构建形态与工程纪律借鉴，不进入交付）。目标 DSH 版本以根 [.dsh-version](<../../.dsh-version>)（0.2.2-rc.5）为准（历史 2026-11-19 探针曾基于 `0.2.1-rc.3` 开展）。本计划构成桌面分发路线与品牌定制层级的立项依据；受控文档同步留待 G0 通过后按 §4.6 执行；计划批准待 P0 探针结果后另行记录，审核 / 批准维持待定。
 >
 > 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[公版插件、企业私有包与官方 DSH 集成方案](<../architecture/public-enterprise-bundle.md>)、[总体架构](<../architecture/platform-architecture.md>)、[推广方案](<rollout-plan.md>)、[品牌与外观详细设计](<../design/plugins/forge-brand.md>)、[品牌资产规范](<../assets/branding/cyber-long/usage.txt>)、[双端客户端分发](<../../deploy/clients/README.md>)、[DSH 插件高阶规范](<../engineering/dsh-plugin-conventions.md>)、[桌面壳详细设计](<../design/services/desktop-shell.md>)（CORP-DSH-DESIGN-025）、[#222](https://github.com/hrygo/heluo-forge/issues/222)、[#123](https://github.com/hrygo/heluo-forge/issues/123)。
 
@@ -32,9 +32,9 @@
 
 | 分发目标 | 包形态 | 内容 | 状态 |
 |---|---|---|---|
-| Windows x64 | 自建壳 NSIS 安装包（§4.3） | 自有代码 Electron 壳（本体完整河洛品牌：名称「河洛 Forge 企业版」+ 苍螭主标识）内嵌锁定版 dsh 运行时、预编译原生依赖与内置运行时（Python 与 Office 库、Node、pnpm），加载本机 `dsh --profile web`（仅绑定 `127.0.0.1`）；企业插件与配置由随包企业资产在首启时装载；GitHub Actions 构建 | 未构建 |
-| macOS arm64 / x64 | 自建壳 dmg / zip | 同一壳工程的 macOS 双架构产物与首开引导（Gatekeeper 未签名首开路径按实测记录）；GitHub Actions 构建 | 未构建 |
-| 银河麒麟 aarch64 / x86_64 | 自建壳 deb | 同一壳工程的麒麟双架构产物（deb 元数据、内部软件源双路径）；GitHub Actions 构建 | 未构建 |
+| Windows x64 | 自建壳 NSIS 安装包（§4.3） | 自有代码 Electron 壳（本体完整河洛品牌：名称「河洛 Forge 企业版」+ 苍螭主标识）内嵌锁定版 dsh 运行时、预编译原生依赖与内置运行时（Python 与 Office 库、Node、pnpm），加载本机 `dsh --profile web`（仅绑定 `127.0.0.1`）；企业插件与配置由随包企业资产在首启时装载；GitHub Actions 构建 | CI 草稿已接入；VM 与实机未验收 |
+| macOS arm64 / x64 | 自建壳 dmg / zip | 同一壳工程的 macOS 双架构产物与首开引导（Gatekeeper 未签名首开路径按实测记录）；GitHub Actions 构建 | `arm64` CI 草稿已接入；`x64` 与实机未验收 |
+| 银河麒麟 aarch64 / x86_64 | 自建壳 deb | 同一壳工程的麒麟双架构产物（deb 元数据、内部软件源双路径）；GitHub Actions 构建 | 脚本支持 `--arch`；CI 与实机未验收 |
 
 品牌定制采用两个层级（壳本体在全平台均为自有产物）：
 
@@ -47,7 +47,7 @@
 - 白标边界（[需求基线 N3](<../requirements/requirements-baseline.md>)）：交付物为自有壳 + 原样官方运行时；基线 N3 的约束对象为官方宿主名称 / 图标，其措辞随 G0 后同步澄清。
 - 桌面客户端为单一自有壳工程覆盖全平台：不编译、不修改上游 `apps/desktop` 与 DSH 源码（不构成 fork）；壳复用 `web` profile，与终端 CLI 共享会话、配置与登录态；壳内加载本机 web profile 仅绑定 `127.0.0.1`，[需求基线 N5](<../requirements/requirements-baseline.md>) 不变；Electron 精确钉 44.7.0（指纹白名单，§3 #8）。预设预案：麒麟 Electron 探针失败时先降级版本线重试，仍 BLOCKED 则该平台恢复 web 形态 deb 兜底。
 - 功能范围：系统托盘与后台驻留（关窗隐藏至托盘，运行中任务不中断；退出前确认）；内置运行时（Python 与 Office 库、Node、pnpm，首次使用时离线安装到 `$DSH_HOME`，接入方式以 §3 #9 探针结论为准）；首启企业配置初始化。企业登录在应用内完成，不设独立欢迎窗口。
-- 统一构建与分发渠道：中性安装包字节不变；员工包（中性安装包 + 企业资产目录 + `INSTALL.md` + `SHA256SUMS`）由公开仓工作流从源码构建，壳首次启动时读取企业资产并初始化 `web` profile（优先自动探测安装来源目录，未探测到时由用户指定企业资产包；初始化失败不进入工作区）。员工包经下载链接分发：有仓库写权限的人从草稿 Release 下载后上传企业内网下载站，地址不进入仓库。
+- 统一构建与分发渠道：中性安装包字节不变；员工包（中性安装包 + 企业资产目录 + `INSTALL.md` + `SHA256SUMS`）由公开仓工作流从源码构建，壳首次启动时仅自动探测随包内嵌或同目录的 `enterprise-assets/` 并初始化 `web` profile（不设用户手动指定外部资产路径入口；初始化失败停在本地引导页并支持托盘重试，不进入工作区）。员工包经下载链接分发：有仓库写权限的人从草稿 Release 下载后上传企业内网下载站，地址不进入仓库。
 - Windows ARM64 不在本矩阵：基线允许其 Web 形态，过渡期继续走现有 zip 交付（路线 B）；路线 B 退役后其交付方式另行决定。
 - Windows 7 不在本矩阵：Node 维护线（18 起）均不支持 Win7、Electron 23 起放弃 Win7/8/8.1、web 前端要求 Chrome 116+（`AbortSignal.any()`）而 Win7 止步 109，桌面 / CLI / 浏览器三种形态均无法运行；存量 Win7 终端升级 Win10 后纳入 S1。
 - 构建入口全部为 GitHub Actions Release 流水线（见 §4.0），员工包由同一条工作流从源码构建；仓库只保存工作流与可审查的构建配置输入，产物挂草稿 Release，不入库、不公开。
@@ -86,7 +86,7 @@
 
 | 来源 | 对本计划的作用 |
 |---|---|
-| [锁定版打包文档](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/packaging/README.md) | 安装器形态（NSIS 静默参数）与打包流程的借鉴来源 |
+| [历史锁定版打包文档](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/packaging/README.md) | 安装器形态（NSIS 静默参数）与打包流程的历史参考来源（当前基线以 `.dsh-version` 为准） |
 | electron-builder 配置入口（`apps/desktop/scripts/electron-builder-config.mjs`，见[推广方案事实 #5](<rollout-plan.md>)） | NSIS 参数、资产命名与摘要规则的 P0 盘点对象 |
 
 ## 3. 前置未决项
@@ -95,17 +95,17 @@
 |---|---|---|---|
 | 1 | Electron / Chromium 等第三方组件的企业内再分发许可结论（盘点范围：壳链接的 Electron 二进制、内嵌 dsh npm 制品依赖与内置运行时分发包） | 自建壳分发的合法性前提；清单核对无异常即视为通过，异常项单独上报 | P0 |
 | 2 | forge-brand 可覆盖 token 完整清单与 Logo 资源在桌面壳 / web 双端的解析路径（设计未决事项） | 决定品牌插件字段范围与资源分发方式；token 不可覆盖时相应外观项回退上游默认 | P0 |
-| 3 | 壳 NSIS 打包链：GitHub Actions windows runner 的构建可行性、品牌图标资源嵌入与静默安装参数 | 决定 Windows 壳安装包构建脚本形态；构建主路径为 Release 流水线 CI；兜底：CI 不可行时以本地 Mac 的 makensis 离线构建 | P2 |
+| 3 | 壳 NSIS 打包链：GitHub Actions windows runner 的构建可行性、品牌图标资源嵌入与静默安装参数 | 决定 Windows 壳安装包构建脚本形态；构建主路径为 Release 流水线 CI（`desktop-windows` 已接入且已配置 `deleteAppDataOnUninstall: false`），VM 安装与静默参数待实测；兜底：CI 不可行时以本地 Mac 的 makensis 离线构建 | P2 |
 | 4 | SmartScreen / Gatekeeper 对未签名产物（壳本体与外层材料）的实际表现 | 记录性风险，自有壳不签名；归 [#123](https://github.com/hrygo/heluo-forge/issues/123) 取证 | P2 / P3 |
-| 5 | 自助安装引导与静默参数口径（企业无统一 MDM，仅自助 + 参数文档，不随包提供批量脚本） | 决定 Windows 静默参数文档与麒麟 deb 元数据 | P2 / P4 |
+| 5 | 自助安装引导与静默参数口径（企业无统一 MDM，仅自助 + 参数文档，不随包提供批量脚本） | 参数口径已写入 [deploy/clients/README.md](../../deploy/clients/README.md)；VM 实测与麒麟 deb 元数据待验收 | P2 / P4 |
 | 6 | GitHub Actions 构建麒麟 arm64 / x86_64 产物（Electron 壳 deb、预构建原生依赖、内置运行时）的目标机兼容性：ubuntu runner 与麒麟 V10 SP1 的 glibc / ABI 差异需在目标机实测 | 决定壳与依赖能否由 CI 产出；不兼容时评估降级基础镜像或容器构建 | P4 |
-| 7 | 外层品牌图标派生路径（SVG → `.ico` / `.icns`）：主路径为 Release 流水线 CI（windows / macos runner 跨平台工具） | 决定外层安装器与快捷方式能否使用品牌图标；兜底顺序：CI 派生失败以本地 Mac 工具重试，仍败外层回退中性命名；兜底链已于 2026-11-19 本机（macOS）实测可行——`sips` 直读 SVG（512px）、`iconutil` 产 `.icns`、node 包装器产 `.ico`，源资产 SHA-256 与 manifest 一致、目检合格；`sizes/` 缺 `app-icon` 16/32/64 切图，小尺寸由派生补齐 | P1 |
-| 8 | 麒麟 V10 SP1 上 Electron 可行性：glibc 版本、chromium sandbox 在加固内核的行为、arm64 与 x86_64 双架构最小应用探针；**版本线已由本机探针收敛（2026-11-19）：dsh 0.2.1-rc.3 原生加载器带 Electron 指纹白名单 `{43.0.0, 44.0.0, 44.7.0, 45.0.0-alpha.6}`，壳必须精确钉 44.7.0，`^44` 浮动解析（如 44.11.5）会被拒绝启动** | 自建桌面壳的可行性前提；macOS 开发构建已实测该机制（见 §4.5），麒麟目标机表现仍待本探针；预设预案：降级旧线仍 BLOCKED 时恢复 web 形态 deb 兜底，届时重申 | P0 |
+| 7 | 外层品牌图标派生路径（SVG → `.ico` / `.icns`）：主路径为仓内预派生入库 + `manifest.json` SHA-256 逐字节校验 | **2026-11-24 已闭环**：8 档切图与 `.ico` / `.icns` 已入库并登记 `manifest.json`（V2.1.5）；`build-desktop-installer.mjs` 直接校验消费仓内图标，不再要求 CI 动态派生；`derive-brand-icons.mjs` 保留用于源资产更新时本地重建 | P1（已闭环） |
+| 8 | 麒麟 V10 SP1 上 Electron 可行性：glibc 版本、chromium sandbox 在加固内核的行为、arm64 与 x86_64 双架构最小应用探针；**Electron 44.7.0 兼容性已在 `0.2.2-rc.5` 复核（2026-11-26）：`@deepseek-ai/dsh@0.2.2-rc.5` 依赖的 `node-addon-require-builtin-darwin-arm64@0.1.10` 白名单含 `{43.0.0, 44.0.0, 44.7.0, 44.11.5, 45.0.0-alpha.6}`（承接 2026-11-19 `0.2.1-rc.3` 探针），壳继续精确钉 `44.7.0`** | 自建桌面壳的可行性前提；macOS 开发构建已实测该机制，麒麟目标机表现仍待本探针；预设预案：降级旧线仍 BLOCKED 时恢复 web 形态 deb 兜底，届时重申 | P0 |
 | 9 | 内置运行时在 `web` profile 下的接入方式：Office 技能资源与 Python 解释器路径的配置入口、agent 侧 `node` / `pnpm` 的提供机制 | 决定 Office 技能与工作区依赖能力能否在不改编上游的前提下提供；无配置入口时相应能力移出范围并上报。**已收敛（2026-11-26 mac 本机，DSH 0.2.2-rc.5）**：有配置入口——上游 `web` profile 的补丁层已有 `workspace-dependencies` 与 `skill-office` 两行，只对名为 `desktop` 的 profile 打开，企业底座按 id 覆盖后对 `web` profile 生效；agent 侧的 node 与 pnpm 由 `load_workspace_dependencies` 返回绝对路径，不改 PATH。证据见[验证记录](<../design/verification/desktop-primary-runtime.md>) | P0 |
-| 10 | Electron 44.7.0 自承载 Node 下 `node:sqlite` 与凭据存储（值级加密、0600 密钥文件）的可用性 | 企业登录与凭据存储的前提；不可用则方案重新设计 | P0 |
+| 10 | Electron 44.7.0 自承载 Node 下 `node:sqlite` 与凭据存储（值级加密、0600 密钥文件）的可用性 | **macOS 本机已实测（2026-11-25）：`credentials.sqlite` 可写且密钥入库成功**；Windows / Linux 实机仍待验证，不可用则方案重新设计 | P0 |
 | 11 | 自承载运行随包内嵌的 dsh 在 Windows 与 Linux 的可行性；dsh 运行时原生依赖（`node-pty` 等）在五个目标（win x64、mac arm64 / x64、linux arm64 / x86_64）的预编译 | 某平台不可行则该平台回退路线 B | P0 |
 | 12 | 终端 CLI 与壳并发使用同一 `web` profile 的安全性（会话持久化、插件写锁、凭据库） | 不安全则壳改用独立 profile | P0 |
-| 13 | 壳内认证闭环：dsh web 的 launch URL 获取方式、IAM 经系统浏览器登录后壳内会话的恢复 | 首启与登录流程的设计输入。线索（2026-11-23 静态阅读 `@deepseek-ai/dsh` 0.2.2-rc.5，非探针结论）：web 应用就绪后向 stdout 打印一行 `dsh web: <带进程令牌的认证地址>`，命令行选项含 `--host`、`--port`、`--no-open`；锁定版以探针确认 | P0 |
+| 13 | 壳内认证闭环：dsh web 的 launch URL 获取方式、IAM 经系统浏览器登录后壳内会话的恢复 | **2026-11-26 离线包核验 `@deepseek-ai/dsh@0.2.2-rc.5` 与 `@deepseek-ai/dsh-web-app@0.2.2-rc.5` 确认**：`runCli({ packageManager })`、`--host`/`--port`/`--no-open` 与 stdout `dsh web: <带进程令牌的认证地址>` 均已保持；真实企业网络下 IAM 登录与会话恢复待联调 | P0 |
 
 ## 4. 阶段与门禁
 
@@ -125,8 +125,8 @@
 员工包由一条工作流从源码直接构建，作为资产挂在公开仓的**草稿 Release** 上并保持草稿：不上传 workflow artifact，不发布 Release，构建产物不公开。草稿 Release 仅仓库写权限协作者可见可下载；公开仓的 workflow artifact 与已发布 Release 对任何登录 GitHub 的人可见，不用于承载产物。
 
 1. **触发**：推 `v*` tag 触发构建工作流，或在该 tag 上手动触发；tag 版本号对齐员工包版本（一个 tag = 一套制品基线），与 [.dsh-version](<../../.dsh-version>) 锁定版的对应关系、源提交与摘要清单位置写入草稿 Release 说明。
-2. **CI 矩阵**：windows runner 构建 Windows x64 壳 NSIS 安装包、`.ico` 派生与 win x64 内置运行时；macos runner 构建 macOS arm64 / x64 壳 dmg / zip、`.icns` 派生与 mac 双架构内置运行时；ubuntu arm64 / x86_64 runner 构建麒麟壳 deb、预编译原生依赖与 linux 双架构内置运行时。
-3. **统一构建**：构建企业插件包 → 注入企业配置 → 组装员工包（中性安装包 + 企业资产目录 + `INSTALL.md` + `SHA256SUMS`），附 SHA-256 摘要清单，作为资产挂到触发 tag 对应的草稿 Release；多 job 矩阵由一个前置 job 创建草稿、其余 job 只上传，不经 workflow artifact 在 job 间传递；内嵌的 dsh 运行时制品、内置运行时分发包与 Electron 二进制经摘要比对后方可编排进安装包。P1 完成构建、注入与企业资产，P2–P4 依次接入各平台中性安装包。
+2. **CI 矩阵**：windows runner 构建 Windows x64 壳 NSIS 安装包与 win x64 内置运行时（消费仓内已校验的品牌 `.ico`）；macos runner 构建 macOS arm64 / x64 壳 dmg / zip 与 mac 双架构内置运行时（消费仓内已校验的品牌 `.icns`）；ubuntu arm64 / x86_64 runner 构建麒麟壳 deb、预编译原生依赖与 linux 双架构内置运行时。
+3. **统一构建**：构建企业插件包 → 注入企业配置 → 组装员工包（中性安装包 + 企业资产目录 + `INSTALL.md` + `SHA256SUMS`），附员工包 SHA-256 摘要清单，作为资产挂到触发 tag 对应的草稿 Release（桌面安装包自身的独立 `.sha256` 校验文件及草稿说明摘要暂不调整，留待后续统一包校验体系补齐）；多 job 矩阵由一个前置 job 创建草稿、其余 job 只上传，不经 workflow artifact 在 job 间传递；内嵌的 dsh 运行时制品与随包 pnpm 经 `runtime-lock.json` 摘要比对后方可编排进安装包。P1 完成构建、注入与企业资产，P2–P4 依次接入各平台中性安装包。
 4. **配置注入**：插件不读环境变量，`.env` 只是输入格式。工作流把 `release-bundle` 环境的 Environment Secrets 中的配置键以环境变量映射交给构建脚本，构建脚本按映射表（见配置清单）转成插件配置字段，写入 patch 层中对应插件条目的 `config:`，与插件包一起构成企业资产；配置值只存在于构建进程内存，不落临时文件。签发方由 Discovery 文档提供，不注入 issuer。客户端密钥不进 patch 层：它随企业资产交付，由安装器在首启时写入本机凭据库并删除明文副本，记录名为 `clientSecretRef` 的值。配置值不写入构建日志、错误体与清单。
 5. **插件加载**：企业组合包 `@heluo/forge-enterprise` 为默认安装单元，研发扩展包 `@heluo/forge-engineering` 按需加入企业资产（其补丁层不含 IAM 行，以中性 tgz 原样随包）。壳首启时委托员工包内的安装器（`init-enterprise-plugin.mjs`）完成：校验员工包完整性、安装企业插件包（`dsh plugin --profile web add <tgz>`，经自承载 Node 运行）并核对制品证据、把客户端密钥写入本机凭据库后删除明文副本。企业配置随私版 tgz 内的 `dsh.bundle.patch` 由宿主随包装载；壳是否还需向 `web` profile 写入 `cordis.patch.yml` 与企业 npm 源 / 索引 preset，待 P0 第 6 项结论后确定，在此之前不写入。任一步失败不进入工作区；已完成的首启按员工包清单摘要记录，同一员工包不再重复初始化。
 6. **人工确认**：统一构建放在受保护的 GitHub 环境中，审批人批准后构建才运行；无人批准不产出员工包。
@@ -170,20 +170,20 @@
 
 仓库变量：`HELUO_PUBLIC_LICENSE`（构建声明的许可，未设置时构建拒绝）、`HELUO_WITH_ENGINEERING`（`true` 时把研发扩展包加入企业资产）。
 
-现状：`release-bundle` 尚未运行过（仓库无 `v*` tag 与 Release）；工作流的窄例外条件由 `tests/check-repo.test.mjs` 断言，远端行为（环境审批、Secrets 读取、草稿可见性）待首次推 tag 实测。
+现状：`release-bundle` 已自 `v0.1.1` 起完成远端实测（含 `release-bundle` 环境进入、Secrets 读取、草稿创建与资产上传校验），后续 tag 已接入 `desktop-mac`（arm64 `.zip`）与 `desktop-windows`（x64 NSIS `.exe`）草稿构建；工作流窄例外条件由 `tests/check-repo.test.mjs` 断言。桌面安装包的独立 `.sha256` 校验产物与目标终端实测仍待后续完善。
 
 ### 4.1 P0 前置验证（G0）
 
 1. **决策立项**：本计划获批即构成桌面分发路线与品牌定制层级的立项记录；G0 通过后按 §4.6 同步受控文档，未取证前不改终态文档。
-2. **内嵌制品盘点**：按 [.dsh-version](<../../.dsh-version>) 锁定版盘点 dsh npm 制品（版本、SHA-256 摘要、原生依赖清单）与 Electron 44.7.0 二进制分发物、内置运行时分发包（Python 解释器、Office 库 wheel、Node、pnpm）的来源与摘要，作为壳内嵌输入；同时盘点上游 electron-builder 配置入口与内置运行时构建器作为构建参考。
+2. **内嵌制品盘点**：按 [.dsh-version](<../../.dsh-version>) 锁定版盘点 dsh npm 制品（`0.2.2-rc.5` 版本、SHA-256 摘要、`runCli` 与 `dsh-web-app` 接缝已离线核验；原生依赖清单继续跟踪）与 Electron 44.7.0 二进制分发物、随包 pnpm（11.28.5 已核验入账）及其余内置运行时分发包（Python 解释器、Office 库 wheel、Node）的来源与摘要，作为壳内嵌输入；同时盘点上游 electron-builder 配置入口与内置运行时构建器作为构建参考。
 3. **再分发许可结论**：DSH 为 MIT（[总体架构](<../architecture/platform-architecture.md>)已载）；范围为壳链接的 Electron / Chromium 第三方许可、内嵌 dsh npm 制品依赖与内置运行时分发包（Python 及 Office 库、Node、pnpm），清单核对无异常即视为通过，异常项单独上报，形成书面结论。
 4. **品牌 token 探针**：本机实测桌面壳与 web 双端的可覆盖品牌 token 清单、Logo 资源解析路径与缺失回退行为，关闭[品牌设计](<../design/plugins/forge-brand.md>)的两项未决事项；安全提示、审批与审计入口的可覆盖性一并取证，不得因品牌化被隐藏；部分 token 不可覆盖时接受逐项回退上游默认。
 5. **麒麟 Electron 可行性探针**：银河麒麟 V10 SP1（aarch64 与 x86_64，实机或虚拟机；双架构环境已具备、可调度）运行最小 Electron 应用（精确钉 44.7.0，指纹白名单见 §3 #8），核验 glibc、chromium sandbox 与加固内核行为；结论决定麒麟双架构适配（P4）能否立项实施。
 6. **内置运行时接入探针**：在 `web` profile 下实测 Office 技能资源与 Python 解释器路径的配置入口、agent 侧 `node` / `pnpm` 的提供机制；无配置入口的能力移出范围并上报。2026-11-26 结论（mac 本机）：有配置入口，能力不移出范围；可复跑的探针是 `scripts/probe/run-primary-runtime-probe.mjs`，实施记录见 §4.2 同日条目。
-7. **凭据存储探针**：在 Electron 自承载 Node 下实测 `node:sqlite` 与凭据的写入、读取和刷新（值级加密、0600 密钥文件）；不可用则方案重新设计。
-8. **Windows / Linux 自承载探针**：实测自承载运行随包内嵌的 dsh 与 `dsh --profile web` 在 Windows 10 与 Linux 的可行性，以及运行时原生依赖在五个目标的预编译；某平台不可行则该平台回退路线 B。
+7. **凭据存储探针**：在 Electron 自承载 Node 下实测 `node:sqlite` 与凭据的写入、读取和刷新（值级加密、0600 密钥文件）；macOS 本机已证实可写与入库，Windows / Linux 实机仍待验证，不可用则方案重新设计。
+8. **Windows / Linux 自承载探针**：实测自承载运行随包内嵌的 dsh 与 `dsh --profile web` 在 Windows 10 与 Linux 的可行性，以及运行时原生依赖在五个目标的预编译（macOS 本机已实测自承载）；某平台不可行则该平台回退路线 B。
 9. **`web` profile 并发探针**：终端 CLI 与壳同时使用同一 `web` profile（会话读写、插件安装、登录刷新），核验持久化、写锁与凭据库行为；不安全则壳改用独立 profile。
-10. **壳内认证闭环探针**：实测 dsh web 启动时 launch URL 的获取方式，以及 IAM 经系统浏览器登录后壳内会话的恢复。
+10. **壳内认证闭环探针**：实测 dsh web 启动时 launch URL 的获取方式（`0.2.2-rc.5` 输出格式与 `--no-open`/`--host` 参数已离线核验，macOS 本机已实测 launch URL 加载），以及真实企业网络下 IAM 经系统浏览器登录后壳内会话的恢复。
 
 **G0 出口判据**：第 2–10 项均有书面结论；第 3 项（许可）BLOCKED 时全平台壳分发不启动、目标回退路线 B（现有 zip 交付）；第 4 项部分 token 不可覆盖时相应外观项回退上游默认，不构成整体阻塞；第 6 项无配置入口的能力移出范围并上报；第 7 项不可用时全平台分发不启动；第 8 项按平台回退路线 B；第 9 项不安全时壳改用独立 profile；第 5 项经降级版本线重试仍 BLOCKED 时，麒麟按预设预案恢复 web 形态 deb 兜底并上报用户重申。
 
@@ -191,7 +191,7 @@
 
 1. **forge-brand 包实现**：按[品牌与外观详细设计](<../design/plugins/forge-brand.md>)与仓库准入流程（设计已登记 → 准入核验 → 清单与测试 → 编码）实现 `@heluo/forge-brand`：配置 bundle + 本地品牌资源，`private: true`，声明 `engines.dsh`，配套正反向测试（配置校验、对比度回退、缺失回退、外链拒绝）；G0 取得的 token 清单回写设计第 5 节。
 2. **品牌资源随包**：外层图标与壳图标用彩色主标 `app-icon`（`sizes/` 已有 16–1024px 标准切图），应用内 Logo 用图文组合 `wordmark-color`；内置副本与源文件保持逐字节一致并过 package-shape 测试；不使用外链资源；深浅色模式对比度按 forge-brand 设计校验。
-3. **外层品牌资产派生**：在 Release 流水线 CI 内从品牌源文件（SVG）派生 Windows `.ico`（windows runner）与 macOS `.icns`（macos runner）及快捷方式所需尺寸；派生资产登记入 manifest 校验体系，源文件保持不动；CI 派生失败时以本地 Mac 工具重试，仍败外层回退中性命名（主路径 CI）。
+3. **外层品牌资产维护**：外层 `.ico`、`.icns` 与 8 档 PNG 切图在仓内预派生并登记进品牌 `manifest.json`（SHA-256 校验闭环），构建阶段直接校验并消费仓内资产，不再要求在 CI 中动态派生；`scripts/derive-brand-icons.mjs` 保留用于品牌源图变更时在本地重建并更新 manifest。
 4. **外层品牌规范**：外层安装器名称、快捷方式名称与图标、zip / `INSTALL.md`、deb 元数据统一以「河洛 Forge 企业版」呈现并沿用河洛苍螭资产规范。
 5. **统一构建流水线**：按 §4.0 改造清单完成 `release-bundle` 的统一构建与草稿 Release 上传，作为后续各阶段的构建入口。
 
@@ -199,7 +199,7 @@
 
 - 第 5 项对应 §4.0 改造清单第 1–5、7 项已实现：`.github/workflows/release-bundle.yml`、`scripts/build-employee-package.mjs`、`scripts/upload-draft-release.mjs`、`scripts/lib/release-config.mjs`（配置键清单，检查器与构建脚本共用）、`scripts/lib/repo-rules.mjs` 的窄例外，以及 `tests/check-repo.test.mjs`、`tests/build-employee-package.test.mjs`、`tests/upload-draft-release.test.mjs` 三份用例。离线证据：用例 45 项通过，18 个规则变异全部被对应用例杀死，全量离线检查通过；真实链路本机冒烟一次通过（合成配置、隔离目录）。2026-11-24：第 6 项完成——`release-bundle` 环境建立（部署分支限定 tag `v*`，经负责人裁决不设必需评审人）、两个仓库变量（`HELUO_PUBLIC_LICENSE=UNLICENSED`、`HELUO_WITH_ENGINEERING=true`）与企业配置 Environment Secrets（12 键；显式撤销端点经负责人裁决暂缺，退出撤销降级）录入完毕；首次推 tag `v0.1.0` 远端实测：环境进入、Secrets 读取、员工包构建与自检、草稿创建全部通过，资产上传因流式请求体不携带 Content-Length 被上传端点拒绝（HTTP 400 Bad Content-Length），同日修复为缓冲请求体并补回归用例（未修版本已验证失败），端到端资产交付经 `v0.1.1` 重跑核验通过（run 45377289045；员工包资产 988254 字节挂载草稿 Release，摘要独立复算一致，草稿保持待人工发布）。
 - 壳工程的设计先行部分已完成：[桌面壳详细设计](<../design/services/desktop-shell.md>)（CORP-DSH-DESIGN-025）已登记设计索引；`services/forge-desktop/` 实现了不依赖 Electron 的判断模块（进程状态机、launch URL 解析与回环校验、导航与权限判定、登录 shell 环境合并、企业资产校验与首启、关窗与退出判定）和以注入接口装配的 `shell.mjs`。离线证据：47 项用例与 3 项构建—壳契约用例通过，24 个规则变异全部被对应用例杀死。壳已建 `package.json`（暂不声明依赖，锁文件只登记工作区成员）并标「状态：可用」，未接 Electron 运行，未打包。2026-11-24 按代码评审修正壳的七处问题（摘要来源不一致、符号链接逃逸、跨块解码、重复扫描、重定向处置、输出上限、错误码文案），并写明员工包的信任模型；新用例已在未修代码的隔离副本上确认会失败。
-- 第 3 项（外层品牌资产派生）的脚本已具备：`scripts/derive-brand-icons.mjs` 从品牌源文件派生 Windows `.ico`、macOS `.icns` 与缺失的小尺寸切图，输入按品牌 `manifest.json` 的 SHA-256 闭环校验，派生产物另记 `derivation-manifest.json`，不改写源文件；栅格化依次尝试 `rsvg-convert` 与 `sips`，两者皆无且缺尺寸时以 `MISSING_RASTERIZER` 失败。离线证据：`tests/derive-brand-icons.test.mjs` 10 项通过；对仓库真实品牌资产的本机冒烟一次通过（`file` 识别出 6 条目的 ICO 与 ICNS，源文件零改动）。2026-11-24 资产闭环（issue #459）：`sizes/app-icon-{16,32,48,64}.png` 以 sips 派生入库，`icons/app-icon.{ico,icns}` 构建入库，六件产物全部登记 `manifest.json`（V2.1.5，261 条）；此后 8 档切图齐备，重建免栅格化器（`none-needed`），新增真实套件用例断言纯 Node 重建与入库 ico/icns 逐字节一致、任一档源图变动即偏离（判据会失败）。未做：接入 Release 流水线 CI（随第 4 项外层品牌一并接线）。
+- 第 3 项（外层品牌资产派生）的脚本已具备：`scripts/derive-brand-icons.mjs` 从品牌源文件派生 Windows `.ico`、macOS `.icns` 与缺失的小尺寸切图，输入按品牌 `manifest.json` 的 SHA-256 闭环校验，派生产物另记 `derivation-manifest.json`，不改写源文件；栅格化依次尝试 `rsvg-convert` 与 `sips`，两者皆无且缺尺寸时以 `MISSING_RASTERIZER` 失败。离线证据：`tests/derive-brand-icons.test.mjs` 10 项通过；对仓库真实品牌资产的本机冒烟一次通过（`file` 识别出 6 条目的 ICO 与 ICNS，源文件零改动）。2026-11-24 资产闭环（issue #459）：`sizes/app-icon-{16,32,48,64}.png` 以 sips 派生入库，`icons/app-icon.{ico,icns}` 构建入库，六件产物全部登记 `manifest.json`（V2.1.5，261 条）；此后 8 档切图齐备，重建免栅格化器（`none-needed`），新增真实套件用例断言纯 Node 重建与入库 ico/icns 逐字节一致、任一档源图变动即偏离（判据会失败）。后续主路径已确定为直接校验并消费仓内已登记的 `.ico`/`.icns`（`build-desktop-installer.mjs`），不再要求接入 CI 动态派生。
 - 第 1、2 项（forge-brand 包、品牌资源随包）2026-11-24 已实现（issue #459）：`packages/forge-brand` 按设计六字段交付令牌校验与安全回退（对比度双底 ≥3:1、超长截断、外链与路径逃逸拒绝、缺失回退品牌默认），`apply` 经 `ctx.provide('forge-brand')` 暴露；`icon.svg` 与 `assets/wordmark-color.svg` 和品牌源文件逐字节一致并经品牌 manifest SHA-256 交叉校验（package-shape 测试）；16 项单元用例通过。`@heluo/forge-enterprise` 依赖闭包与补丁层中性行（不带 config）携带本包，品牌身份为包内默认，公版保持配置中性。宿主 token 消费面与 Logo 双端解析路径经负责人裁决留 GB 双端实测（缺接缝按 `HOST_SEAM_UNAVAILABLE` 降级，不影响装载）。
 - 第 4 项（外层品牌规范）2026-11-24 已实现（issue #459）：员工包新增 `branding/` 目录——ico/icns、8 档 PNG 与 `wordmark-color.svg` 经品牌 manifest 逐件校验后复制（与源逐字节一致），并写入 `app-identity.json` 应用标识五元组（appId `com.heluo.forge.enterprise`、升级 GUID、productName、可执行名、显示名「河洛 Forge 企业版」）；`INSTALL.md` 标题与启动器文案统一品牌呈现（Windows 启动器用 ASCII `Heluo Forge Enterprise` 规避代码页风险）。品牌套件整体缺失时降级省略 `branding/`（GB 判据：不阻塞插件级品牌化），存在但登记不符则拒绝构建。员工包清单记录品牌材料来源（manifest 版本、身份五元组与文件名）。快捷方式创建与 deb 元数据落地属 P2 壳打包（electron-builder 消费 `branding/` 与身份真源），本项交付其全部品牌材料。
 
@@ -213,7 +213,7 @@
 - 首启装配缺陷修复（2026-11-25，干净环境首次真实首启暴露）：`shell.mjs` 把 `loadInstaller(...)`（main.mjs 经动态 import 返回 `Promise<runInit>`）未经 await 传入 `initializeProfile`，函数守卫按 `BAD_ARGUMENT` 拒绝并弹框，应用无法启动。此前冒烟因「预写首启标记 + 安装器终端单独驱动」恰好绕过该集成路径。修复为 `runInit: await loadInstaller(...)`；回归用例先行（以 main.mjs 同形的 Promise 型 loader 驱动装配层，未修版本必挂、修复后通过），装配层 58 项用例全绿。
 - 窗口先行与页内配置提示（2026-11-25，负责人裁决「先开界面、页内提示、后续配置」）：需要首启或首启失败时窗口先开并加载壳自带本地品牌引导页（`resources/status.html` 暂存为 `brand/status.html`，无 preload 无外链，状态/错误码经查询串注入），应用驻留不弹框不退出，托盘菜单「重试企业配置」复用同一安装器幂等续跑（补放员工包、回企业网均可续），成功后窗口改载 launch URL 并移除重试项；运行时段失败仍走对话框+退出，禁止以未打补丁默认 profile 提前出界面（O3 官方登录旁路）。装配层 59 项用例含状态页驻留、重试续跑、运行时失败路径与布局契约。
 - 桌面构建接入 Release 流水线（2026-11-25，负责人要求）：`release-bundle` 工作流新增 `desktop-mac`（macos-15，`--dir` 产物以 ditto 压为 `heluo-forge-enterprise-<tag>-mac-arm64.zip`）与 `desktop-windows`（windows-2025，electron-builder NSIS x64 产物 `heluo-forge-enterprise-<tag>-setup-x64.exe`）两任务，均 `needs: employee` 后各自重建员工包做内嵌资产（公共仓库的工作流 artifact 任何读者皆可下载，企业载荷不跨任务传递；needs 同时固定草稿与正文由 ubuntu 任务先建），进入同一 `release-bundle` 环境（tag `v*` 策略）。锁定版 dsh 制品在 runner 上经 `npm pack` 取得并由 `runtime-lock.json` SHA-256 台账核验；工具链 `pnpm install --frozen-lockfile`（electron/builder 二进制默认源）。检查器不变量全部保持（同触发器、顶层唯一 `contents: write`、checkout 全部 `persist-credentials: false`、secrets 仅 env 整行映射）。桌面产物均未签名：NSIS 首开会遇 SmartScreen、mac zip 需右键打开，签名属后续里程碑。
-- 安装包瘦身（2026-11-25，负责人要求，issue #485）：`scripts/build-desktop-installer.mjs` 的打包配置增加三项规则，配套正反向用例（8 个规则变异全部被对应用例杀死）。其一，NSIS 关闭差分包（`nsis.differentialPackage: false`）：差分形式只服务 electron-updater，本应用不建更新 feed；electron-builder 26.0.12 交给 7z 的参数由「非 solid、1 MB 字典」变为默认 solid。其二，`extraResources.filter` 在打包时排除 TypeScript 源码与类型声明、source map 与调试符号，`runtime-lock.json` 钉定的 `@deepseek-ai/dsh` 目录原样随包：这些文件运行时不读取（内嵌 Node 拒绝为 `node_modules` 内的 `.ts` 剥离类型、闭包内没有 TypeScript 编译器，壳剥离 `NODE_OPTIONS` 故 source map 不会被加载），而 electron-builder 的默认排除只作用于应用文件，不作用于 `extraResources`。其三，Electron 语言包只保留英文与简繁中文（`electronLanguages`）。构建摘要新增 `resources`（暂存资源的文件数与字节数、其中被排除的部分）。证据（本机 mac，载荷取 dsh 0.2.1-rc.3 的暂存树）：以 electron-builder 交给 7z 的同一组参数压同一份产物，现行参数 252.8 MiB、solid 168.8 MiB（降 33%），单线程解码由 8.5 秒降到 5.9 秒；`--dir` 构建逐文件核对，进包集合与规则一致（资源 63,137 → 24,356 个文件、681.1 → 434.9 MB，钉定目录的 8 个 `.d.ts` 保留）。未验：Windows 安装包的体积、安装耗时与 nsis7z 解包表现（本机到 Electron 发布源约 14 KB/s 且无 wine，无法交叉构建，由 `release-bundle` 的 windows runner 在下一个 tag 取证）；`electronLanguages` 的 Windows 路径未实测，在 macOS 上不生效（electron-builder 26 到应用 Resources 查找 `.lproj`，Electron 44 将其放在 Framework 内）。未做：依赖闭包去重（0.2.1-rc.3 暂存树里 `zod@4.4.3` 嵌套 50 份，需改暂存脚本）、闭包 lockfile 与体积预算门禁。
+- 安装包瘦身与闭包确定性（2026-11-25 issue #485，2026-11-26 补齐去重与预算门禁）：`scripts/build-desktop-installer.mjs` 的打包配置增加三项规则，配套正反向用例（8 个规则变异全部被对应用例杀死）。其一，NSIS 关闭差分包（`nsis.differentialPackage: false`）：差分形式只服务 electron-updater，本应用不建更新 feed；electron-builder 26.0.12 交给 7z 的参数由「非 solid、1 MB 字典」变为默认 solid；同时显式配置 `deleteAppDataOnUninstall: false` 与 `uninstallDisplayName`，支持 `--arch`（macOS x64 与麒麟 linux arm64/x64），并清理 `ELECTRON_LANGUAGES` 重复项为 6 项（`en`、`en-US`、`zh-CN`、`zh-TW`、`zh_CN`、`zh_TW`）。其二，`extraResources.filter` 在打包时排除 TypeScript 源码与类型声明、source map 与调试符号，`runtime-lock.json` 钉定的 `@deepseek-ai/dsh` 目录原样随包：这些文件运行时不读取（内嵌 Node 拒绝为 `node_modules` 内的 `.ts` 剥离类型、闭包内没有 TypeScript 编译器，壳剥离 `NODE_OPTIONS` 故 source map 不会被加载），而 electron-builder 的默认排除只作用于应用文件，不作用于 `extraResources`。其三，Electron 语言包只保留英文与简繁中文（`electronLanguages`）。构建摘要新增 `resources`（暂存资源的文件数与字节数、其中被排除的部分）。暂存工具 `scripts/stage-desktop-payload.mjs` 于 2026-11-26 补齐同版本嵌套传递依赖去重（`dedupeDshClosure`）、确定性闭包清单与可选锁校验（`dshClosure`、`STAGE_CLOSURE_MISMATCH`）以及体积/文件数预算门禁（`STAGE_BUDGET_EXCEEDED`），并通过原子临时目录切换保证拒绝运行不破坏已有输出。历史证据（2026-11-25 本机 mac，载荷取当时 `0.2.1-rc.3` 暂存树）：以 electron-builder 交给 7z 的同一组参数压同一份产物，现行参数 252.8 MiB、solid 168.8 MiB（降 33%），单线程解码由 8.5 秒降到 5.9 秒；`--dir` 构建逐文件核对，进包集合与规则一致（资源 63,137 → 24,356 个文件、681.1 → 434.9 MB，钉定目录的 8 个 `.d.ts` 保留）。未验：Windows 安装包的体积、安装耗时、静默参数与 nsis7z 解包表现（由 `release-bundle` 的 windows runner 与离线 VM 取证）；`electronLanguages` 的 Windows 路径未实测，在 macOS 上不生效（electron-builder 26 到应用 Resources 查找 `.lproj`，Electron 44 将其放在 Framework 内）；`0.2.2-rc.5` 真实网络暂存下的闭包去重收益待下一次实机暂存统计。
 - 随包 pnpm（2026-11-25，负责人确认照上游做法接入；第 4 项的 pnpm 部分）：`runtime-lock.json` 把 `pnpm: null` 换成 pnpm 11.28.5 的台账行（版本与根 `packageManager` 一致，字节数与 SHA-256 由暂存用例核对）；`scripts/stage-desktop-payload.mjs` 新增必填 `--pnpm-tgz`，按台账核验后用仓库自有的归档读取器解包到 `<resources>/pnpm/`，并核对包内身份（`pnpm@<锁定版>` 与 `bin/pnpm.mjs`）。接入方式取自上游同标签（`dsh-v0.2.1-rc.3`）源码的公开接缝：壳新增 `src/embedded-cli.mjs` 作为 dsh 的唯一入口，经 `@deepseek-ai/dsh` 公开导出的 `runCli({ packageManager })` 把「应用二进制 + 随包 `bin/pnpm.mjs`」交给 dsh，每次包操作都以 Electron 的 Node 模式运行随包 pnpm，不改 DSH、不改 PATH；安装器新增 `--pnpm-from-host`，壳调用时既不在 PATH 查找 pnpm，也不补装。`release-bundle` 两个桌面任务在同一步骤经 `npm pack` 取得 pnpm 制品并交给暂存工具。验证：暂存、入口、安装器与壳契约用例含反向与变异证明；本机 mac `--dir` 构建，在 PATH 上没有 node、npm、pnpm 的条件下首启装入企业插件并进入工作区，同一条件下不带随包 pnpm 的构建停在 `FIRST_RUN_FAILED`。未验证：随包 pnpm 在 Windows 与 Linux 上的包操作，以及包脚本需要 PATH 上 `node` 的插件；第 4 项其余部分（独立 Node、Python 与 Office 库）与 P0 内置运行时接入探针不变。
 - 首启排障明细（2026-11-25，负责人确认开发阶段显示）：内网机器上的员工包（0.1.6-corp.1）首启必然失败，而状态页对所有失败显示同一段文案，无法判断原因。壳新增 `src/diagnostic.mjs`：`initializeProfile` 把安装器的完整结论（错误码、原因、处理、回显与警告）带进 `FIRST_RUN_FAILED`；状态页显示安装器错误码、原因、处理办法与日志位置；应用数据目录下的 `logs/first-run.log`（0600）记录每次首启尝试与每个导致退出的失败。安装器的失败结论新增 `progress`（走到失败为止的回显，终端输出不变），`reasonTail` 保留真正的报错行而略去调用栈。实测（本机 mac，PATH 上无 node、npm、pnpm）：IAM 不可达时为 `IAM_DISCOVERY_FAILED` 并显示 Discovery 地址；IAM 可达且插件完整时为 `IAM_CLIENT_SECRET_PROVISION_FAILED`，页面与日志显示 `dsh: invalid profile name "<…>/@heluo/forge-iam/bin/heluo-forge.mjs"`。由此确认一项未修缺陷：壳的执行器对每条命令前置 dsh 入口，而安装器预置密钥时用 `process.execPath` 直接运行插件的 forge-iam CLI，三处调用（set、replace、空目录诊断）在壳内必然失败；只带上随包 pnpm 重新打包，内网机器会从 `PNPM_REQUIRED` 变为 `IAM_CLIENT_SECRET_PROVISION_FAILED`。壳与员工包须出自同一次构建（壳传 `--pnpm-from-host`，旧员工包的安装器报 `BAD_ARGUMENT`）。未验证：Windows 与 Linux 上的显示。
 - 密钥入库调用形态修复（2026-11-25，负责人裁决启动）：上一条记录确认的未修缺陷当日修复。安装器 `runInit`/`provisionClientSecret` 新增 `scriptExec` 选项：密钥预置的三条命令（set、replace、空目录诊断）改经它运行插件自带的 `@heluo/forge-iam/bin/heluo-forge.mjs`（`args[0]` 即脚本路径）；缺省等于原先的 `exec(process.execPath, args)`，终端行为不变。壳的 `src/process.mjs` 新增 `embeddedScriptExec`：以应用二进制为 Node 运行该脚本，前面不加 dsh 入口，只放行 profile 目录内路径归一的普通文件；`main.mjs` 按安装器同源的 `$DSH_HOME` 规则推导 profile 目录并传入。验证：安装器与壳的用例含正反向（放行、越界、链接、非函数拒绝、缺省不变）与契约级用例（真实安装器经壳执行器实际运行替身 CLI，断言收到的命令行首项就是脚本路径、密钥按字节到 stdin）；本机 mac 端到端（PATH 上无 node、npm、pnpm，IAM 以本地服务代替内网）：首启完成插件安装、核验、密钥入库（隔离凭据库出现 `credentials.sqlite`，明文删除）并进入工作区，顺带证实 Electron 44.7.0 内嵌 Node 下 `node:sqlite` 可写（P0 #7 的一侧证据）。未验证：Windows 与 Linux。
@@ -228,11 +228,11 @@
 
 1. **壳工程立项与实现**：按「设计先行 → 准入核验 → 清单与测试 → 编码」在 `services/` 建立全平台壳工程：Electron 精确钉 44.7.0（package-shape 断言拒绝 `^` / `~` 浮动）；`ELECTRON_RUN_AS_NODE` 自承载内嵌 dsh（macOS 开发构建已实测，见 §4.5）；`--no-open` 防双开、仅绑定 `127.0.0.1`（配置层白名单拒绝其他值）、单实例锁、launch URL 认证、子进程退出清理与端口冲突处理（状态机显式：spawning → ready → stopped，不确定保持 pending）；GUI 进程补 PATH；登录 shell 环境读取（GUI 进程环境与用户启动文件合并，参考上游 `<shell> -ilc` 机制）；完整河洛品牌（`app-icon` 切图）；配套正反向测试。
 2. **内嵌载荷**：锁定版 dsh 运行时（npm 制品原样 + SHA-256 校验）+ 预编译原生依赖（避免终端 `node-gyp rebuild`）；企业插件、企业 npm 源 / 索引 preset 与配好的 `cordis.patch.yml` 属于企业资产，由首启企业配置装载。
-3. **首启企业配置初始化**：首次启动时读取企业资产（优先自动探测安装来源目录，未探测到时由用户指定企业资产包），校验员工包完整性后委托员工包内的安装器依次完成密钥入库（`client-secret set`）、安装企业插件（`dsh plugin --profile web add`，经内嵌 pnpm，由自承载 Node 运行）与制品证据核对；企业配置随私版 tgz 的 `dsh.bundle.patch` 装载；`cordis.patch.yml` 与企业 npm 源 / 索引 preset 的写入待 P0 第 6 项结论后接入。每步幂等，任一步失败时不进入工作区，密钥入库后删除明文副本。
+3. **首启企业配置初始化**：首次启动时仅自动探测随包内嵌或同目录的 `enterprise-assets/`（不支持用户手动指定外部资产包），校验员工包完整性后委托员工包内的安装器依次完成密钥入库（`client-secret set`）、安装企业插件（`dsh plugin --profile web add`，经内嵌 pnpm，由自承载 Node 运行）与制品证据核对；企业配置随私版 tgz 的 `dsh.bundle.patch` 装载；`cordis.patch.yml` 与企业 npm 源 / 索引 preset 的写入待 P0 第 6 项结论后接入。每步幂等，任一步失败时停在本地引导页并支持托盘重试（不进入工作区），密钥入库后删除明文副本。
 4. **内置运行时**：随包携带 Python 与 Office 库、Node、pnpm 的分发包，带版本清单与哈希；首次使用时离线安装到 `$DSH_HOME`，接入方式按 §3 #9 探针结论实现。（已实现，实施记录见 §4.2 的 2026-11-26 条目；Windows / Linux 载荷与离线 VM 验收未做。）
 5. **托盘与后台驻留**：系统托盘常驻；关窗隐藏至托盘，运行中任务不中断；退出前确认（任务状态可查询时按状态提示，否则一律提示）；macOS 沿用 Dock 生命周期。
 6. **安全基线**：渲染进程启用 `contextIsolation` 与 sandbox，关闭 `nodeIntegration`；`will-navigate` 与 `window.open` 只放行回环地址，其余链接交给系统浏览器；麦克风、摄像头、通知等权限请求默认拒绝；preload 仅暴露最小接口。
-7. **Windows 打包**：electron-builder 产出 NSIS 安装包（Release 流水线 windows runner，§4.0 中性制品）；应用标识按 §1.1；品牌图标嵌入；静默安装参数实测并产出文档（仅自助安装口径，不随包提供批量脚本）。
+7. **Windows 打包**：electron-builder 产出 NSIS 安装包（Release 流水线 windows runner，§4.0 中性制品）；应用标识按 §1.1；品牌图标嵌入；配置 `deleteAppDataOnUninstall: false` 保留用户数据；静默安装参数口径已写入 [deploy/clients/README.md](../../deploy/clients/README.md)（仅自助安装口径，不随包提供批量脚本），VM 实测待 P2 验收。
 8. **验收**：离线 Windows 10 x64 虚拟机执行安装、首启企业配置、客户端密钥入库与明文删除、企业登录（IAM 联调另计）、Office 技能与工作区依赖、托盘与后台驻留、退出确认、与终端 CLI 并发、企业插件挂载、品牌外观（壳本体与应用内）、升级（异版本先卸载再装）、回退与数据保留（[#123](https://github.com/hrygo/heluo-forge/issues/123) 范围）；SmartScreen 未签名首开表现记录与绕过图文。
 
 **G2 出口判据**：离线 VM 端到端通过（含首启企业配置、内置运行时、托盘与后台驻留、品牌核验）+ NSIS 构建链结论 + 参数表；企业真实终端另按 #123 验收。
@@ -249,7 +249,7 @@
 
 1. **形态与落位**：全平台壳工程（P2 建立）的麒麟双架构平台层；不编译官方 `apps/desktop` 的 Linux 目标、不修改 DSH 源码，不构成 fork。平台层职责：deb 元数据与内部软件源（apt）双路径、`systemd --user` 自启动。
 2. **壳职责**：BrowserWindow 加载本机 `dsh --profile web`（仅绑定 `127.0.0.1`）；管理 dsh 子进程生命周期（启动、launch URL 与进程凭据读取、退出清理、端口冲突、单实例）；应用本体完整河洛品牌——名称「河洛 Forge 企业版」、图标用彩色主标 `app-icon` 的 `sizes/` 标准 PNG 切图；内嵌锁定版 dsh 运行时（原生依赖预编译，避免终端 `node-gyp rebuild`）。**2026-11-19 macOS 开发构建实测**（探针性质，麒麟目标机另证）：以 `ELECTRON_RUN_AS_NODE` 自承载运行随包内嵌的 dsh 可行；Electron 须精确钉 44.7.0（指纹白名单）；`dsh plugin` 经 pnpm 转发安装，GUI 进程须补 PATH；dsh web 默认自动拉起系统浏览器，壳内须传 `--no-open` 防双开；企业组合包 `plugin add` 后 `plugin list` 可见、web 服务仅回环监听、窗口正常渲染。
-3. **构建与分发**：麒麟 deb 经 Release 流水线（§4.0）由 GitHub Actions 构建 arm64 与 x86_64 产物；CI 产出中性制品（壳、预构建依赖、内置运行时、deb 骨架），麒麟员工包由同一流水线的统一构建产出（§4.0）；CI 遵循固定 Action SHA 与最小权限；ubuntu runner 产出的壳、内置运行时（Python 与 Office 库 wheel）与原生依赖和麒麟 V10 SP1 的 glibc / ABI 兼容性在目标机实测，不兼容时换老版本基础镜像 / 容器重试，仍败触发 web 兜底预案。企业内部软件源（apt）与文件交付双路径：apt 安装的壳在首次启动时由用户指定企业资产包；静默安装参数文档。
+3. **构建与分发**：麒麟 deb 经 Release 流水线（§4.0）由 GitHub Actions 构建 arm64 与 x86_64 产物；CI 产出中性制品（壳、预构建依赖、内置运行时、deb 骨架），麒麟员工包由同一流水线的统一构建产出（§4.0）；CI 遵循固定 Action SHA 与最小权限；ubuntu runner 产出的壳、内置运行时（Python 与 Office 库 wheel）与原生依赖和麒麟 V10 SP1 的 glibc / ABI 兼容性在目标机实测，不兼容时换老版本基础镜像 / 容器重试，仍败触发 web 兜底预案。企业内部软件源（apt）与文件交付双路径：apt 路径通过配套安装把 `enterprise-assets/` 落位到应用探测目录（不支持用户手动选包），并附静默安装参数文档。
 4. **验收**：银河麒麟 V10 SP1 aarch64 与 x86_64 实机：安装、自启动、首启企业配置、企业插件挂载、品牌外观（壳本体与应用内）、内置运行时、沙箱链 `bwrap → Landlock` 准入、凭据隔离、升级与回退（[#123](https://github.com/hrygo/heluo-forge/issues/123) 范围）。
 
 **G4 出口判据**：双架构实机端到端通过，且 P0 Electron 兼容性结论在成品上复验；沙箱链准入结论明确（不可用即按 fail closed 记录目标缺口，不降级放行）。
@@ -283,20 +283,20 @@
 |---|---|
 | 第三方组件再分发许可 | 仅盘点壳链接的 Electron / Chromium 第三方许可与内嵌 dsh npm 制品依赖；清单核对无异常即通过，异常项单独上报 |
 | 品牌 token 清单与 Logo 双端解析路径 | P0 本机探针并回写品牌设计；接受逐项回退上游默认 |
-| 外层图标派生（SVG → `.ico` / `.icns`）工具链 | P1 于 Release 流水线 CI 内派生；失败以本地 Mac 工具重试，仍败回退中性命名；本地兜底链已实测可行（sips / iconutil / node 包装器，详见 §3 #7） |
-| Release 流水线可行性与产物完整性（tag 触发、草稿 Release 挂载、资产核对、环境审批、Secrets 读取） | P1 首次推 tag 实测并作为后续各阶段统一构建入口：草稿对无写权限账号不可见、有仓库写权限的账号可下载、重跑覆盖同名资产、无审批不产出员工包、Secrets 仅配置注入步骤可读；固定 Action SHA 与最小权限按仓库 CI 约定 |
-| NSIS 构建链（CI windows runner 可行性、品牌图标嵌入、静默参数） | P2 实测；构建主路径为 Release 流水线 CI，兜底本地 Mac 的 makensis 离线构建；本机盘点 makensis 未安装，本地兜底需先安装（如 brew） |
-| 自助安装引导与批量部署口径 | 无 MDM；仅自助 + 静默参数文档，不随包提供批量脚本；P2 产出参数文档 |
+| 外层图标派生（SVG → `.ico` / `.icns`）工具链 | P1 已闭环：仓内预派生入库并纳入 `manifest.json` 校验，构建脚本直接验证并消费（`derive-brand-icons.mjs` 仅用于源图更新时本地重建，不再要求 CI 动态派生） |
+| Release 流水线可行性与产物完整性（tag 触发、草稿 Release 挂载、资产核对、环境审批、Secrets 读取） | P1 已实测（`v0.1.1` 起已跑通员工包与 mac/win 草稿构建）；桌面安装包的独立 `.sha256` 校验文件及草稿说明摘要留待后续统一包校验体系补齐 |
+| NSIS 构建链（CI windows runner 可行性、品牌图标嵌入、静默参数） | CI `desktop-windows` 已接入，NSIS 已配置 `deleteAppDataOnUninstall: false`，静默参数口径写入 `deploy/clients/README.md`；离线 Win10 x64 VM 实测仍待 P2 验收 |
+| 自助安装引导与批量部署口径 | 无 MDM；仅自助 + 静默参数文档，不随包提供批量脚本；参数口径已落入 `deploy/clients/README.md`，VM 实测后复核 |
 | SmartScreen / Gatekeeper 表现 | P2 / P3 记录，归 #123 取证，自有壳不签名；首开引导附警告绕过图文 |
-| 麒麟 Electron 兼容性（glibc / chromium sandbox / 双架构） | P0 最小应用探针（精确钉 44.7.0）；仍 BLOCKED 则恢复 web 形态 deb 兜底并上报重申 |
+| 麒麟 Electron 兼容性（glibc / chromium sandbox / 双架构） | P0 最小应用探针（精确钉 44.7.0；`0.2.2-rc.5` 依赖的白名单已离线确认包含 `44.7.0`）；仍 BLOCKED 则恢复 web 形态 deb 兜底并上报重申 |
 | GitHub Actions 麒麟构建与目标机兼容性（glibc / ABI、沙箱链准入） | P4 实测；不兼容时降级基础镜像 / 容器重试，仍败触发 web 兜底 |
 | 企业真实终端验收 | 全部归 #123 按目标环境独立验收 |
 | 内置运行时在 `web` profile 下的接入方式 | 已有 mac 本机结论（2026-11-26，见 §3 #9）；复跑用 `scripts/probe/run-primary-runtime-probe.mjs` |
 | 内置运行时的 Windows / Linux 载荷、体积与随包许可 | P2 / P4：两平台载荷由 CI 原生运行器暂存并检查，未在目标机运行；压缩后的体积增量未测；CPython 的许可文本不在载荷内，分发前由项目负责人裁决（见[验证记录](<../design/verification/desktop-primary-runtime.md>)） |
-| 自承载 Node 下的凭据存储（`node:sqlite`） | P0 探针；不可用则方案重新设计 |
-| Windows / Linux 自承载与五目标原生依赖预编译 | P0 探针；按平台回退路线 B |
+| 自承载 Node 下的凭据存储（`node:sqlite`） | macOS 本机已证实可写与入库；Windows / Linux 实机仍待 P0/P2 验证，不可用则方案重新设计 |
+| Windows / Linux 自承载与五目标原生依赖预编译 | P0 探针（macOS 已实测自承载）；按平台回退路线 B |
 | `web` profile 并发（终端 CLI 与壳） | P0 探针；不安全则壳改用独立 profile |
-| 壳内认证闭环（launch URL、IAM 登录后的会话恢复） | P0 探针；结论作为首启与登录流程的设计输入 |
+| 壳内认证闭环（launch URL、IAM 登录后的会话恢复） | `0.2.2-rc.5` 启动参数与 stdout `dsh web:` 行已于 2026-11-26 离线核验；真实企业网络下 IAM 登录与会话恢复待联调 |
 | 统一构建在 Linux runner 上的运行 | P1 首次推 tag 实测：构建企业插件包、注入配置、组装员工包、环境审批全链路通过 |
 | Discovery 预检 | runner 访问不到企业 IAM，构建时不做，也不设固定补做环节；交付回执记为未核验，首次企业登录实测时一并验证 |
 | 撤销端点兼容性 | P1 实测：`revocationEndpoint` 指向的端点可用，退出后访问令牌失效 |
