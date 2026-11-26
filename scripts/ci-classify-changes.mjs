@@ -124,10 +124,46 @@ function collidesWithTree(index, path) {
   return false;
 }
 
-function isApprovedDocumentation({ path, status, oldMode, newMode }, tree) {
-  const approvedPath = ['README.md', 'CONTRIBUTING.md', 'SECURITY.md'].includes(path)
-    || (path.startsWith('docs/') && path.endsWith('.md'));
-  if (!approvedPath || !isPortablePath(path)) return false;
+const APPROVED_ROOT_DOCS = new Set(['README.md', 'CONTRIBUTING.md', 'SECURITY.md']);
+
+const ISOLATED_NON_PLATFORM_PREFIXES = [
+  '.agents/skills/',
+  'deploy/',
+  'services/forge-desktop/',
+];
+
+const ISOLATED_NON_PLATFORM_FILES = new Set([
+  'scripts/build-desktop-installer.mjs',
+  'scripts/derive-brand-icons.mjs',
+  'scripts/stage-desktop-payload.mjs',
+  'scripts/stage-primary-runtime.mjs',
+  'scripts/lib/primary-runtime.mjs',
+  'scripts/lib/primary-runtime-smoke.py',
+  'scripts/lib/zip-archive.mjs',
+  'scripts/probe/primary-runtime-probe-plugin.mjs',
+  'scripts/probe/run-primary-runtime-probe.mjs',
+  'tests/build-desktop-installer.test.mjs',
+  'tests/derive-brand-icons.test.mjs',
+  'tests/desktop-shell-contract.test.mjs',
+  'tests/stage-desktop-payload.test.mjs',
+  'tests/stage-primary-runtime.test.mjs',
+  'tests/zip-archive.test.mjs',
+  'tests/fixtures/primary-runtime-helpers.mjs',
+  'tests/fixtures/zip-writer.mjs',
+]);
+
+function isApprovedDocPath(path) {
+  return APPROVED_ROOT_DOCS.has(path) || (path.startsWith('docs/') && path.endsWith('.md'));
+}
+
+function isIsolatedNonPlatformPath(path) {
+  return isApprovedDocPath(path)
+    || ISOLATED_NON_PLATFORM_PREFIXES.some((prefix) => path.startsWith(prefix))
+    || ISOLATED_NON_PLATFORM_FILES.has(path);
+}
+
+function isApprovedNonPlatformChange({ path, status, oldMode, newMode }, tree) {
+  if (!isIsolatedNonPlatformPath(path) || !isPortablePath(path)) return false;
   if (status === 'A') return newMode === '100644' && tree !== null && !collidesWithTree(tree, path);
   if (status === 'D') return oldMode === '100644';
   return oldMode === '100644' && newMode === '100644';
@@ -192,10 +228,13 @@ export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd
     const tree = changes.some(({ status }) => status === 'A')
       ? createTreeIndex(nulFields(gitRunner(['ls-tree', '-r', '-z', '--name-only', '--full-tree', checkout], cwd)))
       : null;
-    if (!changes.every((entry) => isApprovedDocumentation(entry, tree))) {
-      return full('non-documentation or unsafe change');
+    if (!changes.every((entry) => isApprovedNonPlatformChange(entry, tree))) {
+      return full('non-isolated or unsafe change');
     }
-    return { run_platforms: false, reason: 'documentation-only changes' };
+    if (changes.every((entry) => isApprovedDocPath(entry.path))) {
+      return { run_platforms: false, reason: 'documentation-only changes' };
+    }
+    return { run_platforms: false, reason: 'isolated non-platform changes' };
   } catch {
     return full('Git comparison unavailable or invalid');
   }
