@@ -135,6 +135,7 @@ export function createExpertsHost(ports) {
     evaluatePolicy: ports.evaluatePolicy,
     openStorageDomain: ports.openStorageDomain,
     onCorrelationPersistError: ports.onCorrelationPersistError,
+    onPendingIndexError: ports.onPendingIndexError,
     onTaskReconciled: (event) => {
       routesRef?.broadcast({ type: 'task-reconciled', ...event });
     },
@@ -302,6 +303,11 @@ export async function apply(ctx, config = {}) {
     onCorrelationPersistError: ({ requestId, status, message }) => {
       if (typeof ctx.logger?.warn === 'function') {
         ctx.logger.warn('[forge-experts] request correlation update failed', { requestId, status, message });
+      }
+    },
+    onPendingIndexError: ({ requestId, status, message }) => {
+      if (typeof ctx.logger?.warn === 'function') {
+        ctx.logger.warn('[forge-experts] pending_index sync failed', { requestId, status, message });
       }
     },
     getIamSession: () => {

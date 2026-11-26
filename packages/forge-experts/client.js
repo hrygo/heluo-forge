@@ -257,13 +257,30 @@ window.__ModuleLoader__.load({
     }
 
     // §5 管理页与异步任务状态/恢复卡片视图（#246 / #247）
-    function pickTaskResultFields(body) {
+    function pickTaskFields(body, keys) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) return {};
       const picked = {};
-      for (const key of ['summary', 'rawResult', 'result', 'sources', 'artifacts', 'runId', 'runGeneration', 'resultVersion', 'waitingUserNotice']) {
+      for (const key of keys) {
         if (body[key] !== undefined) picked[key] = body[key];
       }
       return picked;
+    }
+
+    function pickTaskResultFields(body) {
+      return pickTaskFields(body, ['summary', 'rawResult', 'result', 'sources', 'artifacts', 'runId', 'runGeneration', 'resultVersion', 'waitingUserNotice']);
+    }
+
+    function pickTaskReconcileFields(body, prev) {
+      const picked = pickTaskFields(body, ['status', 'runId', 'runGeneration', 'resultVersion', 'acceptedAt', 'waitingUserNotice', 'summary', 'rawResult', 'result', 'sources', 'artifacts']);
+      // Preserve existing authoritative taskId/requestId; only adopt taskId when previously unknown.
+      if (!prev?.taskId && typeof body?.taskId === 'string' && body.taskId.trim()) {
+        picked.taskId = body.taskId.trim();
+      }
+      return picked;
+    }
+
+    function pickTaskMutationFields(body) {
+      return pickTaskFields(body, ['status', 'runId', 'runGeneration', 'resultVersion', 'cancelRequested', 'waitingUserNotice', 'summary']);
     }
 
     function ExpertTaskStatusCard(props = {}) {
@@ -292,7 +309,7 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
-          setTask((prev) => ({ ...(prev ?? {}), ...(res.body ?? {}) }));
+          setTask((prev) => ({ ...(prev ?? {}), ...pickTaskReconcileFields(res.body, prev) }));
           setNotice('已按原请求号完成权威状态对账。');
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
@@ -311,7 +328,7 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(statusRes));
             return;
           }
-          let merged = { ...(task ?? {}), ...(statusRes.body ?? {}) };
+          let merged = { ...(task ?? {}), ...pickTaskMutationFields(statusRes.body) };
           if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'waiting_user') {
             const resultRes = await fetchTaskResult(model.taskId).catch(() => null);
             if (resultRes?.ok && resultRes.body) {
@@ -338,7 +355,7 @@ window.__ModuleLoader__.load({
             return;
           }
           setFollowupText('');
-          setTask((prev) => ({ ...(prev ?? {}), ...(res.body ?? {}) }));
+          setTask((prev) => ({ ...(prev ?? {}), ...pickTaskMutationFields(res.body) }));
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
         } finally {
@@ -356,8 +373,14 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
-          setTask((prev) => ({ ...(prev ?? {}), ...(res.body ?? {}) }));
-          setNotice('取消请求已提交；专家已经执行的外部动作不会被自动撤销。');
+          const patch = pickTaskMutationFields(res.body);
+          setTask((prev) => ({ ...(prev ?? {}), ...patch }));
+          const nextStatus = patch.status ?? task?.status;
+          if (nextStatus === 'cancelling' || nextStatus === 'cancelled' || patch.cancelRequested === true) {
+            setNotice('取消请求已提交；专家已经执行的外部动作不会被自动撤销。');
+          } else {
+            setNotice('已同步服务端最新任务状态。');
+          }
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_REQUEST_FAILED);
         } finally {
@@ -573,9 +596,23 @@ window.__ModuleLoader__.load({
       let generation = 0;
       let activeEpoch = 0;
       let activeVersion = 0;
+      const MAX_PENDING_DRAFTS = 32;
+      const RECONCILE_COOLDOWN_MS = 5_000;
       // Hoisted to mountMentionsSource closure so SSE reconnect/invalidation never drops buffered user drafts (#245/#246).
       const pendingDrafts = new Map();
       let draftRecoveryListener = null;
+      let reconcileInFlight = false;
+      let lastReconcileAt = 0;
+
+      const rememberPendingDraft = (sessionKey, draft) => {
+        pendingDrafts.delete(sessionKey);
+        pendingDrafts.set(sessionKey, draft);
+        while (pendingDrafts.size > MAX_PENDING_DRAFTS) {
+          const oldest = pendingDrafts.keys().next().value;
+          if (oldest === undefined) break;
+          pendingDrafts.delete(oldest);
+        }
+      };
 
       const dropGroup = () => {
         generation += 1;
@@ -672,7 +709,7 @@ window.__ModuleLoader__.load({
                 };
               }
               if (typeof sessionId === 'string' && sessionId.trim()) {
-                pendingDrafts.set(sessionId.trim(), draft);
+                rememberPendingDraft(sessionId.trim(), draft);
               }
               return {
                 ok: true,
@@ -704,8 +741,11 @@ window.__ModuleLoader__.load({
         (payload) => {
           if (payload.type === 'ready') {
             activeHooks = registerGroup() ?? activeHooks;
-            if (enableSelectionBinding) {
-              // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）。
+            const nowMs = Date.now();
+            if (enableSelectionBinding && !reconcileInFlight && (lastReconcileAt === 0 || nowMs - lastReconcileAt >= RECONCILE_COOLDOWN_MS)) {
+              reconcileInFlight = true;
+              lastReconcileAt = nowMs;
+              // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重与冷却防重连风暴。
               postReconcilePending().then((res) => {
                 if (res && !res.ok && typeof console !== 'undefined') {
                   console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
@@ -714,14 +754,17 @@ window.__ModuleLoader__.load({
                 if (typeof console !== 'undefined') {
                   console.warn('[forge-experts] pending task reconciliation failed');
                 }
+              }).finally(() => {
+                reconcileInFlight = false;
               });
             }
             return;
           }
-          if (payload.type === 'turn-finalized' && enableSelectionBinding && payload.preserveDraft === true) {
+          if (payload.type === 'turn-finalized' && enableSelectionBinding) {
             const sessionKey = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
             const recoveredDraft = sessionKey ? (pendingDrafts.get(sessionKey) ?? null) : null;
             if (sessionKey) pendingDrafts.delete(sessionKey);
+            if (payload.preserveDraft !== true) return;
             const notice = typeof payload.notice === 'string' && payload.notice
               ? payload.notice
               : (ERROR_NOTICE[payload.code] ?? ERROR_NOTICE.EXPERT_SELECTION_INVALID);

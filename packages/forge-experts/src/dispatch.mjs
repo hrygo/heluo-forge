@@ -380,9 +380,16 @@ export function createDispatchService(ports) {
           schemaVersion: 1,
           requestIds: filtered,
         });
-      } catch {
+      } catch (error) {
         // Index sync is best-effort and must not override primary correlation writes
-        // or overwrite existing entries when readPendingIndex fails.
+        // or overwrite existing entries when readPendingIndex fails; report drift via port.
+        try {
+          ports.onPendingIndexError?.({
+            requestId,
+            status,
+            message: error?.message ?? String(error),
+          });
+        } catch { /* diagnostics isolation */ }
       }
     };
     const next = pendingIndexQueue.then(run, run);

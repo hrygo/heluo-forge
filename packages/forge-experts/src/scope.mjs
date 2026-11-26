@@ -21,12 +21,13 @@ function normalizeIamSession(raw) {
   const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn === true);
   const issuer = pickNonEmptyString(raw.issuer, raw.principal?.issuer);
   const subject = pickNonEmptyString(raw.subject, raw.principal?.subject);
+  const orgId = pickNonEmptyString(raw.orgId, raw.principal?.orgId);
   if (!ready || !issuer || !subject) return null;
   return Object.freeze({
     state: 'ready',
     issuer,
     subject,
-    ...(isNonEmptyString(raw.orgId) ? { orgId: raw.orgId.trim() } : {}),
+    ...(orgId ? { orgId } : {}),
   });
 }
 
