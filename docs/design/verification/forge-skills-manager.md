@@ -6,6 +6,19 @@
 
 本地技能管理与 Nacos 只读发现；Skill Manager 由自己的 TGZ 与补丁独立安装，enterprise 不依赖、捆绑或挂载它。正式交付由包内 `scripts/package.mjs` 预置 Nacos 地址、命名空间和固定凭据引用；账号密码写入包内 `private/nacos-credentials.json`，Host 运行时读取，不写回配置对象，安装后无需填写连接配置。中性构建包用于开发，profile 可作开发覆盖。HTTP/HTTPS 均可，无 Nacos HTTP 开关。项目级交付器和安装器保持 enterprise 单包流程；Nacos 内嵌限定要求按契约记账。页面与错误不回显凭据，旧环境变量方式兼容开发使用。真实 Cordis 用例验证 manager 作用域可以动态绑定同 Host 的 IAM；产品代码尚不消费具体 IAM 能力，不实现 IAM 换票。独立预置 TGZ 在目标 DSH 0.2.2-rc.5 的隔离 profile 装载与诊断脱敏通过；三包离线装配的历史实测宿主为 0.2.2-rc.2；企业权限、完整三包装卸及目标平台仍待验。
 
+## 2026-11-26 PR 465 最新主线文档冲突集成
+
+本地 rebase 集成主线 `6e4bfef` 的七个新提交，保留 27 个分支提交，由 `post-rewrite` 完成重新扫描与签名。唯一冲突是本文关联架构方案的版本字段，正文保留双方修改，版本统一为 V0.9.4。安装器及测试自动合并；三方树核对表明 rebase 结果与预期自动合并树仅有该文档版本字段差异。Skill Manager 包内容与集成前逐字一致，包含上一轮 Linux 凭据目录修复。根 README 的产品受众职责未变化。
+
+固定 Node 24.21.0 / pnpm 11.28.5，本机 Windows；未重新制作正式员工包，未新增企业 Nacos/IAM 或目标平台验收。
+
+| 命令与范围 | 结果与耗时 |
+|---|---|
+| `node --test packages/forge-skills-manager/test/bundled-credentials.test.mjs packages/forge-skills-manager/test/nacos-credentials.test.mjs` | 17 项全部通过，约 1.1 秒；包括目录链接拒绝、包内及开发凭据读取、令牌失效与轮换 |
+| `node --test --test-name-pattern='readPrivateRelease\|parseArgs：--pnpm-store\|storePreflight\|预检演练' tests/init-enterprise-plugin.test.mjs` | 6 项中 5 通过、1 失败，约 0.45 秒；失败为 main 新增 store 预检用例的 Windows 绝对路径预期。对 `6e4bfef` 隔离源码归档运行同一失败用例，约 0.23 秒，以相同差异复现；不是自动合并引入。去除该已核验失败项的五项定向回归全部通过，约 0.69 秒 |
+| 根目录 `pnpm check` | 生成物一致性、类型、文档、仓库结构、技能、12 包 618 文件归档审计与版本检查通过；5488 项中 5312 通过、109 失败、67 跳过，整体约 405.6 秒、测试约 355.6 秒。失败涉及 Windows 路径、权限、IAM 锁等待与 POSIX 工具等；失败明细未列出 Skill Manager 包内用例。除上述 store 用例外，本轮未逐项基线对照，不记全库通过 |
+| `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD`（rebase 后、收尾记录提交前） | 27 个提交签名校验通过，约 5.9 秒；推送前再次核验 |
+
 ## 2026-11-26 PR 465 Linux 凭据目录链接校验
 
 包内凭据目录以不带末尾斜杠的固定路径执行 `lstat`，拒绝符号链接或 junction 后才读取凭据文件。POSIX 对带末尾斜杠的目录路径会跟随链接，原路径使目录链接被当成普通目录；修复同步源码与 `lib/nacos.js`，保留既有行为回归用例，不调整凭据交付方式和错误契约。
