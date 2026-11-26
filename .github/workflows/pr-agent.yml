@@ -231,8 +231,8 @@ jobs:
           PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"
           PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"
 
-      # The model's review stays advisory. A maintainer decides whether any
-      # finding merits a formal request or whether an existing request is resolved.
+      # Only P0/P1 findings with a location in the reviewed diff request changes.
+      # Maintainers decide whether to dismiss prior requests.
       - name: Validate PR-Agent review
         id: validation
         if: ${{ steps.revision.outputs.head != '' }}
@@ -255,12 +255,14 @@ jobs:
           const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, GITHUB_EVENT_PATH,
             PR_TITLE, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEWED_BASE_REF,
             REVIEW_STARTED_AT, PR_AGENT_ALLOW_RETRY, PR_AGENT_CHECK_REFRESH, GITHUB_OUTPUT } = process.env;
+          const comment = EVENT_NAME === 'issue_comment'
+            ? JSON.parse(await readFile(GITHUB_EVENT_PATH, 'utf8'))?.comment?.body
+            : undefined;
+          const commentBody = typeof comment === 'string' ? comment : '';
+          let review;
           if (!REVIEW_RESULT) {
             // Match the upstream ignored-title and incremental-review skips.
             const ignoredTitle = /^\[Auto\]/.test(PR_TITLE ?? '');
-            const commentBody = EVENT_NAME === 'issue_comment'
-              ? JSON.parse(await readFile(GITHUB_EVENT_PATH, 'utf8'))?.comment?.body ?? ''
-              : '';
             const incremental = /^\s*\/review\s+-i(?:\s|$)/i.test(commentBody);
             const expected = !ignoredTitle && (EVENT_NAME === 'pull_request' ||
               (!incremental && /^\s*\/review(?:\s|$)/i.test(commentBody)));
@@ -272,7 +274,6 @@ jobs:
             }
           }
           if (REVIEW_RESULT) {
-            let review;
             try {
               review = JSON.parse(REVIEW_RESULT);
             } catch {
@@ -290,16 +291,17 @@ jobs:
           }
           const url = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}`;
           const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` };
-          async function verifyRevision() {
+          async function verifyRevision({ afterSubmission = false } = {}) {
             const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
             if (!response.ok) throw new Error(`Cannot verify PR revision (HTTP ${response.status})`);
             const pr = await response.json();
-            if (pr.head?.repo?.full_name !== GITHUB_REPOSITORY) {
+            const sameHeadRepo = pr.head?.repo?.full_name === GITHUB_REPOSITORY;
+            if (!sameHeadRepo && !afterSubmission) {
               console.log('Skipping a fork or deleted head repository');
               process.exit(0);
             }
-            if (pr.state !== 'open' || pr.head?.sha !== REVIEWED_HEAD || pr.base?.ref !== REVIEWED_BASE_REF ||
-                pr.base?.repo?.full_name !== GITHUB_REPOSITORY) {
+            if (!sameHeadRepo || pr.state !== 'open' || pr.head?.sha !== REVIEWED_HEAD ||
+                pr.base?.ref !== REVIEWED_BASE_REF || pr.base?.repo?.full_name !== GITHUB_REPOSITORY) {
               throw new Error('PR revision changed during review; summary and review may need to be refreshed');
             }
             const baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(REVIEWED_BASE_REF)}`, {
@@ -313,7 +315,7 @@ jobs:
               throw new Error('Invalid target branch revision');
             }
             if (reference.object.sha !== REVIEWED_BASE) {
-              if (PR_AGENT_ALLOW_RETRY === 'true') {
+              if (!afterSubmission && PR_AGENT_ALLOW_RETRY === 'true') {
                 await appendFile(GITHUB_OUTPUT, 'retry=true\n');
                 console.log('::warning::Target branch advanced during review; retrying the PR-Agent run.');
                 process.exit(0);
@@ -365,7 +367,90 @@ jobs:
             if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
             await verifyRevision();
           }
-          console.log('PR-Agent review is advisory; formal review decisions require a maintainer.');
+          // A manual command with arguments can override the severity rubric.
+          if (EVENT_NAME === 'issue_comment' && !/^\s*\/review\s*$/iu.test(commentBody)) process.exit(0);
+          const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
+          const highPriority = issues.filter((issue) =>
+            typeof issue?.issue_header === 'string' && /^\[P[01]\]\s+\S/u.test(issue.issue_header.trim()) &&
+            typeof issue.relevant_file === 'string' && issue.relevant_file.trim() &&
+            typeof issue.issue_content === 'string' && issue.issue_content.trim() &&
+            Number.isSafeInteger(issue.start_line) && issue.start_line > 0 &&
+            Number.isSafeInteger(issue.end_line) && issue.end_line >= issue.start_line);
+          if (!highPriority.length) process.exit(0);
+
+          async function hasMatchingItem(resource, matches) {
+            for (let page = 1; page <= 100; page++) {
+              const response = await fetch(`${url}/${resource}?per_page=100&page=${page}`, {
+                headers,
+                signal: AbortSignal.timeout(15000),
+              });
+              if (!response.ok) throw new Error(`Cannot read PR ${resource} (HTTP ${response.status})`);
+              const items = await response.json();
+              if (!Array.isArray(items)) throw new Error(`Invalid PR ${resource} response`);
+              if (items.some(matches)) return true;
+              if (items.length < 100) return false;
+            }
+            throw new Error(`PR ${resource} exceeds the pagination limit`);
+          }
+
+          function containsFinding(file) {
+            if (typeof file?.patch !== 'string') return false;
+            const reported = highPriority.filter(({ relevant_file }) =>
+              file.filename === relevant_file.trim() || file.previous_filename === relevant_file.trim());
+            if (!reported.length) return false;
+            const hunkPattern = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gmu;
+            for (const [, oldStart, oldCount, newStart, newCount] of file.patch.matchAll(hunkPattern)) {
+              // GitHub exposes both sides in the patch, including deletions.
+              const ranges = [[Number(oldStart), Number(oldCount ?? 1)], [Number(newStart), Number(newCount ?? 1)]];
+              if (reported.some(({ start_line }) =>
+                ranges.some(([first, count]) => start_line >= first && start_line < first + count))) return true;
+            }
+            return false;
+          }
+          if (!await hasMatchingItem('files', containsFinding)) {
+            console.log('::warning::No P0/P1 finding has a location in the current PR diff.');
+            process.exit(0);
+          }
+
+          const marker = `<!-- heluo-forge-pr-agent-priority-rc:v1 ${REVIEWED_HEAD} ${REVIEWED_BASE} -->`;
+          const alreadyRequested = await hasMatchingItem('reviews', (item) =>
+            item?.user?.login === 'github-actions[bot]' && item.commit_id === REVIEWED_HEAD &&
+            ['CHANGES_REQUESTED', 'DISMISSED'].includes(item.state) &&
+            typeof item.body === 'string' && item.body.trimEnd().endsWith(marker));
+          if (alreadyRequested) {
+            console.log('A change request for this reviewed revision is already recorded.');
+            process.exit(0);
+          }
+
+          // Recheck after reading the diff and review history. GitHub binds the
+          // review to the explicit commit, even if a push races the submission.
+          await verifyRevision();
+          const response = await fetch(`${url}/reviews`, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event: 'REQUEST_CHANGES',
+              commit_id: REVIEWED_HEAD,
+              body: [
+                '洛神发现本次差异中存在 P0/P1 问题。请查看洛神的审查意见，修复后重新审查。',
+                '',
+                marker,
+              ].join('\n'),
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!response.ok) throw new Error(`Cannot request changes (HTTP ${response.status})`);
+          const submitted = await response.json();
+          if (submitted?.state !== 'CHANGES_REQUESTED' || submitted.commit_id !== REVIEWED_HEAD ||
+              !Number.isSafeInteger(submitted.id) || submitted.id <= 0) {
+            throw new Error('GitHub returned an unexpected change request state or commit');
+          }
+          try {
+            await verifyRevision({ afterSubmission: true });
+          } catch (error) {
+            throw new Error(`Change request ${submitted.id} was submitted. Could not confirm the current PR revision.`, { cause: error });
+          }
+          console.log(`Requested changes for the reviewed commit (review ${submitted.id}).`);
           NODE
 
       # A base-only change does not produce a PR synchronize event. Retry once

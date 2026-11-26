@@ -141,4 +141,4 @@ OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启�
 
 [仓库审查配置](.pr_agent.toml)从默认分支加载，合并后对后续运行生效。审查给出按风险排序的可操作发现和人工审查优先文件，合入建议供维护者参考。评论折叠区展示实际返回的 token 数与调用次数，账单以 OpenAI 项目用量为准。以 2026-11-26 的标准价估算，累计消耗 20,000 个未缓存输入 token 和 2,000 个输出 token（含推理）约为 US$0.06。[OpenAI API 定价](https://developers.openai.com/api/docs/pricing)
 
-维护者可在开放的 PR 直接留言 `/review`。自动和手动审查都会以 GitHub `COMMENT` 审查发布定位到差异行的评论。无法定位或发布的发现保留在审查摘要。合入决定由维护者作出。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)
+维护者可在开放的 PR 直接留言 `/review`。洛神通过 GitHub `COMMENT` 审查发布定位到差异行的发现，无法发布的发现保留在摘要。发现按 P0 到 P3 分级。自动审查和无参数的 `/review` 发现可在当前差异中定位的 P0/P1 时，另提交一次 GitHub `Request changes`。同一组 PR 提交和目标分支提交只发起一次。带参数的手动审查仍发布意见。修改请求由维护者确认解除。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)
