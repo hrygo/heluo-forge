@@ -36,6 +36,24 @@
 - id: credentials
   disabled: true
 
+# 内置运行时（CORP-DSH-DESIGN-025）：桌面壳随包携带上游的 primary runtime，并以 DSH_PRIMARY_RUNTIME
+# 交出它的位置。上游自己把这两行只对名为 desktop 的 profile 打开；这里只去掉 profile 名这一条限制，
+# 其余语义与上游一致——没有该变量时工具行保持停用、Office 技能照旧指向用户自己的 Python，
+# 所以终端 CLI 与不带载荷的环境不受影响。两行都带 name 守卫：上游更换实现包时补丁警告跳过，
+# 而不是命中一个恰好同 id 的别的行。sdk profile 里由 @deepseek-ai/dsh-sdk-app 插入的同名行同样被命中，
+# 差别只在多了 root：载荷首次被调用时复制到 Harness home，而不是原地使用。
+- id: workspace-dependencies
+  name: '@deepseek-ai/dsh-tool-workspace-dependencies'
+  disabled: !!js "!process.env.DSH_PRIMARY_RUNTIME"
+  config:
+    source: !!js process.env.DSH_PRIMARY_RUNTIME
+    root: !!js dshHomePath('dsh-runtimes', 'dsh-primary-runtime')
+
+- id: skill-office
+  name: '@deepseek-ai/dsh-skill-office'
+  config:
+    pythonEnvironment: !!js "process.env.DSH_PRIMARY_RUNTIME ? 'workspace-dependencies' : 'user'"
+
 # 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 6 条写动作目录
 # （只读动作不登记）与内存审计配置（环形缓冲，无 isolate）；与 `@heluo/forge-engineering` 并存安装时由
 # Cordis Loader 按 id 合并为单一策略实例，不依赖挂载顺序。

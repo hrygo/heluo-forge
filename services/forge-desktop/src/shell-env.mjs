@@ -1,9 +1,13 @@
 import { delimiter as pathDelimiter } from 'node:path';
 
-// Node and Electron knobs are set by the shell for its own children. They are
-// dropped from everything inherited, so a value in the user's shell profile
-// cannot add loaders to, or change the mode of, the embedded runtime.
-const SHELL_OWNED = new Set(['NODE_OPTIONS', 'NODE_PATH', 'ELECTRON_RUN_AS_NODE']);
+import { PRIMARY_RUNTIME_VARIABLE } from './layout.mjs';
+
+// Node and Electron knobs are set by the shell for its own children, and so is
+// the location of the bundled runtime. They are dropped from everything
+// inherited, so a value in the user's shell profile cannot add loaders to, or
+// change the mode of, the embedded runtime, nor point the web profile at a
+// payload the app did not ship.
+const SHELL_OWNED = new Set(['NODE_OPTIONS', 'NODE_PATH', 'ELECTRON_RUN_AS_NODE', PRIMARY_RUNTIME_VARIABLE]);
 const VARIABLE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u;
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 

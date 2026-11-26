@@ -17,6 +17,21 @@ export const DSH_ENTRY_PARTS = ['dsh', 'node_modules', '@deepseek-ai', 'dsh', 'l
  */
 export const PNPM_ENTRY_PARTS = ['pnpm', 'bin', 'pnpm.mjs'];
 
+/**
+ * The primary runtime the app ships, relative to the resources root: upstream's
+ * relocatable payload of standalone Node.js, pnpm and CPython with the Office
+ * libraries, under its own `runtime.json`. The shell reads nothing inside it;
+ * it names the directory to the web profile through `PRIMARY_RUNTIME_VARIABLE`.
+ */
+export const PRIMARY_RUNTIME_DIR = 'primary-runtime';
+
+/**
+ * The variable the web profile reads the payload's location from. Upstream's
+ * own rows are keyed to this name, and the enterprise bundle's patch layer
+ * unlocks them by it.
+ */
+export const PRIMARY_RUNTIME_VARIABLE = 'DSH_PRIMARY_RUNTIME';
+
 /** The tray icon, relative to the resources root. */
 export const TRAY_ICON_PARTS = ['brand', 'tray.png'];
 

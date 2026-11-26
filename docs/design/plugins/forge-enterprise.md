@@ -6,16 +6,16 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.9.1 |
+| 版本 | V1.10.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-20 |
+| 最后更新 | 2026-11-26 |
 | 门禁 | G2 |
-| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`） |
+| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`；内置运行时的两行按 `DSH_PRIMARY_RUNTIME` 条件启用） |
 
 > 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用官方行后 shell/onboarding 是否完整。
 >
@@ -178,6 +178,19 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 用户在「设置 → 企业账号」（`forge-iam`，`order: -10`）配置网关地址与个人 Key，在独立「设置 → 企业模型」（`forge-models`，`order: 10`，由 `@heluo/forge-iam` 托管）经 `${baseURL}/models` 动态获取模型并管理手动声明条目，不开放原生自由模型设置入口。例如，`baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。模型调用由 IAM 内受控适配器与全局模型流事件检查，细节见 [IAM 设计 §13](<forge-iam.md#13-企业模型设置与执行闭环代拟>)与 [菜单统一设计](../enterprise-menu-and-token-unification.md)。
 
 本轮证据限于补丁内容与离线用例：扩至七行后的组合层完整性、升级回灌与双端 GUI 未复测，不能写成生产或企业联调结论。
+
+#### 5.1.4 内置运行时的两行条件启用
+
+通用底座对官方行的覆盖不只有停用一种。`workspace-dependencies`（`@deepseek-ai/dsh-tool-workspace-dependencies`，注册 `load_workspace_dependencies`）与 `skill-office` 两行是条件启用：上游自己只在名为 `desktop` 的 profile 且设置了 `DSH_PRIMARY_RUNTIME` 时打开它们，这里去掉 profile 名这一条限制，其余语义与上游一致。
+
+| 行 | 覆盖内容 | 没有变量时 | 有变量时 |
+|---|---|---|---|
+| `workspace-dependencies` | `disabled` 取反于 `DSH_PRIMARY_RUNTIME`；`source` 为该变量的值；`root` 为 Harness home 下的 `dsh-runtimes/dsh-primary-runtime` | 保持停用 | 读取该位置的载荷，首次调用时安装到 `root` 下并复用 |
+| `skill-office` | `pythonEnvironment` 按变量在 `workspace-dependencies` 与 `user` 之间选择 | 指向用户自己的 Python | 指向内置依赖 |
+
+两行都带 `name` 守卫：上游更换实现包时，补丁按 Loader 语义警告并跳过，而不是命中一个恰好同 id 的别的行。变量由桌面壳设置（[CORP-DSH-DESIGN-025](../services/desktop-shell.md)）；终端 CLI 使用同一个 `web` profile 而没有这个变量，行为与上游默认一致。sdk profile 里由 `@deepseek-ai/dsh-sdk-app` 插入的同名行同样被命中，差别只在多了 `root`：载荷首次被调用时复制到 Harness home，而不是原地使用。
+
+这两行不在 `OFFICIAL_ROWS` 之内，也不参与回灌判定：启用与否取决于环境变量，而不是 `disabled: true` 有没有落地，`rowsFromDump` 读不出它们的状态。补丁层的形态由 `packages/forge-enterprise/test/bundle-patch.test.mjs` 逐行断言，并对每一种改动给出变异证明；运行层的核验由 `scripts/probe/run-primary-runtime-probe.mjs` 承担。
 
 ### 5.2 按需企业 Skill 与规范条款加载（已独立至 `@heluo/forge-engineering`）
 
@@ -445,12 +458,12 @@ flowchart TD
 
 ## 实现与验证记录
 
-**实现边界**：企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与凭据/策略/IAM 三插件挂载；2 个源文件。
+**实现边界**：企业账号与模型组合 bundle：七个官方行禁用补丁（`OFFICIAL_ROWS`）、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、自包含构建与凭据/策略/IAM 三插件挂载；内置运行时的两行条件启用（`RUNTIME_ROWS`）；2 个源文件。两行条件启用的到达性证据见[验证记录](../verification/desktop-primary-runtime.md)。
 
 **验证结果与限制**：`node --test packages/forge-enterprise/test/*.test.mjs`、`tests/bundle-build`/`bundle-closure` 离线闭环；真机安装/升级/回滚/卸载与 `--from-default-profile` 历史实测（2026-10-24 五行口径）；七行扩行后仅由单测覆盖，未复测 DSH 组合层。**未验**：界面功能与角色 preset 粒度；`desktop` profile 在本机不可 dump，按 NOT RUN 记账。
 
 ## 准入核对要点
 
-**设计与接入边界**：通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测。
+**设计与接入边界**：通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行，按 id 覆盖内置运行时的两行（条件启用，§5.1.4），并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测。
 
 **准入关注点**：版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile。

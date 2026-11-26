@@ -142,6 +142,8 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+      - name: Verify the pinned runtime lock against upstream
+        run: node scripts/stage-primary-runtime.mjs --verify-lock
       - name: Fetch the locked runtime artifacts
         run: |
           DSH_VERSION=$(node -p "require('./services/forge-desktop/runtime-lock.json').dsh.version")
@@ -190,6 +192,16 @@ jobs:
             --dsh-tgz "$DSH_TGZ" \
             --pnpm-tgz "$PNPM_TGZ" \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
+      - name: Stage the bundled runtime
+        run: |
+          # After the dsh closure: the payload is laid out the way the locked dsh reads it.
+          node scripts/stage-primary-runtime.mjs \
+            --target mac-arm64 \
+            --output "$RUNNER_TEMP/staged/resources" \
+            --pnpm-tgz "$PNPM_TGZ" \
+            --dsh-modules "$RUNNER_TEMP/staged/resources/dsh/node_modules" \
+            --version "$GITHUB_REF_NAME" \
+            --record "$RUNNER_TEMP/staged/primary-runtime-record.json"
       - name: Build the desktop application bundle
         run: |
           node scripts/build-desktop-installer.mjs \
@@ -242,6 +254,9 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+      - name: Verify the pinned runtime lock against upstream
+        shell: bash
+        run: node scripts/stage-primary-runtime.mjs --verify-lock
       - name: Fetch the locked runtime artifacts
         shell: bash
         run: |
@@ -293,6 +308,17 @@ jobs:
             --dsh-tgz "$DSH_TGZ" \
             --pnpm-tgz "$PNPM_TGZ" \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
+      - name: Stage the bundled runtime
+        shell: bash
+        run: |
+          # After the dsh closure: the payload is laid out the way the locked dsh reads it.
+          node scripts/stage-primary-runtime.mjs \
+            --target win-x64 \
+            --output "$RUNNER_TEMP/staged/resources" \
+            --pnpm-tgz "$PNPM_TGZ" \
+            --dsh-modules "$RUNNER_TEMP/staged/resources/dsh/node_modules" \
+            --version "$GITHUB_REF_NAME" \
+            --record "$RUNNER_TEMP/staged/primary-runtime-record.json"
       - name: Build the NSIS installer
         shell: bash
         run: |

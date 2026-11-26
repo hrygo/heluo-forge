@@ -286,18 +286,24 @@ test('反向：缺品牌套件与缺 dsh 制品各自报错；参数解析要求
   });
 });
 
-test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品并交给暂存工具', () => {
+test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品，两个暂存工具各拿一份', () => {
   // The workflow runs only on a tag, behind an approval: a handover it gets wrong would be found late.
   const count = (text, pattern) => (text.match(pattern) ?? []).length;
+  // A staged command is a first line ending in a backslash and the lines it is joined to; a one-line call is not a staging.
+  const commands = (text, tool) => [...text.matchAll(new RegExp(`node scripts/${tool}\\.mjs[^\\n]*\\n(?:[^\\S\\n]+[^\\n]*\\\\\\n)+[^\\S\\n]+[^\\n]*`, 'gu'))].map((match) => match[0]);
   const workflow = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-bundle.yml'), 'utf8');
-  const stagings = count(workflow, /stage-desktop-payload\.mjs/gu);
-  assert.equal(stagings, 2, 'one desktop job per platform');
-  assert.equal(count(workflow, /--pnpm-tgz "\$PNPM_TGZ"/gu), stagings, 'every staging gets the pnpm artifact');
-  assert.equal(count(workflow, /node -p "require\('\.\/services\/forge-desktop\/runtime-lock\.json'\)\.pnpm\.version"/gu), stagings, 'the version comes from the ledger');
-  assert.equal(count(workflow, /echo "PNPM_TGZ=/gu), stagings, 'the artifact path is published to the later steps');
+  const stagings = commands(workflow, 'stage-desktop-payload');
+  assert.equal(stagings.length, 2, 'one desktop job per platform');
+  assert.equal(count(workflow, /node -p "require\('\.\/services\/forge-desktop\/runtime-lock\.json'\)\.pnpm\.version"/gu), stagings.length, 'the version comes from the ledger');
+  assert.equal(count(workflow, /echo "PNPM_TGZ=/gu), stagings.length, 'the artifact path is published to the later steps');
+  const handed = (command) => /--pnpm-tgz "\$PNPM_TGZ"/u.test(command);
+  // The bundled runtime is staged from the same pnpm artifact; its one-line lock check is not a staging.
+  const consumers = [...stagings, ...commands(workflow, 'stage-primary-runtime')];
+  for (const command of consumers) assert.equal(handed(command), true, `a staging without the pnpm artifact:\n${command}`);
   // The guard fails on a workflow that stages without the pnpm artifact.
   const dropped = workflow.replace('--pnpm-tgz "$PNPM_TGZ"', '');
-  assert.equal(count(dropped, /--pnpm-tgz "\$PNPM_TGZ"/gu), stagings - 1);
+  const afterDrop = [...commands(dropped, 'stage-desktop-payload'), ...commands(dropped, 'stage-primary-runtime')];
+  assert.equal(afterDrop.some((command) => !handed(command)), true);
 });
 
 /** Kept pure so the mutation below proves the agreement check fails. */
