@@ -20,10 +20,11 @@
  *
  * 用法：
  *   node scripts/stage-desktop-payload.mjs --output <dir> --dsh-tgz <path.tgz> --pnpm-tgz <path.tgz> \
- *     [--brand-dir <dir>] [--employee-assets <dir>] [--lock <runtime-lock.json>] [--json]
+ *     [--target <mac-arm64|mac-x64|win-x64|linux-x64|linux-arm64>] [--brand-dir <dir>] \
+ *     [--employee-assets <dir>] [--lock <runtime-lock.json>] [--max-dsh-bytes <n>] [--max-dsh-files <n>] [--json]
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,6 +37,23 @@ const TRAY_ICON_SOURCE = 'sizes/app-icon-256.png';
 const DEFAULT_BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
 const DEFAULT_LOCK = join('services', 'forge-desktop', 'runtime-lock.json');
 const DSH_PACKAGE_NAME = '@deepseek-ai/dsh';
+const TOP_PACKAGES_LIMIT = 20;
+
+const PREBUILD_RULES = Object.freeze({
+  'mac-arm64': { os: 'darwin', arches: new Set(['arm64', 'x64+arm64', 'arm64+x64', 'universal']) },
+  'mac-x64': { os: 'darwin', arches: new Set(['x64', 'x64+arm64', 'arm64+x64', 'universal']) },
+  'win-x64': { os: 'win32', arches: new Set(['x64']) },
+  'linux-x64': { os: 'linux', arches: new Set(['x64', 'x64-glibc', 'x64-musl']) },
+  'linux-arm64': { os: 'linux', arches: new Set(['arm64', 'arm64-glibc', 'arm64-musl']) },
+});
+const FOREIGN_PREBUILD_DIR = /^(win32|darwin|linux|freebsd|openbsd|sunos|aix|android)-([a-z0-9_+.-]+)$/u;
+
+export function defaultStagingTarget(platform = process.platform, arch = process.arch) {
+  const os = platform === 'win32' ? 'win' : platform === 'darwin' ? 'mac' : platform === 'linux' ? 'linux' : null;
+  if (os === null) return undefined;
+  const candidate = `${os}-${arch}`;
+  return Object.hasOwn(PREBUILD_RULES, candidate) ? candidate : undefined;
+}
 
 export class StageError extends Error {
   constructor(code, message) {
@@ -49,30 +67,48 @@ const fail = (code, message) => {
   throw new StageError(code, message);
 };
 
+function parsePositiveInt(raw, flag) {
+  if (!/^\d+$/u.test(String(raw))) fail('BAD_ARGUMENT', `${flag} must be a positive integer`);
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) fail('BAD_ARGUMENT', `${flag} must be a positive integer`);
+  return parsed;
+}
+
 export function parseArguments(argv) {
   const options = {
     output: undefined,
     dshTgz: undefined,
     pnpmTgz: undefined,
+    target: undefined,
     brandDir: undefined,
     employeeAssets: undefined,
     lock: undefined,
+    maxDshBytes: undefined,
+    maxDshFiles: undefined,
     json: false,
   };
   const valued = new Map([
     ['--output', 'output'],
     ['--dsh-tgz', 'dshTgz'],
     ['--pnpm-tgz', 'pnpmTgz'],
+    ['--target', 'target'],
     ['--brand-dir', 'brandDir'],
     ['--employee-assets', 'employeeAssets'],
     ['--lock', 'lock'],
+    ['--max-dsh-bytes', 'maxDshBytes'],
+    ['--max-dsh-files', 'maxDshFiles'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (valued.has(argument)) {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('--')) fail('BAD_ARGUMENT', `${argument} requires a value`);
-      options[valued.get(argument)] = value;
+      const field = valued.get(argument);
+      if (field === 'maxDshBytes' || field === 'maxDshFiles') {
+        options[field] = parsePositiveInt(value, argument);
+      } else {
+        options[field] = value;
+      }
       index += 1;
       continue;
     }
@@ -81,6 +117,9 @@ export function parseArguments(argv) {
       continue;
     }
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
+  }
+  if (options.target !== undefined && !Object.hasOwn(PREBUILD_RULES, options.target)) {
+    fail('BAD_ARGUMENT', `--target must be one of ${Object.keys(PREBUILD_RULES).join(', ')}`);
   }
   for (const flag of ['--output', '--dsh-tgz', '--pnpm-tgz']) {
     if (typeof options[valued.get(flag)] !== 'string' || options[valued.get(flag)].trim() === '') fail('BAD_ARGUMENT', `${flag} is required`);
@@ -220,18 +259,80 @@ export function dedupeDshClosure(rootNodeModules) {
   return { removedPackages, hoistedPackages };
 }
 
+/** Count regular files and bytes inside a directory tree (skipping any nested `node_modules`). */
+function measurePackageTree(dir, { skipNodeModules = false } = {}) {
+  let files = 0;
+  let bytes = 0;
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (skipNodeModules && entry.name === 'node_modules') continue;
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        files += 1;
+        bytes += statSync(full).size;
+      }
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return { files, bytes };
+}
+
 /**
- * Deterministic inventory and size summary of `dsh/node_modules`.
+ * Prune foreign-platform subdirectories under `<pkg>/prebuilds/` inside
+ * `dsh/node_modules`, leaving `@deepseek-ai/dsh` verbatim and keeping any
+ * universal or matching-target prebuild directory.
+ */
+export function pruneForeignPrebuilds(rootNodeModules, target = defaultStagingTarget()) {
+  const result = { removedDirs: 0, removedFiles: 0, removedBytes: 0 };
+  if (target === undefined || !Object.hasOwn(PREBUILD_RULES, target)) return result;
+  const rule = PREBUILD_RULES[target];
+  const root = resolve(rootNodeModules);
+  if (!existsSync(root)) return result;
+  for (const item of collectInstalledPackages(root)) {
+    if (item.name === DSH_PACKAGE_NAME && item.ancestors.length === 0) continue;
+    const prebuildsDir = join(item.dir, 'prebuilds');
+    if (!existsSync(prebuildsDir)) continue;
+    for (const dirent of readdirSync(prebuildsDir, { withFileTypes: true })) {
+      if (!dirent.isDirectory()) continue;
+      const match = FOREIGN_PREBUILD_DIR.exec(dirent.name);
+      if (match === null) continue;
+      const [, os, arch] = match;
+      if (os === rule.os && rule.arches.has(arch)) continue;
+      const foreignDir = join(prebuildsDir, dirent.name);
+      const stats = measurePackageTree(foreignDir);
+      rmSync(foreignDir, { recursive: true, force: true });
+      result.removedDirs += 1;
+      result.removedFiles += stats.files;
+      result.removedBytes += stats.bytes;
+    }
+  }
+  return result;
+}
+
+/**
+ * Deterministic inventory, Top-20 heaviest packages, and size summary of `dsh/node_modules`.
  */
 export function inspectDshClosure(rootNodeModules) {
   const root = resolve(rootNodeModules);
-  const packages = collectInstalledPackages(root)
+  const installed = collectInstalledPackages(root);
+  const packages = installed
     .map((item) => ({
       path: relative(root, item.dir).split(sep).join('/'),
       name: item.name,
       version: item.version,
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
+
+  const topPackages = installed
+    .map((item) => ({
+      path: relative(root, item.dir).split(sep).join('/'),
+      name: item.name,
+      version: item.version,
+      ...measurePackageTree(item.dir, { skipNodeModules: true }),
+    }))
+    .sort((a, b) => (b.bytes !== a.bytes ? b.bytes - a.bytes : a.path.localeCompare(b.path)))
+    .slice(0, TOP_PACKAGES_LIMIT);
 
   const unique = new Set(packages.map((pkg) => `${pkg.name}@${pkg.version}`));
   let files = 0;
@@ -249,6 +350,7 @@ export function inspectDshClosure(rootNodeModules) {
     files,
     bytes,
     digest: sha256Hex(Buffer.from(canonical, 'utf8')),
+    topPackages,
   };
 }
 
@@ -276,6 +378,15 @@ function verifyDshClosureLock(closure, lock) {
   }
 }
 
+function verifyDshBudget(closure, { maxBytes, maxFiles }) {
+  if (maxBytes !== undefined && closure.bytes > maxBytes) {
+    fail('STAGE_BUDGET_EXCEEDED', `dsh closure is ${closure.bytes} bytes, exceeding budget ${maxBytes}`);
+  }
+  if (maxFiles !== undefined && closure.files > maxFiles) {
+    fail('STAGE_BUDGET_EXCEEDED', `dsh closure has ${closure.files} files, exceeding budget ${maxFiles}`);
+  }
+}
+
 /**
  * The artifact the ledger locked, or nothing: the file must exist and be the
  * bytes the ledger names. Checked before anything is unpacked.
@@ -298,16 +409,20 @@ function verifiedArtifact(tgz, entry, label) {
 
 /**
  * Install the verified artifact with its dependency closure under
- * `<resources>/dsh/node_modules`, then deduplicate identical nested copies.
+ * `<resources>/dsh/node_modules`, prune foreign-platform prebuilds, and
+ * deduplicate identical nested copies.
  */
-function installDshClosure(tgz, destination, { installer, deduper } = {}) {
+function installDshClosure(tgz, destination, { installer, deduper, target } = {}) {
   mkdirSync(destination, { recursive: true });
   const install = installer ?? ((tgzPath, dest) => {
     execNpm(['install', '--no-save', '--omit=dev', '--no-audit', '--no-fund', '--loglevel', 'error', tgzPath, '--prefix', dest], { stdio: ['ignore', 'ignore', 'pipe'] });
   });
   install(tgz, destination);
+  const rootModules = join(destination, 'node_modules');
+  const prunedPrebuilds = pruneForeignPrebuilds(rootModules, target);
   const runDedupe = deduper ?? dedupeDshClosure;
-  return runDedupe(join(destination, 'node_modules'));
+  const deduped = runDedupe(rootModules) ?? { removedPackages: 0, hoistedPackages: 0 };
+  return { ...deduped, prunedPrebuilds };
 }
 
 /**
@@ -353,7 +468,8 @@ function assertPnpmIdentity(resources, version) {
   }
 }
 
-export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets, lockPath, repoRoot, installer, deduper }) {
+export function stagePayload({ output, dshTgz, pnpmTgz, target, brandDir, employeeAssets, lockPath, repoRoot, installer, deduper, maxDshBytes, maxDshFiles }) {
+  const resolvedTarget = target ?? defaultStagingTarget();
   const outputDir = resolve(output);
   const lock = JSON.parse(readFileSync(resolve(lockPath), 'utf8'));
   // dsh first: an incomplete handover is reported one artifact at a time, in the order the layout lists them.
@@ -374,7 +490,7 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
 
   try {
     const dshDir = join(resources, DSH_ENTRY_PARTS[0]);
-    const deduped = installDshClosure(dsh.path, dshDir, { installer, deduper }) ?? { removedPackages: 0, hoistedPackages: 0 };
+    const closureResult = installDshClosure(dsh.path, dshDir, { installer, deduper, target: resolvedTarget });
     const entry = join(resources, ...DSH_ENTRY_PARTS);
     if (!existsSync(entry)) fail('STAGE_LAYOUT_INVALID', `the unpacked artifact carries no ${DSH_ENTRY_PARTS.join('/')}`);
 
@@ -382,6 +498,10 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
     verifyDshIdentity(dshNodeModules, lock.dsh.version);
     const closure = inspectDshClosure(dshNodeModules);
     verifyDshClosureLock(closure, lock);
+    verifyDshBudget(closure, {
+      maxBytes: maxDshBytes ?? (Number.isSafeInteger(lock?.dshClosure?.maxBytes) && lock.dshClosure.maxBytes > 0 ? lock.dshClosure.maxBytes : undefined),
+      maxFiles: maxDshFiles ?? (Number.isSafeInteger(lock?.dshClosure?.maxFiles) && lock.dshClosure.maxFiles > 0 ? lock.dshClosure.maxFiles : undefined),
+    });
 
     unpackPnpm(pnpm.bytes, join(resources, PNPM_ENTRY_PARTS[0]));
     assertPnpmIdentity(resources, pnpm.entry.version);
@@ -415,16 +535,19 @@ export function stagePayload({ output, dshTgz, pnpmTgz, brandDir, employeeAssets
 
     const record = {
       schema: 'heluo-desktop-staging/1',
+      target: resolvedTarget ?? null,
       dsh: { version: lock.dsh.version, sha256: lock.dsh.sha256, bytes: lock.dsh.bytes, artifact: basename(dsh.path) },
       dshClosure: {
         packages: closure.packages.length,
         uniquePackages: closure.uniquePackages,
         duplicates: closure.duplicates,
-        deduped: deduped.removedPackages,
-        hoisted: deduped.hoistedPackages,
+        deduped: closureResult.removedPackages,
+        hoisted: closureResult.hoistedPackages,
+        prunedPrebuilds: closureResult.prunedPrebuilds,
         files: closure.files,
         bytes: closure.bytes,
         digest: closure.digest,
+        topPackages: closure.topPackages,
       },
       pnpm: { version: pnpm.entry.version, sha256: pnpm.entry.sha256, bytes: pnpm.entry.bytes, artifact: basename(pnpm.path) },
       tray: { source: TRAY_ICON_SOURCE, bytes: trayBytes.length, sha256: sha256Hex(trayBytes) },
@@ -450,10 +573,13 @@ async function main() {
     output: options.output,
     dshTgz: options.dshTgz,
     pnpmTgz: options.pnpmTgz,
+    target: options.target,
     brandDir: options.brandDir,
     employeeAssets: options.employeeAssets,
     lockPath: options.lock ?? join(repoRoot, DEFAULT_LOCK),
     repoRoot,
+    maxDshBytes: options.maxDshBytes,
+    maxDshFiles: options.maxDshFiles,
   });
   if (options.json) process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
   else process.stdout.write(`staged: ${resolve(options.output)} (dsh ${record.dsh.version}, closure ${record.dshClosure.packages} pkgs / ${record.dshClosure.bytes} B, pnpm ${record.pnpm.version}, tray ${record.tray.source}${record.assets ? `, assets ${record.assets}` : ''})\n`);

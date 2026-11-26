@@ -191,6 +191,7 @@ jobs:
             --output "$RUNNER_TEMP/staged" \
             --dsh-tgz "$DSH_TGZ" \
             --pnpm-tgz "$PNPM_TGZ" \
+            --target mac-arm64 \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
       - name: Stage the bundled runtime
         run: |
@@ -209,12 +210,11 @@ jobs:
             --resources "$RUNNER_TEMP/staged/resources" \
             --version "$GITHUB_REF_NAME" \
             --output "$RUNNER_TEMP/dist" \
-            --target dir \
+            --target mac \
+            --arch arm64 \
             --json
-          APP=$(ls -d "$RUNNER_TEMP/dist/mac-"*/heluo-forge-enterprise.app | head -1)
           mkdir -p "$RUNNER_TEMP/upload"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" \
-            "$RUNNER_TEMP/upload/heluo-forge-enterprise-${GITHUB_REF_NAME}-mac-arm64.zip"
+          mv "$RUNNER_TEMP/dist/"heluo-forge-enterprise-*-arm64.dmg "$RUNNER_TEMP/upload/"
       - name: Attach the desktop bundle to the draft Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -307,6 +307,7 @@ jobs:
             --output "$RUNNER_TEMP/staged" \
             --dsh-tgz "$DSH_TGZ" \
             --pnpm-tgz "$PNPM_TGZ" \
+            --target win-x64 \
             --employee-assets "$RUNNER_TEMP/employee/heluo-forge-employee-assets"
       - name: Stage the bundled runtime
         shell: bash

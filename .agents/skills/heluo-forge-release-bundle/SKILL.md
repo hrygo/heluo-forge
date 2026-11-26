@@ -1,6 +1,6 @@
 ---
 name: heluo-forge-release-bundle
-description: 供打包人员规划和制作企业 DSH 私版与员工包。公开仓 release-bundle 统一构建由 v* tag 产出员工包及桌面端草稿包（macOS arm64 zip、Windows x64 NSIS exe）并挂草稿 Release（经 release-bundle 环境审批，配置取自该环境的 Secrets）；回退路径的两段式流程使用本机未跟踪的 .env、现有制包脚本及终端 SQLite 凭据预置。
+description: 供打包人员规划和制作企业 DSH 私版与员工包。公开仓 release-bundle 统一构建由 v* tag 产出员工包及桌面端草稿包（macOS arm64 dmg、Windows x64 NSIS exe）并挂草稿 Release（经 release-bundle 环境审批，配置取自该环境的 Secrets）；回退路径的两段式流程使用本机未跟踪的 .env、现有制包脚本及终端 SQLite 凭据预置。
 ---
 # 企业 DSH 交付包制作
 

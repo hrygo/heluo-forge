@@ -214,6 +214,7 @@ test('allows isolated desktop, deploy and skill edits to skip platform jobs whil
     'scripts/stage-primary-runtime.mjs',
     'scripts/build-desktop-installer.mjs',
     'scripts/derive-brand-icons.mjs',
+    'scripts/lib/desktop-after-pack.mjs',
     'scripts/lib/primary-runtime.mjs',
     'scripts/lib/zip-archive.mjs',
     'scripts/probe/run-primary-runtime-probe.mjs',

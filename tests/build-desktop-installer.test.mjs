@@ -9,12 +9,14 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { APP_IDENTITY } from '../scripts/release-delivery.mjs';
-import { builderConfig, builderEntry, isPackaged, normalizeVersion, parseArguments, readAppIdentity, resolveTargetArch, summarizeResources } from '../scripts/build-desktop-installer.mjs';
+import { afterPack, KEEP_MAC_LPROJ, pruneMacLocales } from '../scripts/lib/desktop-after-pack.mjs';
+import { builderConfig, builderEntry, isPackaged, normalizeVersion, parseArguments, readAppIdentity, resolveTargetArch, runtimeFilter, summarizeResources } from '../scripts/build-desktop-installer.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -67,8 +69,8 @@ test('配置反向：换掉身份任一字段，配置随之偏离真源（判�
   }
 });
 
-test('安装包内容：运行时不读取的文件类型不进包，台账钉定的制品目录与内置运行时原样保留', () => {
-  // 规则只认文件类型，与所在目录无关：同一个 .d.ts，在制品目录内留下，在闭包里裁掉。
+test('安装包内容：运行时不读取的文件类型与第三方文档测试不进包，台账钉定的制品、内置运行时、@deepseek-ai 文档与许可原样保留', () => {
+  // 规则只认文件类型与目录归属：同一个 .d.ts，在制品目录内留下，在闭包里裁掉。
   assert.equal(isPackaged('dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts'), true);
   assert.equal(isPackaged('dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts'), false);
   // 反向：被裁的类型换成 .js 就必须留下，否则规则裁掉了整个目录而不只是无用文件。
@@ -76,24 +78,78 @@ test('安装包内容：运行时不读取的文件类型不进包，台账钉�
     assert.equal(isPackaged(`dsh/node_modules/pkg/lib/${excluded}`), false, excluded);
   }
   assert.equal(isPackaged('dsh/node_modules/pkg/lib/index.js'), true);
+  // 第三方包（非 @deepseek-ai）里的测试、示例、docs、CHANGELOG 与非许可 markdown 一并裁掉。
+  for (const excluded of [
+    'dsh/node_modules/openai/README.md',
+    'dsh/node_modules/pkg/CHANGELOG.md',
+    'dsh/node_modules/pkg/HISTORY.txt',
+    'dsh/node_modules/pkg/test/foo.js',
+    'dsh/node_modules/pkg/tests/bar.js',
+    'dsh/node_modules/pkg/__tests__/baz.js',
+    'dsh/node_modules/@scope/pkg/docs/guide.md',
+    'dsh/node_modules/@scope/pkg/example/demo.js',
+    'dsh/node_modules/@scope/pkg/examples/demo.js',
+  ]) {
+    assert.equal(isPackaged(excluded), false, excluded);
+  }
+  // 第三方包的许可证文件与 @deepseek-ai 作用域下的文档/技能文本必须保留。
+  for (const kept of [
+    'dsh/node_modules/zod/LICENSE.md',
+    'dsh/node_modules/pkg/license.txt',
+    'dsh/node_modules/pkg/NOTICE',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/README.md',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
+    'dsh/node_modules/.package-lock.json',
+    'brand/tray.png',
+    'brand/status.html',
+    'enterprise-assets/employee-manifest.json',
+    'enterprise-assets/INSTALL.md',
+  ]) {
+    assert.equal(isPackaged(kept), true, kept);
+  }
   // 内置运行时是暂存后检查过、并按文件数与字节数记入构建记录的那棵树：进包的必须就是它。
-  // 它里面 pnpm 副本的类型声明随载荷保留，而壳直接启动的那份 pnpm 属于注册表闭包，照旧裁掉。
   assert.equal(isPackaged('primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts'), true);
   assert.equal(isPackaged('pnpm/dist/node_modules/fdir/dist/index.d.mts'), false);
   assert.equal(isPackaged('primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/tests.map'), true);
-  // 豁免落到目录边界上：同前缀的别的目录不在豁免之列。
   assert.equal(isPackaged('primary-runtime-other/lib/index.d.ts'), false);
-  // 运行文件、许可与说明文本、品牌材料、员工包和 npm 的隐藏锁文件都不在规则内。
-  for (const kept of ['dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js', 'dsh/node_modules/zod/LICENSE.md', 'dsh/node_modules/openai/README.md', 'dsh/node_modules/.package-lock.json', 'brand/tray.png', 'brand/status.html', 'enterprise-assets/employee-manifest.json']) {
-    assert.equal(isPackaged(kept), true, kept);
+
+  // 若本机已安装 app-builder-lib，则直接用真实 createFilter 核对与 isPackaged 逐项一致。
+  const appBuilderPkg = join(REPO_ROOT, 'services', 'forge-desktop', 'node_modules', 'electron-builder', 'node_modules', 'app-builder-lib', 'package.json');
+  const pnpmAppBuilder = join(REPO_ROOT, 'node_modules', '.pnpm', 'app-builder-lib@26.0.12_dmg-builder@26.0.12_electron-builder-squirrel-windows@26.0.12_supports-color@7.2.0', 'node_modules', 'app-builder-lib', 'package.json');
+  const resolvedPkg = existsSync(appBuilderPkg) ? appBuilderPkg : existsSync(pnpmAppBuilder) ? pnpmAppBuilder : null;
+  if (resolvedPkg !== null) {
+    const req = createRequire(resolvedPkg);
+    const { createFilter } = req('./out/util/filter.js');
+    const { Minimatch } = req('minimatch');
+    const realFilter = createFilter('/res', runtimeFilter().map((pattern) => new Minimatch(pattern, { dot: true })));
+    for (const rel of [
+      'dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts',
+      'dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts',
+      'dsh/node_modules/@deepseek-ai/dsh-llm/README.md',
+      'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
+      'dsh/node_modules/openai/README.md',
+      'dsh/node_modules/zod/LICENSE.md',
+      'dsh/node_modules/pkg/license.txt',
+      'dsh/node_modules/pkg/NOTICE',
+      'dsh/node_modules/pkg/test/foo.js',
+      'dsh/node_modules/@scope/pkg/docs/guide.md',
+      'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
+      'enterprise-assets/INSTALL.md',
+    ]) {
+      assert.equal(realFilter(`/res/${rel}`, { isDirectory: () => false }), isPackaged(rel), `real filter parity for ${rel}`);
+    }
   }
 });
 
-test('打包配置：过滤规则与判定同源且顺序正确；关闭差分包；语言包只留英文与简繁中文', (t) => {
+test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack 钩子与中英文语言包', (t) => {
   const root = temp(t);
   const config = builderConfig({ identity: readAppIdentity(identityFile(root)), version: '1.2.3', resourcesDir: join(root, 'resources'), iconsDir: join(BRAND_DIR, 'icons'), appDir: join(REPO_ROOT, 'services', 'forge-desktop'), outputDir: join(root, 'dist') });
-  // electron-builder 按顺序应用并让后者覆盖前者：豁免目录排在排除规则之后才生效。
-  assert.deepEqual(config.extraResources[0].filter, ['**/*', '!**/*.ts', '!**/*.cts', '!**/*.mts', '!**/*.map', '!**/*.pdb', 'dsh/node_modules/@deepseek-ai/dsh/**', 'primary-runtime/**']);
+  assert.deepEqual(config.extraResources[0].filter, runtimeFilter());
+  assert.equal(config.extraResources[0].filter.at(-1), 'primary-runtime/**');
+  assert.equal(config.compression, 'maximum');
+  assert.equal(config.dmg.writeUpdateInfo, false);
+  assert.equal(existsSync(config.afterPack), true, 'afterPack hook script must exist');
   // 本应用不建自动更新 feed，差分形式的归档比 solid 归档大三分之一。
   assert.equal(config.nsis.differentialPackage, false);
   // 两种拼写各对应一种平台的语言文件名：macOS 用 en / zh_CN / zh_TW，Windows 与 Linux 用 en-US / zh-CN / zh-TW，无重复项。
@@ -102,18 +158,46 @@ test('打包配置：过滤规则与判定同源且顺序正确；关闭差分�
   assert.equal(config.nsis.deleteAppDataOnUninstall, false);
 });
 
-test('目标与架构矩阵：macOS x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {
+test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {
   const root = temp(t);
   const identity = readAppIdentity(identityFile(root));
   const common = { identity, version: '1.2.3', resourcesDir: join(root, 'resources'), iconsDir: join(BRAND_DIR, 'icons'), appDir: join(REPO_ROOT, 'services', 'forge-desktop'), outputDir: join(root, 'dist') };
   const macX64 = builderConfig({ ...common, target: 'mac', arch: 'x64' });
-  assert.deepEqual(macX64.mac.target, [{ target: 'dmg', arch: ['x64'] }, { target: 'zip', arch: ['x64'] }]);
+  assert.deepEqual(macX64.mac.target, [{ target: 'dmg', arch: ['x64'] }]);
   const linuxArm = builderConfig({ ...common, target: 'linux', arch: 'arm64' });
   assert.deepEqual(linuxArm.linux.target, [{ target: 'deb', arch: ['arm64'] }]);
   assert.equal(resolveTargetArch('linux'), 'x64');
   assert.equal(resolveTargetArch('win'), 'x64');
   assert.throws(() => resolveTargetArch('win', 'arm64'), (error) => error.code === 'BAD_ARGUMENT');
   assert.throws(() => resolveTargetArch('linux', 'universal'), (error) => error.code === 'BAD_ARGUMENT');
+});
+
+test('afterPack：macOS 清理 Electron Framework 内多余 .lproj，非 macOS 不改动', async (t) => {
+  const root = temp(t);
+  const appOutDir = join(root, 'mac-arm64');
+  const appBundle = join(appOutDir, 'Heluo Forge Enterprise.app');
+  const frameworkRes = join(appBundle, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Versions', 'A', 'Resources');
+  const appRes = join(appBundle, 'Contents', 'Resources');
+  for (const locale of [...KEEP_MAC_LPROJ, 'fr.lproj', 'de.lproj', 'ja.lproj']) {
+    mkdirSync(join(frameworkRes, locale), { recursive: true });
+    writeFileSync(join(frameworkRes, locale, 'locale.pak'), 'data');
+  }
+  mkdirSync(join(appRes, 'es.lproj'), { recursive: true });
+  writeFileSync(join(appRes, 'es.lproj', 'InfoPlist.strings'), 'es');
+  writeFileSync(join(frameworkRes, 'icudtl.dat'), 'icu');
+
+  // Non-macOS platform leaves bundle untouched.
+  assert.equal(await afterPack({ electronPlatformName: 'win32', appOutDir, packager: { appInfo: { productFilename: 'Heluo Forge Enterprise' } } }), undefined);
+  assert.equal(existsSync(join(frameworkRes, 'fr.lproj')), true);
+
+  const summary = await afterPack({ electronPlatformName: 'darwin', appOutDir, packager: { appInfo: { productFilename: 'Heluo Forge Enterprise' } } });
+  assert.equal(summary.removedDirs, 4);
+  assert.equal(summary.removedFiles, 4);
+  for (const kept of KEEP_MAC_LPROJ) assert.equal(existsSync(join(frameworkRes, kept)), true, `${kept} kept`);
+  for (const gone of ['fr.lproj', 'de.lproj', 'ja.lproj']) assert.equal(existsSync(join(frameworkRes, gone)), false, `${gone} removed`);
+  assert.equal(existsSync(join(appRes, 'es.lproj')), false);
+  assert.equal(existsSync(join(frameworkRes, 'icudtl.dat')), true, 'non-lproj framework resource preserved');
+  assert.equal(pruneMacLocales(join(root, 'missing.app')).removedDirs, 0);
 });
 
 test('体积摘要：逐文件分类，数字取自真实文件', (t) => {
