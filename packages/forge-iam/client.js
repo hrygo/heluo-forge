@@ -1639,6 +1639,7 @@ window.__ModuleLoader__.load({
     const STORAGE_RECOVERY_NOTICE = '本地凭据存储繁忙，正在自动重试';
     const SESSION_VERIFYING_NOTICE = '正在核验企业会话';
     const SESSION_RENEWING_NOTICE = '企业会话待续期';
+    const confirmedSessionViews = new WeakSet();
 
     // §4.1 会话状态派生
     // view.state 只在这里读一次：其余代码用布尔量判断，新增状态时只改这里。
@@ -1675,7 +1676,7 @@ window.__ModuleLoader__.load({
     function presentSession(view) {
       const ui = deriveSessionUi(view);
       const deadline = sessionDeadline(view, ui);
-      const verifying = deadline !== null && deadline <= Date.now();
+      const verifying = deadline !== null && deadline <= Date.now() && !confirmedSessionViews.has(view);
       return { ...ui, verifying, ready: ui.ready && !verifying };
     }
 
@@ -2174,13 +2175,32 @@ window.__ModuleLoader__.load({
       let inFlight = null;
       let generation = 0;
       let deadlineTimer = null;
+      let deadlineReadQueued = false;
 
-      function trackDeadline(subscriber, view) {
-        const deadline = sessionDeadline(view);
-        if (subscriber.deadline === deadline) return false;
-        subscriber.deadline = deadline;
-        subscriber.deadlineReached = false;
-        return true;
+      function trackDeadline(subscriber, view, sampledAfter = -Infinity) {
+        const ui = deriveSessionUi(view);
+        const at = sessionDeadline(view, ui);
+        if (at === null) { subscriber.deadline = null; return; }
+        const previous = subscriber.deadline;
+        const epoch = subscriber.barrierRef?.current.epoch;
+        const same = previous?.at === at && previous.epoch === epoch
+          && previous.state === ui.state && previous.view.principal === view.principal;
+        // Only a request or stream opened after this cutoff can confirm that
+        // the browser crossed it before the Host did. Keep that confirmation
+        // for subsequent snapshots of the same session state and cutoff.
+        if (at <= sampledAfter || (same && confirmedSessionViews.has(previous.view))) confirmedSessionViews.add(view);
+        subscriber.deadline = { at, epoch, view, state: ui.state, reached: same && previous.reached };
+      }
+
+      function hasUnconfirmedDeadline() {
+        return [...subscribers].some(({ deadline }) => deadline?.reached && !confirmedSessionViews.has(deadline.view));
+      }
+
+      function flushDeadlineRead() {
+        if (!deadlineReadQueued) return;
+        // poll consumes the queued read only when a request can start.
+        if (hasUnconfirmedDeadline()) void poll(true);
+        else deadlineReadQueued = false;
       }
 
       function scheduleDeadline() {
@@ -2188,30 +2208,31 @@ window.__ModuleLoader__.load({
         deadlineTimer = null;
         const at = Date.now();
         let next = Infinity;
-        let reached = false;
         for (const subscriber of subscribers) {
           const deadline = subscriber.deadline;
-          if (deadline === null || subscriber.deadlineReached) continue;
-          if (deadline > at) {
-            next = Math.min(next, deadline);
+          if (!deadline || deadline.reached || confirmedSessionViews.has(deadline.view)) continue;
+          if (deadline.at > at) {
+            next = Math.min(next, deadline.at);
             continue;
           }
-          subscriber.deadlineReached = true;
+          deadline.reached = true;
+          deadlineReadQueued = true;
           subscriber.invalidatePresentation();
-          reached = true;
         }
         if (Number.isFinite(next)) {
           deadlineTimer = setTimeout(() => {
-            if (scheduleDeadline()) void poll(true);
+            scheduleDeadline();
+            flushDeadlineRead();
           }, Math.min(next - at, 2_147_483_647));
         }
-        return reached;
       }
 
       function noteView(subscriber, view) {
         if (!subscribers.has(subscriber)) return;
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
-        if (trackDeadline(subscriber, view) && scheduleDeadline()) void poll(true);
+        trackDeadline(subscriber, view);
+        scheduleDeadline();
+        flushDeadlineRead();
       }
 
       function revalidate() {
@@ -2223,23 +2244,23 @@ window.__ModuleLoader__.load({
         if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void revalidate();
       }
 
-      function broadcast(view, pending) {
+      function broadcast(view, pending, sampledAfter) {
         let delivered = false;
         for (const { subscriber, epoch, revision } of pending) {
           if (!subscribers.has(subscriber) || (revision !== undefined && subscriber.revisionRef?.current !== revision)) continue;
           const barrier = subscriber.barrierRef?.current;
           if (!barrier || (!barrier.pending && barrier.epoch === epoch)) {
-            deliver(subscriber, view);
+            deliver(subscriber, view, sampledAfter);
             delivered = true;
           }
         }
-        if (delivered && scheduleDeadline()) void poll(true);
+        if (delivered) scheduleDeadline();
         return delivered;
       }
 
-      function deliver(subscriber, view) {
+      function deliver(subscriber, view, sampledAfter) {
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
-        trackDeadline(subscriber, view);
+        trackDeadline(subscriber, view, sampledAfter);
         subscriber.updateRef.current(view);
       }
 
@@ -2259,6 +2280,7 @@ window.__ModuleLoader__.load({
       function openStream() {
         if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return false;
         try {
+          const openedAt = Date.now();
           const opened = new window.EventSource('/api/forge-iam/events');
           stream = opened;
           streamReady = false;
@@ -2272,11 +2294,19 @@ window.__ModuleLoader__.load({
             streamReady = true;
             stopPolling();
             // A read started before this frame cannot replace it when late.
+            const interruptedDeadlineRead = inFlight?.checksDeadline;
             inFlight?.cancel();
             // Once admitted, this frame belongs to every current subscriber,
             // even if one callback synchronously replaces the physical stream.
             const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
-            broadcast(view, pending);
+            broadcast(view, pending, openedAt);
+            if (interruptedDeadlineRead && hasUnconfirmedDeadline()) {
+              // This frame won the view but may have been sampled before the
+              // cutoff. Require a fresh source for the outstanding confirmation.
+              deadlineReadQueued = true;
+              if (isCurrent()) restart();
+            }
+            flushDeadlineRead();
           };
           opened.onerror = () => {
             if (!isCurrent()) return;
@@ -2301,6 +2331,9 @@ window.__ModuleLoader__.load({
           return;
         }
         const readGeneration = generation;
+        const startedAt = Date.now();
+        const checksDeadline = deadlineReadQueued;
+        deadlineReadQueued = false;
         const pending = [...subscribers].map((subscriber) => ({
           subscriber, epoch: subscriber.barrierRef?.current.epoch, revision: subscriber.revisionRef?.current,
         }));
@@ -2309,8 +2342,12 @@ window.__ModuleLoader__.load({
         const cancelled = new Promise((resolve) => { release = resolve; });
         const request = fetchView(controller ? { signal: controller.signal } : {}).then((view) => ({ view }), () => null);
         unsettledReads.add(request);
-        void request.then(() => unsettledReads.delete(request));
+        void request.then(() => {
+          unsettledReads.delete(request);
+          flushDeadlineRead();
+        });
         const current = {
+          checksDeadline,
           cancel() {
             if (inFlight === current) inFlight = null;
             controller?.abort();
@@ -2321,18 +2358,20 @@ window.__ModuleLoader__.load({
         const deadline = setTimeout(() => current.cancel(), 10000);
         try {
           const result = await Promise.race([request, cancelled]);
-          if (result && (revalidate || !streamReady) && generation === readGeneration) {
-            const delivered = broadcast(result.view, pending);
+          if (result?.view && (revalidate || checksDeadline || !streamReady) && generation === readGeneration) {
+            const delivered = broadcast(result.view, pending, startedAt);
             // Even a ready source may have queued frames older than this read.
             // Retire that generation without disturbing a callback's replacement.
             if (delivered && stream && generation === readGeneration) restart();
           }
         } finally {
           clearTimeout(deadline);
-          if (inFlight !== current) return;
-          inFlight = null;
-          // Try the stream again after each fallback read, including a failed one.
-          if (subscribers.size > 0 && !stream) openStream();
+          if (inFlight === current) {
+            inFlight = null;
+            // Try the stream again after each fallback read, including a failed one.
+            if (subscribers.size > 0 && !stream) openStream();
+          }
+          flushDeadlineRead();
         }
       }
       function startPolling() { if (timer === null) timer = setInterval(poll, 2000); }
@@ -2354,12 +2393,16 @@ window.__ModuleLoader__.load({
           if (subscribers.size === 0) {
             if (stream) closeStream(); else generation += 1;
             stopPolling();
+            deadlineReadQueued = false;
             inFlight?.cancel();
             clearTimeout(deadlineTimer);
             deadlineTimer = null;
             if (typeof window !== 'undefined') window.removeEventListener?.('focus', onWake);
             if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onWake);
-          } else if (scheduleDeadline()) void poll(true);
+          } else {
+            scheduleDeadline();
+            flushDeadlineRead();
+          }
         };
       }
       return { restart, subscribe, revalidate, noteView };
@@ -2375,7 +2418,7 @@ window.__ModuleLoader__.load({
         if (!enabled) return undefined;
         const restartStream = () => sessionStream.restart();
         const subscriber = {
-          updateRef, barrierRef, revisionRef, deadline: null, deadlineReached: false,
+          updateRef, barrierRef, revisionRef, deadline: null,
           invalidatePresentation: () => invalidate((revision) => revision + 1),
         };
         subscription.current = subscriber;
