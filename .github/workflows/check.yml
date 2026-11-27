@@ -26,7 +26,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       run_platforms: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
-      run_windows_arm64: ${{ steps.classify.outputs.run_windows_arm64 || steps.full.outputs.run_windows_arm64 }}
       run_macos: ${{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}
     steps:
       - name: Run all platforms for non-PR events
@@ -34,7 +33,6 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
-          echo 'run_windows_arm64=true' >> "$GITHUB_OUTPUT"
           echo 'run_macos=true' >> "$GITHUB_OUTPUT"
       - name: Checkout complete history for the change comparison
         if: github.event_name == 'pull_request'
@@ -60,15 +58,6 @@ jobs:
           case "$RUN_PLATFORMS" in
             true|false) ;;
             *) echo 'Invalid platform decision.' >&2; exit 1 ;;
-          esac
-      - name: Validate Windows ARM64 decision
-        env:
-          RUN_WINDOWS_ARM64: ${{ steps.classify.outputs.run_windows_arm64 || steps.full.outputs.run_windows_arm64 }}
-          RUN_PLATFORMS: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
-        run: |
-          case "$RUN_PLATFORMS:$RUN_WINDOWS_ARM64" in
-            false:false|true:false|true:true) ;;
-            *) echo 'Invalid Windows ARM64 decision.' >&2; exit 1 ;;
           esac
       - name: Validate macOS decision
         env:
@@ -281,8 +270,7 @@ jobs:
 
   native-win32-arm64:
     name: SQLite and IAM (win32-arm64, windows-11-arm)
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_windows_arm64 != 'false') }}
+    if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: windows-11-arm
     timeout-minutes: 15
     env:

@@ -184,7 +184,6 @@ function expressionValue(expression, scenario, { caseInsensitive = true } = {}) 
     if (token === 'false') return false;
     if (token === 'needs.changes.result') return scenario.result;
     if (token === 'needs.changes.outputs.run_platforms') return scenario.output;
-    if (token === 'needs.changes.outputs.run_windows_arm64') return scenario.arm64;
     if (token === 'needs.changes.outputs.run_macos') return scenario.macos;
     if (token === 'github.event_name') return scenario.event;
     if (token === 'github.repository') return scenario.repository;
@@ -339,6 +338,7 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
   for (const event of requiredEvents) {
     if (!new RegExp(`^  ${event}:`, 'mu').test(events)) errors.push(`trigger: missing ${event}`);
   }
+  if (!/^  push:\n    branches: \[main\]$/mu.test(events)) errors.push('trigger: push must target main');
   if (!/^  merge_group:[\s\S]*?^    types:\s*\[[^\]]*\bchecks_requested\b/mu.test(events)) {
     errors.push('trigger: merge_group must request checks');
   }
@@ -364,8 +364,7 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
       if (!/^ {8}run:[ \t]*node\s+scripts\/ci-classify-changes\.mjs[ \t]*$/mu.test(classifier)) {
         errors.push('changes: PR path must run the classifier');
       }
-      if (!full.includes("echo 'run_platforms=true' >> \"$GITHUB_OUTPUT\"") ||
-          !full.includes("echo 'run_windows_arm64=true' >> \"$GITHUB_OUTPUT\"")) {
+      if (!full.includes("echo 'run_platforms=true' >> \"$GITHUB_OUTPUT\"")) {
         errors.push('changes: non-PR full output must be true');
       }
       try {
@@ -378,23 +377,6 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
           }
         }
       } catch (error) { errors.push(`changes: invalid event conditions: ${error.message}`); }
-    }
-  }
-
-  if (!optionalMacOS && changes) {
-    const output = '$' + '{{ steps.classify.outputs.run_windows_arm64 || steps.full.outputs.run_windows_arm64 }}';
-    const armGuard = stepBlocks(stepsOf(source, changes)).find((step) => step.includes('name: Validate Windows ARM64 decision'));
-    const armValidation = [
-      'case "$RUN_PLATFORMS:$RUN_WINDOWS_ARM64" in',
-      'false:false|true:false|true:true) ;;',
-      "*) echo 'Invalid Windows ARM64 decision.' >&2; exit 1 ;;",
-      'esac',
-    ];
-    if (!changes.includes('      run_windows_arm64: ' + output)
-      || !armGuard || !unconditionalStep(armGuard) || !armGuard.includes('          RUN_WINDOWS_ARM64: ' + output)
-      || !armGuard.includes('          RUN_PLATFORMS: $' + '{{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}')
-      || armValidation.some((line) => !armGuard.split('\n').some((actual) => actual.trim() === line))) {
-      errors.push('changes: Windows ARM64 output must be validated with the platform decision');
     }
   }
 
@@ -470,24 +452,30 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
     if (jobEnvironment(job, 'SUITE') !== platformEnvironment.get(id)?.SUITE) errors.push(`${id}: unexpected suite`);
     if (optionalMacOS) {
       if (dependencies(job).length || field(job, 'if') !== undefined) errors.push(`${id}: optional job uses workflow path filters`);
+    } else if (id === 'native-win32-arm64') {
+      if (dependencies(job).length) errors.push(`${id}: must run independently of classification`);
+      try {
+        const condition = resolveIf(source, job);
+        for (const event of ['pull_request', 'push', 'merge_group', 'workflow_dispatch']) {
+          const scenario = { event, result: 'success', output: 'true', cancelled: false };
+          const expected = event === 'push' || event === 'workflow_dispatch';
+          if (runsAfterNeeds(condition, scenario) !== expected) errors.push(`${id}: incorrect trigger for ${event}`);
+          if (runsAfterNeeds(condition, { ...scenario, cancelled: true })) errors.push(`${id}: must honor workflow cancellation`);
+        }
+      } catch (error) { errors.push(`${id}: unsafe job condition: ${error.message}`); }
     } else {
       if (!needsChanges(job)) errors.push(`${id}: must depend on changes`);
       try {
         const condition = resolveIf(source, job);
-        const arm64Job = id === 'native-win32-arm64';
         const forwardJob = id === 'native-linux-x64-next';
         for (const [result, output, expected] of cases) {
-          const scenario = { event: 'pull_request', result, output, arm64: output, cancelled: false };
+          const scenario = { event: 'pull_request', result, output, cancelled: false };
           if (runsAfterNeeds(condition, scenario) !== (!forwardJob && expected)) {
             errors.push(`${id}: unsafe condition for ${result}/${output || '(empty)'}`);
           }
         }
-        if (arm64Job) {
-          const skip = { event: 'pull_request', result: 'success', output: 'true', arm64: 'false', cancelled: false };
-          if (runsAfterNeeds(condition, skip)) errors.push(`${id}: must obey the Windows ARM64 decision`);
-        }
         for (const event of ['push', 'merge_group', 'workflow_dispatch']) {
-          const scenario = { event, result: 'success', output: 'true', arm64: 'true', cancelled: false };
+          const scenario = { event, result: 'success', output: 'true', cancelled: false };
           if (runsAfterNeeds(condition, scenario) !== (!forwardJob || event === 'workflow_dispatch')) {
             errors.push(`${id}: incorrect trigger for ${event}`);
           }
@@ -692,10 +680,10 @@ test('workflow guards reject deleted gates, inverted conditions and missing clas
     ['incorrect unit command', replaceJob(workflow, 'verify-shards', (job) => job.replace('node --run test:unit', 'echo')), /verify: full check/u],
     ['missing Windows job result', replaceJob(workflow, 'native-win32-x64', (job) => job.replace(' && test "$IAM_RESULT" = success', '')), /native-win32-x64: both Windows test jobs must succeed/u],
     ['Windows suite reassigned', replaceJob(workflow, 'native-win32-x64-iam', (job) => job.replace('SUITE: iam', 'SUITE: credentials')), /native-win32-x64-iam: FORGE_CI_SUITE/u],
-    ['ARM64 fallback output', replaceJob(workflow, 'changes', (job) => job.replace('run_windows_arm64=true', 'run_windows_arm64=false')), /changes: non-PR full output must be true/u],
-    ['ARM64 unvalidated', replaceJob(workflow, 'changes', (job) => job.replace('false:false|true:false|true:true)', 'false:true|false:false|true:false|true:true)')), /changes: Windows ARM64 output/u],
-    ['ARM64 ignores decision', replaceJob(workflow, 'native-win32-arm64', (job) => job.replace('outputs.run_windows_arm64', 'outputs.run_platforms')), /native-win32-arm64: must obey/u],
+    ['Windows ARM64 runs for a PR', replaceJob(workflow, 'native-win32-arm64', (job) => job.replace("github.event_name == 'push'", "github.event_name == 'pull_request'")), /native-win32-arm64: incorrect trigger for pull_request/u],
+    ['Windows ARM64 skips manual validation', replaceJob(workflow, 'native-win32-arm64', (job) => job.replace(" || github.event_name == 'workflow_dispatch'", '')), /native-win32-arm64: incorrect trigger for workflow_dispatch/u],
     ['workflow path filter', workflow.replace(/^  pull_request:$/mu, '  pull_request:\n    paths-ignore: ["docs/**"]'), /trigger: workflow must not use path filters/u],
+    ['push on all branches', workflow.replace('    branches: [main]\n', ''), /trigger: push must target main/u],
     ['merge queue trigger', workflow.replace('types: [checks_requested]', 'types: [other]'), /trigger: merge_group must request checks/u],
     ['manual trigger', workflow.replace(/^  workflow_dispatch:$/mu, '  ignored_dispatch:'), /trigger: missing workflow_dispatch/u],
   ];
