@@ -15,8 +15,8 @@
  *     [--certificate-file <path>] [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../services/forge-desktop/src/layout.mjs';
@@ -242,7 +242,8 @@ export function isPackaged(relativePath) {
   if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
     return true;
   }
-  if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
+  if (segments.length < 2) return true;
+  if (segments.slice(1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
   if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
@@ -389,6 +390,75 @@ export function builderEntry(builderDir, exists = existsSync, read = readFileSyn
 }
 
 const DISALLOWED_WIN_SIGNING_ENV_KEYS = new Set(['WIN_CSC_KEY_PASSWORD', 'CSC_KEY_PASSWORD']);
+const WIN_CSC_LINK_ENV_KEYS = new Set(['WIN_CSC_LINK', 'CSC_LINK']);
+
+function resolveRealPath(targetPath, depth = 0) {
+  const abs = resolve(targetPath);
+  if (depth > 16) return abs;
+  if (existsSync(abs)) return realpathSync(abs);
+  const linkStat = lstatSync(abs, { throwIfNoEntry: false });
+  if (linkStat?.isSymbolicLink()) {
+    return resolveRealPath(resolve(dirname(abs), readlinkSync(abs)), depth + 1);
+  }
+  const parent = dirname(abs);
+  if (parent !== abs && existsSync(parent)) {
+    return join(realpathSync(parent), basename(abs));
+  }
+  return abs;
+}
+
+function isUrlLike(value) {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
+}
+
+/**
+ * Reject a certificate file path that resides inside any packaged input tree
+ * (resourcesDir, appDir, or brandDir), resolving symlinks so a private key
+ * cannot be bundled into the installer payload.
+ */
+export function assertSafeCertificatePath(certificateFile, inputRoots = []) {
+  const certReal = resolveRealPath(certificateFile);
+  for (const root of inputRoots) {
+    if (!root) continue;
+    const rootReal = resolveRealPath(root);
+    const rel = relative(rootReal, certReal);
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+      fail('BAD_ARGUMENT', 'certificate file must not reside inside packaged input directories');
+    }
+  }
+}
+
+/**
+ * Reject `appDir/electron-builder.env` entries that would silently inject a
+ * Windows signing password (passing `/p` to signtool.exe) or an unsafe
+ * certificate path inside packaged input directories.
+ */
+export function validateBuilderEnvFile(appDir, options = {}) {
+  const envFile = join(resolve(appDir), 'electron-builder.env');
+  if (!existsSync(envFile)) return;
+  const isWin = options?.target === 'win' || options?.certificateFile !== undefined;
+  if (!isWin) return;
+  const content = readFileSync(envFile, 'utf8');
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const stripped = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
+    const eqIndex = stripped.indexOf('=');
+    if (eqIndex <= 0) continue;
+    const key = stripped.slice(0, eqIndex).trim().toUpperCase();
+    let value = stripped.slice(eqIndex + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (DISALLOWED_WIN_SIGNING_ENV_KEYS.has(key) && value.trim() !== '') {
+      fail('BAD_ARGUMENT', `${key} in electron-builder.env is not supported for target win: use a passwordless PFX or Windows certificate store`);
+    }
+    if (WIN_CSC_LINK_ENV_KEYS.has(key) && value.trim() !== '' && !isUrlLike(value) && Array.isArray(options?.inputRoots)) {
+      const candidate = isAbsolute(value) ? value : resolve(appDir, value);
+      assertSafeCertificatePath(candidate, options.inputRoots);
+    }
+  }
+}
 
 /**
  * Environment variables for the electron-builder subprocess.
@@ -397,13 +467,15 @@ const DISALLOWED_WIN_SIGNING_ENV_KEYS = new Set(['WIN_CSC_KEY_PASSWORD', 'CSC_KE
  * to disk in builder-config.json, nor may a Windows certificate password be
  * passed to signtool.exe via `/p` command-line arguments. When
  * --certificate-file is given, the path to a passwordless PFX is passed via
- * WIN_CSC_LINK. For target `win`, any non-empty WIN_CSC_KEY_PASSWORD or
+ * WIN_CSC_LINK after verifying it does not reside inside any packaged input
+ * tree. For target `win`, any non-empty WIN_CSC_KEY_PASSWORD or
  * CSC_KEY_PASSWORD (case-insensitive, matching Windows environment semantics)
  * is rejected (fail-closed) so no password can reach child process arguments.
  * Non-Windows targets (such as `mac`) keep their existing signing environment.
  */
 export function builderEnv(options = {}, env = process.env) {
   const next = { ...env };
+  const inputRoots = Array.isArray(options?.inputRoots) ? options.inputRoots : [];
   if (options?.certificateFile !== undefined) {
     if (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '') {
       fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
@@ -411,17 +483,26 @@ export function builderEnv(options = {}, env = process.env) {
     if (options.target !== undefined && options.target !== 'win') {
       fail('BAD_ARGUMENT', '--certificate-file is only supported for target win');
     }
+    assertSafeCertificatePath(options.certificateFile, inputRoots);
     next.WIN_CSC_LINK = resolve(options.certificateFile);
   }
   if (options?.target === 'win' || options?.certificateFile !== undefined) {
     for (const key of Object.keys(next)) {
       const upper = key.toUpperCase();
-      if (!DISALLOWED_WIN_SIGNING_ENV_KEYS.has(upper)) continue;
-      const value = next[key];
-      if (typeof value === 'string' && value.trim() !== '') {
-        fail('BAD_ARGUMENT', `${upper} is not supported for target win: use a passwordless PFX or Windows certificate store`);
+      if (DISALLOWED_WIN_SIGNING_ENV_KEYS.has(upper)) {
+        const value = next[key];
+        if (typeof value === 'string' && value.trim() !== '') {
+          fail('BAD_ARGUMENT', `${upper} is not supported for target win: use a passwordless PFX or Windows certificate store`);
+        }
+        delete next[key];
+        continue;
       }
-      delete next[key];
+      if (WIN_CSC_LINK_ENV_KEYS.has(upper)) {
+        const value = next[key];
+        if (typeof value === 'string' && value.trim() !== '' && !isUrlLike(value)) {
+          assertSafeCertificatePath(value, inputRoots);
+        }
+      }
     }
   }
   return next;
@@ -435,6 +516,9 @@ async function main() {
   const brandDir = resolve(options.brandDir ?? join(repoRoot, DEFAULT_BRAND_DIR));
   verifiedIcons(brandDir);
   const appDir = resolve(options.appDir ?? join(repoRoot, DEFAULT_APP_DIR));
+  const inputRoots = [options.resources, appDir, brandDir];
+  const childEnv = builderEnv({ ...options, inputRoots }, process.env);
+  validateBuilderEnvFile(appDir, { ...options, inputRoots });
   const outputDir = resolve(options.output);
   const version = normalizeVersion(options.version);
   mkdirSync(outputDir, { recursive: true });
@@ -474,7 +558,6 @@ async function main() {
   else if (options.target === 'win') args.push('--win');
   else args.push('--linux');
   args.push(`--${options.arch}`);
-  const childEnv = builderEnv(options, process.env);
   const run = spawnSync(process.execPath, [builder, ...args], { cwd: appDir, env: childEnv, encoding: 'utf8' });
   if (run.error !== undefined || run.status !== 0) {
     const outcome = run.error === undefined ? `exited ${run.status}` : `could not start (${run.error.message})`;
