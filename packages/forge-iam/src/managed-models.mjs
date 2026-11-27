@@ -140,9 +140,9 @@ function withinModelRenewalBudget(signal, expiresAt, work) {
   waiting.addEventListener('abort', onAbort, { once: true });
   const stop = () => {
     clearTimeout(timeout);
+    // Detach the race before releasing observers on the private wait signal.
+    // The caller and network transport retain their own cancellation signals.
     waiting.removeEventListener('abort', onAbort);
-    // Closing the private wait signal releases rotation observers. The caller
-    // and the network transport retain their own cancellation signals.
     deadline.abort();
   };
   const check = () => {

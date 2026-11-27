@@ -1473,7 +1473,7 @@ window.__ModuleLoader__.load({
     function getLauncherStatus(view, ui) {
       if (ui.verifying || ui.expiredRenewable) {
         const label = ui.verifying ? SESSION_VERIFYING_NOTICE : SESSION_RENEWING_NOTICE;
-        const tooltip = !ui.verifying && view?.canSignIn === true ? `${label}，点击重新登录` : label;
+        const tooltip = !ui.verifying && view?.canSignIn === true ? SESSION_RELOGIN_TOOLTIP : label;
         return { kind: 'checking', dotClass: 'warn', label, tooltip };
       }
       if (!view || ui.signedOut || ui.unconfigured) {
@@ -1640,6 +1640,7 @@ window.__ModuleLoader__.load({
     const STORAGE_RECOVERY_NOTICE = '本地凭据存储繁忙，正在自动重试';
     const SESSION_VERIFYING_NOTICE = '正在核验企业会话';
     const SESSION_RENEWING_NOTICE = '企业会话待续期';
+    const SESSION_RELOGIN_TOOLTIP = `${SESSION_RENEWING_NOTICE}，点击重新登录`;
     const confirmedSessionViews = new WeakSet();
     const projectedSessionDeadlines = new WeakMap();
 
@@ -2282,10 +2283,16 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function noteView(subscriber, view) {
+      function noteView(subscriber, view, { retireStream = false } = {}) {
         if (!subscribers.has(subscriber)) return;
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
         trackDeadline(subscriber, view);
+        if (retireStream && stream) {
+          // The adopted HTTP view supersedes queued frames and reads from
+          // this source. The replacement will sample again for all consumers.
+          inFlight?.cancel();
+          restart();
+        }
         scheduleDeadline();
         flushDeadlineRead();
       }
@@ -2494,7 +2501,7 @@ window.__ModuleLoader__.load({
           unsubscribe();
         };
       }, [enabled]);
-      return React.useCallback((view) => sessionStream.noteView(subscription.current, view), []);
+      return React.useCallback((view, options) => sessionStream.noteView(subscription.current, view, options), []);
     }
 
     // §12 卡片与旅程条
@@ -4221,7 +4228,7 @@ window.__ModuleLoader__.load({
           void getJson('/api/forge-iam/models')
             .then((result) => {
               if (result?.ok && result.body?.view && isCurrentEpoch(epoch) && viewRevision.current === revision) {
-                noteSessionView(result.body.view);
+                noteSessionView(result.body.view, { retireStream: true });
                 form.observeView(result.body.view);
                 setState((current) => ({ ...current, view: result.body.view }));
               }

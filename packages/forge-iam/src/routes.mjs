@@ -9,6 +9,7 @@ const API_PREFIX = '/api/forge-iam';
 const MAX_BODY_BYTES = 8 * 1024;
 
 function clientView(view) {
+  // Promote the Host timing metadata at the browser response boundary.
   return Number.isFinite(view?.sampledAt) ? { ...view, sampledAt: view.sampledAt } : view;
 }
 
