@@ -610,7 +610,9 @@ test('a P1 review retains approval cleanup through transient GitHub review-histo
     assert.equal(state.requests.slice(priorRequests).filter(({ method, url }) =>
       method === 'GET' && url.startsWith('/repos/corp/example/pulls/42/reviews?')).length, 2);
     assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'COMMENTED']);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'COMMENT', 'DISMISS']);
+    const writes = reviewWrites(state);
+    assert.deepEqual(writes.map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'COMMENT', 'pending', 'DISMISS']);
+    assert.match(writes[2].body.body, /approval-dismissal-pending:v1/u);
   });
 });
 

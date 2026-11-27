@@ -4,6 +4,7 @@ import { hasIndependentApprovalGate, hasLiveApprovalProtection } from './pr-agen
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
+const pendingDismissalMarker = '<!-- heluo-forge-pr-agent-approval-dismissal-pending:v1 -->';
 const approvalSummary = '洛神自动审批。完整审查未发现 P0、P1 或 P2 问题。';
 const verificationDismissal = '洛神未能核对发布后的状态，撤销本次自动审批。';
 const protectionDismissal = '洛神未能核对人工审批要求，撤销自动审批。';
@@ -14,6 +15,7 @@ const recoverableDismissals = new Set([
   verificationDismissal, protectionDismissal, ineligibleDismissal, changeRequestDismissal, staleDismissal,
 ]);
 const transientHistoryCodes = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN']);
+const cleanupBatchSize = 4;
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
 
 function sameBot(left, right) {
@@ -108,6 +110,37 @@ function matchesApproval(review, owner, head, body) {
   return validId(review?.id) && sameBot(review.user, owner) && review.commit_id === head && review.body === body;
 }
 
+function matchesStoredApproval(candidate, review, body = review.body) {
+  return matchesApproval(candidate, review.user, review.commit_id, body) && candidate.id === review.id &&
+    ['APPROVED', 'DISMISSED'].includes(candidate.state);
+}
+
+function hasPendingDismissal(review) {
+  return review.body.split('\n').at(-2) === pendingDismissalMarker;
+}
+
+async function recordPendingDismissal(github, approver, pull, review) {
+  if (hasPendingDismissal(review)) return review;
+  const url = `${pull}/reviews/${review.id}`;
+  const receiptStart = review.body.lastIndexOf('\n') + 1;
+  const body = `${review.body.slice(0, receiptStart)}${pendingDismissalMarker}\n${review.body.slice(receiptStart)}`;
+  const current = await github.get(url);
+  if (matchesStoredApproval(current, review, body)) return current;
+  if (!matchesStoredApproval(current, review)) {
+    throw new Error(`Could not verify automatic approval ${review.id} before recording withdrawal`);
+  }
+  if (current.state === 'DISMISSED') return current;
+  try {
+    const updated = await approver.put(url, { body });
+    if (matchesStoredApproval(updated, review, body)) return updated;
+  } catch {
+    // An accepted review edit can lose its response. Read the exact marker before proceeding.
+  }
+  const observed = await github.get(url);
+  if (matchesStoredApproval(observed, review, body)) return observed;
+  throw new Error(`Could not record pending withdrawal for automatic approval ${review.id}`);
+}
+
 async function postApproval(github, approver, pull, reviews, owner, head, body) {
   const newApproval = (review) => matchesApproval(review, owner, head, body) &&
     !reviews.some((prior) => prior?.id === review.id);
@@ -124,25 +157,27 @@ async function postApproval(github, approver, pull, reviews, owner, head, body) 
   throw new Error('Could not confirm the automatic approval after submitting it to GitHub');
 }
 
-async function dismissApproval(github, approver, pull, review, message) {
+async function dismissApproval(github, approver, pull, review, reason) {
   const url = `${pull}/reviews/${review.id}`;
-  const matches = (item) => matchesApproval(item, review.user, review.commit_id, review.body) && item.id === review.id;
   const current = await github.get(url);
-  if (!matches(current) || !['APPROVED', 'DISMISSED'].includes(current.state)) {
+  if (!matchesStoredApproval(current, review)) {
     throw new Error(`Could not verify automatic approval ${review.id} before dismissal`);
   }
-  if (current.state === 'DISMISSED') return;
+  if (current.state === 'DISMISSED') return false;
+  const message = typeof reason === 'function' ? await reason() : reason;
+  if (!message) return false;
 
   try {
     const dismissed = await approver.put(`${url}/dismissals`, { event: 'DISMISS', message });
-    if (matches(dismissed) && dismissed.state === 'DISMISSED') return;
+    if (matchesStoredApproval(dismissed, review) && dismissed.state === 'DISMISSED') return true;
   } catch {
     // Confirm an already applied dismissal by reading the exact review.
   }
   const observed = await github.get(url);
-  if (!matches(observed) || observed.state !== 'DISMISSED') {
+  if (!matchesStoredApproval(observed, review) || observed.state !== 'DISMISSED') {
     throw new Error(`Could not confirm dismissal of automatic approval ${review.id}`);
   }
+  return true;
 }
 
 async function readReviewHistory(github, pull, signal) {
@@ -163,12 +198,11 @@ export async function reconcileMainApprovals({ github, approver, appSlug, humanO
   const owner = await readApprovalBot(github, approver, appSlug);
   let dismissed = 0;
   const errors = [];
-  // A PR that once targeted main can retain its approval after being retargeted.
-  for await (const pr of pages(github, '/pulls?state=open', 'Open pull requests')) {
+  async function reconcilePull(pr) {
     const prNumber = pr?.number;
-    if (!validId(prNumber)) throw new Error('Invalid open pull request');
-    const pull = `/pulls/${prNumber}`;
     try {
+      if (!validId(prNumber)) throw new Error('Invalid open pull request');
+      const pull = `/pulls/${prNumber}`;
       const signal = AbortSignal.timeout(pullTimeoutMs);
       const scopedGitHub = github.withSignal(signal);
       const scopedApprover = approver.withSignal(signal);
@@ -176,18 +210,31 @@ export async function reconcileMainApprovals({ github, approver, appSlug, humanO
       for (const review of reviews) {
         const receipt = readActiveApproval(review, owner, prNumber);
         if (!receipt) continue;
-        const current = await isCurrent(scopedGitHub, github.repository, pull, prNumber, receipt, { allowDraft: true });
-        let reason;
-        if (!current) reason = staleDismissal;
-        else if (!await hasIndependentApprovalGate(scopedGitHub, scopedApprover, receipt, humanOwners)) reason = protectionDismissal;
-        else if (await hasBlockingChangeRequest(scopedGitHub, reviews)) reason = changeRequestDismissal;
-        if (!reason) continue;
-        await dismissApproval(scopedGitHub, scopedApprover, pull, review, reason);
-        dismissed++;
+        const reason = async (history) => {
+          if (hasPendingDismissal(review)) return ineligibleDismissal;
+          if (!await isCurrent(scopedGitHub, github.repository, pull, prNumber, receipt, { allowDraft: true })) return staleDismissal;
+          if (!await hasIndependentApprovalGate(scopedGitHub, scopedApprover, receipt, humanOwners)) return protectionDismissal;
+          if (await hasBlockingChangeRequest(scopedGitHub, history ?? await readReviewHistory(scopedGitHub, pull, signal))) {
+            return changeRequestDismissal;
+          }
+        };
+        if (await reason(reviews) && await dismissApproval(scopedGitHub, scopedApprover, pull, review, reason)) dismissed++;
       }
     } catch (cause) {
       errors.push(new Error(`Could not reconcile Luoshen approvals for PR #${prNumber}`, { cause }));
     }
+  }
+  let batch = [];
+  try {
+    // Include PRs that may have retained a main approval after being retargeted.
+    for await (const pr of pages(github, '/pulls?state=open', 'Open pull requests')) {
+      batch.push(reconcilePull(pr));
+      if (batch.length < cleanupBatchSize) continue;
+      await Promise.all(batch);
+      batch = [];
+    }
+  } finally {
+    await Promise.all(batch);
   }
   if (errors.length) throw new AggregateError(errors, 'Could not reconcile all Luoshen approvals');
   return dismissed;
@@ -229,9 +276,11 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const withdrawn = new Set();
   for (const review of previousReviews) {
     const receipt = readActiveApproval(review, owner, prNumber);
-    if (!receipt || (allowApproval && matchesRevision(receipt, revision))) continue;
-    const message = allowApproval ? staleDismissal : ineligibleDismissal;
-    await dismissApproval(github, approver, pull, review, message);
+    if (!receipt) continue;
+    const pending = hasPendingDismissal(review);
+    if (allowApproval && !pending && matchesRevision(receipt, revision)) continue;
+    const reviewToDismiss = allowApproval ? review : await recordPendingDismissal(github, approver, pull, review);
+    await dismissApproval(github, approver, pull, reviewToDismiss, pending || !allowApproval ? ineligibleDismissal : staleDismissal);
     withdrawn.add(review.id);
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';

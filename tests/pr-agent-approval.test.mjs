@@ -114,6 +114,13 @@ function fakeGitHub() {
     async put(path, data) {
       state.calls.push(`PUT ${path}`);
       state.writes.push({ method: 'PUT', path, data });
+      const update = /^\/pulls\/42\/reviews\/(\d+)$/u.exec(path);
+      if (update) {
+        const review = state.reviews.find(({ id }) => id === Number(update[1]));
+        assert.equal(review.user.id, approvalBot.id);
+        review.body = data.body;
+        return structuredClone(review);
+      }
       const match = /^\/pulls\/42\/reviews\/(\d+)\/dismissals$/u.exec(path);
       assert.ok(match);
       assert.equal(data.event, 'DISMISS');
@@ -520,16 +527,50 @@ test('a rejected current verdict withdraws only active Luoshen approvals', async
 
   assert.equal(await run({ allowApproval: false }), 'dismissed-ineligible');
   assert.deepEqual(state.writes.map(({ path }) => path), [
-    `${reviewPath}/106/dismissals`, `${reviewPath}/107/dismissals`,
+    `${reviewPath}/106`, `${reviewPath}/106/dismissals`, `${reviewPath}/107`, `${reviewPath}/107/dismissals`,
   ]);
   assert.deepEqual(state.reviews.map(({ state }) => state), [
     'APPROVED', 'APPROVED', 'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED', 'DISMISSED', 'DISMISSED',
   ]);
 
   assert.equal(await run({ allowApproval: false }), 'skipped-ineligible');
-  assert.equal(state.writes.length, 2);
+  assert.equal(state.writes.length, 4);
   assert.equal(await run(), 'skipped-changes-requested');
-  assert.equal(state.writes.length, 2);
+  assert.equal(state.writes.length, 4);
+});
+
+test('a later same-version cleanup retries a failed withdrawal recorded on the exact App approval', async () => {
+  const { state, run, reconcile } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  const human = priorApproval({ id: 101, author: owner });
+  state.reviews.unshift(human);
+  state.denyDismissal = true;
+
+  await assert.rejects(run({ allowApproval: false }), /Could not confirm dismissal/u);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED']);
+  state.denyDismissal = false;
+
+  assert.equal(await reconcile(), 1);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+  assert.deepEqual(state.writes.map(({ method, path }) => [method, path]), [
+    ['POST', reviewPath], ['PUT', `${reviewPath}/300`], ['PUT', `${reviewPath}/300/dismissals`],
+    ['PUT', `${reviewPath}/300/dismissals`],
+  ]);
+  assert.equal(await reconcile(), 0);
+  assert.equal(await run({ runId: '5678' }), 'approved');
+});
+
+test('cleanup preserves a same-version App approval when a maintainer lifts the blocking change request before dismissal', async () => {
+  const { state, run, reconcile } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  state.reviews.unshift({ id: 101, user: owner, state: 'CHANGES_REQUESTED', commit_id: head });
+  state.beforeGet = (path) => {
+    if (path === `${reviewPath}/300`) state.reviews.push({ id: 301, user: owner, state: 'APPROVED', commit_id: head });
+  };
+
+  assert.equal(await reconcile(), 0);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['CHANGES_REQUESTED', 'APPROVED', 'APPROVED']);
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
 });
 
 test('retries transient history before reconciling an existing approval with a human change request', async () => {
@@ -608,25 +649,30 @@ test('one unavailable review history does not prevent cleanup for other open PRs
   assert.equal(state.reviews[0].state, 'DISMISSED');
 });
 
-test('each unreachable PR has its own cleanup deadline so a subsequent stale approval is still withdrawn', async () => {
+test('a batch of unreachable PRs is bounded and a subsequent batch can withdraw an old approval', async () => {
   const { state, reconcile } = fakeGitHub();
   state.base = otherSha;
   state.reviews = [priorApproval({ id: 101 }), priorApproval({ id: 102, author: owner })];
   const deadlines = new Set();
+  let active = 0;
+  let peak = 0;
   state.beforeGet = (path, signal) => {
-    if (path === '/pulls?state=open&per_page=100&page=1') return [39, 40, 41, 42].map((number) => ({ number }));
-    if (!/^\/pulls\/(?:39|40|41)\/reviews\?/u.test(path)) return;
+    if (path === '/pulls?state=open&per_page=100&page=1') return [37, 38, 39, 40, 41, 42].map((number) => ({ number }));
+    if (!/^\/pulls\/(?:3[7-9]|4[01])\/reviews\?/u.test(path)) return;
     assert.ok(signal instanceof AbortSignal);
     deadlines.add(signal);
-    return delay(30_000, [], { signal });
+    active++;
+    peak = Math.max(active, peak);
+    return delay(30_000, [], { signal }).finally(() => { active--; });
   };
 
   await assert.rejects(reconcile({ pullTimeoutMs: 20 }), (error) => {
     assert.ok(error instanceof AggregateError);
-    assert.deepEqual(error.errors.map(({ cause }) => cause.name), ['AbortError', 'AbortError', 'AbortError']);
+    assert.deepEqual(error.errors.map(({ cause }) => cause.name), Array(5).fill('AbortError'));
     return true;
   });
-  assert.equal(deadlines.size, 3);
+  assert.equal(deadlines.size, 5);
+  assert.equal(peak, 4);
   assert.equal([...deadlines].every(({ aborted }) => aborted), true);
   assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
 });
