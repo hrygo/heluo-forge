@@ -49,6 +49,9 @@ test('配置逐字段来自身份真源：appId/GUID/productName/可执行名/�
   assert.equal(config.executableName, APP_IDENTITY.executableName);
   assert.equal(config.nsis.guid, APP_IDENTITY.upgradeGuid);
   assert.equal(config.nsis.uninstallDisplayName, `${APP_IDENTITY.displayName} \${version}`);
+  assert.equal(config.nsis.oneClick, false);
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, true);
+  assert.equal(config.nsis.perMachine, false);
   assert.equal(config.nsis.deleteAppDataOnUninstall, false);
   assert.equal(config.artifactName, 'heluo-forge-enterprise-${version}-${arch}.${ext}');
   assert.equal(config.nsis.artifactName, 'heluo-forge-enterprise-${version}-setup-${arch}.${ext}');
