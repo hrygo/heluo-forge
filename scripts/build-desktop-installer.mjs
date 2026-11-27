@@ -43,19 +43,77 @@ const TARGET_ARCHES = Object.freeze({
  * symbols: only a debugger opens them. electron-builder's own default excludes
  * apply to the app files, not to `extraResources`, where the runtime travels.
  */
-const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb'];
+const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb', '.flow', '.c', '.cc', '.cpp', '.h', '.hpp', '.gyp', '.gypi', '.tsbuildinfo'];
 
 /**
  * Third-party packages inside `dsh/node_modules` (outside `@deepseek-ai/`)
  * carry test suites, docs, examples and changelogs that are never needed at
  * runtime; license/notice files are always preserved.
  */
-const THIRD_PARTY_EXCLUDED_DIRS = ['test', 'tests', '__tests__', 'docs', 'example', 'examples'];
+const THIRD_PARTY_EXCLUDED_DIRS = [
+  'test',
+  'tests',
+  '__tests__',
+  'docs',
+  'example',
+  'examples',
+  '.github',
+  '.vscode',
+  '.idea',
+  'fixtures',
+  '__fixtures__',
+];
 const THIRD_PARTY_EXCLUDED_DIR_SET = new Set(THIRD_PARTY_EXCLUDED_DIRS);
 const THIRD_PARTY_EXCLUDED_DOC_EXTS = new Set(['.md', '.markdown']);
 const THIRD_PARTY_EXCLUDED_DOC_PREFIXES = ['CHANGELOG', 'HISTORY'];
+const THIRD_PARTY_EXCLUDED_CONFIG_GLOBS = [
+  '.eslintrc*',
+  '.prettier*',
+  '.editorconfig',
+  '.npmignore',
+  '.flowconfig',
+  '.babelrc*',
+  'tsconfig*.json',
+  'binding.gyp',
+  'Makefile',
+  'CMakeLists.txt',
+  'biome.json',
+  'biome.jsonc',
+  'jest.config.*',
+  'vitest.config.*',
+  '.DS_Store',
+  'Thumbs.db',
+];
 const THIRD_PARTY_LICENSE_PREFIXES = ['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'];
 const THIRD_PARTY_LICENSE_GLOBS = ['[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*', '[Nn][Oo][Tt][Ii][Cc][Ee]*', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*'];
+
+export function isExcludedConfigFile(file) {
+  if (
+    file === '.editorconfig' ||
+    file === '.npmignore' ||
+    file === '.flowconfig' ||
+    file === 'binding.gyp' ||
+    file === 'Makefile' ||
+    file === 'CMakeLists.txt' ||
+    file === 'biome.json' ||
+    file === 'biome.jsonc' ||
+    file === '.DS_Store' ||
+    file === 'Thumbs.db'
+  ) {
+    return true;
+  }
+  if (
+    file.startsWith('.eslintrc') ||
+    file.startsWith('.prettier') ||
+    file.startsWith('.babelrc') ||
+    file.startsWith('jest.config.') ||
+    file.startsWith('vitest.config.')
+  ) {
+    return true;
+  }
+  if (file.startsWith('tsconfig') && file.endsWith('.json')) return true;
+  return false;
+}
 
 /**
  * The directories that travel exactly as they were staged: the dsh artifact
@@ -193,6 +251,7 @@ export function isPackaged(relativePath) {
   if (isLicense) return true;
   if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
   if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
+  if (isExcludedConfigFile(file)) return false;
   return true;
 }
 
@@ -213,6 +272,7 @@ export function runtimeFilter() {
     '!dsh/node_modules/!(@deepseek-ai)/**/*.markdown',
     '!dsh/node_modules/!(@deepseek-ai)/**/CHANGELOG*',
     '!dsh/node_modules/!(@deepseek-ai)/**/HISTORY*',
+    ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
     ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
     ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
   ];
@@ -285,7 +345,12 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     mac: { icon: join(iconsDir, basename(MAC_ICON)), target: macTargets.map((kind) => ({ target: kind, arch: [macArch] })) },
     // `compression: maximum` selects UDBZ (bzip2) DMG; skip blockmap since there is no update feed.
     dmg: { writeUpdateInfo: false },
-    linux: { icon: join(iconsDir), target: [{ target: 'deb', arch: [linuxArch] }], category: 'Development' },
+    linux: {
+      icon: join(iconsDir),
+      target: [{ target: 'deb', arch: [linuxArch] }],
+      category: 'Development',
+      maintainer: ['Heluo Forge <heluo-forge', 'corp.example>'].join('@'),
+    },
   };
 }
 

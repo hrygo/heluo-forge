@@ -89,6 +89,15 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/@scope/pkg/docs/guide.md',
     'dsh/node_modules/@scope/pkg/example/demo.js',
     'dsh/node_modules/@scope/pkg/examples/demo.js',
+    'dsh/node_modules/pkg/.github/workflows/ci.yml',
+    'dsh/node_modules/pkg/fixtures/sample.json',
+    'dsh/node_modules/pkg/src/native.c',
+    'dsh/node_modules/pkg/include/native.h',
+    'dsh/node_modules/pkg/binding.gyp',
+    'dsh/node_modules/pkg/Makefile',
+    'dsh/node_modules/pkg/tsconfig.json',
+    'dsh/node_modules/pkg/.eslintrc.json',
+    'dsh/node_modules/pkg/.DS_Store',
   ]) {
     assert.equal(isPackaged(excluded), false, excluded);
   }
@@ -134,6 +143,10 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/NOTICE',
       'dsh/node_modules/pkg/test/foo.js',
       'dsh/node_modules/@scope/pkg/docs/guide.md',
+      'dsh/node_modules/pkg/src/native.c',
+      'dsh/node_modules/pkg/binding.gyp',
+      'dsh/node_modules/pkg/tsconfig.json',
+      'dsh/node_modules/pkg/.github/workflows/ci.yml',
       'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
       'enterprise-assets/INSTALL.md',
     ]) {
@@ -166,6 +179,9 @@ test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64
   assert.deepEqual(macX64.mac.target, [{ target: 'dmg', arch: ['x64'] }]);
   const linuxArm = builderConfig({ ...common, target: 'linux', arch: 'arm64' });
   assert.deepEqual(linuxArm.linux.target, [{ target: 'deb', arch: ['arm64'] }]);
+  assert.equal(linuxArm.linux.maintainer.includes('@'), true);
+  const desktopPkg = JSON.parse(readFileSync(join(REPO_ROOT, 'services', 'forge-desktop', 'package.json'), 'utf8'));
+  assert.match(desktopPkg.homepage, /^https:\/\//);
   assert.equal(resolveTargetArch('linux'), 'x64');
   assert.equal(resolveTargetArch('win'), 'x64');
   assert.throws(() => resolveTargetArch('win', 'arm64'), (error) => error.code === 'BAD_ARGUMENT');
