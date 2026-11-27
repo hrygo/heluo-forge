@@ -102,13 +102,14 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
   ]) {
     assert.equal(isPackaged(excluded), false, excluded);
   }
-  // 第三方包的许可证文件（MIT/Apache 等版权保留义务合规保留）与 @deepseek-ai 作用域下的文档/技能文本必须保留；
+  // 第三方包的许可证文件（MIT/Apache 等版权保留义务合规保留，包含 fixtures 等子目录内的许可证）与 @deepseek-ai 作用域下的文档/技能文本必须保留；
   // 与排除规则同前缀但非配置的正常源码（如 tsconfig-loader.js、.npmignore-helper.js）不得被误伤。
   for (const kept of [
     'dsh/node_modules/zod/LICENSE.md',
     'dsh/node_modules/pkg/license.txt',
     'dsh/node_modules/pkg/NOTICE',
     'dsh/node_modules/pkg/COPYING',
+    'dsh/node_modules/pkg/fixtures/LICENSE.md',
     'dsh/node_modules/pkg/lib/tsconfig-loader.js',
     'dsh/node_modules/pkg/lib/.npmignore-helper.js',
     'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js',
@@ -157,6 +158,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/.github/workflows/ci.yml',
       'dsh/node_modules/pkg/.vscode/settings.json',
       'dsh/node_modules/pkg/fixtures/test.json',
+      'dsh/node_modules/pkg/fixtures/LICENSE.md',
       'dsh/node_modules/pkg/__fixtures__/mock.json',
       'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
       'enterprise-assets/INSTALL.md',
@@ -195,6 +197,15 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   const signedEnv = builderEnv({ certificateFile: 'certs/code-sign.pfx' }, { ...baseEnv, WIN_CSC_KEY_PASSWORD: 'secret-password' });
   assert.equal(signedEnv.WIN_CSC_LINK, resolve('certs/code-sign.pfx'));
   assert.equal(signedEnv.WIN_CSC_KEY_PASSWORD, 'secret-password');
+
+  // 省略参数时保留环境变量已有 WIN_CSC_LINK
+  const existingEnv = builderEnv({}, { ...baseEnv, WIN_CSC_LINK: '/existing/cert.pfx' });
+  assert.equal(existingEnv.WIN_CSC_LINK, '/existing/cert.pfx');
+
+  // 显式传入空白证书参数必须直接报错拒绝，防止静默回退
+  assert.throws(() => builderEnv({ certificateFile: '' }), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => builderEnv({ certificateFile: '   ' }), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => parseArguments(['--identity', 'id.json', '--resources', 'res', '--version', '1.0.0', '--output', 'out', '--certificate-file', '']), (err) => err.code === 'BAD_ARGUMENT');
 });
 
 test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {

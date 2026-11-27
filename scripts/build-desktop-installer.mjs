@@ -195,6 +195,9 @@ export function parseArguments(argv) {
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
   }
   options.arch = resolveTargetArch(options.target, options.arch);
+  if (options.certificateFile !== undefined && (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '')) {
+    fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
+  }
   for (const key of ['identity', 'resources', 'version', 'output']) {
     if (typeof options[key] !== 'string' || options[key].trim() === '') fail('BAD_ARGUMENT', `missing required option for ${key}`);
   }
@@ -224,10 +227,10 @@ export function isPackaged(relativePath) {
   const file = segments.at(-1) ?? '';
   const upperFile = file.toUpperCase();
   const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
+  if (isLicense) return true;
   if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
-  if (isLicense) return true;
   if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
   if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
   if (isExcludedConfigFile(file)) return false;
@@ -382,7 +385,10 @@ export function builderEntry(builderDir, exists = existsSync, read = readFileSyn
  */
 export function builderEnv(options = {}, env = process.env) {
   const next = { ...env };
-  if (typeof options?.certificateFile === 'string' && options.certificateFile.trim() !== '') {
+  if (options?.certificateFile !== undefined) {
+    if (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '') {
+      fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
+    }
     next.WIN_CSC_LINK = resolve(options.certificateFile);
   }
   return next;
