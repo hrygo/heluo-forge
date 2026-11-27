@@ -20,7 +20,9 @@ const tail = (text) => (text.length > OUTPUT_TAIL ? text.slice(-OUTPUT_TAIL) : t
 const keptEnd = (text) => {
   if (text.length <= OUTPUT_TAIL) return text;
   const from = text.indexOf('\n', text.length - OUTPUT_TAIL);
-  return from === -1 ? tail(text) : text.slice(from + 1);
+  // A single line longer than the tail has no safe start left: drop it so a cut
+  // URL cannot leave its query or fragment parameters exposed without a scheme.
+  return from === -1 ? '' : text.slice(from + 1);
 };
 
 /** The end of one stream: a string that is replaced whole, never appended to in place. */
@@ -119,15 +121,16 @@ export function createRuntime({
     };
     /**
      * The verdict of a process that is gone or killed: decided now, delivered
-     * once its pipes are read to the end or `outputGraceMs` has passed. The
-     * report it wrote before it left may still be in them, and the class of
-     * the failure is read from that report.
+     * once its pipes are read to the end (and, on timeout, its exit is seen) or
+     * `outputGraceMs` has passed. The report it wrote before it left may still
+     * be in them, and the class of the failure is read from that report.
      */
-    const failAfterOutput = (verdict) => {
+    const failAfterOutput = (verdict, { waitExit = false } = {}) => {
       if (settled) return;
       decide();
       let grace;
-      const read = Promise.race([outputRead, new Promise((resolve) => {
+      const drained = waitExit ? Promise.all([outputRead, handle.exited.catch(() => {})]) : outputRead;
+      const read = Promise.race([drained, new Promise((resolve) => {
         grace = setTimer(resolve, outputGraceMs);
       })]);
       void read.then(() => {
@@ -135,6 +138,7 @@ export function createRuntime({
         deliver(...verdict());
       });
     };
+    const portConflictVerdict = () => (addressInUse(err.current()) ? ['PORT_CONFLICT', 'the web profile could not bind its port'] : null);
     const settleReady = (lines) => {
       let url;
       try {
@@ -210,12 +214,7 @@ export function createRuntime({
         return;
       }
       if (phase === 'starting') {
-        failAfterOutput(() => {
-          const taken = addressInUse(err.current());
-          return taken
-            ? ['PORT_CONFLICT', 'the web profile could not bind its port']
-            : ['EXITED_BEFORE_READY', `the web profile exited (code ${info.code ?? info.signal ?? 'unknown'})`];
-        });
+        failAfterOutput(() => portConflictVerdict() ?? ['EXITED_BEFORE_READY', `the web profile exited (code ${info.code ?? info.signal ?? 'unknown'})`]);
         return;
       }
       const left = `the web profile exited (code ${info.code ?? info.signal ?? 'unknown'})`;
@@ -229,7 +228,10 @@ export function createRuntime({
       // Past the deadline the process may not linger and announce later.
       handle.kill('SIGKILL');
       retiring = handle;
-      failAfterOutput(() => ['START_TIMEOUT', `the web profile did not announce its address within ${startTimeoutMs} ms`]);
+      failAfterOutput(
+        () => portConflictVerdict() ?? ['START_TIMEOUT', `the web profile did not announce its address within ${startTimeoutMs} ms`],
+        { waitExit: true },
+      );
     }, startTimeoutMs);
     return starting;
   }

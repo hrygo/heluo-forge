@@ -24,9 +24,9 @@ export function addressInUse(text) {
 // JSON line — up to and including the `?` or `#` that starts its query or
 // fragment.
 const ADDRESS_HEAD = /(\bhttps?:[\\/][^\s"'<>?#]*[?#])[^\s"'<>]*/gu;
-// The process token by its name, wherever it stands: also where the start of
-// its address was cut off before it.
-const TOKEN_VALUE = /([?&]token=)[^\s"'<>&#\\]*/gu;
+// The process token by its name, wherever it stands: in a query, as a
+// standalone key=value pair, or where the start of its address was cut off.
+const TOKEN_VALUE = /(\btoken=)[^\s"'<>&#\\]*/gu;
 
 /**
  * What may be kept and repeated of what the web profile printed. Every

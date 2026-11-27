@@ -232,18 +232,19 @@ test('反向：进日志的服务输出有界，日志这一道口上再抹一�
   // The bounds are the contract: the last sixty lines, eight KiB to a stream, six hundred characters to a line.
   const stdout = `${Array.from({ length: 100 }, (_, index) => `line ${index}`).join('\n')}\n`;
   // Thirty lines past the length of a line: together they are past the bytes of a stream.
-  const stderr = `${Array.from({ length: 30 }, () => 'e'.repeat(700)).join('\n')}\nhttp://127.0.0.1:43210/?token=synthetic-token-value\n`;
+  const stderr = `${Array.from({ length: 30 }, () => 'e'.repeat(700)).join('\n')}\nstandalone token=synthetic-token-value\nhttp://127.0.0.1:43210/?token=synthetic-token-value\n`;
   const entry = failureRecord({ at: AT, code: 'START_TIMEOUT', message: 'm', service: { ...SERVICE, exit: null, output: { stdout, stderr } } });
   const [head, rest] = entry.split('本机服务标准错误（尾部）：\n');
   const [errText, outText] = rest.split('本机服务标准输出（尾部）：\n');
   assert.equal(head, '=== 2026-11-25T12:00:00.000Z 应用未能启动 ===\n错误码：START_TIMEOUT\n说明：m\n');
   // What was dropped is said, then the end of it. A line cut to six hundred characters ends in an ellipsis, so it
-  // is 602 bytes: eight KiB hold thirteen of them and the last line (29 bytes), not a fourteenth of them.
+  // is 602 bytes: eight KiB hold thirteen of them plus the standalone token line (20 bytes) and the last line (29 bytes).
   const errLines = errText.replace(/\n$/u, '').split('\n');
   assert.equal(errLines[0], '  …（更早的输出已省略）');
+  assert.equal(errLines.at(-2), '  standalone token=…');
   assert.equal(errLines.at(-1), '  http://127.0.0.1:43210/?…');
-  assert.ok(errLines.slice(1, -1).every((line) => line === `  ${'e'.repeat(599)}…`));
-  assert.equal(errLines.length, 15);
+  assert.ok(errLines.slice(1, -2).every((line) => line === `  ${'e'.repeat(599)}…`));
+  assert.equal(errLines.length, 16);
   const outLines = outText.split('\n');
   assert.equal(outLines[0], '  …（更早的输出已省略）');
   assert.equal(outLines[1], '  line 40');

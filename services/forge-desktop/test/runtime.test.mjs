@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ShellError } from '../src/errors.mjs';
+import { failureRecord } from '../src/diagnostic.mjs';
 import { createRuntime } from '../src/runtime.mjs';
 
 const TOKEN = 'process-token-7f3a9c';
@@ -235,6 +236,8 @@ test('the snapshot keeps the end of both streams, bounded, with the query of eve
       + '  issuer http://iam.corp.example/esc-sso/oidc/.well-known/openid-configuration has no query\n'
       // An address whose start was cut off before it keeps no token either; a fragment goes like a query.
       + `  cut at its start: 43210/?token=${TOKEN}\n`
+      // A standalone token= key-value pair is redacted without needing ? or & before it.
+      + `  standalone token=${TOKEN} and next=1\n`
       + '  fragment https://idp.corp.example/cb#session=1\n',
   );
   await flush();
@@ -246,9 +249,20 @@ test('the snapshot keeps the end of both streams, bounded, with the query of eve
       + '  {"error":"get http:\\/\\/127.0.0.1:43210\\/?… failed"}\n'
       + '  issuer http://iam.corp.example/esc-sso/oidc/.well-known/openid-configuration has no query\n'
       + '  cut at its start: 43210/?token=…\n'
+      + '  standalone token=… and next=1\n'
       + '  fragment https://idp.corp.example/cb#…\n',
   );
   assert.equal(JSON.stringify(runtime.snapshot()).includes(TOKEN), false);
+
+  // An over-limit line without a newline has its start cut off and is dropped whole so callback credentials cannot leak.
+  fake.complain(`https://idp.corp.example/cb?${'p'.repeat(70 * 1024)}&code=callback-secret-code#session=callback-secret-session`);
+  await flush();
+  assert.equal(runtime.snapshot().output.stderr, '');
+  assert.equal(JSON.stringify(runtime.snapshot()).includes('callback-secret-code'), false);
+  assert.equal(JSON.stringify(runtime.snapshot()).includes('callback-secret-session'), false);
+  const logEntry = failureRecord({ at: new Date('2026-11-27T00:00:00Z'), code: 'START_TIMEOUT', message: 'm', service: runtime.snapshot() });
+  assert.equal(logEntry.includes('callback-secret-code'), false);
+  assert.equal(logEntry.includes('callback-secret-session'), false);
 
   // Each stream keeps its end, and no more than the tail: what failed is at the end.
   for (let index = 0; index < 1500; index += 1) {
@@ -501,6 +515,35 @@ test('after a start that was killed, the next one waits until that process is se
   assert.equal((await again).origin, ORIGIN);
 });
 
+test('a timeout whose stderr reports EADDRINUSE yields PORT_CONFLICT, and waits for exit after pipes close', async () => {
+  const taken = fixture({ startTimeoutMs: 1000 });
+  const startingTaken = taken.runtime.start();
+  taken.fake.complain('Error: listen EADDRINUSE: address already in use 127.0.0.1:43210\n');
+  taken.timers.fire(1000);
+  // Pipes close before the exit notification arrives: the verdict waits within the grace window.
+  taken.fake.handle.output.end();
+  taken.fake.handle.errors.end();
+  await flush();
+  assert.equal(taken.runtime.snapshot().phase, 'starting');
+  taken.fake.gone({ code: null, signal: 'SIGKILL' });
+  await rejectsCode(startingTaken, 'PORT_CONFLICT');
+  assert.deepEqual(taken.runtime.snapshot().exit, { code: null, signal: 'SIGKILL' });
+  assert.deepEqual(taken.timers.armed(), []);
+
+  // Without EADDRINUSE in stderr, the same pipe-then-exit order yields START_TIMEOUT with the exit signal recorded.
+  const timedOut = fixture({ startTimeoutMs: 1000 });
+  const startingTimedOut = timedOut.runtime.start();
+  timedOut.timers.fire(1000);
+  timedOut.fake.handle.output.end();
+  timedOut.fake.handle.errors.end();
+  await flush();
+  assert.equal(timedOut.runtime.snapshot().phase, 'starting');
+  timedOut.fake.gone({ code: null, signal: 'SIGKILL' });
+  await rejectsCode(startingTimedOut, 'START_TIMEOUT');
+  assert.deepEqual(timedOut.runtime.snapshot().exit, { code: null, signal: 'SIGKILL' });
+  assert.deepEqual(timedOut.timers.armed(), []);
+});
+
 test('the same after an address the shell may not load', async () => {
   const first = fakeProcess();
   const second = fakeProcess();
@@ -523,4 +566,33 @@ test('the same after an address the shell may not load', async () => {
   assert.equal(spawns, 2);
   second.say(ANNOUNCE);
   assert.equal((await again).origin, ORIGIN);
+});
+
+test('a timeout whose stderr reports EADDRINUSE yields PORT_CONFLICT, and waits for exit after pipes close', async () => {
+  const taken = fixture({ startTimeoutMs: 1000 });
+  const startingTaken = taken.runtime.start();
+  taken.fake.complain('Error: listen EADDRINUSE: address already in use 127.0.0.1:43210\n');
+  taken.timers.fire(1000);
+  // Pipes close before the exit notification arrives: the verdict waits within the grace window.
+  taken.fake.handle.output.end();
+  taken.fake.handle.errors.end();
+  await flush();
+  assert.equal(taken.runtime.snapshot().phase, 'starting');
+  taken.fake.gone({ code: null, signal: 'SIGKILL' });
+  await rejectsCode(startingTaken, 'PORT_CONFLICT');
+  assert.deepEqual(taken.runtime.snapshot().exit, { code: null, signal: 'SIGKILL' });
+  assert.deepEqual(taken.timers.armed(), []);
+
+  // Without EADDRINUSE in stderr, the same pipe-then-exit order yields START_TIMEOUT with the exit signal recorded.
+  const timedOut = fixture({ startTimeoutMs: 1000 });
+  const startingTimedOut = timedOut.runtime.start();
+  timedOut.timers.fire(1000);
+  timedOut.fake.handle.output.end();
+  timedOut.fake.handle.errors.end();
+  await flush();
+  assert.equal(timedOut.runtime.snapshot().phase, 'starting');
+  timedOut.fake.gone({ code: null, signal: 'SIGKILL' });
+  await rejectsCode(startingTimedOut, 'START_TIMEOUT');
+  assert.deepEqual(timedOut.runtime.snapshot().exit, { code: null, signal: 'SIGKILL' });
+  assert.deepEqual(timedOut.timers.armed(), []);
 });
