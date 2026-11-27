@@ -127,11 +127,11 @@ async function publishReviewComments(github, prPath, head, comments, currentRevi
     }
   } catch {
     console.log('::warning::Unable to read existing inline comments. Findings are available in the review summary.');
-    return true;
+    return 'incomplete';
   }
   const unpublished = comments.filter((comment) => !seen.has(getReviewCommentMarker(comment.body)));
-  if (!unpublished.length) return true;
-  if (!await currentRevision()) return false;
+  if (!unpublished.length) return 'complete';
+  if (!await currentRevision()) return 'revision-changed';
   try {
     const posted = await github.post(`${prPath}/reviews`, {
       event: 'COMMENT', commit_id: head, body: '洛神审查意见', comments: unpublished,
@@ -139,8 +139,9 @@ async function publishReviewComments(github, prPath, head, comments, currentRevi
     if (posted?.state !== 'COMMENTED' || posted.commit_id !== head) throw new Error('Invalid GitHub COMMENT response');
   } catch {
     console.log('::warning::Unable to confirm inline comments. Findings are available in the review summary.');
+    return 'incomplete';
   }
-  return true;
+  return 'complete';
 }
 
 async function alreadyReviewed(github, env, scope, base, ref) {
@@ -313,6 +314,7 @@ async function validateReview(github, env, scope) {
 
   // Options on a manual review are handled by the pinned upstream runner.
   let allowApproval = false;
+  let inlineCommentStatus = 'complete';
   if (nativeReview) {
     const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
     const coverage = eligible && await readReviewCoverage(env.PR_AGENT_COVERAGE_PATH);
@@ -322,6 +324,7 @@ async function validateReview(github, env, scope) {
         for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
       } catch {
         files.length = 0;
+        if (issues.length) inlineCommentStatus = 'incomplete';
         console.log('::warning::Unable to read complete PR files for inline comments or approval coverage.');
       }
       const textCovered = Boolean(coverage) && verifyReviewCoverage(coverage, {
@@ -330,7 +333,10 @@ async function validateReview(github, env, scope) {
         invocation: env.PR_AGENT_COVERAGE_INVOCATION,
       });
       const comments = buildReviewComments({ issues, files, head });
-      if (comments.length && !await publishReviewComments(github, prPath, head, comments, currentRevision)) return;
+      if (comments.length) {
+        inlineCommentStatus = await publishReviewComments(github, prPath, head, comments, currentRevision);
+        if (inlineCommentStatus === 'revision-changed') return;
+      }
       if (textCovered) {
         try {
           allowApproval = verifyReviewFileModes(await github.getDiff(prPath), files);
@@ -360,7 +366,9 @@ async function validateReview(github, env, scope) {
       await appendFile(env.GITHUB_OUTPUT, `approval_revision=${JSON.stringify(revision)}\n`);
     }
   }
-  if (automatic) await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
+  if (automatic && inlineCommentStatus === 'complete') {
+    await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
+  }
 }
 
 function approvalCredential(env) {

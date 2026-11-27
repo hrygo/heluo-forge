@@ -698,6 +698,25 @@ test('a same-version rejection rereads that revision before writing a pending ma
   }
 });
 
+test('a temporary revision read failure after listing reviews does not drop a withdrawal', async () => {
+  const { state, run } = fakeGitHub();
+  state.reviews = [priorApproval({ id: 101, author: owner }), priorApproval({ id: 300 })];
+  let historyRead = false;
+  let unavailable = true;
+  state.beforeGet = (path) => {
+    if (path.startsWith(`${reviewPath}?`)) historyRead = true;
+    if (path === pull && historyRead && unavailable) {
+      unavailable = false;
+      throw Object.assign(new Error('Pull request revision unavailable'), { status: 503 });
+    }
+  };
+
+  assert.equal(await run({ allowApproval: false }), 'dismissed-ineligible');
+  assert.equal(unavailable, false);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+  assert.deepEqual(state.writes.map(({ path }) => path), [`${reviewPath}/300`, `${reviewPath}/300/dismissals`]);
+});
+
 test('a later same-version cleanup retries a failed withdrawal recorded on the exact App approval', async () => {
   const { state, run, reconcile } = fakeGitHub();
   assert.equal(await run(), 'approved');
