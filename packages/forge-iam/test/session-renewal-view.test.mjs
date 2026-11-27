@@ -98,6 +98,7 @@ test('view and first watch frame project expiry even before any timer or notific
   const ready = await service.hydrate();
   assert.equal(ready.state, 'ready');
   assert.equal(ready.sampledAt, clock.wall);
+  assert.equal(Object.hasOwn({ ...ready }, 'sampledAt'), false);
   clock.wall += 60_000;
   const watch = service.watch();
   try {
