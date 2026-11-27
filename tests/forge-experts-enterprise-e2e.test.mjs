@@ -491,12 +491,35 @@ test('Stage C4-C cross-package IAM + Policy + Experts E2E: real forge-policy den
     assert.equal(denied.body.error.code, 'EXPERT_POLICY_DENIED');
     assert.equal(backend.getCreateTaskCalls(), 0, 'real forge-policy deny must block outbound Delegra call');
 
-    // 2. Re-mount real @heluo/forge-policy in observe-only/allow mode -> full prestep + tool bridge + RFC 8693 E2E succeeds.
+    // 2. Empty generic @heluo/forge-policy (rules: {}, out-of-scope fallback) MUST ALSO fail closed with 0 Delegra creates.
     disposePolicy();
     disposePolicy = applyPolicy(host.ctx, {
       catalog: [],
       rules: {},
       audit: { sink: 'memory', buffer: 100 },
+    });
+
+    const selOutOfScope = await host.invokeHttp({
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-e2e-1', scopeEpoch, taskText: 'Out-of-scope policy check', draftVersion: 1 },
+    });
+    assert.equal(selOutOfScope.status, 201);
+    const deniedOutOfScope = await host.invokeHttp({
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: selOutOfScope.body.selectionToken, sessionId: 'sess-e2e-1', taskText: 'Out-of-scope policy check', draftVersion: 1 },
+    });
+    assert.equal(deniedOutOfScope.status, 403);
+    assert.equal(deniedOutOfScope.body.error.code, 'EXPERT_POLICY_DENIED');
+    assert.equal(backend.getCreateTaskCalls(), 0, 'generic out-of-scope policy fallback must never authorize expert egress');
+
+    // 3. Explicit egress policy authorization -> full prestep + tool bridge + RFC 8693 E2E succeeds.
+    disposePolicy();
+    disposePolicy = host.ctx.provide('forgePolicy', {
+      decideEgress: async () => ({ decision: 'allow', reason: 'explicit-expert-egress-grant' }),
     });
 
     const sel2 = await host.invokeHttp({
@@ -598,7 +621,7 @@ test('Stage C4-C wire-drop unknown acceptance + dispatchEnabled: false kill-swit
   // Phase 1: Dispatch commits on Delegra, then wire drops -> 503 EXPERT_ACCEPTANCE_UNKNOWN persisted in pending_index.
   const host1 = createSyntheticCordisHost({ storage, iam });
   try {
-    applyPolicy(host1.ctx, { catalog: [], rules: {}, audit: { sink: 'memory', buffer: 100 } });
+    host1.ctx.provide('forgePolicy', { decideEgress: async () => ({ decision: 'allow' }) });
     await applyExperts(host1.ctx, {
       managementEnabled: true,
       dispatchEnabled: true,
@@ -724,5 +747,28 @@ test('Stage C4-C policy.decide unknown verdict string fails closed as EXPERT_POL
   } finally {
     await host.disposeAll();
     await iam.dispose();
+  }
+});
+
+test('Stage C4-C contradictory IAM session (state: ready with signedIn: false) fails closed as EXPERT_UNAUTHENTICATED (#484)', async () => {
+  const storage = createMemoryStorage();
+  const backend = createMockDelegraBackend();
+  const contradictoryIam = {
+    getSession: () => ({ state: 'ready', status: 'ready', signedIn: false, issuer: 'https://iam.corp.example', subject: 'emp-e2e-1' }),
+  };
+  const host = createSyntheticCordisHost({ storage, iam: contradictoryIam });
+
+  try {
+    await applyExperts(host.ctx, {
+      managementEnabled: true,
+      dispatchEnabled: true,
+      delegraTarget: 'delegra',
+      delegraOrgId: 'org-alpha',
+    });
+    const cat = await host.invokeHttp({ path: `${API_PREFIX}/catalog?view=callable` });
+    assert.equal(cat.status, 401);
+    assert.equal(cat.body.error.code, 'EXPERT_UNAUTHENTICATED');
+  } finally {
+    await host.disposeAll();
   }
 });

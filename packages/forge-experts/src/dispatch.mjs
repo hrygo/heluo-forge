@@ -280,6 +280,7 @@ export function createDispatchService(ports) {
   let pendingIndexTable = null;
   let closed = false;
   let pendingIndexQueue = Promise.resolve();
+  const inFlightReconciles = new Map();
   const reconcileTimeoutMs = Number.isInteger(ports.reconcileTimeoutMs) && ports.reconcileTimeoutMs > 0
     ? ports.reconcileTimeoutMs
     : 10_000;
@@ -333,6 +334,7 @@ export function createDispatchService(ports) {
   async function close() {
     closed = true;
     taskContextById.clear();
+    inFlightReconciles.clear();
     if (domainHandle) {
       const closing = domainHandle;
       domainHandle = null;
@@ -875,52 +877,63 @@ export function createDispatchService(ports) {
   }
 
   // Startup/reconnect recovery (#247): reconciles pending_delivery/unknown requestIds
-  // against Delegra via by-request with bounded concurrency and per-call timeout,
-  // without ever blindly re-sending createDelegraTask.
+  // against Delegra via by-request with per-scope in-flight dedup, bounded concurrency,
+  // and per-call timeout, without ever blindly re-sending createDelegraTask.
   async function reconcilePendingRequests() {
     const scope = await ports.resolveScope();
-    const requestIds = await readPendingIndex(scope);
-    const reconciled = [];
-    const notFound = [];
-    const stillPending = [];
+    const scopeKey = derivePendingIndexKey(scope);
+    const existingPass = inFlightReconciles.get(scopeKey);
+    if (existingPass) return existingPass;
 
-    const reconcileOne = async (requestId) => {
-      const record = await readCorrelation(scope, requestId);
-      if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
-        await syncPendingIndex(scope, requestId, 'accepted');
-        return;
-      }
-      try {
-        const result = await withTimeout(reconcileByRequest({ requestId }), reconcileTimeoutMs);
-        const entry = Object.freeze({
-          requestId,
-          taskId: result.taskId ?? record.taskId ?? null,
-          status: result.status ?? 'queued',
-          originSessionRef: record.originSessionRef,
-          expertId: record.expertId,
-        });
-        reconciled.push(entry);
-        try { ports.onTaskReconciled?.(entry); } catch { /* best effort */ }
-      } catch (error) {
-        if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
-          notFound.push(requestId);
-          await syncPendingIndex(scope, requestId, 'not_found');
-        } else {
-          stillPending.push(requestId);
+    const pass = (async () => {
+      const requestIds = await readPendingIndex(scope);
+      const reconciled = [];
+      const notFound = [];
+      const stillPending = [];
+
+      const reconcileOne = async (requestId) => {
+        const record = await readCorrelation(scope, requestId);
+        if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
+          await syncPendingIndex(scope, requestId, 'accepted');
+          return;
         }
+        try {
+          const result = await withTimeout(reconcileByRequest({ requestId }), reconcileTimeoutMs);
+          const entry = Object.freeze({
+            requestId,
+            taskId: result.taskId ?? record.taskId ?? null,
+            status: result.status ?? 'queued',
+            originSessionRef: record.originSessionRef,
+            expertId: record.expertId,
+          });
+          reconciled.push(entry);
+          try { ports.onTaskReconciled?.(entry); } catch { /* best effort */ }
+        } catch (error) {
+          if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
+            notFound.push(requestId);
+            await syncPendingIndex(scope, requestId, 'not_found');
+          } else {
+            stillPending.push(requestId);
+          }
+        }
+      };
+
+      for (let idx = 0; idx < requestIds.length; idx += RECONCILE_CONCURRENCY) {
+        const batch = requestIds.slice(idx, idx + RECONCILE_CONCURRENCY);
+        await Promise.all(batch.map((requestId) => reconcileOne(requestId)));
       }
-    };
 
-    for (let idx = 0; idx < requestIds.length; idx += RECONCILE_CONCURRENCY) {
-      const batch = requestIds.slice(idx, idx + RECONCILE_CONCURRENCY);
-      await Promise.all(batch.map((requestId) => reconcileOne(requestId)));
-    }
-
-    return Object.freeze({
-      reconciled: Object.freeze(reconciled),
-      notFound: Object.freeze(notFound),
-      stillPending: Object.freeze(stillPending),
+      return Object.freeze({
+        reconciled: Object.freeze(reconciled),
+        notFound: Object.freeze(notFound),
+        stillPending: Object.freeze(stillPending),
+      });
+    })().finally(() => {
+      if (inFlightReconciles.get(scopeKey) === pass) inFlightReconciles.delete(scopeKey);
     });
+
+    inFlightReconciles.set(scopeKey, pass);
+    return pass;
   }
 
   return Object.freeze({

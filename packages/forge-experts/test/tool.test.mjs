@@ -284,6 +284,13 @@ test('apply() registers restricted expert tools when dispatchEnabled is true and
           },
         };
       }
+      if (serviceName === 'agentHooks') {
+        return {
+          registerPreStep() {
+            return () => {};
+          },
+        };
+      }
       if (serviceName === 'storageDomain') {
         return {
           async open() {

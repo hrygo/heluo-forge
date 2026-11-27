@@ -195,6 +195,7 @@ export function createPreStepGuard(ports) {
       expertId: binding.expertId,
       sessionId: binding.sessionId,
       scopeEpoch: binding.scopeEpoch,
+      draftDigest: binding.draftDigest ?? null,
       draft,
       delegatedTaskId: null,
       createdAt,
@@ -271,6 +272,7 @@ export function createPreStepGuard(ports) {
         ports.onTurnFinalized?.({
           sessionId: turn.sessionId,
           expertId: turn.expertId,
+          ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
           status: 'delegated',
           preserveDraft: false,
         });
@@ -316,6 +318,7 @@ export function createPreStepGuard(ports) {
       ports.onTurnFinalized?.({
         sessionId: turn.sessionId,
         expertId: turn.expertId,
+        ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
         status: outcome.status,
         ...(outcome.code ? { code: outcome.code } : {}),
         preserveDraft: true,
