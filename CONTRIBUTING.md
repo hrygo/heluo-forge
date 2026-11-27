@@ -91,7 +91,7 @@ Dependabot 默认生成的提交即使关联了 Issue，也不能通过独立的
 
 - 两个 Ubuntu 24.04 测试分片与变更分类并行。分类或任一分片失败，`verify (ubuntu-x64)` 失败。Windows x64 使用 Windows Server 2025 并行执行凭据和 IAM 测试，共同决定其必需检查结果。Windows ARM64 在相关改动及全部基线运行上验证。同一 PR 的新运行取消过期运行。
 - Ubuntu 测试分片在检出前拒绝 head 仓库不是本仓库的 fork PR，并将失败汇总到 `verify`。判定只作用于 `pull_request`。工作流定义来自 PR 合并提交，可信基线门禁由 `sensitive-attestation` 和 CODEOWNERS 评审提供。
-- [`macOS compatibility checks`](.github/workflows/check-macos.yml) 验证 Apple Silicon。仓库检查依据完整 Git 差异调度 macOS 作业，便携的纯文档、技能及部署资料变更可跳过。基线推送、合并队列和手动运行均执行，也可单独手动运行。执行超时为 2 分钟，结果作为可选检查记录。
+- [`macOS compatibility checks`](.github/workflows/check-macos.yml) 验证 Apple Silicon。PR 复用仓库检查的完整 Git 差异分类，便携的纯文档、技能及部署资料变更可跳过。基线推送、合并队列和手动运行时独立执行。执行超时为 2 分钟，结果作为可选检查记录。
 - Node 版本来自 `.node-version`。本地 `pnpm check` 执行 `check:static` 与 `test:unit`，CI 使用相同入口。分片 2 执行静态检查，两个分片覆盖 Node 自动发现的全部测试，单个测试超时为 120 秒。
 - Ubuntu 测试分片使用根 `packageManager` 固定的 pnpm 执行 `install --frozen-lockfile --ignore-scripts`。Linux 和 macOS 作业构建并离线安装企业组合包，Windows 作业打包并离线安装凭据独立包。平台作业在临时存储中使用合成数据。检查的显示名称及分支保护约定见[开发约定](docs/engineering/development-conventions.md#6-检查与-ci)。
 - 托管 runner 的结果不代替 Windows 10、UOS、银河麒麟、目标 DSH/Electron 宿主、Windows ACL 或企业 IAM 的目标环境取证。8.3 真实短名用例在卷不提供不同的短别名时跳过；需以实际运行记录区分通过与跳过。

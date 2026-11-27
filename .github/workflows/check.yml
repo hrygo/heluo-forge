@@ -294,7 +294,7 @@ jobs:
   macos:
     name: macOS compatibility checks
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_macos != 'false') }}
+    if: ${{ github.event_name == 'pull_request' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_macos != 'false') }}
     uses: ./.github/workflows/check-macos.yml
 
   # Forward-compatibility jobs are not required checks.

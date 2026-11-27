@@ -185,6 +185,7 @@ function expressionValue(expression, scenario, { caseInsensitive = true } = {}) 
     if (token === 'needs.changes.result') return scenario.result;
     if (token === 'needs.changes.outputs.run_platforms') return scenario.output;
     if (token === 'needs.changes.outputs.run_windows_arm64') return scenario.arm64;
+    if (token === 'needs.changes.outputs.run_macos') return scenario.macos;
     if (token === 'github.event_name') return scenario.event;
     if (token === 'github.repository') return scenario.repository;
     if (token === 'github.event.pull_request.head.repo.full_name') return scenario.headRepo;
@@ -334,16 +335,16 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
   const errors = [];
   const jobs = jobsOf(source);
   const events = /^on:[ \t]*\n([\s\S]*?)(?=^[^\s#]|$(?![\s\S]))/mu.exec(source)?.[1] ?? '';
-  const requiredEvents = optionalMacOS ? ['workflow_call', 'workflow_dispatch'] : ['push', 'pull_request', 'merge_group', 'workflow_dispatch'];
+  const requiredEvents = ['push', 'merge_group', 'workflow_dispatch', optionalMacOS ? 'workflow_call' : 'pull_request'];
   for (const event of requiredEvents) {
     if (!new RegExp(`^  ${event}:`, 'mu').test(events)) errors.push(`trigger: missing ${event}`);
   }
-  if (!optionalMacOS && !/^  merge_group:[\s\S]*?^    types:\s*\[[^\]]*\bchecks_requested\b/mu.test(events)) {
+  if (!/^  merge_group:[\s\S]*?^    types:\s*\[[^\]]*\bchecks_requested\b/mu.test(events)) {
     errors.push('trigger: merge_group must request checks');
   }
   if (/^\s+paths(?:-ignore)?:/mu.test(events)) errors.push('trigger: workflow must not use path filters');
-  if (optionalMacOS && /^  (?:pull_request|push|merge_group):/mu.test(events)) {
-    errors.push('trigger: automatic macOS runs must come through the shared classifier');
+  if (optionalMacOS && /^  pull_request:/mu.test(events)) {
+    errors.push('trigger: macOS pull request runs must come through the shared classifier');
   }
 
   const changes = jobs.get('changes');
@@ -580,7 +581,15 @@ test('macOS shares the complete PR diff and remains independent of required jobs
   const caller = jobs.get('macos');
   assert.equal(field(caller, 'uses'), './.github/workflows/check-macos.yml');
   assert.deepEqual(dependencies(caller), ['changes']);
-  assert.equal(field(caller, 'if'), '$' + "{{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_macos != 'false') }}");
+  const condition = resolveIf(workflow, caller);
+  const runs = (event, result, macos, cancelled = false) => runsAfterNeeds(condition, { event, result, macos, cancelled });
+  assert.equal(runs('pull_request', 'success', 'true'), true);
+  assert.equal(runs('pull_request', 'success', 'false'), false);
+  assert.equal(runs('pull_request', 'failure', 'false'), true);
+  assert.equal(runs('pull_request', 'success', 'true', true), false);
+  for (const event of ['push', 'merge_group', 'workflow_dispatch']) {
+    assert.equal(runs(event, 'success', 'true'), false, event);
+  }
   const classification = jobs.get('changes');
   const output = '$' + '{{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}';
   assert.ok(classification.includes('      run_macos: ' + output));
@@ -590,6 +599,8 @@ test('macOS shares the complete PR diff and remains independent of required jobs
   assert.ok(guard.includes('RUN_MACOS: ' + output));
   assert.match(guard, /case "\$RUN_MACOS" in\n\s+true\|false\) ;;\n\s+\*\)[^\n]+exit 1 ;;/u);
   assert.match(macosWorkflow, /^  workflow_call:$/mu);
+  assert.match(macosWorkflow, /^  push:\n    branches: \[main\]$/mu);
+  assert.match(macosWorkflow, /^  merge_group:\n    types: \[checks_requested\]$/mu);
   assert.doesNotMatch(macosWorkflow, /^  pull_request:|^\s+paths(?:-ignore)?:/mu);
   assert.ok([...jobs.values()].every((job) => !dependencies(job).includes('macos')));
   const withPathFilter = macosWorkflow.replace('  workflow_call:', '  pull_request:\n    paths:\n      - packages/**');

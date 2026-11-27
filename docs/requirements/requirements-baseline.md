@@ -31,6 +31,8 @@
 >
 > 2026-11-19 确认依据：项目负责人决定 S5 的拦截能力改为八条独立规则开关，代码默认全关、由部署者按真实使用情况逐条开启；范围票据整层取消，普通研发写不弹确认；只有本地分支推送与 DOP 状态流转在各自开关开启后，经宿主问答卡片（`userQuestions`）询问用户，不再复用审批通道。分阶段实施见[实施计划](../plans/2026-11-19-policy-minimal-gates.md)。
 >
+> S9 的 macOS 目标架构由项目负责人于 2026-11-27 确认为 Apple Silicon，依据见 [PR #511](https://github.com/hrygo/heluo-forge/pull/511)。Apple Silicon 目标终端的安装与联调待验收，判据见[桌面打包计划 §4.4](<../plans/2026-11-19-desktop-bundle-packaging.md#44-p3-macos-arm64-打包g3>)。
+>
 > 关联文档：[总体架构设计](../architecture/platform-architecture.md)（决策与领域设计）、[推广实施方案](../plans/rollout-plan.md)（WBS、验收 A1–A14）、[文档清单](../DOCUMENT-REGISTER.md)。
 
 ## 摘要（一页纸）
