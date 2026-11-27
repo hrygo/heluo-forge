@@ -17,8 +17,10 @@ const recoverableDismissals = new Set([
 ]);
 const transientNetworkCodes = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN']);
 const cleanupBatchSize = 4;
+const actionsBot = { id: 41898282, login: 'github-actions[bot]', type: 'Bot' };
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
 const executionPattern = new RegExp(`^${executionPrefix} ([1-9][0-9]*) ([1-9][0-9]*) -->$`, 'u');
+const withdrawalAttemptPattern = /^[1-9][0-9]* [1-9][0-9]* -->$/u;
 
 function sameBot(left, right) {
   return validId(left?.id) && left.id === right?.id && left.type === 'Bot' && right.type === 'Bot' &&
@@ -73,13 +75,44 @@ function withdrawalBody(revision) {
   ].join('\n\n');
 }
 
+function workflowWithdrawalPrefix(revision) {
+  return '本次审查不满足自动批准条件。洛神会核对并撤销该版本已有的自动批准。\n\n' +
+    `<!-- heluo-forge-pr-agent-approval-withdrawal:v2 ${formatRevision(revision)} `;
+}
+
+function isWorkflowWithdrawal(review, receipt) {
+  if (!validId(review?.id) || !sameBot(review.user, actionsBot) || review.commit_id !== receipt.head) return false;
+  const prefix = workflowWithdrawalPrefix(receipt);
+  return typeof review.body === 'string' && review.body.startsWith(prefix) &&
+    withdrawalAttemptPattern.test(review.body.slice(prefix.length));
+}
+
+export async function recordWorkflowWithdrawal(github, revision, reviews) {
+  const { prNumber, head, runId, runAttempt } = revision;
+  if (!/^[1-9][0-9]*$/u.test(runId ?? '') || !/^[1-9][0-9]*$/u.test(runAttempt ?? '')) {
+    throw new Error('Invalid automatic approval withdrawal attempt');
+  }
+  const pull = `/pulls/${prNumber}`;
+  const body = workflowWithdrawalPrefix(revision) + `${runId} ${runAttempt} -->`;
+  const isRecord = (review) => review?.state === 'COMMENTED' && matchesReview(review, actionsBot, head, body);
+  if (reviews?.some(isRecord)) return;
+  try {
+    const recorded = await github.post(`${pull}/reviews`, { event: 'COMMENT', commit_id: head, body });
+    if (isRecord(recorded)) return;
+    throw new Error('Unexpected workflow withdrawal record after publication');
+  } catch (error) {
+    if ((await listReviews(github, pull)).some(isRecord)) return;
+    throw error;
+  }
+}
+
 function hasLaterWithdrawal(history, approval, receipt) {
   const index = history.findIndex((review) => review?.id === approval.id);
   if (index === -1) return false;
   const body = withdrawalBody(receipt);
   // GitHub returns the reviews in chronological order.
   return history.slice(index + 1).some((review) => review?.state === 'COMMENTED' &&
-    matchesReview(review, approval.user, receipt.head, body));
+    (matchesReview(review, approval.user, receipt.head, body) || isWorkflowWithdrawal(review, receipt)));
 }
 
 async function hasPriorApproval(github, reviews, owner, revision) {

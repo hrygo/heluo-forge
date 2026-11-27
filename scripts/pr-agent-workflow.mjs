@@ -1,5 +1,5 @@
 import { appendFile, readFile } from 'node:fs/promises';
-import { publishApproval, readApprovalReceipt, reconcileMainApprovals } from './pr-agent-approval.mjs';
+import { publishApproval, readApprovalReceipt, reconcileMainApprovals, recordWorkflowWithdrawal } from './pr-agent-approval.mjs';
 import { verifyReviewCoverage, verifyReviewFileModes } from './pr-agent-coverage.mjs';
 import { buildReviewComments, getReviewCommentMarker } from './pr-agent-review-comments.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
@@ -300,23 +300,32 @@ async function validateReview(github, env, scope) {
 
   async function emitApprovalRevision(allowApproval) {
     if (!checkApprovals) return 'no-work';
-    let hasApprovalWork = allowApproval;
-    if (!hasApprovalWork) {
+    let previousReviews;
+    if (!allowApproval) {
       try {
-        hasApprovalWork = (await listReviews(github, prPath)).some((previous) =>
-          previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
+        previousReviews = await listReviews(github, prPath);
+        if (!previousReviews.some((previous) =>
+          previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber))) {
+          return 'no-work';
+        }
       } catch {
-        hasApprovalWork = true;
         console.log('::warning::Unable to list older automatic approvals; the approval job will retry reconciliation.');
       }
     }
-    if (!hasApprovalWork) return 'no-work';
     if (!await currentRevision()) return 'revision-changed';
     const revision = {
       prNumber, head, base, baseRef: ref, allowApproval,
       runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
     };
     await appendFile(env.GITHUB_OUTPUT, `approval_revision=${JSON.stringify(revision)}\n`);
+    if (!allowApproval && ref === 'main') {
+      try {
+        await recordWorkflowWithdrawal(github, revision, previousReviews);
+      } catch {
+        console.log('::warning::Unable to persist the withdrawal decision; the approval job will attempt it directly.');
+        return 'withdrawal-unrecorded';
+      }
+    }
     return 'emitted';
   }
 
@@ -337,7 +346,7 @@ async function validateReview(github, env, scope) {
       if (favorable) throw error;
       const withdrawal = await emitApprovalRevision(false);
       if (withdrawal === 'no-work') throw error;
-      if (withdrawal === 'emitted') {
+      if (withdrawal !== 'revision-changed') {
         console.log('::warning::Unable to verify refreshed PR-Agent comments; continuing with automatic approval withdrawal.');
         await appendFile(env.GITHUB_OUTPUT, 'publication_failed=true\n');
       }
@@ -380,9 +389,11 @@ async function validateReview(github, env, scope) {
       }
     }
   }
-  const publicationFailed = inlineCommentStatus === 'incomplete';
+  let publicationFailed = inlineCommentStatus === 'incomplete';
   if (!favorable || (verifiedCoverage && !publicationFailed)) {
-    if (await emitApprovalRevision(favorable) === 'revision-changed') return;
+    const status = await emitApprovalRevision(favorable);
+    if (status === 'revision-changed') return;
+    publicationFailed ||= status === 'withdrawal-unrecorded';
   } else if (eligible && !await currentRevision()) {
     return;
   }

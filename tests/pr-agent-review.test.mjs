@@ -39,6 +39,7 @@ const script = fileURLToPath(new URL('../scripts/pr-agent-workflow.mjs', import.
 const repository = 'corp/example';
 const maintainer = { id: 774, login: 'maintainer', type: 'User' };
 const approver = { id: 789, login: 'luoshen[bot]', type: 'Bot' };
+const actionsBot = { id: 41898282, login: 'github-actions[bot]', type: 'Bot' };
 const usersPath = '/users';
 const ownerFile = '.github/CODEOWNERS';
 const ownerBlob = 'd'.repeat(40);
@@ -73,6 +74,8 @@ async function withGitHub(run) {
     diffReads: 0,
     codeOwners: owners,
     reviewHistoryStatus: 200,
+    approvalIdentityStatus: 200,
+    installationStatus: 200,
     transientReviewHistoryFailures: 0,
     disconnectReviewHistory: false,
     inlineCommentsStatus: 200,
@@ -110,8 +113,10 @@ async function withGitHub(run) {
     const page = Number(url.searchParams.get('page') ?? '1');
     const pageOf = (items) => items.slice((page - 1) * 100, page * 100);
     if (request.method === 'GET' && path === `${usersPath}/${encodeURIComponent(state.approvalBot.login)}`) {
+      response.statusCode = state.approvalIdentityStatus;
       response.end(JSON.stringify(state.approvalBot));
     } else if (request.method === 'GET' && path === '/installation/repositories') {
+      response.statusCode = state.installationStatus;
       response.end(JSON.stringify({ total_count: 1, repositories: [{ full_name: repository }] }));
     } else if (request.method === 'GET' && path === '/branches/main/protection') {
       response.end(JSON.stringify(state.approvalProtection));
@@ -193,13 +198,18 @@ async function withGitHub(run) {
         id: 101 + state.reviews.length,
         state: { APPROVE: 'APPROVED', COMMENT: 'COMMENTED', REQUEST_CHANGES: 'CHANGES_REQUESTED' }[body.event],
         commit_id: body.commit_id,
-        user: body.event === 'APPROVE' ? state.approvalBot : { login: 'github-actions[bot]' },
+        user: request.headers.authorization === 'Bearer approval-test-token' ? state.approvalBot : actionsBot,
         body: body.body,
       };
       if (state.postStatus < 300) {
         state.reviews.push(review);
         state.inlineComments.push(...(body.comments ?? []).map((comment) =>
           ({ ...comment, user: review.user, commit_id: body.commit_id })));
+        if (state.disconnectWithdrawalPost && body.body?.includes('approval-withdrawal:v2')) {
+          state.disconnectWithdrawalPost = false;
+          request.socket.destroy();
+          return;
+        }
       }
       response.end(JSON.stringify(review));
     } else if (request.method === 'PUT' && /^\/pulls\/42\/reviews\/\d+$/u.test(path)) {
@@ -648,7 +658,7 @@ test('a favorable review without coverage proof preserves an existing approval w
     assert.equal(pending?.allowApproval, false);
     assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^publication_failed=true$/mu);
     await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(pending) });
-    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'COMMENTED']);
   });
 });
 
@@ -671,7 +681,9 @@ test('inline comment failures preserve a P1 review conclusion and withdraw only 
 
       const { stdout } = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(pending) });
       assert.match(stdout, /dismissed-ineligible/u);
-      assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+      const expected = ['DISMISSED', 'APPROVED'];
+      if (endpoint !== 'postStatus') expected.push('COMMENTED');
+      assert.deepEqual(state.reviews.map(({ state }) => state), expected);
     }));
   }
 });
@@ -699,7 +711,10 @@ test('a bare /review reports an inline POST failure while preserving the summary
     const result = await execute('approve', { ...manual, APPROVAL_REVISION: JSON.stringify(withdrawal) });
     assert.match(result.stdout, /dismissed-ineligible/u);
     assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'COMMENT', 'pending', 'DISMISS']);
+    const writes = reviewWrites(state);
+    assert.deepEqual(writes.map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'COMMENT', 'COMMENT', 'pending', 'DISMISS']);
+    assert.match(writes[2].body.body, /approval-withdrawal:v2/u);
+    assert.match(writes[3].body.body, /approval-dismissal-pending:v1/u);
   });
 });
 
@@ -747,8 +762,8 @@ test('a current unfavorable verdict can withdraw an approval when summary verifi
 
       const approved = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(withdrawal) });
       assert.match(approved.stdout, /dismissed-ineligible/u);
-      assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
-      assert.deepEqual(reviewWrites(state).map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'pending', 'DISMISS']);
+      assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'COMMENTED']);
+      assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'COMMENT', 'DISMISS']);
     }));
   }
 });
@@ -819,17 +834,17 @@ test('a P1 review retains approval cleanup through transient GitHub review-histo
     await assert.rejects(execute('approve', { ...next, GITHUB_RUN_ATTEMPT: '2', APPROVAL_REVISION: JSON.stringify(ineligible) }),
       { stderr: /Withdrawal.*re-run all jobs/iu });
     assert.equal(state.requests.length, priorRequests);
-    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED', 'COMMENTED']);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED', 'COMMENTED', 'COMMENTED']);
     const { stdout } = await execute('approve', {
       ...next, PR_AGENT_AUTO_APPROVE: '', APPROVAL_REVISION: JSON.stringify(ineligible),
     });
     assert.match(stdout, /dismissed-ineligible/u);
     assert.equal(state.requests.slice(priorRequests).filter(({ method, url }) =>
       method === 'GET' && url.startsWith('/repos/corp/example/pulls/42/reviews?')).length, 2);
-    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'COMMENTED']);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'COMMENTED', 'COMMENTED']);
     const writes = reviewWrites(state);
-    assert.deepEqual(writes.map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'COMMENT', 'pending', 'DISMISS']);
-    assert.match(writes[2].body.body, /approval-dismissal-pending:v1/u);
+    assert.deepEqual(writes.map(({ body }) => body.event), ['APPROVE', 'COMMENT', 'COMMENT', 'DISMISS']);
+    assert.match(writes[2].body.body, /approval-withdrawal:v2/u);
   });
 });
 
@@ -859,6 +874,47 @@ test('the approval entry point uses the dedicated credential for identity and on
       runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
     });
   });
+});
+
+test('a later cleanup can withdraw an earlier approval when App identity was unavailable', async (t) => {
+  for (const endpoint of ['approvalIdentityStatus', 'installationStatus']) {
+    await t.test(endpoint, () => withGitHub(async ({ state, env }) => {
+      const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+      const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+      await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+      state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+
+      const next = { ...mode, GITHUB_RUN_ID: '12346', GITHUB_RUN_ATTEMPT: '2' };
+      state[endpoint] = 503;
+      state.disconnectWithdrawalPost = true;
+      const captured = await capture(next);
+      const withdrawal = await approvalRevision(next, captured, prioritizedReview('P1'));
+      assert.equal(withdrawal?.allowApproval, false);
+      assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^review_key=/mu);
+      assert.deepEqual(await approvalRevision(next, captured, prioritizedReview('P1')), withdrawal);
+      const decisions = state.reviews.filter(({ body }) => body.includes('approval-withdrawal:v2'));
+      assert.equal(decisions.length, 1);
+      const [decision] = decisions;
+      assert.equal(decision.user.id, actionsBot.id);
+      assert.match(decision.body, / 12346 2 -->$/u);
+      await assert.rejects(execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(withdrawal) }),
+        { stderr: /HTTP 503/u });
+      assert.deepEqual(state.reviews.slice(0, 2).map(({ state }) => state), ['APPROVED', 'APPROVED']);
+
+      state[endpoint] = 200;
+      const schedule = { ...mode, GITHUB_EVENT_NAME: 'schedule' };
+      decision.user = maintainer;
+      assert.match((await execute('approve', schedule)).stdout, /Dismissed 0 stale Luoshen approval/u);
+      decision.user = actionsBot;
+      const correctBody = decision.body;
+      decision.body = correctBody.replace(base, 'c'.repeat(40));
+      assert.match((await execute('approve', schedule)).stdout, /Dismissed 0 stale Luoshen approval/u);
+      decision.body = correctBody;
+      const cleanup = await execute('approve', schedule);
+      assert.match(cleanup.stdout, /Dismissed 1 stale Luoshen approval/u);
+      assert.deepEqual(state.reviews.slice(0, 2).map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    }));
+  }
 });
 
 test('a different GitHub App scoped to the same repository cannot publish an APPROVE', async () => {
