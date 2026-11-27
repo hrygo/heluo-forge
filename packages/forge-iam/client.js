@@ -2308,9 +2308,9 @@ window.__ModuleLoader__.load({
         if (!subscribers.has(subscriber)) return false;
         const previous = subscriber.deadline;
         trackDeadline(subscriber, view);
-        // A directory reply that still needs verification cannot replace the
-        // current view or invalidate a shared read that could settle it.
-        if (retireStream && inFlight && presentSession(view).verifying) {
+        // A directory reply that needs verification cannot replace the
+        // current view, the stream, or a shared read that could settle it.
+        if (retireStream && presentSession(view).verifying) {
           subscriber.deadline = previous;
           return false;
         }
