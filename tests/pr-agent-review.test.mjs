@@ -611,28 +611,44 @@ test('unavailable file-mode evidence preserves the native COMMENT and review key
 test('a target branch change while obtaining file-mode evidence causes a retry', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv, PR_AGENT_ALLOW_RETRY: 'true' };
-    const revision = await capture(mode);
-    state.baseAfterDiff = 'c'.repeat(40);
-    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
-    assert.equal(state.diffReads, 1);
-    assert.equal(await readFile(mode.GITHUB_OUTPUT, 'utf8'), 'retry=true\n');
+    for (const status of [200, 503]) {
+      state.refs.main = base;
+      const revision = await capture(mode);
+      state.baseAfterDiff = 'c'.repeat(40);
+      state.diffStatus = status;
+      assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+      assert.equal(await readFile(mode.GITHUB_OUTPUT, 'utf8'), 'retry=true\n');
+    }
+    assert.equal(state.diffReads, 2);
   });
 });
 
-test('a clean automatic review stays complete when GitHub fails the optional coverage comparison', async () => {
+test('a favorable review without coverage proof preserves an existing approval while P1 still withdraws it', async () => {
   await withGitHub(async ({ state, env }) => {
-    const mode = { ...env, ...approvalEnv };
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
     const revision = await capture(mode);
-    state.filesStatus = 503;
-    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
-    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+    const approved = await approvalRevision(mode, revision, cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(approved) });
+    state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
 
-    state.reviewHistoryStatus = 503;
-    const pending = await approvalRevision(mode, revision, cleanReview());
+    const next = { ...mode, GITHUB_RUN_ID: '12346' };
+    const captured = await capture(next);
+    for (const [endpoint, coverage] of [['diffStatus', {}], ['filesStatus', {}], [undefined, null]]) {
+      if (endpoint) state[endpoint] = 503;
+      const requestStart = state.requests.length;
+      assert.equal(await approvalRevision(next, captured, cleanReview(), coverage), undefined, endpoint);
+      assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+      assert.ok(!state.requests.slice(requestStart).some(({ url }) => url.includes('/pulls/42/reviews')));
+      if (endpoint) state[endpoint] = 200;
+    }
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED']);
+
+    state.filesStatus = 503;
+    const pending = await approvalRevision(next, captured, prioritizedReview('P1'));
     assert.equal(pending?.allowApproval, false);
-    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
-    assert.deepEqual(reviewWrites(state), []);
-    assert.equal(state.approverRequests, undefined);
+    assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^publication_failed=true$/mu);
+    await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(pending) });
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
   });
 });
 
