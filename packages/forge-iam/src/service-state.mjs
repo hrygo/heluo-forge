@@ -75,24 +75,26 @@ export function createServiceState(env) {
     expiry = null;
   }
 
-  function scheduleExpiry() {
-    const at = now();
+  function scheduleExpiry(sampledAt) {
     const access = state === 'ready' ? Date.parse(lastGrant?.accessExpiresAt) : NaN;
-    const refresh = ['ready', 'expired'].includes(state) && isRefreshUsable(lastGrant, at)
+    const refresh = ['ready', 'expired'].includes(state) && isRefreshUsable(lastGrant, sampledAt)
       ? Date.parse(lastGrant?.refreshExpiresAt) : NaN;
     const deadline = Math.min(Number.isFinite(access) ? access : Infinity, Number.isFinite(refresh) ? refresh : Infinity);
     if (disposed || !Number.isFinite(deadline)) {
       cancelExpiry();
       return;
     }
-    if (expiry?.deadline === deadline) return;
+    // A deadline visible in the published view may pass before this call.
+    // Re-arm an overdue timer immediately even if the deadline is unchanged.
+    const remaining = deadline - now();
+    if (expiry?.deadline === deadline && remaining > 0) return;
     cancelExpiry();
     const timer = setTimeout(() => {
       if (expiry?.timer !== timer) return;
       expiry = null;
       if (now() >= deadline) notify();
-      else scheduleExpiry();
-    }, Math.max(0, Math.min(deadline - at, 2_147_483_647)));
+      else scheduleExpiry(sampledAt);
+    }, Math.max(0, Math.min(remaining, 2_147_483_647)));
     timer.unref?.();
     expiry = { deadline, timer };
   }
@@ -157,7 +159,7 @@ export function createServiceState(env) {
     }
     scheduleReconcile();
     scheduleRenewal?.();
-    scheduleExpiry();
+    scheduleExpiry(snapshot.sampledAt);
     return snapshot;
   }
 

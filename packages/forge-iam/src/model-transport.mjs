@@ -112,6 +112,9 @@ export function modelFetchOptions(options, baseURL, resolveIamToken, identity = 
             && Array.isArray(connectErrors) && connectErrors.length > 0 && connectErrors.every(isConnectFailure);
           const fault = (attempt.failedBeforeSend ? connectErrors[0] : socket)?.code;
           attempt.fault = transportFaults.has(fault) ? fault : undefined;
+          // Publish the proof before the SDK handles the failure: the Host's
+          // deadline can expire while the SDK is still unwinding.
+          if (modelPreconnectFault(attempt)) attempt.restoreSent?.();
           throw cause;
         }
       };
