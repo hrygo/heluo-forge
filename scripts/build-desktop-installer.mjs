@@ -23,6 +23,7 @@ import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const WIN_ICON = 'icons/app-icon.ico';
 const MAC_ICON = 'icons/app-icon.icns';
+const LINUX_ICON = join('sizes', 'app-icon-512.png');
 const DEFAULT_BRAND_DIR = join('docs', 'assets', 'branding', 'cyber-long');
 const DEFAULT_APP_DIR = join('services', 'forge-desktop');
 const DEFAULT_AFTER_PACK = fileURLToPath(new URL('./lib/desktop-after-pack.mjs', import.meta.url));
@@ -346,7 +347,7 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     // `compression: maximum` selects UDBZ (bzip2) DMG; skip blockmap since there is no update feed.
     dmg: { writeUpdateInfo: false },
     linux: {
-      icon: join(iconsDir),
+      icon: join(dirname(iconsDir), LINUX_ICON),
       target: [{ target: 'deb', arch: [linuxArch] }],
       category: 'Development',
       maintainer: ['Heluo Forge <heluo-forge', 'corp.example>'].join('@'),
@@ -360,6 +361,7 @@ function verifiedIcons(brandDir) {
   return {
     ico: verifyAsset(brandDir, byPath, WIN_ICON).bytes,
     icns: verifyAsset(brandDir, byPath, MAC_ICON).bytes,
+    linuxPng: verifyAsset(brandDir, byPath, 'sizes/app-icon-512.png').bytes,
   };
 }
 

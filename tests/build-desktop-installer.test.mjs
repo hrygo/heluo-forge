@@ -179,6 +179,7 @@ test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64
   assert.deepEqual(macX64.mac.target, [{ target: 'dmg', arch: ['x64'] }]);
   const linuxArm = builderConfig({ ...common, target: 'linux', arch: 'arm64' });
   assert.deepEqual(linuxArm.linux.target, [{ target: 'deb', arch: ['arm64'] }]);
+  assert.equal(linuxArm.linux.icon.endsWith('app-icon-512.png'), true);
   assert.equal(linuxArm.linux.maintainer.includes('@'), true);
   const desktopPkg = JSON.parse(readFileSync(join(REPO_ROOT, 'services', 'forge-desktop', 'package.json'), 'utf8'));
   assert.match(desktopPkg.homepage, /^https:\/\//);
