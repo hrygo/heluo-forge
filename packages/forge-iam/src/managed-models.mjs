@@ -842,6 +842,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         || Boolean(refusal(request, attempt.version))) return false;
       retried = true;
       retryVersion = attempt.version;
+      // The transport proved this attempt did not send. Preserve any earlier
+      // dispatch in the same logical call, such as a rejected image request.
+      call.sent = attempt.sentBeforeAttempt;
       reportFailure(request, cause, mapped, 'unknown', modelTransportDiagnostic(attempt, output, true));
       const delayMs = PRECONNECT_RETRY_DELAY_MS + Math.floor(Math.random() * (PRECONNECT_RETRY_JITTER_MS + 1));
       try { await delay(delayMs, undefined, { signal }); }
@@ -928,7 +931,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           return useGrant(true);
         });
         const attempt = observeTransport ? {
-          calls: 0, version, binding: lastId, withDispatchAccessToken,
+          calls: 0, version, binding: lastId, withDispatchAccessToken, sentBeforeAttempt: call.sent,
           sent() { call.sent = true; },
           accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, call.lease, signal); },
           revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },

@@ -131,11 +131,15 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
         return {
           openAICompletionsApi: () => ({
             async *stream(model, context, streamOptions) {
-              if (sendModelRequest) {
+              if (sendModelRequest || beforeModelFetch) {
                 beforeModelFetch?.();
-                await streamOptions.fetch(`${model.baseUrl}/chat/completions`, {
+                const response = await streamOptions.fetch(`${model.baseUrl}/chat/completions`, {
                   method: 'POST', headers: streamOptions.headers, signal: streamOptions.signal,
                 });
+                if (!response.ok) {
+                  yield { type: 'finish', reason: { kind: 'error', failure: { code: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED' } } };
+                  return;
+                }
               }
               yield* transport(streamOptions.apiKey, streamOptions);
             },
@@ -751,6 +755,56 @@ for (const [scenario, holdGrantRead, refreshAvailable, guarded] of [
       assert.notEqual(complete.accessToken, f.grant.accessToken);
       assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: complete.accessToken }]);
     }
+  });
+}
+
+for (const [name, priorPost] of [
+  ['a verified connection failure leaves the retry eligible for dispatch renewal', false],
+  ['a verified connection failure after an image rejection preserves the earlier dispatch', true],
+]) {
+  test(name, { timeout: 6000 }, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const accessOffsetMs = 240_000;
+    const f = await sessionFixture(t, { accessOffsetMs });
+    await f.service.saveModelSelection({ models: { [options.model]: {} }, defaultModelId: options.model });
+    const endpoint = `${GATEWAY}/chat/completions`;
+    const fetch = globalThis.fetch;
+    const posts = [];
+    const retryAttempt = priorPost ? 3 : 2;
+    let attempts = 0;
+    let transportCalls = 0;
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      if (url !== endpoint) return fetch(url, init);
+      if (++transportCalls === retryAttempt - 1) {
+        const refused = Object.assign(new Error('synthetic connection refusal'), { code: 'ECONNREFUSED', syscall: 'connect' });
+        throw new TypeError('synthetic fetch failed', { cause: refused });
+      }
+      posts.push({ method: init.method, token: new Headers(init.headers).get('X-IAM-Token') });
+      const rejectedImage = priorPost && transportCalls === 1;
+      return new Response('synthetic response', { status: rejectedImage ? 400 : 200 });
+    });
+    const { adapter, guard, runtime } = fixture({
+      iamOverride: f.service, native: true,
+      beforeModelFetch() {
+        if (++attempts !== retryAttempt) return;
+        t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
+        f.advance(accessOffsetMs + 1, { notify: false });
+      },
+    });
+    t.after(() => runtime.dispose());
+    await runtime.ready;
+    const request = priorPost ? { ...options, messages: [{ role: 'user', content: [{ type: 'image' }] }] } : options;
+    const prepared = await adapter.prepareCall(request.provider, request.model);
+    const finish = finishOf(await chunks(guard(request, next => prepared.stream(next))));
+
+    assert.equal(attempts, retryAttempt, 'the known unsent failure must reach the SDK retry');
+    assert.deepEqual({ kind: finish.kind, code: finish.failure?.code, refreshes: f.oidc.counts.refresh, transportCalls }, priorPost
+      ? { kind: 'error', code: 'IAM_LOGIN_REQUIRED', refreshes: 0, transportCalls: 2 }
+      : { kind: 'stop', code: undefined, refreshes: 1, transportCalls: 2 });
+    const { grant: complete } = await f.store.read();
+    assert.equal(complete.sessionInstanceId, f.grant.sessionInstanceId);
+    assert.equal(complete.accessToken === f.grant.accessToken, priorPost);
+    assert.deepEqual(posts, [{ method: 'POST', token: complete.accessToken }]);
   });
 }
 
