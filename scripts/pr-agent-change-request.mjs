@@ -149,7 +149,7 @@ export async function handleChangeRequests({ github, prNumber, command, event })
   const pr = await readPull(github, pull, number);
   const { priority, head, base, baseRef } = command;
   const revision = { head, base, baseRef };
-  if (!await isCurrent(github, repository, pull, number, revision, pr)) return { status: 'rejected' };
+  if (!await isCurrent(github, repository, pull, number, revision, { observed: pr })) return { status: 'rejected' };
   const legacy = `<!-- heluo-forge-pr-agent-priority-rc:v1 ${head} ${base} -->`;
   const commentId = event.comment.id;
   if (reviews.some((review) => isBotReview(review) && review.commit_id === head &&

@@ -60,6 +60,7 @@ jobs:
       approval_revision: ${{ steps.retry_validation.outputs.approval_revision || steps.validation.outputs.approval_revision }}
     env:
       PR_AGENT_AUTO_APPROVE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
+      PR_AGENT_APPROVAL_CONFIGURED: ${{ vars.PR_AGENT_APPROVAL_APP_CLIENT_ID != '' }}
       # Native OpenAI endpoint with the runner's API key preflight.
       # Mirror the model and budget so runs also work with older base settings.
       # v0.50.0's bundled model table predates GPT-6.2.
@@ -222,8 +223,9 @@ jobs:
     needs: review
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' && vars.PR_AGENT_APPROVAL_APP_CLIENT_ID != '' &&
-      (github.event_name == 'push' || (vars.PR_AGENT_AUTO_APPROVE == 'true' && needs.review.result == 'success' &&
-       needs.review.outputs.approval_revision != '' && fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))
+      (github.event_name == 'push' || (needs.review.result == 'success' && needs.review.outputs.approval_revision != '' &&
+       fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt &&
+       (vars.PR_AGENT_AUTO_APPROVE == 'true' || fromJSON(needs.review.outputs.approval_revision).allowApproval == false)))
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     environment: luoshen-approval

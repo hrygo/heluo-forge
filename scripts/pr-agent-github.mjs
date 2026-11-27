@@ -46,8 +46,8 @@ export async function readPull(github, pull, prNumber) {
   return pr;
 }
 
-function matchesPull(pr, repository, revision) {
-  return pr.state === 'open' && !pr.draft &&
+function matchesPull(pr, repository, revision, allowDraft) {
+  return pr.state === 'open' && (allowDraft || !pr.draft) &&
     pr.head.repo?.full_name === repository && pr.base.repo?.full_name === repository &&
     pr.head.sha === revision.head && pr.base.ref === revision.baseRef;
 }
@@ -59,9 +59,9 @@ export async function targetTip(github, ref, label) {
   return reference.object.sha;
 }
 
-export async function isCurrent(github, repository, pull, prNumber, revision, observed) {
+export async function isCurrent(github, repository, pull, prNumber, revision, { observed, allowDraft = false } = {}) {
   const first = observed ?? await readPull(github, pull, prNumber);
-  if (!matchesPull(first, repository, revision)) return false;
+  if (!matchesPull(first, repository, revision, allowDraft)) return false;
   let base;
   let readError;
   try {
@@ -71,7 +71,7 @@ export async function isCurrent(github, repository, pull, prNumber, revision, ob
   }
   // A retarget can remove the first ref. The second PR read distinguishes it from a ref API failure.
   const latest = await readPull(github, pull, prNumber);
-  if (!matchesPull(latest, repository, revision)) return false;
+  if (!matchesPull(latest, repository, revision, allowDraft)) return false;
   if (readError) throw readError;
   return base === revision.base && await targetTip(github, revision.baseRef) === revision.base;
 }

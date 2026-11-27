@@ -147,7 +147,7 @@ OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启�
 
 `main` 的合入仍需要 `CODEOWNERS` 中的个人账号批准。洛神核验 `main` 分支保护强制适用于管理员、要求代码所有者批准、撤回过期批准且没有绕过名单或自定义审查撤销限制，并核对目标版本的全路径人员归属。`hrygo` 保留人工批准和请求修改权限。专用 App 使用独立身份，其批准仅供维护者参考，人工修改请求持续生效。[GitHub 分支保护规则](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-pull-request-reviews-before-merging)
 
-GitHub 正式审查绑定 PR 头提交。洛神批准记录包含发布时核对的目标版本。`main` 推进后，清理作业重新核对开放 PR 的头提交和目标版本，只撤回专用 App 发布的过期批准，无需重新调用模型。后续审查也会重新核对现有批准及维护者的修改请求。因审查不达标或核验失败而自动撤销的批准，可在同版本通过新审查后恢复。人工撤销的同版本批准保持撤销。[GitHub 撤销事件](https://docs.github.com/en/rest/using-the-rest-api/issue-event-types#review_dismissed)
+GitHub 正式审查绑定 PR 头提交。洛神批准记录包含发布时核对的目标版本。`main` 推进后，清理作业核对所有开放 PR 的头提交和目标版本，包括改投其他分支的 PR。清理只撤回专用 App 发布的过期批准。仅切换草稿状态时保留同版本批准。后续审查也会核对现有批准及维护者的修改请求。若审查历史暂时不可用，普通审查仍可完成，批准作业在本次运行尝试内重试读取历史并按结论清理。清理无需调用模型。因审查不达标或核验失败而自动撤销的批准，可在同版本通过新审查后恢复。人工撤销的同版本批准保持撤销。[GitHub 撤销事件](https://docs.github.com/en/rest/using-the-rest-api/issue-event-types#review_dismissed)
 
 启用前创建洛神专用 GitHub App，仅安装到本仓库，授予 `Pull requests: Read and write` 和 `Administration: Read-only`。设置仓库变量 `PR_AGENT_APPROVAL_APP_CLIENT_ID`，在仅允许 `main` 的 `luoshen-approval` Actions 环境设置 Secret `PR_AGENT_APPROVAL_APP_PRIVATE_KEY`，再设置仓库变量 `PR_AGENT_AUTO_APPROVE=true`。工作流按作业签发并撤销短期安装令牌。删除 `PR_AGENT_AUTO_APPROVE` 可停止新增批准。保留 App 配置时，`main` 推进仍会清理过期批准。[GitHub App 安装认证](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation) · [环境保护规则](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#deployment-branches-and-tags)
 

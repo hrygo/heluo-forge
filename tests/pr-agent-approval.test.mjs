@@ -59,7 +59,7 @@ function fakeGitHub() {
       const injected = state.beforeGet?.(path);
       if (injected !== undefined) return injected;
       if (path === pull) return structuredClone(state.pr);
-      if (path === '/pulls?state=open&base=main&per_page=100&page=1') return [{ number: 42 }];
+      if (path === '/pulls?state=open&per_page=100&page=1') return [{ number: 42 }];
       if (path === `/contents/.github?ref=${base}`) return [{ path: ownerFile, type: 'file', sha: ownerBlob }];
       if (path === `/contents/${ownerFile}?ref=${base}`) return {
         path: ownerFile, type: 'file', sha: ownerBlob, encoding: 'base64', size: owners.length, content: owners.toString('base64'),
@@ -503,12 +503,24 @@ test('main advancing withdraws the old App approval without another model review
   assert.equal(await reconcile(), 0);
 });
 
+test('main cleanup ignores a draft toggle for an approval of the same revision', async () => {
+  const { state, reconcile, run } = fakeGitHub();
+  state.reviews = [priorApproval({ id: 101 })];
+  state.pr.draft = true;
+  assert.equal(await reconcile(), 0);
+  assert.deepEqual(state.writes, []);
+  state.pr.draft = false;
+  assert.equal(await run(), 'skipped-existing');
+  assert.equal(state.reviews[0].state, 'APPROVED');
+  assert.deepEqual(state.writes, []);
+});
+
 test('one unavailable review history does not prevent cleanup for other open PRs', async () => {
   const { state, reconcile } = fakeGitHub();
   state.base = otherSha;
   state.reviews = [priorApproval({ id: 101 })];
   state.beforeGet = (path) => {
-    if (path === '/pulls?state=open&base=main&per_page=100&page=1') return [{ number: 41 }, { number: 42 }];
+    if (path === '/pulls?state=open&per_page=100&page=1') return [{ number: 41 }, { number: 42 }];
     if (path.startsWith('/pulls/41/reviews?')) throw new Error('Review history unavailable');
   };
 

@@ -44,6 +44,7 @@ const owners = Buffer.from('* @maintainer\n');
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const approvalEnv = {
   PR_AGENT_AUTO_APPROVE: 'true',
+  PR_AGENT_APPROVAL_CONFIGURED: 'true',
   PR_AGENT_APPROVAL_APP_SLUG: 'luoshen',
 };
 
@@ -63,6 +64,7 @@ async function withGitHub(run) {
     refStatus: 200,
     filesStatus: 200,
     reviewHistoryStatus: 200,
+    transientReviewHistoryFailures: 0,
     approvalProtection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
       require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
     } },
@@ -106,8 +108,9 @@ async function withGitHub(run) {
         size: owners.length, content: owners.toString('base64') }));
     } else if (request.method === 'GET' && path === '/codeowners/errors') {
       response.end(JSON.stringify({ errors: [] }));
-    } else if (request.method === 'GET' && path === '/pulls' && url.searchParams.get('base') === 'main' && url.searchParams.get('state') === 'open') {
-      response.end(JSON.stringify(pageOf([state.pr])));
+    } else if (request.method === 'GET' && path === '/pulls' && url.searchParams.get('state') === 'open') {
+      const target = url.searchParams.get('base');
+      response.end(JSON.stringify(pageOf(!target || state.pr.base.ref === target ? [state.pr] : [])));
     } else if (request.method === 'GET' && path === '/pulls/42') {
       response.end(JSON.stringify(state.pr));
     } else if (request.method === 'GET' && path.startsWith('/git/ref/heads/')) {
@@ -124,7 +127,8 @@ async function withGitHub(run) {
       response.end(JSON.stringify(pageOf(state.inlineComments)));
       if (state.headAfterInlineList) state.pr.head.sha = state.headAfterInlineList;
     } else if (request.method === 'GET' && path === '/pulls/42/reviews') {
-      response.statusCode = state.reviewHistoryStatus;
+      response.statusCode = state.transientReviewHistoryFailures > 0 ? 503 : state.reviewHistoryStatus;
+      if (state.transientReviewHistoryFailures > 0) state.transientReviewHistoryFailures--;
       response.end(JSON.stringify(pageOf(state.reviews)));
     } else if (request.method === 'GET' && /^\/pulls\/42\/reviews\/\d+$/u.test(path)) {
       const review = state.reviews.find(({ id }) => id === Number(path.split('/').at(-1)));
@@ -309,7 +313,8 @@ test('the approval credential is available only in the trusted, protected approv
   assert.match(approvalJob, /^    needs: review$/mu);
   assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
   assert.match(approvalJob, /vars\.PR_AGENT_APPROVAL_APP_CLIENT_ID != ''/u);
-  assert.match(approvalJob, /github\.event_name == 'push' \|\| \(vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
+  assert.match(approvalJob, /github\.event_name == 'push' \|\| \(needs\.review\.result == 'success'/u);
+  assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true' \|\| fromJSON\(needs\.review\.outputs\.approval_revision\)\.allowApproval == false/u);
   assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
   assert.match(approvalJob, /^    environment: luoshen-approval$/mu);
@@ -415,11 +420,44 @@ test('a clean automatic review stays complete when GitHub fails the optional cov
     const mode = { ...env, ...approvalEnv };
     const revision = await capture(mode);
     state.filesStatus = 503;
-    state.reviewHistoryStatus = 503;
     assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+
+    state.reviewHistoryStatus = 503;
+    const pending = await approvalRevision(mode, revision, cleanReview());
+    assert.equal(pending?.allowApproval, false);
     assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
     assert.deepEqual(reviewWrites(state), []);
     assert.equal(state.approverRequests, undefined);
+  });
+});
+
+test('a P1 review retains approval cleanup through transient GitHub review-history failures', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+
+    const next = { ...mode, GITHUB_RUN_ID: '12346' };
+    const captured = await capture(next);
+    state.transientReviewHistoryFailures = 2;
+    const ineligible = await approvalRevision(next, captured, prioritizedReview('P1'));
+    assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+    assert.deepEqual(ineligible, { prNumber: 42, head, base, baseRef: 'main', allowApproval: false,
+      runId: next.GITHUB_RUN_ID, runAttempt: next.GITHUB_RUN_ATTEMPT });
+
+    const priorRequests = state.requests.length;
+    await execute('approve', { ...next, GITHUB_RUN_ATTEMPT: '2', APPROVAL_REVISION: JSON.stringify(ineligible) });
+    assert.equal(state.requests.length, priorRequests);
+    const { stdout } = await execute('approve', {
+      ...next, PR_AGENT_AUTO_APPROVE: '', APPROVAL_REVISION: JSON.stringify(ineligible),
+    });
+    assert.match(stdout, /dismissed-ineligible/u);
+    assert.equal(state.requests.slice(priorRequests).filter(({ method, url }) =>
+      method === 'GET' && url.startsWith('/repos/corp/example/pulls/42/reviews?')).length, 2);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'COMMENTED']);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'COMMENT', 'DISMISS']);
   });
 });
 
@@ -498,6 +536,22 @@ test('a trusted main push still dismisses an older automatic approval when new a
       ['POST', '/repos/corp/example/pulls/42/reviews'],
       ['PUT', '/repos/corp/example/pulls/42/reviews/101/dismissals'],
     ]);
+  });
+});
+
+test('a trusted main push clears a retargeted PR’s Luoshen approval with new approvals switched off', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+    state.pr.base.ref = 'release';
+    state.refs.release = base;
+
+    const { stdout } = await execute('approve', { ...mode, GITHUB_EVENT_NAME: 'push', PR_AGENT_AUTO_APPROVE: '' });
+    assert.match(stdout, /Dismissed 1 stale Luoshen approval/u);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'DISMISS']);
   });
 });
 

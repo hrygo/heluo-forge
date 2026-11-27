@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
 import { hasIndependentApprovalGate } from './pr-agent-approval-policy.mjs';
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
@@ -140,18 +141,32 @@ async function dismissApproval(github, approver, pull, review, message) {
   }
 }
 
+async function readReviewsForReconciliation(github, pull) {
+  // Retry reads in the approval job while the reviewed attempt is still current.
+  for (const delayMs of [1000, 4000, 12000]) {
+    try {
+      return await listReviews(github, pull);
+    } catch (error) {
+      if (error.name !== 'TimeoutError' && !(error.status >= 500 && error.status < 600)) throw error;
+      await delay(delayMs);
+    }
+  }
+  return listReviews(github, pull);
+}
+
 export async function reconcileMainApprovals({ github, approver, appSlug }) {
   const owner = await readApprovalBot(github, approver, appSlug);
   let dismissed = 0;
   const errors = [];
-  for await (const pr of pages(github, '/pulls?state=open&base=main', 'Open main pull requests')) {
+  // A PR that once targeted main can retain its approval after being retargeted.
+  for await (const pr of pages(github, '/pulls?state=open', 'Open pull requests')) {
     const prNumber = pr?.number;
     if (!validId(prNumber)) throw new Error('Invalid open pull request');
     const pull = `/pulls/${prNumber}`;
     try {
       for (const review of await listReviews(github, pull)) {
         const receipt = readActiveApproval(review, owner, prNumber);
-        if (!receipt || await isCurrent(github, github.repository, pull, prNumber, receipt)) continue;
+        if (!receipt || await isCurrent(github, github.repository, pull, prNumber, receipt, { allowDraft: true })) continue;
         await dismissApproval(github, approver, pull, review, staleDismissal);
         dismissed++;
       }
@@ -193,8 +208,8 @@ export async function publishApproval({ github, approver, revision, appSlug, run
     `[查看 GitHub Actions 审查运行](${reviewUrl})`,
     marker,
   ].join('\n\n');
-  const previousReviews = await listReviews(github, pull);
-  if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
+  const previousReviews = allowApproval ? await listReviews(github, pull) : await readReviewsForReconciliation(github, pull);
+  if (!await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: !allowApproval })) return 'skipped-stale';
 
   const withdrawn = new Set();
   for (const review of previousReviews) {
