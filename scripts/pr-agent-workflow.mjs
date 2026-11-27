@@ -363,6 +363,18 @@ async function validateReview(github, env, scope) {
   if (automatic) await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
 }
 
+function approvalCredential(env) {
+  const appSlug = env.PR_AGENT_APPROVAL_EXPECTED_APP_SLUG;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(appSlug ?? '') || appSlug === 'github-actions') {
+    throw new Error('Invalid expected approval GitHub App slug');
+  }
+  if (env.PR_AGENT_APPROVAL_APP_SLUG !== appSlug) {
+    throw new Error('Approval GitHub App does not match the expected App');
+  }
+  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
+  return { approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), appSlug };
+}
+
 async function approve(github, env, scope) {
   if (env.GITHUB_REF !== 'refs/heads/main' || !usesNativeReview(scope) || !env.APPROVAL_REVISION) return;
   const revision = JSON.parse(env.APPROVAL_REVISION);
@@ -378,11 +390,9 @@ async function approve(github, env, scope) {
     console.log('Skipping automatic approval without a review from this workflow attempt.');
     return;
   }
-  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
   const status = await publishApproval({
-    github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), revision,
-    appSlug: env.PR_AGENT_APPROVAL_APP_SLUG, humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS, runId: env.GITHUB_RUN_ID,
-    allowApproval: revision.allowApproval,
+    github, ...approvalCredential(env), revision, humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS,
+    runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, allowApproval: revision.allowApproval,
   });
   console.log(`GitHub approval for PR #${scope.prNumber}: ${status}`);
 }
@@ -401,10 +411,8 @@ if (scope) {
     event.repository?.full_name === github.repository &&
     ((env.GITHUB_EVENT_NAME === 'push' && event.ref === env.GITHUB_REF && event.deleted === false) ||
      (env.GITHUB_EVENT_NAME === 'branch_protection_rule' && ['created', 'edited', 'deleted'].includes(event.action)))) {
-  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
   const dismissed = await reconcileMainApprovals({
-    github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), appSlug: env.PR_AGENT_APPROVAL_APP_SLUG,
-    humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS,
+    github, ...approvalCredential(env), humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS,
   });
   const change = env.GITHUB_EVENT_NAME === 'push' ? 'main changed' : 'branch protection changed';
   console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after ${change}.`);
