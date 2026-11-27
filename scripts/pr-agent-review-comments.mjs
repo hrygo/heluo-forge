@@ -6,18 +6,26 @@ export function getReviewCommentMarker(body) {
   return typeof body === 'string' ? markerPattern.exec(body.trimEnd())?.[1] : undefined;
 }
 
-function changedLines(patch) {
-  if (typeof patch !== 'string') return [];
+export function parseReviewPatch(patch) {
   const hunks = [];
-  for (const hunk of patch.split(/(?=^@@ )/mu)) {
+  if (typeof patch !== 'string') return { hunks, complete: false, hasNoNewlineMarker: false };
+  let complete = true;
+  let hasNoNewlineMarker = false;
+  for (const hunk of patch.split(/(?<=\n)(?=@@ )/u)) {
     const [header, ...rows] = hunk.split('\n');
     const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?\r?$/u.exec(header);
-    if (!match) continue;
+    if (!match) {
+      complete = false;
+      continue;
+    }
     const [, oldStart, oldCount = '1', newStart, newCount = '1'] = match;
     const left = { start: Number(oldStart), end: Number(oldStart) + Number(oldCount), lines: [] };
     const right = { start: Number(newStart), end: Number(newStart) + Number(newCount), lines: [] };
     const sides = [left, right];
-    if (sides.some(({ start, end }) => !Number.isSafeInteger(end) || (start === 0 && end > start))) continue;
+    if (sides.some(({ start, end }) => !Number.isSafeInteger(end) || (start === 0 && end > start))) {
+      complete = false;
+      continue;
+    }
 
     if (rows.at(-1) === '') rows.pop();
     let oldLine = left.start;
@@ -30,13 +38,14 @@ function changedLines(patch) {
           newLine++;
           break;
         case '-':
-          left.lines.push(oldLine++);
+          left.lines.push({ number: oldLine++, text: row.slice(1) });
           break;
         case '+':
-          right.lines.push(newLine++);
+          right.lines.push({ number: newLine++, text: row.slice(1) });
           break;
         case '\\':
           valid = row === '\\ No newline at end of file' || row === '\\ No newline at end of file\r';
+          hasNoNewlineMarker ||= valid;
           break;
         default:
           valid = false;
@@ -45,21 +54,9 @@ function changedLines(patch) {
     }
     // The GitHub patch can be truncated. Require a complete hunk before using its coordinates.
     if (valid && oldLine === left.end && newLine === right.end) hunks.push({ LEFT: left, RIGHT: right });
+    else complete = false;
   }
-  return hunks;
-}
-
-export function hasCompleteReviewPatches(files, changedFileCount) {
-  if (files.length === 0 || files.length !== changedFileCount) return false;
-  const paths = new Set();
-  for (const file of files) {
-    if (typeof file?.filename !== 'string' || !file.filename || paths.has(file.filename)) return false;
-    paths.add(file.filename);
-    const hunks = changedLines(file.patch);
-    if (!hunks.length || hunks.reduce((count, hunk) => count + hunk.LEFT.lines.length, 0) !== file.deletions ||
-        hunks.reduce((count, hunk) => count + hunk.RIGHT.lines.length, 0) !== file.additions) return false;
-  }
-  return true;
+  return { hunks, complete, hasNoNewlineMarker };
 }
 
 function indexChangedPaths(files) {
@@ -114,10 +111,10 @@ export function buildReviewComments({ issues, files, head }) {
     const side = requestedSide ?? onlySide;
     if (!side) continue;
 
-    if (!parsedPatches.has(file)) parsedPatches.set(file, changedLines(file.patch));
+    if (!parsedPatches.has(file)) parsedPatches.set(file, parseReviewPatch(file.patch).hunks);
     const hunk = parsedPatches.get(file).find(({ [side]: range }) =>
       start >= range.start && end < range.end);
-    const line = hunk?.[side].lines.find((number) => number >= start && number <= end);
+    const line = hunk?.[side].lines.find(({ number }) => number >= start && number <= end)?.number;
     if (line === undefined) continue;
 
     const path = file.filename;

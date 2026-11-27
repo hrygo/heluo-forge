@@ -1,7 +1,7 @@
 import { appendFile, readFile } from 'node:fs/promises';
-import { isDeepStrictEqual } from 'node:util';
-import { publishApproval, readApprovalReceipt } from './pr-agent-approval.mjs';
-import { buildReviewComments, getReviewCommentMarker, hasCompleteReviewPatches } from './pr-agent-review-comments.mjs';
+import { publishApproval, readApprovalReceipt, reconcileMainApprovals } from './pr-agent-approval.mjs';
+import { verifyReviewCoverage } from './pr-agent-coverage.mjs';
+import { buildReviewComments, getReviewCommentMarker } from './pr-agent-review-comments.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
 import { isBranch, isSha, listReviews, pages, targetTip, validId } from './pr-agent-github.mjs';
 
@@ -14,6 +14,7 @@ const reviewFindingLimit = 4; // PR_REVIEWER__NUM_MAX_FINDINGS in the workflow.
 function githubClient(env, token = env.GH_TOKEN) {
   const repository = env.GITHUB_REPOSITORY;
   const api = `${env.GITHUB_API_URL}/repos/${repository}`;
+  const usersApi = `${env.GITHUB_API_URL}/users`;
   async function request(method, path, body, label, base = api) {
     const response = await fetch(base + path, {
       method,
@@ -32,7 +33,10 @@ function githubClient(env, token = env.GH_TOKEN) {
   return {
     api, repository, serverUrl: env.GITHUB_SERVER_URL,
     get: (path, label) => request('GET', path, undefined, label),
-    getUser: () => request('GET', '/user', undefined, 'Cannot verify the GitHub approval identity', env.GITHUB_API_URL),
+    getAccount: (login) => request('GET', `/${encodeURIComponent(login)}`, undefined,
+      'Cannot verify the GitHub approval identity', usersApi),
+    getInstallationRepositories: () => request('GET', '/installation/repositories?per_page=2', undefined,
+      'Cannot verify the approval App installation scope', env.GITHUB_API_URL),
     post: (path, body) => request('POST', path, body),
     put: (path, body) => request('PUT', path, body),
   };
@@ -92,16 +96,12 @@ function reviewCanBeApproved(review) {
   });
 }
 
-async function hasCompleteReviewEvidence(path, github, prNumber, head, review) {
+async function readReviewCoverage(path) {
+  if (!path) return undefined;
   try {
-    // A single file-sink record from the corresponding Docker invocation.
-    const { type, payload, markdown, pr } = JSON.parse(await readFile(path, 'utf8'));
-    return type === 'review' && pr?.provider === 'github' && pr.repo === github.repository &&
-      (pr.number === prNumber || pr.number === String(prNumber)) && pr.head_sha === head &&
-      isDeepStrictEqual(payload, review) && typeof markdown === 'string' && Boolean(markdown.trim()) &&
-      !/\*\*(?:Review coverage|Chunked review):\*\*/u.test(markdown);
+    return JSON.parse(await readFile(path, 'utf8'));
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -254,9 +254,8 @@ async function validateReview(github, env, scope) {
 
   const nativeReview = usesNativeReview(scope);
   const checkApprovals = nativeReview && env.PR_AGENT_AUTO_APPROVE === 'true' && !pr.draft &&
-    Boolean(env.PR_AGENT_APPROVER_LOGIN) && validId(pr.user?.id) && typeof pr.user?.login === 'string' &&
-    pr.user.login !== env.PR_AGENT_APPROVER_LOGIN;
-  const eligible = checkApprovals && validId(pr.changed_files) && reviewCanBeApproved(review);
+    validId(pr.user?.id) && pr.user.type === 'User';
+  const eligible = checkApprovals && ref === 'main' && validId(pr.changed_files) && reviewCanBeApproved(review);
   if (automatic) {
     const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
@@ -276,11 +275,15 @@ async function validateReview(github, env, scope) {
   let allowApproval = false;
   if (nativeReview) {
     const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
-    const verifyPatches = eligible && await hasCompleteReviewEvidence(env.REVIEW_EVIDENCE_PATH, github, prNumber, head, review);
-    if (issues.length || verifyPatches) {
+    const coverage = eligible && await readReviewCoverage(env.PR_AGENT_COVERAGE_PATH);
+    if (issues.length || coverage) {
       const files = [];
       for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
-      allowApproval = verifyPatches && hasCompleteReviewPatches(files, pr.changed_files);
+      allowApproval = Boolean(coverage) && verifyReviewCoverage(coverage, {
+        repository: github.repository, prNumber, head, base, baseRef: ref, review, files,
+        changedFileCount: pr.changed_files, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
+        invocation: env.PR_AGENT_COVERAGE_INVOCATION,
+      });
       const comments = buildReviewComments({ issues, files, head });
       if (comments.length) {
         const seen = new Set();
@@ -302,10 +305,12 @@ async function validateReview(github, env, scope) {
   }
   if (checkApprovals) {
     const hasApprovalWork = allowApproval || (await listReviews(github, prPath)).some((previous) =>
-      previous?.state === 'APPROVED' && previous.user?.login === env.PR_AGENT_APPROVER_LOGIN &&
-      readApprovalReceipt(previous, prNumber));
+      previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
     if (hasApprovalWork && await currentRevision()) {
-      const revision = { prNumber, head, base, baseRef: ref, allowApproval };
+      const revision = {
+        prNumber, head, base, baseRef: ref, allowApproval,
+        runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
+      };
       await appendFile(env.GITHUB_OUTPUT, `approval_revision=${JSON.stringify(revision)}\n`);
     }
   }
@@ -320,10 +325,16 @@ async function approve(github, env, scope) {
       typeof revision.allowApproval !== 'boolean') {
     throw new Error('Invalid PR revision for approval');
   }
-  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Configure PR_AGENT_APPROVAL_TOKEN in the luoshen-approval environment.');
+  // GitHub can rerun this job using successful dependencies from a previous attempt.
+  if (revision.runId !== env.GITHUB_RUN_ID || revision.runAttempt !== env.GITHUB_RUN_ATTEMPT ||
+      !/^[1-9][0-9]*$/u.test(env.GITHUB_RUN_ATTEMPT ?? '')) {
+    console.log('Skipping automatic approval without a review from this workflow attempt.');
+    return;
+  }
+  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
   const status = await publishApproval({
     github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), revision,
-    approverLogin: env.PR_AGENT_APPROVER_LOGIN, runId: env.GITHUB_RUN_ID,
+    appSlug: env.PR_AGENT_APPROVAL_APP_SLUG, runId: env.GITHUB_RUN_ID,
     allowApproval: revision.allowApproval,
   });
   console.log(`GitHub approval for PR #${scope.prNumber}: ${status}`);
@@ -333,10 +344,18 @@ const env = process.env;
 const github = githubClient(env);
 const event = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, 'utf8'));
 const scope = eventScope(event, env.GITHUB_EVENT_NAME, github);
+const action = process.argv[2];
 if (scope) {
-  const action = process.argv[2];
   if (action === 'capture') await capture(github, env, scope, event);
   else if (action === 'validate') await validateReview(github, env, scope);
   else if (action === 'approve') await approve(github, env, scope);
   else throw new Error('Unknown PR-Agent workflow command');
+} else if (action === 'approve' && env.PR_AGENT_AUTO_APPROVE === 'true' && env.GITHUB_EVENT_NAME === 'push' &&
+    env.GITHUB_REF === 'refs/heads/main' && event.ref === env.GITHUB_REF && event.deleted === false &&
+    event.repository?.full_name === github.repository) {
+  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
+  const dismissed = await reconcileMainApprovals({
+    github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), appSlug: env.PR_AGENT_APPROVAL_APP_SLUG,
+  });
+  console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after main changed.`);
 }

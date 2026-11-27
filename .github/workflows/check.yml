@@ -139,6 +139,9 @@ jobs:
       - name: Check documents, repository and build
         if: matrix.shard == 2
         run: node --run check:static
+      - name: Verify PR-Agent coverage adapter
+        if: matrix.shard == 2
+        run: python3 -B tests/pr-agent-coverage.test.py
       - name: Run unit and integration tests
         run: node --run test:unit -- --test-shard=${{ matrix.shard }}/2
 

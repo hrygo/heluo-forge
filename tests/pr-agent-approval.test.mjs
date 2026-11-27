@@ -1,19 +1,26 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { publishApproval, readApprovalReceipt } from '../scripts/pr-agent-approval.mjs';
+import { publishApproval, readApprovalReceipt, reconcileMainApprovals } from '../scripts/pr-agent-approval.mjs';
 
 const repository = 'corp/example';
 const owner = { id: 107, login: 'maintainer', type: 'User' };
 const contributor = { id: 108, login: 'contributor', type: 'User' };
+const approvalBot = { id: 117, login: 'luoshen[bot]', type: 'Bot' };
+const appSlug = 'luoshen';
+const usersPath = '/users';
+const botProfile = `${usersPath}/${encodeURIComponent(approvalBot.login)}`;
 const head = 'a'.repeat(40);
 const base = 'b'.repeat(40);
 const otherSha = 'c'.repeat(40);
-const baseRef = 'release/candidate=1';
+const ownerFile = '.github/CODEOWNERS';
+const ownerBlob = 'd'.repeat(40);
+const owners = Buffer.from('* @maintainer\n');
+const baseRef = 'main';
 const revision = { prNumber: 42, head, base, baseRef };
 const pull = '/pulls/42';
 const reviewPath = `${pull}/reviews`;
-const basePath = '/git/ref/heads/release%2Fcandidate%3D1';
+const basePath = '/git/ref/heads/main';
 
 function fakeGitHub() {
   const state = {
@@ -27,8 +34,12 @@ function fakeGitHub() {
       title: 'UNTRUSTED PR TEXT',
     },
     base,
-    account: { ...owner },
-    permissions: new Map(),
+    account: { ...approvalBot },
+    installation: { total_count: 1, repositories: [{ full_name: repository }] },
+    protection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
+      require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
+    } },
+    permissions: new Map([[owner.login, { user: owner, permission: 'admin' }]]),
     reviews: [],
     nextReviewId: 300,
     timeline: [],
@@ -38,11 +49,22 @@ function fakeGitHub() {
   const github = {
     repository,
     serverUrl: 'https://github.test',
+    async getAccount(login) {
+      assert.equal(login, approvalBot.login);
+      state.calls.push(botProfile);
+      return structuredClone(state.account);
+    },
     async get(path) {
       state.calls.push(path);
       const injected = state.beforeGet?.(path);
       if (injected !== undefined) return injected;
       if (path === pull) return structuredClone(state.pr);
+      if (path === '/pulls?state=open&base=main&per_page=100&page=1') return [{ number: 42 }];
+      if (path === `/contents/.github?ref=${base}`) return [{ path: ownerFile, type: 'file', sha: ownerBlob }];
+      if (path === `/contents/${ownerFile}?ref=${base}`) return {
+        path: ownerFile, type: 'file', sha: ownerBlob, encoding: 'base64', size: owners.length, content: owners.toString('base64'),
+      };
+      if (path === `/codeowners/errors?ref=${base}`) return { errors: [] };
       const permission = /^\/collaborators\/([a-zA-Z0-9_-]+)\/permission$/u.exec(path);
       if (permission) {
         const access = state.permissions.get(permission[1]);
@@ -62,16 +84,21 @@ function fakeGitHub() {
     },
   };
   const approver = {
-    async getUser() {
-      state.calls.push('/user');
-      return structuredClone(state.account);
+    async get(path) {
+      assert.equal(path, '/branches/main/protection');
+      state.calls.push(path);
+      return structuredClone(state.protection);
+    },
+    async getInstallationRepositories() {
+      state.calls.push('/installation/repositories');
+      return structuredClone(state.installation);
     },
     async post(path, data) {
       state.calls.push(`POST ${path}`);
       state.writes.push({ method: 'POST', path, data });
       assert.equal(path, reviewPath);
       if (state.failPost) throw new Error('POST timed out');
-      const review = { id: state.nextReviewId++, user: owner, commit_id: data.commit_id, body: data.body, state: 'APPROVED' };
+      const review = { id: state.nextReviewId++, user: approvalBot, commit_id: data.commit_id, body: data.body, state: 'APPROVED' };
       if (!state.hideApproval) state.reviews.push(review);
       state.afterPost?.(review);
       return structuredClone(state.postResponse ?? review);
@@ -87,15 +114,16 @@ function fakeGitHub() {
       review.state = 'DISMISSED';
       state.timeline.push({
         event: 'review_dismissed',
-        actor: owner,
+        actor: approvalBot,
         dismissed_review: { review_id: review.id, state: 'approved', dismissal_message: data.message },
       });
       state.afterDismissal?.();
       return structuredClone(review);
     },
   };
-  const run = (options = {}) => publishApproval({ github, approver, revision, approverLogin: owner.login, runId: '1234', ...options });
-  return { state, run };
+  const run = (options = {}) => publishApproval({ github, approver, revision, appSlug, runId: '1234', ...options });
+  const reconcile = () => reconcileMainApprovals({ github, approver, appSlug });
+  return { state, run, reconcile };
 }
 
 test('publishes one exact APPROVE tied to the reviewed head and links the trusted run', async () => {
@@ -116,14 +144,15 @@ test('publishes one exact APPROVE tied to the reviewed head and links the truste
   assert.doesNotMatch(write.data.body, /UNTRUSTED PR TEXT/u);
   const postIndex = state.calls.indexOf(`POST ${reviewPath}`);
   assert.deepEqual(state.calls.slice(postIndex - 4, postIndex), [pull, basePath, pull, basePath]);
-  assert.ok(state.calls[0] === '/user' || state.calls.indexOf('/user') < postIndex);
+  assert.ok(state.calls.indexOf(botProfile) < postIndex);
+  assert.equal(state.reviews[0].user.login, approvalBot.login);
 
   assert.equal(await run({ runId: '5678' }), 'skipped-existing');
   assert.equal(state.writes.length, 1);
 });
 
 test('an invalid token identity or run link never reaches the approval writes', async () => {
-  for (const patch of [{ login: 'another-user' }, { login: 'Maintainer' }, { id: null }, { type: 'Bot' }]) {
+  for (const patch of [{ login: 'another-user' }, { login: 'Luoshen[bot]' }, { id: null }, { type: 'User' }]) {
     const { state, run } = fakeGitHub();
     Object.assign(state.account, patch);
     await assert.rejects(run(), /approver identity/iu);
@@ -131,13 +160,33 @@ test('an invalid token identity or run link never reaches the approval writes', 
   }
 
   const { state, run } = fakeGitHub();
+  await assert.rejects(run({ appSlug: 'github-actions' }), /dedicated approval GitHub App/u);
   await assert.rejects(run({ runId: '1)\nmanual approval' }), /run ID/iu);
+  state.installation = { total_count: 2, repositories: [{ full_name: repository }, { full_name: 'corp/other' }] };
+  await assert.rejects(run(), /not scoped to this repository/u);
   assert.deepEqual(state.writes, []);
+});
+
+test('an automatic approval requires a protected human code-owner decision', async () => {
+  const { state, run } = fakeGitHub();
+  state.protection.required_pull_request_reviews.require_code_owner_reviews = false;
+  assert.equal(await run(), 'skipped-protection');
+  assert.deepEqual(state.writes, []);
+});
+
+test('an existing App approval is withdrawn when a later review cannot verify the human gate', async () => {
+  const { state, run } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  state.protection.required_pull_request_reviews.require_code_owner_reviews = false;
+  assert.equal(await run(), 'dismissed-protection');
+  assert.equal(state.reviews[0].state, 'DISMISSED');
+  state.protection.required_pull_request_reviews.require_code_owner_reviews = true;
+  assert.equal(await run({ runId: '5678' }), 'approved');
 });
 
 test('skips self-authored PRs and those with an ineligible or changed revision', async () => {
   const { state, run } = fakeGitHub();
-  state.pr.user = { ...owner };
+  state.pr.user = { ...approvalBot };
   assert.equal(await run(), 'skipped-self');
   assert.deepEqual(state.writes, []);
 
@@ -157,7 +206,7 @@ test('skips self-authored PRs and those with an ineligible or changed revision',
   }
 });
 
-test('keeps the owner’s live changes request across heads and recognizes current-head manual approval', async () => {
+test('keeps the human changes request across heads until that human approves', async () => {
   const { state, run } = fakeGitHub();
   state.reviews = [
     { id: 101, user: owner, state: 'APPROVED', commit_id: head },
@@ -168,11 +217,11 @@ test('keeps the owner’s live changes request across heads and recognizes curre
   assert.equal(await run(), 'skipped-changes-requested');
 
   state.reviews.push({ id: 105, user: owner, state: 'APPROVED', commit_id: head });
-  assert.equal(await run(), 'skipped-existing');
+  assert.equal(await run(), 'approved');
 
   state.reviews.push({ id: 106, user: owner, state: 'APPROVED', commit_id: otherSha });
   assert.equal(await run(), 'skipped-existing');
-  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
 });
 
 test('finds owner changes requests across paginated reviews', async () => {
@@ -389,7 +438,7 @@ test('keeps a human changes request that arrived during the pre-publication revi
   assert.deepEqual(state.writes, []);
 });
 
-function priorApproval({ id, author = owner, reviewHead = head, reviewBase = base, target = baseRef, state = 'APPROVED' }) {
+function priorApproval({ id, author = approvalBot, reviewHead = head, reviewBase = base, target = baseRef, state = 'APPROVED' }) {
   return {
     id,
     user: author,
@@ -411,7 +460,7 @@ test('a rejected current verdict withdraws only active Luoshen approvals', async
     ordinary,
     markerOnly,
     priorApproval({ id: 103, author: contributor }),
-    priorApproval({ id: 104, state: 'CHANGES_REQUESTED' }),
+    priorApproval({ id: 104, author: owner, state: 'CHANGES_REQUESTED' }),
     priorApproval({ id: 105, state: 'DISMISSED' }),
     priorApproval({ id: 106 }),
     priorApproval({ id: 107, reviewHead: otherSha }),
@@ -429,6 +478,38 @@ test('a rejected current verdict withdraws only active Luoshen approvals', async
   assert.equal(state.writes.length, 2);
   assert.equal(await run(), 'skipped-changes-requested');
   assert.equal(state.writes.length, 2);
+});
+
+test('main advancing withdraws the old App approval without another model review', async () => {
+  const { state, reconcile } = fakeGitHub();
+  const currentBase = otherSha;
+  state.base = currentBase;
+  state.reviews = [
+    priorApproval({ id: 101 }),
+    priorApproval({ id: 102, author: owner }),
+    priorApproval({ id: 103, reviewBase: currentBase }),
+  ];
+  assert.equal(await reconcile(), 1);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'APPROVED']);
+  assert.deepEqual(state.writes.map(({ method, path }) => [method, path]), [['PUT', `${reviewPath}/101/dismissals`]]);
+  assert.equal(await reconcile(), 0);
+});
+
+test('one unavailable review history does not prevent cleanup for other open PRs', async () => {
+  const { state, reconcile } = fakeGitHub();
+  state.base = otherSha;
+  state.reviews = [priorApproval({ id: 101 })];
+  state.beforeGet = (path) => {
+    if (path === '/pulls?state=open&base=main&per_page=100&page=1') return [{ number: 41 }, { number: 42 }];
+    if (path.startsWith('/pulls/41/reviews?')) throw new Error('Review history unavailable');
+  };
+
+  await assert.rejects(reconcile(), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.errors[0].message, /#41/u);
+    return true;
+  });
+  assert.equal(state.reviews[0].state, 'DISMISSED');
 });
 
 test('an automated approval of the same head on an older base is withdrawn and replaced after checking the current revision', async () => {

@@ -1,6 +1,8 @@
 name: 洛神 (PR-Agent)
 run-name: >-
-  洛神 · PR #${{ github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}${{ github.event_name == 'workflow_run' && format(' {0}', github.event.workflow_run.head_sha) || '' }}
+  ${{ github.event_name == 'push' && '洛神 · 清理过期批准' ||
+  format('洛神 · PR #{0}{1}', github.event.workflow_run.pull_requests[0].number || github.event.issue.number,
+    github.event_name == 'workflow_run' && format(' {0}', github.event.workflow_run.head_sha) || '') }}
 
 # The pull-request signal has read-only permissions and uses no credentials.
 # The publisher runs from the default branch. It makes no PR checkout and
@@ -22,10 +24,12 @@ on:
     types: [completed]
   issue_comment:
     types: [created]
+  push:
+    branches: [main]
 
 # Serialize publication and recovery for each PR, including quoted commands.
 concurrency:
-  group: pr-agent-${{ github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type != 'User' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/')) && 'other-comment' || 'review' }}
+  group: pr-agent-${{ github.event_name == 'push' && 'main-approval-cleanup' || github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type != 'User' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/')) && 'other-comment' || 'review' }}
   queue: max
 
 permissions:
@@ -33,9 +37,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-
-env:
-  PR_AGENT_APPROVER_LOGIN: hrygo
 
 jobs:
   review:
@@ -133,6 +134,9 @@ jobs:
         id: pr_agent
         if: ${{ !cancelled() && steps.revision.outcome == 'success' && steps.revision.outputs.head != '' && steps.revision.outputs.manual_summary != 'true' }}
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
+        with: &pr_agent_entrypoint
+          entrypoint: /app/.venv/bin/python
+          args: /github/workspace/scripts/pr-agent-coverage.py
         env: &pr_agent_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI__KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -152,11 +156,9 @@ jobs:
           PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"
           PR_REVIEWER__NUM_MAX_FINDINGS: "4"
           PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"
-          # Keep the rendered review and its structured result together on this runner.
-          PUSH_OUTPUTS__ENABLE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
-          PUSH_OUTPUTS__CHANNELS: '["file"]'
-          PUSH_OUTPUTS__TOOLS: '["review"]'
-          PUSH_OUTPUTS__FILE_PATH: /github/workspace/.pr-agent-review-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.retry_revision.outputs.head != '' && 'retry' || 'initial' }}.jsonl
+          # The pinned runner records hashes of rows in the actual model request.
+          PR_AGENT_COVERAGE_INVOCATION: ${{ steps.retry_revision.outputs.head != '' && 'retry' || 'initial' }}
+          PR_AGENT_COVERAGE_PATH: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' && format('/github/workspace/.pr-agent-coverage-{0}-{1}-{2}.json', github.run_id, github.run_attempt, steps.retry_revision.outputs.head != '' && 'retry' || 'initial') || '' }}
 
       - name: Validate PR-Agent review
         id: validation
@@ -165,7 +167,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_TITLE: ${{ github.event.issue.title }}
           REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
-          REVIEW_EVIDENCE_PATH: .pr-agent-review-${{ github.run_id }}-${{ github.run_attempt }}-initial.jsonl
+          PR_AGENT_COVERAGE_INVOCATION: initial
+          PR_AGENT_COVERAGE_PATH: .pr-agent-coverage-${{ github.run_id }}-${{ github.run_attempt }}-initial.json
           REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
@@ -193,6 +196,7 @@ jobs:
         id: pr_agent_retry
         if: ${{ !cancelled() && steps.retry_revision.outcome == 'success' && steps.retry_revision.outputs.head != '' }}
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
+        with: *pr_agent_entrypoint
         env: *pr_agent_env
 
       - name: Validate refreshed PR-Agent review
@@ -201,7 +205,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_RESULT: ${{ steps.pr_agent_retry.outputs.review }}
-          REVIEW_EVIDENCE_PATH: .pr-agent-review-${{ github.run_id }}-${{ github.run_attempt }}-retry.jsonl
+          PR_AGENT_COVERAGE_INVOCATION: retry
+          PR_AGENT_COVERAGE_PATH: .pr-agent-coverage-${{ github.run_id }}-${{ github.run_attempt }}-retry.json
           REVIEWED_HEAD: ${{ steps.retry_revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.retry_revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.retry_revision.outputs.base_ref }}
@@ -215,7 +220,10 @@ jobs:
   approve:
     name: 洛神自动批准 (ubuntu-x64)
     needs: review
-    if: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' && github.ref == 'refs/heads/main' && needs.review.outputs.approval_revision != '' }}
+    if: >-
+      !cancelled() && vars.PR_AGENT_AUTO_APPROVE == 'true' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || (needs.review.result == 'success' && needs.review.outputs.approval_revision != '' &&
+       fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     environment: luoshen-approval
@@ -236,10 +244,20 @@ jobs:
           node-version-file: .node-version
           package-manager-cache: false
 
-      - name: Approve the reviewed PR revision
+      - name: Mint the dedicated Luoshen approval token
+        id: approval_app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.PR_AGENT_APPROVAL_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PR_AGENT_APPROVAL_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-administration: read
+
+      - name: Reconcile or approve the reviewed PR revision
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_AGENT_AUTO_APPROVE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
-          PR_AGENT_APPROVAL_TOKEN: ${{ secrets.PR_AGENT_APPROVAL_TOKEN }}
+          PR_AGENT_APPROVAL_TOKEN: ${{ steps.approval_app.outputs.token }}
+          PR_AGENT_APPROVAL_APP_SLUG: ${{ steps.approval_app.outputs.app-slug }}
           APPROVAL_REVISION: ${{ needs.review.outputs.approval_revision }}
         run: node scripts/pr-agent-workflow.mjs approve
