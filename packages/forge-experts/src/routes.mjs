@@ -120,12 +120,21 @@ function requireRoutePort(req, res, { method, mutation = false, portFn, disabled
   return portFn;
 }
 
-export function createExpertsRoutes(ports) {
-  const sseClients = new Set();
+function scopeKeyOf(scope) {
+  if (!scope || typeof scope !== 'object') return null;
+  const parts = [scope.instanceId, scope.orgId, scope.issuer, scope.subject];
+  if (parts.some((p) => typeof p !== 'string' || !p.trim())) return null;
+  return JSON.stringify(parts.map((p) => p.trim()));
+}
 
-  function broadcast(event) {
+export function createExpertsRoutes(ports) {
+  const sseClients = new Map();
+
+  function broadcast(event, targetScope = null) {
+    const targetKey = scopeKeyOf(targetScope);
     const frame = `data: ${JSON.stringify(event)}\n\n`;
-    for (const res of sseClients) {
+    for (const [res, clientKey] of sseClients.entries()) {
+      if (targetKey && clientKey !== targetKey) continue;
       try {
         res.write(frame);
       } catch {
@@ -135,7 +144,7 @@ export function createExpertsRoutes(ports) {
   }
 
   function closeAllStreams() {
-    for (const res of sseClients) {
+    for (const res of sseClients.keys()) {
       try { res.end(); } catch { /* closing */ }
     }
     sseClients.clear();
@@ -168,7 +177,7 @@ export function createExpertsRoutes(ports) {
         res.setHeader('content-type', 'text/event-stream; charset=utf-8');
         res.setHeader('cache-control', 'no-store');
         res.setHeader('x-content-type-options', 'nosniff');
-        sseClients.add(res);
+        sseClients.set(res, scopeKeyOf(scope));
         res.write(`data: ${JSON.stringify({ type: 'ready', scopeEpoch: scope.scopeEpoch, viewVersion: ports.getViewVersion() })}\n\n`);
         const cleanup = () => sseClients.delete(res);
         req.on?.('close', cleanup);

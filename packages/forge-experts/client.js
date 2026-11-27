@@ -283,6 +283,14 @@ window.__ModuleLoader__.load({
       return pickTaskFields(body, ['status', 'runId', 'runGeneration', 'resultVersion', 'cancelRequested', 'waitingUserNotice', 'summary']);
     }
 
+    const taskReconciledListeners = new Set();
+    function notifyTaskReconciled(entry) {
+      if (!entry || typeof entry !== 'object') return;
+      for (const listener of taskReconciledListeners) {
+        try { listener(entry); } catch { /* best effort */ }
+      }
+    }
+
     function ExpertTaskStatusCard(props = {}) {
       const initial = props.initialTask ?? props.task ?? null;
       const [task, setTask] = React.useState(initial);
@@ -298,6 +306,19 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
       const model = deriveTaskCardModel(task ?? initial);
+      const activeRequestId = model.requestId;
+      React.useEffect(() => {
+        if (!activeRequestId) return undefined;
+        const onReconciled = (entry) => {
+          if (!entry || entry.requestId !== activeRequestId) return;
+          setTask((prev) => ({ ...(prev ?? {}), ...pickTaskReconcileFields(entry, prev) }));
+          setNotice('已按原请求号完成权威状态对账。');
+        };
+        taskReconciledListeners.add(onReconciled);
+        return () => {
+          taskReconciledListeners.delete(onReconciled);
+        };
+      }, [activeRequestId]);
 
       const handleReconcile = async () => {
         if (!model.requestId || busy) return;
@@ -757,6 +778,12 @@ window.__ModuleLoader__.load({
                   if (typeof console !== 'undefined') {
                     console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
                   }
+                  return;
+                }
+                if (Array.isArray(res?.body?.reconciled)) {
+                  for (const entry of res.body.reconciled) {
+                    notifyTaskReconciled(entry);
+                  }
                 }
               }).catch(() => {
                 lastReconcileAt = 0;
@@ -769,6 +796,10 @@ window.__ModuleLoader__.load({
             }
             return;
           }
+          if (payload.type === 'task-reconciled') {
+            notifyTaskReconciled(payload);
+            return;
+          }
           if (payload.type === 'turn-finalized' && enableSelectionBinding) {
             const sessionKey = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
             const digest = typeof payload.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
@@ -778,9 +809,9 @@ window.__ModuleLoader__.load({
               recoveredDraft = pendingDrafts.get(exactKey);
               pendingDrafts.delete(exactKey);
               if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
-            } else if (!exactKey && sessionKey) {
-              recoveredDraft = pendingDrafts.get(sessionKey) ?? null;
-              pendingDrafts.delete(sessionKey);
+            } else if (sessionKey && pendingDrafts.has(sessionKey)) {
+              recoveredDraft = pendingDrafts.get(sessionKey);
+              if (!exactKey) pendingDrafts.delete(sessionKey);
             }
             if (payload.preserveDraft !== true) return;
             const notice = typeof payload.notice === 'string' && payload.notice

@@ -14,6 +14,8 @@ const DEFAULT_MAX_ACTIVE_TURNS = 128;
 const DEFAULT_TURN_TTL_MS = 5 * 60 * 1000;
 const MODEL_DID_NOT_DELEGATE_NOTICE =
   '主助手未调用所选专家，未发起远端任务；已保留您的草稿，可重新确认后发送。';
+const EXPIRED_TURN_NOTICE =
+  '专家确认已超时失效，未发起远端任务；已保留您的草稿，请重新确认后发送。';
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -68,6 +70,18 @@ export function createPreStepGuard(ports) {
           if (activeTokens.get(entry.selectionToken) === id) activeTokens.delete(entry.selectionToken);
           try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
         }
+        try {
+          ports.onTurnFinalized?.({
+            scope: entry.scope ?? null,
+            sessionId: entry.sessionId,
+            expertId: entry.expertId,
+            ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
+            status: 'expired',
+            code: 'EXPERT_SELECTION_INVALID',
+            preserveDraft: true,
+            notice: EXPIRED_TURN_NOTICE,
+          });
+        } catch { /* best effort */ }
       }
     }
   }
@@ -195,6 +209,7 @@ export function createPreStepGuard(ports) {
       expertId: binding.expertId,
       sessionId: binding.sessionId,
       scopeEpoch: binding.scopeEpoch,
+      scope,
       draftDigest: binding.draftDigest ?? null,
       draft,
       delegatedTaskId: null,
@@ -270,6 +285,7 @@ export function createPreStepGuard(ports) {
       try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
       try {
         ports.onTurnFinalized?.({
+          scope: turn.scope ?? null,
           sessionId: turn.sessionId,
           expertId: turn.expertId,
           ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
@@ -316,6 +332,7 @@ export function createPreStepGuard(ports) {
     // Notify host event stream with minimal non-sensitive metadata (never broadcast raw draft text).
     try {
       ports.onTurnFinalized?.({
+        scope: turn.scope ?? null,
         sessionId: turn.sessionId,
         expertId: turn.expertId,
         ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),

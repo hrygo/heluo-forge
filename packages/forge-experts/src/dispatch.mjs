@@ -363,10 +363,24 @@ export function createDispatchService(ports) {
     }
   }
 
-  function syncPendingIndex(scope, requestId, status) {
-    if (closed || !pendingIndexTable) return Promise.resolve();
+  function syncPendingIndex(scope, requestId, status, { strict = false } = {}) {
+    if (closed || !pendingIndexTable) {
+      if (strict) {
+        return Promise.reject(new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Pending request index storage is unavailable', {
+          retryable: true,
+        }));
+      }
+      return Promise.resolve();
+    }
     const run = async () => {
-      if (closed || !pendingIndexTable) return;
+      if (closed || !pendingIndexTable) {
+        if (strict) {
+          throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Pending request index storage is unavailable', {
+            retryable: true,
+          });
+        }
+        return;
+      }
       try {
         const existing = await readPendingIndex(scope);
         const isPending = status === 'pending_delivery' || status === 'unknown';
@@ -383,8 +397,6 @@ export function createDispatchService(ports) {
           requestIds: filtered,
         });
       } catch (error) {
-        // Index sync is best-effort and must not override primary correlation writes
-        // or overwrite existing entries when readPendingIndex fails; report drift via port.
         try {
           ports.onPendingIndexError?.({
             requestId,
@@ -392,6 +404,12 @@ export function createDispatchService(ports) {
             message: error?.message ?? String(error),
           });
         } catch { /* diagnostics isolation */ }
+        if (strict) {
+          if (error instanceof ExpertsError) throw error;
+          throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to persist pending request index before outbound delivery', {
+            retryable: true,
+          });
+        }
       }
     };
     const next = pendingIndexQueue.then(run, run);
@@ -399,7 +417,7 @@ export function createDispatchService(ports) {
     return next;
   }
 
-  async function persistCorrelation(scope, record) {
+  async function persistCorrelation(scope, record, { strictPendingIndex = false } = {}) {
     if (closed || !table) {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Request correlation storage is unavailable', {
         retryable: true,
@@ -417,7 +435,7 @@ export function createDispatchService(ports) {
         retryable: true,
       });
     }
-    await syncPendingIndex(scope, validated.data.requestId, validated.data.status);
+    await syncPendingIndex(scope, validated.data.requestId, validated.data.status, { strict: strictPendingIndex });
     return validated.data;
   }
 
@@ -589,7 +607,7 @@ export function createDispatchService(ports) {
       createdAt,
       updatedAt: createdAt,
     };
-    await persistCorrelation(scope, baseRecord);
+    await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
 
     // 4. Final serialized re-verification in the same boundary as preference updates (§3.6).
     // A preference disable submitted earlier wins and aborts this dispatch before outbound transport.
@@ -778,7 +796,7 @@ export function createDispatchService(ports) {
       createdAt,
       updatedAt: createdAt,
     };
-    await persistCorrelation(scope, baseRecord);
+    await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
 
     // 3. Final serialized re-verification in the preference boundary before outbound delivery (§3.6).
     try {
@@ -846,18 +864,21 @@ export function createDispatchService(ports) {
     const scope = await ports.resolveScope();
     const requestIds = await readPendingIndex(scope);
     const items = [];
-    for (const requestId of requestIds) {
-      const record = await readCorrelation(scope, requestId);
-      if (!record) continue;
-      if (record.status !== 'pending_delivery' && record.status !== 'unknown') continue;
-      items.push(Object.freeze({
-        requestId: record.requestId,
-        originSessionRef: record.originSessionRef,
-        expertId: record.expertId,
-        status: record.status,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-      }));
+    for (let idx = 0; idx < requestIds.length; idx += RECONCILE_CONCURRENCY) {
+      const batch = requestIds.slice(idx, idx + RECONCILE_CONCURRENCY);
+      const records = await Promise.all(batch.map((requestId) => readCorrelation(scope, requestId)));
+      for (const record of records) {
+        if (!record) continue;
+        if (record.status !== 'pending_delivery' && record.status !== 'unknown') continue;
+        items.push(Object.freeze({
+          requestId: record.requestId,
+          originSessionRef: record.originSessionRef,
+          expertId: record.expertId,
+          status: record.status,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }));
+      }
     }
     return Object.freeze({ scopeEpoch: scope.scopeEpoch, items: Object.freeze(items) });
   }
@@ -907,7 +928,7 @@ export function createDispatchService(ports) {
             expertId: record.expertId,
           });
           reconciled.push(entry);
-          try { ports.onTaskReconciled?.(entry); } catch { /* best effort */ }
+          try { ports.onTaskReconciled?.({ ...entry, scope }); } catch { /* best effort */ }
         } catch (error) {
           if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
             notFound.push(requestId);
