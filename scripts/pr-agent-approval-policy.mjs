@@ -1,4 +1,4 @@
-import { isSha, pages } from './pr-agent-github.mjs';
+import { isSha, pages, validId } from './pr-agent-github.mjs';
 
 const codeOwnersPath = '.github/CODEOWNERS';
 const githubLogin = /^(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u;
@@ -41,24 +41,40 @@ function permitsIndependentApproval(rule) {
     (dismissal === undefined || dismissal?.enabled === false);
 }
 
-function assignsEveryPathToHumans(file, directory, humanLogins) {
+function catchAllHumanOwners(file, directory, humanLogins) {
   const entry = Array.isArray(directory) && directory.find((item) => item?.path === codeOwnersPath);
   // The Contents API follows symlinks to files. Verify the path's own directory entry.
   if (entry?.type !== 'file' || !isSha(entry.sha) || file?.sha !== entry.sha ||
       file.path !== codeOwnersPath || file.type !== 'file' || file.encoding !== 'base64' ||
-      typeof file.content !== 'string') return false;
+      typeof file.content !== 'string') return null;
 
   const encoded = file.content.replaceAll('\n', '');
   const buffer = Buffer.from(encoded, 'base64');
-  if (buffer.length !== file.size || buffer.toString('base64') !== encoded) return false;
+  if (buffer.length !== file.size || buffer.toString('base64') !== encoded) return null;
 
   const lines = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer).split(/\r?\n/u);
   const rules = lines.filter((line) => !/^[\t ]*(?:#|$)/u.test(line));
   // The allowlist attests to human ownership. A GitHub user account can also be a machine account.
-  if (rules.length !== 1) return false;
+  if (rules.length !== 1) return null;
   const [pattern, ...owners] = rules[0].replace(/^[\t ]+|[\t ]+$/gu, '').split(/[\t ]+/u);
-  return pattern === '*' && owners.length > 0 && owners.every((owner) =>
-    owner.startsWith('@') && githubLogin.test(owner.slice(1)) && humanLogins.has(owner.slice(1).toLowerCase()));
+  if (pattern !== '*' || owners.length === 0) return null;
+
+  const logins = new Set();
+  for (const owner of owners) {
+    const login = owner.slice(1);
+    if (!owner.startsWith('@') || !githubLogin.test(login)) return null;
+    const normalizedLogin = login.toLowerCase();
+    if (!humanLogins.has(normalizedLogin)) return null;
+    logins.add(normalizedLogin);
+  }
+  return logins;
+}
+
+async function hasCodeOwnerWriteAccess(github, login) {
+  const access = await github.get(`/collaborators/${encodeURIComponent(login)}/permission`, 'Read code owner repository permission');
+  const user = access?.user;
+  return user?.type === 'User' && validId(user.id) && typeof user.login === 'string' && githubLogin.test(user.login) &&
+    user.login.toLowerCase() === login && ['write', 'maintain', 'admin'].includes(access.permission);
 }
 
 export async function hasLiveApprovalProtection(approver) {
@@ -85,8 +101,11 @@ export async function hasIndependentApprovalGate(github, approver, revision, con
       github.get(`/contents/${codeOwnersPath}${query}`, 'Read CODEOWNERS'),
       github.get(`/codeowners/errors${query}`, 'Validate GitHub CODEOWNERS ownership'),
     ]);
-    return Array.isArray(parser?.errors) && parser.errors.length === 0 &&
-      assignsEveryPathToHumans(file, directory, humanLogins);
+    if (!Array.isArray(parser?.errors) || parser.errors.length !== 0) return false;
+    const owners = catchAllHumanOwners(file, directory, humanLogins);
+    if (!owners) return false;
+    const access = await Promise.all(Array.from(owners, (login) => hasCodeOwnerWriteAccess(github, login)));
+    return access.every((allowed) => allowed);
   } catch {
     return false;
   }

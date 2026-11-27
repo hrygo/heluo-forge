@@ -9,6 +9,7 @@ const activeRulesPage = (page) => `/rules/branches/main?per_page=100&page=${page
 const directoryPath = `/contents/.github?ref=${revision.base}`;
 const contentPath = `/contents/${codeOwnersPath}?ref=${revision.base}`;
 const parserPath = `/codeowners/errors?ref=${revision.base}`;
+const permissionPath = (login) => `/collaborators/${login}/permission`;
 const codeOwners = '* @maintainer @another-maintainer\n';
 const humanLogins = 'maintainer,another-maintainer';
 const fileEntry = { path: codeOwnersPath, type: 'file', sha: 'c'.repeat(40) };
@@ -33,6 +34,10 @@ function pullRequestRule(parameters = {}) {
   } };
 }
 
+function collaborator(login, permission, overrides = {}) {
+  return { permission, user: { id: 42, type: 'User', login, ...overrides } };
+}
+
 function githubClients(options = {}) {
   const calls = [];
   const source = Buffer.from(options.source ?? codeOwners);
@@ -46,7 +51,12 @@ function githubClients(options = {}) {
     [directoryPath, options.directory ?? [fileEntry]],
     [contentPath, options.contents ?? contents],
     [parserPath, options.parser ?? { errors: [] }],
+    [permissionPath('maintainer'), collaborator('Maintainer', 'write')],
+    [permissionPath('another-maintainer'), collaborator('another-maintainer', 'admin', { id: 43 })],
   ]);
+  for (const [login, permission] of Object.entries(options.ownerAccess ?? {})) {
+    evidence.set(permissionPath(login), permission);
+  }
   const approver = {
     async get(path) {
       calls.push(['approver', path]);
@@ -76,16 +86,48 @@ function githubClients(options = {}) {
 test('requires live protection and the checked base revision’s catch-all of configured human code owners', async () => {
   const { github, approver, calls } = githubClients({ source: `# 人工批准\n\n${codeOwners}` });
   assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), true);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 7);
   assert.deepEqual(new Set(calls.map(([client, path]) => `${client} ${path}`)), new Set([
     `approver ${protectionPath}`, `approver ${activeRulesPage(1)}`,
     `github ${directoryPath}`, `github ${contentPath}`, `github ${parserPath}`,
+    `github ${permissionPath('maintainer')}`, `github ${permissionPath('another-maintainer')}`,
   ]));
 });
 
 test('requires every catch-all owner to be in the configured human allowlist', async () => {
   const { github, approver } = githubClients({ source: '* @maintainer @forge-review-service\n' });
   assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
+});
+
+test('requires every listed code owner to retain write access even when GitHub finds no CODEOWNERS errors', async (t) => {
+  const cases = [
+    ['owner is now read-only', collaborator('maintainer', 'read')],
+    ['owner is no longer a collaborator', Object.assign(new Error('Not Found'), { status: 404 })],
+    ['permission cannot be read', Object.assign(new Error('Forbidden'), { status: 403 })],
+    ['response belongs to a different login', collaborator('someone-else', 'write')],
+    ['response is not a User', collaborator('maintainer', 'admin', { type: 'Bot' })],
+    ['response has no valid identity', collaborator('maintainer', 'write', { id: undefined })],
+    ['response is missing', null],
+  ];
+  for (const [name, access] of cases) {
+    await t.test(name, async () => {
+      const { github, approver, calls } = githubClients({ ownerAccess: { maintainer: access } });
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
+      assert.ok(calls.some(([, path]) => path === parserPath));
+      assert.ok(calls.some(([, path]) => path === permissionPath('maintainer')));
+    });
+  }
+});
+
+test('verifies each actual code owner only once and ignores extra configured logins', async () => {
+  const { github, approver, calls } = githubClients({
+    source: '* @Maintainer @MAINTAINER @another-maintainer\n',
+    ownerAccess: { maintainer: collaborator('MAINTAINER', 'maintain'), 'unused-maintainer': new Error('404') },
+  });
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision, `${humanLogins},unused-maintainer`), true);
+  assert.deepEqual(calls.filter(([, path]) => path.startsWith('/collaborators/')), [
+    ['github', permissionPath('maintainer')], ['github', permissionPath('another-maintainer')],
+  ]);
 });
 
 test('matches human logins case-insensitively and accepts horizontal spacing around CSV entries', async () => {

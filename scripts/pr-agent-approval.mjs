@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
-import { hasIndependentApprovalGate, hasLiveApprovalProtection } from './pr-agent-approval-policy.mjs';
+import { hasIndependentApprovalGate } from './pr-agent-approval-policy.mjs';
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
@@ -316,8 +316,8 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const ineligibleReason = async () => {
     if (await reviewedRevisionIsCurrent()) return ineligibleDismissal;
   };
-  const liveProtectionReason = async () => {
-    if (!await hasLiveApprovalProtection(approver)) return protectionDismissal;
+  const protectionReason = async () => {
+    if (!await hasIndependentApprovalGate(github, approver, revision, humanOwners)) return protectionDismissal;
   };
   const pr = await readPull(github, pull, prNumber);
   if (!validId(pr.user?.id)) throw new Error('Invalid pull request author');
@@ -377,30 +377,29 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
   let rejection;
   if (await hasBlockingChangeRequest(github, remaining)) rejection = 'changes-requested';
-  else if (!await hasIndependentApprovalGate(github, approver, revision, humanOwners)) rejection = 'protection';
+  else if (await protectionReason()) rejection = 'protection';
   if (rejection) {
     const activeApprovals = remaining.filter((review) => readActiveApproval(review, owner, prNumber));
     if (!activeApprovals.length) return `skipped-${rejection}`;
     if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
-    const reason = rejection === 'changes-requested' ? changeRequestReason : async () => {
-      if (!await hasIndependentApprovalGate(github, approver, revision, humanOwners)) return protectionDismissal;
-    };
+    const reason = rejection === 'changes-requested' ? changeRequestReason : protectionReason;
     let dismissed = false;
     for (const review of activeApprovals) {
       if (await dismissApproval(github, approver, pull, review, reason)) dismissed = true;
     }
     return dismissed ? `dismissed-${rejection}` : 'skipped-existing';
   }
+  let dismissedUnverified = false;
   for (const review of remaining) {
     if (readActiveApproval(review, owner, prNumber) && await approvalVerificationFailed(github, review) &&
-        await dismissApproval(github, approver, pull, review, verificationDismissal)) withdrawn.add(review.id);
+        await dismissApproval(github, approver, pull, review, verificationDismissal)) dismissedUnverified = true;
   }
-  if (await hasPriorApproval(github, remaining.filter((review) => !withdrawn.has(review?.id)), owner, revision)) {
-    return 'skipped-existing';
-  }
+  // The dismissal request may have raced a maintainer. Verify its actor before replacing an approval.
+  const latestReviews = dismissedUnverified ? await readReviewHistory(github, pull) : reviews;
+  if (await hasPriorApproval(github, latestReviews, owner, revision)) return 'skipped-existing';
 
   if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
-  const approval = await postApproval(github, approver, pull, reviews, owner, head, body);
+  const approval = await postApproval(github, approver, pull, latestReviews, owner, head, body);
   if (approval.state === 'DISMISSED') return 'skipped-existing';
 
   // The review REST API binds the head commit only. Check the base and PR again after the write.
@@ -424,7 +423,7 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   if (blocked && await dismissApproval(github, approver, pull, approval, changeRequestReason)) {
     return 'dismissed-changes-requested';
   }
-  if (await liveProtectionReason() && await dismissApproval(github, approver, pull, approval, liveProtectionReason)) {
+  if (await protectionReason() && await dismissApproval(github, approver, pull, approval, protectionReason)) {
     return 'dismissed-protection';
   }
   return 'approved';
