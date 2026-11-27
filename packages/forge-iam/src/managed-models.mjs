@@ -772,6 +772,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     });
   }
 
+  // A guard and its matching adapter share one call and renewal deadline.
+  // Starting fetch records a dispatch; verified preconnect failure restores
+  // only that attempt's prior state. Clock expiry can replace only the last
+  // expired lease of an unsent call on the bound native transport.
   async function* protect(request, dispatch, { captured, redispatch, preparedSubject, preparedSession, observeTransport = false } = {}) {
     const parent = forwardedCalls.get(request.signal);
     const inherited = parent?.provider === request.provider && parent?.model === request.model ? parent : undefined;
@@ -839,13 +843,6 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       }
       try { session?.assertCurrent(); } catch (cause) { return failureCode(cause); }
       return signal.aborted && !request.signal?.aborted ? 'IAM_LOGIN_REQUIRED' : null;
-    };
-    const preconnectFaultOf = attempt => {
-      const fault = modelPreconnectFault(attempt);
-      // Restore the prior dispatch status before observing any clock expiry.
-      // A failed connect cannot undo an earlier POST in this logical call.
-      if (fault) call.sent = attempt.sentBeforeAttempt;
-      return fault;
     };
     const retryAfterClockExpiry = (denial, capturedVersion) => bound && !call.sent
       && call.lease.signal.reason === accessDeadlineReached
@@ -944,9 +941,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           budget.expiresAt ??= performance.now() + MODEL_RENEWAL_WAIT_MS;
           return useGrant(true);
         });
+        const sentBeforeAttempt = call.sent;
         const attempt = observeTransport ? {
-          calls: 0, version, binding: lastId, expectedBinding, withDispatchAccessToken, sentBeforeAttempt: call.sent,
+          calls: 0, version, binding: lastId, expectedBinding, withDispatchAccessToken,
           sent() { call.sent = true; },
+          restoreSent() { call.sent = sentBeforeAttempt; },
           accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, call.lease, signal); },
           revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },
           refuse(cause) { this.denied ??= failureCode(cause); },
@@ -997,7 +996,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           for await (const chunk of attempt ? trackModelAttempt(send, attempt) : send()) {
             if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
             const failure = chunk.type === 'finish' && chunk.reason?.kind !== 'aborted' ? chunk.reason?.failure : undefined;
-            const preconnectFault = preconnectFaultOf(attempt);
+            const preconnectFault = modelPreconnectFault(attempt);
             if (chunk.type === 'usage' && attempt?.denied && !attempt.calls) continue;
             const localFailure = Boolean(failure && (attempt?.denied || diagnosed.has(chunk) || preconnectFault))
               || (chunk.type === 'usage' && Boolean(preconnectFault));
@@ -1053,7 +1052,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           return;
         } catch (cause) {
           if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-          const preconnectFault = preconnectFaultOf(attempt);
+          const preconnectFault = modelPreconnectFault(attempt);
           const authorization = streamRefusal(Boolean(preconnectFault || (attempt?.denied && !attempt.calls)));
           code = authorization ?? attempt?.denied ?? attempt?.revocation ?? attempt?.authFailure ?? failureCode(cause, preconnectFault);
           if (!authorization && await retryTransport(attempt, cause, code)) continue engine;

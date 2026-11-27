@@ -1680,6 +1680,18 @@ window.__ModuleLoader__.load({
       return typeof performance === 'undefined' ? Date.now() : performance.now();
     }
 
+    function projectSampledDeadline(view, from, at = sessionDeadline(view)) {
+      const sampledAt = view?.sampledAt;
+      if (at !== null && Number.isSafeInteger(sampledAt) && sampledAt >= 0 && sampledAt < at) {
+        return from + (at - sampledAt);
+      }
+    }
+
+    function rememberSampledDeadline(view, startedAt) {
+      const projectedAt = projectSampledDeadline(view, startedAt);
+      if (projectedAt !== undefined) projectedSessionDeadlines.set(view, projectedAt);
+    }
+
     function presentSession(view) {
       const ui = deriveSessionUi(view);
       const projectedAt = projectedSessionDeadlines.get(view);
@@ -1718,24 +1730,30 @@ window.__ModuleLoader__.load({
     }
 
     // §5 HTTP 封装
-    async function readJson(response) {
+    async function readJson(response, startedAt) {
       try {
-        return await response.json();
+        const body = await response.json();
+        // The Host cannot sample before this request starts. Use that bound
+        // so time spent waiting for the response does not extend the deadline.
+        if (response.ok) rememberSampledDeadline(body?.view ?? body, startedAt);
+        return body;
       } catch {
         return null;
       }
     }
 
     async function fetchView({ signal } = {}) {
+      const startedAt = sessionMonotonicNow();
       const response = signal ? await fetch('/api/forge-iam/view', { signal }) : await fetch('/api/forge-iam/view');
-      const view = await readJson(response);
+      const view = await readJson(response, startedAt);
       if (!response.ok) throw new Error(view?.error?.code ?? 'IAM_VIEW_FAILED');
       return view;
     }
 
     async function getJson(path) {
+      const startedAt = sessionMonotonicNow();
       const response = await fetch(path);
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
+      return { ok: response.ok, status: response.status, body: await readJson(response, startedAt) };
     }
 
     // 请求超时是登录弹窗的护栏：没有它，等待中的请求会让空白窗口永远停住。
@@ -1744,8 +1762,9 @@ window.__ModuleLoader__.load({
       const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
       const body = payload === undefined ? '{}' : JSON.stringify(payload);
       try {
+        const startedAt = sessionMonotonicNow();
         const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body, ...(controller ? { signal: controller.signal } : {}) });
-        return { ok: response.ok, status: response.status, body: await readJson(response) };
+        return { ok: response.ok, status: response.status, body: await readJson(response, startedAt) };
       } catch (error) {
         if (error?.name === 'AbortError') return { ok: false, status: 0, body: { error: { code: 'IAM_REQUEST_TIMEOUT' } } };
         throw error;
@@ -1755,8 +1774,9 @@ window.__ModuleLoader__.load({
     }
 
     async function putJson(path, payload) {
+      const startedAt = sessionMonotonicNow();
       const response = await fetch(path, { method: 'PUT', headers: REQUEST_HEADERS, body: JSON.stringify(payload) });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
+      return { ok: response.ok, status: response.status, body: await readJson(response, startedAt) };
     }
 
     const CREDENTIAL_SAVE_TIMEOUT_MS = 60000;
@@ -1810,8 +1830,9 @@ window.__ModuleLoader__.load({
     }
 
     async function deleteJson(path) {
+      const startedAt = sessionMonotonicNow();
       const response = await fetch(path, { method: 'DELETE', headers: REQUEST_HEADERS });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
+      return { ok: response.ok, status: response.status, body: await readJson(response, startedAt) };
     }
 
     // 响应里的错误码只有一个读取口：调用方判断 result.ok 即可，不要再自己解包。
@@ -2198,7 +2219,7 @@ window.__ModuleLoader__.load({
       let deadlineTimer = null;
       let deadlineRetryTimer = null;
 
-      function trackDeadline(subscriber, view, sampledAfter) {
+      function trackDeadline(subscriber, view, sampledAfter, initialProjection = projectedSessionDeadlines.get(view)) {
         const ui = deriveSessionUi(view);
         const at = sessionDeadline(view, ui);
         if (at === null) { subscriber.deadline = null; return; }
@@ -2208,8 +2229,7 @@ window.__ModuleLoader__.load({
           && previous.state === ui.state && previous.view.principal === view.principal;
         const postDeadlineSample = same && previous.reached && sampledAfter
           && timeUntilSessionDeadline(previous, sampledAfter) <= 0;
-        const remaining = Number.isSafeInteger(view.sampledAt) && view.sampledAt >= 0 ? at - view.sampledAt : 0;
-        let projectedAt = remaining > 0 ? sessionMonotonicNow() + remaining : undefined;
+        let projectedAt = initialProjection ?? projectSampledDeadline(view, sessionMonotonicNow(), at);
         // Same-cutoff data may have been buffered. Only a new observation
         // started after the previous cutoff may grant more presentation time.
         if (same && !postDeadlineSample) {
@@ -2287,9 +2307,8 @@ window.__ModuleLoader__.load({
         if (!subscribers.has(subscriber)) return;
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
         trackDeadline(subscriber, view);
-        if (retireStream && stream) {
-          // The adopted HTTP view supersedes queued frames and reads from
-          // this source. The replacement will sample again for all consumers.
+        if (retireStream) {
+          // Invalidate old reads even while the page is polling without SSE.
           inFlight?.cancel();
           restart();
         }
@@ -2324,7 +2343,7 @@ window.__ModuleLoader__.load({
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
         // A consumer may already have an earlier cutoff for the same session.
         const snapshot = Number.isFinite(view?.sampledAt) ? { ...view } : view;
-        trackDeadline(subscriber, snapshot, sampledAfter);
+        trackDeadline(subscriber, snapshot, sampledAfter, projectedSessionDeadlines.get(view));
         subscriber.updateRef.current(snapshot);
       }
 
@@ -2355,6 +2374,9 @@ window.__ModuleLoader__.load({
             let view;
             try { view = JSON.parse(event.data); } catch { return; }
             if (!view || typeof view !== 'object' || Array.isArray(view) || deriveSessionUi(view).state === null) return;
+            // Bound only the first snapshot by connection start. Later
+            // updates can come from a new authorization on this same source.
+            if (!streamReady) rememberSampledDeadline(view, openedAt.monotonic);
             streamReady = true;
             stopPolling();
             // A read started before this frame cannot replace it when late.

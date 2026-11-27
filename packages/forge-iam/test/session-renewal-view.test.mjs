@@ -9,7 +9,7 @@ import { createIamService } from './support/trusted-service.mjs';
 // loses a request to IAM_REAUTH_REQUIRED. A session whose sliding refresh window
 // has lapsed is terminal; it is not the same state as a renewable lapse.
 
-async function serviceWith(t, grant) {
+async function serviceWith(t, grant, options = {}) {
   const oidc = await startMockOidc({ accessTtl: 60 });
   const credentials = new MemoryCredentials();
   const clock = { wall: Date.now() };
@@ -26,7 +26,7 @@ async function serviceWith(t, grant) {
   const service = createIamService({
     ...oidc.endpoints, clientId: oidc.clientId,
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
-  }, { credentials, now: () => clock.wall });
+  }, { ...options, credentials, now: () => clock.wall });
   t.after(async () => { await service.dispose(); await oidc.close(); });
   return { service, oidc, clock };
 }
@@ -162,6 +162,64 @@ test('Host publishes the renewal cutoff to existing watchers after access expiry
     assert.equal(terminal.renewal, 'unavailable');
     assert.equal(terminal.canSignIn, true);
     assert.equal(oidc.counts.refresh, 0);
+  } finally {
+    controller.abort();
+    await received;
+    await watch.return();
+  }
+});
+
+test('Host publishes a renewal cutoff crossed while building an expired view', async (t) => {
+  let onReadModelView;
+  const { service, oidc, clock } = await serviceWith(t, (now) => ({
+    accessToken: 'synthetic-access',
+    accessExpiresAt: new Date(now - 30_000).toISOString(),
+    refreshExpiresAt: new Date(now + 60_000).toISOString(),
+  }), {
+    getManagedModelRuntime: () => ({
+      getView() {
+        onReadModelView?.();
+        return { managed: true, state: 'unconfigured', models: [] };
+      },
+    }),
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const hydrated = await service.hydrate();
+  const cutoff = Date.parse(hydrated.refreshExpiresAt);
+  const controller = new AbortController();
+  const watch = service.watch(controller.signal);
+  let received;
+  try {
+    const initial = (await watch.next()).value;
+    assert.equal(initial.state, 'expired');
+    assert.equal(initial.renewal, 'available');
+
+    // Advance wall time without running the existing timer, then cross the
+    // cutoff between the next view's clock sample and its publication.
+    clock.wall = cutoff - 1;
+    onReadModelView = () => { clock.wall = cutoff; };
+    service.notifyView();
+    onReadModelView = undefined;
+    const published = (await watch.next()).value;
+    assert.equal(published.state, 'expired');
+    assert.equal(published.renewal, 'available');
+    assert.equal(published.sampledAt, cutoff - 1);
+
+    let terminal;
+    received = watch.next().then(({ value }) => { terminal = value; });
+    t.mock.timers.tick(1);
+    await new Promise(setImmediate);
+    assert.equal(terminal?.renewal, 'unavailable');
+    assert.equal(terminal.state, 'expired');
+    assert.equal(terminal.canSignIn, true);
+    assert.equal(oidc.counts.refresh, 0);
+
+    let republished = false;
+    received = watch.next().then(({ done }) => { republished = !done; });
+    clock.wall += 60_000;
+    t.mock.timers.tick(60_000);
+    await new Promise(setImmediate);
+    assert.equal(republished, false);
   } finally {
     controller.abort();
     await received;

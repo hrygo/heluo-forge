@@ -767,6 +767,7 @@ for (const [name, expireAt, priorPost, changeKey] of [
   ['a verified connection failure can renew when access expires as the SDK receives the failure', 'failure', false],
   ['a verified connection failure after an image rejection preserves the earlier dispatch', 'retry', true],
   ['access expiry during retry backoff cannot renew after the logical call already sent a POST', 'backoff', true],
+  ['access expiry as the SDK receives a connection failure cannot renew after an earlier POST', 'failure', true],
   ['an expired connection retry cannot use a gateway key changed during renewal', 'backoff', false, true],
 ]) {
   test(name, { timeout: 6000 }, async t => {
@@ -810,7 +811,10 @@ for (const [name, expireAt, priorPost, changeKey] of [
         if (++attempts === retryAttempt && expireAt === 'retry') expireAccess();
       },
       onModelFetchError() {
-        if (expireAt === 'failure' && transportCalls === retryAttempt - 1) expireAccess();
+        if (expireAt === 'failure' && transportCalls === retryAttempt - 1) {
+          expireAccess();
+          assert.equal(runtime.getView().error, 'IAM_LOGIN_REQUIRED');
+        }
       },
       diagnoseFailure({ transport }) {
         if (transport?.phase !== 'before-send' || !transport.retrying) return;
@@ -830,7 +834,8 @@ for (const [name, expireAt, priorPost, changeKey] of [
     }
     const finish = finishOf(await call);
 
-    assert.equal(observedRetry, true, 'the first connection failure must be confirmed before the retry');
+    const cancelledBeforeRetry = priorPost && expireAt === 'failure';
+    assert.equal(observedRetry, !cancelledBeforeRetry, 'only a live call may schedule the verified retry');
     if (changeKey) {
       assert.equal(finish.failure?.code, 'IAM_MODEL_CONTEXT_CHANGED');
       assert.equal(attempts, 1, 'the context change must be refused before the SDK retry');
@@ -840,7 +845,7 @@ for (const [name, expireAt, priorPost, changeKey] of [
     assert.deepEqual({ kind: finish.kind, code: finish.failure?.code, refreshes: f.oidc.counts.refresh, transportCalls }, priorPost
       ? { kind: 'error', code: 'IAM_LOGIN_REQUIRED', refreshes: 0, transportCalls: 2 }
       : { kind: 'stop', code: undefined, refreshes: 1, transportCalls: 2 });
-    assert.equal(attempts, priorPost && expireAt === 'backoff' ? retryAttempt - 1 : retryAttempt);
+    assert.equal(attempts, priorPost && expireAt !== 'retry' ? retryAttempt - 1 : retryAttempt);
     const { grant: complete } = await f.store.read();
     assert.equal(complete.sessionInstanceId, f.grant.sessionInstanceId);
     assert.equal(complete.accessToken === f.grant.accessToken, priorPost);
