@@ -5,6 +5,7 @@ import { hasIndependentApprovalGate } from '../scripts/pr-agent-approval-policy.
 const revision = { baseRef: 'main', base: 'b'.repeat(40) };
 const codeOwnersPath = '.github/CODEOWNERS';
 const protectionPath = '/branches/main/protection';
+const activeRulesPage = (page) => `/rules/branches/main?per_page=100&page=${page}`;
 const directoryPath = `/contents/.github?ref=${revision.base}`;
 const contentPath = `/contents/${codeOwnersPath}?ref=${revision.base}`;
 const parserPath = `/codeowners/errors?ref=${revision.base}`;
@@ -16,12 +17,21 @@ const reviewRules = {
   required_approving_review_count: 1,
   require_code_owner_reviews: true,
   dismiss_stale_reviews: true,
+  require_last_push_approval: false,
 };
 const protection = {
   enforce_admins: { enabled: true },
   required_pull_request_reviews: reviewRules,
   required_status_checks: { strict: false },
 };
+
+function pullRequestRule(parameters = {}) {
+  return { type: 'pull_request', parameters: {
+    required_approving_review_count: 1,
+    require_last_push_approval: false,
+    ...parameters,
+  } };
+}
 
 function githubClients(options = {}) {
   const calls = [];
@@ -40,9 +50,15 @@ function githubClients(options = {}) {
   const approver = {
     async get(path) {
       calls.push(['approver', path]);
-      assert.equal(path, protectionPath);
-      if (options.protection instanceof Error) throw options.protection;
-      return options.protection ?? protection;
+      if (path === protectionPath) {
+        if (options.protection instanceof Error) throw options.protection;
+        return options.protection ?? protection;
+      }
+      const rulesPages = options.rulesPages ?? [[]];
+      const index = rulesPages.findIndex((_, i) => path === activeRulesPage(i + 1));
+      assert.notEqual(index, -1);
+      if (rulesPages[index] instanceof Error) throw rulesPages[index];
+      return rulesPages[index];
     },
   };
   const github = {
@@ -60,9 +76,10 @@ function githubClients(options = {}) {
 test('requires live protection and the checked base revision’s catch-all of configured human code owners', async () => {
   const { github, approver, calls } = githubClients({ source: `# 人工批准\n\n${codeOwners}` });
   assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), true);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   assert.deepEqual(new Set(calls.map(([client, path]) => `${client} ${path}`)), new Set([
-    `approver ${protectionPath}`, `github ${directoryPath}`, `github ${contentPath}`, `github ${parserPath}`,
+    `approver ${protectionPath}`, `approver ${activeRulesPage(1)}`,
+    `github ${directoryPath}`, `github ${contentPath}`, `github ${parserPath}`,
   ]));
 });
 
@@ -143,6 +160,8 @@ test('declines approval when the protected branch or effective native review rul
     ['multiple required approvals', { ...protection, required_pull_request_reviews: { ...reviewRules, required_approving_review_count: 2 } }],
     ['no required code owner', { ...protection, required_pull_request_reviews: { ...reviewRules, require_code_owner_reviews: false } }],
     ['stale approval dismissal disabled', { ...protection, required_pull_request_reviews: { ...reviewRules, dismiss_stale_reviews: false } }],
+    ['last push approval enabled', { ...protection, required_pull_request_reviews: { ...reviewRules, require_last_push_approval: true } }],
+    ['last push approval unknown', { ...protection, required_pull_request_reviews: { ...reviewRules, require_last_push_approval: undefined } }],
     ['pull request bypass granted', { ...protection, required_pull_request_reviews: {
       ...reviewRules, bypass_pull_request_allowances: { users: [], teams: [], apps: [{ id: 42 }] },
     } }],
@@ -155,6 +174,52 @@ test('declines approval when the protected branch or effective native review rul
       assert.deepEqual(calls, [['approver', protectionPath]]);
     });
   }
+});
+
+test('accepts compatible active rules from multiple rulesets', async () => {
+  const { github, approver } = githubClients({ rulesPages: [[
+    { type: 'required_status_checks' },
+    pullRequestRule({ required_approving_review_count: 0 }),
+    pullRequestRule({
+      require_extra_approval_for_unattributed_changes: false,
+      required_reviewers: [{ minimum_approvals: 0 }],
+      dismissal_restriction: { enabled: false },
+    }),
+  ]] });
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), true);
+});
+
+test('declines incompatible or unverifiable active rules', async (t) => {
+  const cases = [
+    ['multiple required approvals', [pullRequestRule({ required_approving_review_count: 2 })]],
+    ['last push approval enabled', [pullRequestRule({ require_last_push_approval: true })]],
+    ['last push approval unknown', [pullRequestRule({ require_last_push_approval: undefined })]],
+    ['required approval count unknown', [pullRequestRule({ required_approving_review_count: '1' })]],
+    ['review parameters unknown', [{ type: 'pull_request' }]],
+    ['extra approval for unattributed changes', [pullRequestRule({ require_extra_approval_for_unattributed_changes: true })]],
+    ['additional required reviewers', [pullRequestRule({ required_reviewers: [{ minimum_approvals: 1 }] })]],
+    ['reviewer approval requirement unknown', [pullRequestRule({ required_reviewers: [{}] })]],
+    ['custom dismissal restrictions', [pullRequestRule({ dismissal_restriction: { enabled: true } })]],
+    ['unidentified rule', [{}]],
+    ['malformed response', { rules: [] }],
+    ['rules endpoint inaccessible', new Error('403')],
+  ];
+  for (const [name, rules] of cases) {
+    await t.test(name, async () => {
+      const { github, approver, calls } = githubClients({ rulesPages: [rules] });
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
+      assert.deepEqual(calls, [['approver', protectionPath], ['approver', activeRulesPage(1)]]);
+    });
+  }
+});
+
+test('checks active rules beyond the first page', async () => {
+  const { github, approver, calls } = githubClients({ rulesPages: [
+    Array.from({ length: 100 }, () => ({ type: 'required_status_checks' })),
+    [pullRequestRule({ required_approving_review_count: 2 })],
+  ] });
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
+  assert.deepEqual(calls, [['approver', protectionPath], ['approver', activeRulesPage(1)], ['approver', activeRulesPage(2)]]);
 });
 
 test('declines coverage gaps and owner forms outside the individual catch-all', async (t) => {

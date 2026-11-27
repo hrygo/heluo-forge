@@ -1,4 +1,4 @@
-import { isSha } from './pr-agent-github.mjs';
+import { isSha, pages } from './pr-agent-github.mjs';
 
 const codeOwnersPath = '.github/CODEOWNERS';
 const githubLogin = /^(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u;
@@ -20,10 +20,25 @@ function hasRequiredCodeOwner(protection) {
   return protection?.enforce_admins?.enabled === true &&
     reviews?.require_code_owner_reviews === true && reviews.dismiss_stale_reviews === true &&
     // A higher review count can let the App's approval occupy an additional review slot.
-    reviews.required_approving_review_count === 1 &&
+    reviews.required_approving_review_count === 1 && reviews.require_last_push_approval === false &&
     hasNoCustomActors(reviews.bypass_pull_request_allowances) &&
     // With standard dismissal permissions, the approval App can withdraw its stale approvals.
     hasNoCustomActors(reviews.dismissal_restrictions);
+}
+
+function permitsIndependentApproval(rule) {
+  if (typeof rule?.type !== 'string' || !/^[a-z][a-z0-9_]*$/u.test(rule.type)) return false;
+  if (rule.type !== 'pull_request') return true;
+  const parameters = rule.parameters;
+  if (!parameters || ![0, 1].includes(parameters.required_approving_review_count) ||
+      parameters.require_last_push_approval !== false) return false;
+
+  const extraApproval = parameters.require_extra_approval_for_unattributed_changes;
+  const reviewers = parameters.required_reviewers;
+  const dismissal = parameters.dismissal_restriction;
+  return (extraApproval === undefined || extraApproval === false) &&
+    (reviewers === undefined || (Array.isArray(reviewers) && reviewers.every((reviewer) => reviewer?.minimum_approvals === 0))) &&
+    (dismissal === undefined || dismissal?.enabled === false);
 }
 
 function assignsEveryPathToHumans(file, directory, humanLogins) {
@@ -48,7 +63,12 @@ function assignsEveryPathToHumans(file, directory, humanLogins) {
 
 export async function hasLiveApprovalProtection(approver) {
   try {
-    return hasRequiredCodeOwner(await approver.get('/branches/main/protection', 'Read native approval protection'));
+    if (!hasRequiredCodeOwner(await approver.get('/branches/main/protection', 'Read native approval protection'))) return false;
+    // Active rulesets layer with classic branch protection, including organization-level rulesets.
+    for await (const rule of pages(approver, '/rules/branches/main', 'Active main branch rules')) {
+      if (!permitsIndependentApproval(rule)) return false;
+    }
+    return true;
   } catch {
     return false;
   }
