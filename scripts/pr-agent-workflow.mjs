@@ -299,7 +299,7 @@ async function validateReview(github, env, scope) {
   const eligible = checkApprovals && canCreateApproval && favorable && validId(pr.changed_files);
 
   async function emitApprovalRevision(allowApproval) {
-    if (!checkApprovals || (!canCreateApproval && favorable)) return 'no-work';
+    if (!checkApprovals) return 'no-work';
     let hasApprovalWork = allowApproval;
     if (!hasApprovalWork) {
       try {
@@ -347,7 +347,7 @@ async function validateReview(github, env, scope) {
   }
 
   // Options on a manual review are handled by the pinned upstream runner.
-  let allowApproval = false;
+  let verifiedCoverage = false;
   let inlineCommentStatus = 'complete';
   if (nativeReview) {
     const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
@@ -373,7 +373,7 @@ async function validateReview(github, env, scope) {
       }
       if (textCovered) {
         try {
-          allowApproval = verifyReviewFileModes(await github.getDiff(prPath), files);
+          verifiedCoverage = verifyReviewFileModes(await github.getDiff(prPath), files);
         } catch {
           console.log('::warning::Unable to verify file modes for automatic approval.');
         }
@@ -381,7 +381,11 @@ async function validateReview(github, env, scope) {
     }
   }
   const publicationFailed = inlineCommentStatus === 'incomplete';
-  if ((!publicationFailed || !allowApproval) && await emitApprovalRevision(allowApproval) === 'revision-changed') return;
+  if (!favorable || (verifiedCoverage && !publicationFailed)) {
+    if (await emitApprovalRevision(favorable) === 'revision-changed') return;
+  } else if (eligible && !await currentRevision()) {
+    return;
+  }
   if (publicationFailed) {
     await appendFile(env.GITHUB_OUTPUT, 'publication_failed=true\n');
   } else if (automatic) {
