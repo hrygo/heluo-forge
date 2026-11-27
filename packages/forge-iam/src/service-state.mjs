@@ -76,8 +76,12 @@ export function createServiceState(env) {
   }
 
   function scheduleExpiry() {
-    const deadline = Date.parse(lastGrant?.accessExpiresAt);
-    if (disposed || state !== 'ready' || !Number.isFinite(deadline)) {
+    const at = now();
+    const access = state === 'ready' ? Date.parse(lastGrant?.accessExpiresAt) : NaN;
+    const refresh = ['ready', 'expired'].includes(state) && isRefreshUsable(lastGrant, at)
+      ? Date.parse(lastGrant?.refreshExpiresAt) : NaN;
+    const deadline = Math.min(Number.isFinite(access) ? access : Infinity, Number.isFinite(refresh) ? refresh : Infinity);
+    if (disposed || !Number.isFinite(deadline)) {
       cancelExpiry();
       return;
     }
@@ -86,9 +90,9 @@ export function createServiceState(env) {
     const timer = setTimeout(() => {
       if (expiry?.timer !== timer) return;
       expiry = null;
-      if (currentState(now()) === 'expired') notify();
+      if (now() >= deadline) notify();
       else scheduleExpiry();
-    }, Math.max(0, Math.min(deadline - now(), 2_147_483_647)));
+    }, Math.max(0, Math.min(deadline - at, 2_147_483_647)));
     timer.unref?.();
     expiry = { deadline, timer };
   }

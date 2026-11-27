@@ -141,6 +141,8 @@ function withinModelRenewalBudget(signal, expiresAt, work) {
   const stop = () => {
     clearTimeout(timeout);
     waiting.removeEventListener('abort', onAbort);
+    // Closing the private wait signal releases rotation observers. The caller
+    // and the network transport retain their own cancellation signals.
     deadline.abort();
   };
   const check = () => {
@@ -804,7 +806,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         }
       }
     }
-    if (denial) { yield failed(request, null, denial.code, 'local', undefined, denial.message); return; }
+    if (denial) {
+      if (process.env.DBG304) console.error('DENIAL', JSON.stringify(denial));
+      yield failed(request, null, denial.code, 'local', undefined, denial.message);
+      return;
+    }
     // Reused by the streaming loop below; the initial refusal above is already
     // settled, so this holds only per-attempt failure codes.
     let code;
