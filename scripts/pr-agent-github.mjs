@@ -19,15 +19,20 @@ export function sameUser(left, right) {
     left.type === 'User' && right.type === 'User' && /^[a-zA-Z0-9_-]+$/u.test(left.login ?? '');
 }
 
+export async function* pages(github, path, label) {
+  for (let page = 1; page <= 100; page++) {
+    const rows = await github.get(`${path}?per_page=100&page=${page}`, label);
+    if (!Array.isArray(rows)) throw new Error(`Invalid ${label.toLowerCase()} response`);
+    yield* rows;
+    if (rows.length < 100) return;
+  }
+  throw new Error(`${label} exceeds the pagination limit`);
+}
+
 export async function listReviews(github, pull) {
   const reviews = [];
-  for (let page = 1; page <= 100; page++) {
-    const items = await github.get(`${pull}/reviews?per_page=100&page=${page}`);
-    if (!Array.isArray(items)) throw new Error('Invalid pull request review list');
-    reviews.push(...items);
-    if (items.length < 100) return reviews;
-  }
-  throw new Error('Pull request review list exceeds the pagination limit');
+  for await (const review of pages(github, `${pull}/reviews`, 'Pull request review list')) reviews.push(review);
+  return reviews;
 }
 
 export async function readPull(github, pull, prNumber) {
@@ -46,13 +51,20 @@ function matchesPull(pr, repository, revision) {
     pr.head.sha === revision.head && pr.base.ref === revision.baseRef;
 }
 
+export async function targetTip(github, ref, label) {
+  const reference = await github.get(`/git/ref/heads/${encodeURIComponent(ref)}`, label);
+  if (reference?.ref !== `refs/heads/${ref}` || reference.object?.type !== 'commit' ||
+      !isSha(reference.object.sha)) throw new Error('Invalid target branch revision');
+  return reference.object.sha;
+}
+
 export async function isCurrent(github, repository, pull, prNumber, revision, observed) {
   const first = observed ?? await readPull(github, pull, prNumber);
   if (!matchesPull(first, repository, revision)) return false;
-  let reference;
+  let base;
   let readError;
   try {
-    reference = await github.get(`/git/ref/heads/${encodeURIComponent(revision.baseRef)}`);
+    base = await targetTip(github, revision.baseRef);
   } catch (error) {
     readError = error;
   }
@@ -60,9 +72,5 @@ export async function isCurrent(github, repository, pull, prNumber, revision, ob
   const latest = await readPull(github, pull, prNumber);
   if (!matchesPull(latest, repository, revision)) return false;
   if (readError) throw readError;
-  if (reference?.ref !== `refs/heads/${revision.baseRef}` ||
-      reference?.object?.type !== 'commit' || !isSha(reference.object.sha)) {
-    throw new Error('Invalid target branch revision response');
-  }
-  return reference.object.sha === revision.base;
+  return base === revision.base && await targetTip(github, revision.baseRef) === revision.base;
 }

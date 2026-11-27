@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { publishApproval, readApprovalReceipt } from './pr-agent-approval.mjs';
 import { buildReviewComments, getReviewCommentMarker, hasCompleteReviewPatches } from './pr-agent-review-comments.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
-import { isBranch, isSha, listReviews, validId } from './pr-agent-github.mjs';
+import { isBranch, isSha, listReviews, pages, targetTip, validId } from './pr-agent-github.mjs';
 
 const allowedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 const signalPath = '.github/workflows/pr-agent-signal.yml';
@@ -56,23 +56,6 @@ function eventScope(event, eventName, github) {
     const body = typeof event.comment.body === 'string' ? event.comment.body : '';
     return { prNumber: event.issue.number, body, automatic: false };
   }
-}
-
-async function* pages(github, path, label) {
-  for (let page = 1; page <= 100; page++) {
-    const rows = await github.get(`${path}?per_page=100&page=${page}`, label);
-    if (!Array.isArray(rows)) throw new Error(`Invalid ${label.toLowerCase()} response`);
-    yield* rows;
-    if (rows.length < 100) return;
-  }
-  throw new Error(`${label} exceeds the pagination limit`);
-}
-
-async function targetTip(github, ref, label) {
-  const reference = await github.get(`/git/ref/heads/${encodeURIComponent(ref)}`, label);
-  if (reference.ref !== `refs/heads/${ref}` || reference.object?.type !== 'commit' ||
-      !isSha(reference.object.sha)) throw new Error('Invalid target branch revision');
-  return reference.object.sha;
 }
 
 function revisionKey(base, ref) {

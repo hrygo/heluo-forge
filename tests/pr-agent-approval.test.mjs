@@ -30,6 +30,8 @@ function fakeGitHub() {
     account: { ...owner },
     permissions: new Map(),
     reviews: [],
+    nextReviewId: 300,
+    timeline: [],
     calls: [],
     writes: [],
   };
@@ -52,6 +54,8 @@ function fakeGitHub() {
       }
       const page = /^\/pulls\/42\/reviews\?per_page=100&page=(\d+)$/u.exec(path);
       if (page) return structuredClone(state.reviews.slice(100 * (Number(page[1]) - 1), 100 * Number(page[1])));
+      const timeline = /^\/issues\/42\/timeline\?per_page=100&page=(\d+)$/u.exec(path);
+      if (timeline) return structuredClone(state.timeline.slice(100 * (Number(timeline[1]) - 1), 100 * Number(timeline[1])));
       const review = /^\/pulls\/42\/reviews\/(\d+)$/u.exec(path);
       if (review) return structuredClone(state.reviews.find(({ id }) => id === Number(review[1])));
       assert.fail(`Unexpected GET ${path}`);
@@ -67,7 +71,7 @@ function fakeGitHub() {
       state.writes.push({ method: 'POST', path, data });
       assert.equal(path, reviewPath);
       if (state.failPost) throw new Error('POST timed out');
-      const review = { id: 300, user: owner, commit_id: data.commit_id, body: data.body, state: 'APPROVED' };
+      const review = { id: state.nextReviewId++, user: owner, commit_id: data.commit_id, body: data.body, state: 'APPROVED' };
       if (!state.hideApproval) state.reviews.push(review);
       state.afterPost?.(review);
       return structuredClone(state.postResponse ?? review);
@@ -81,6 +85,11 @@ function fakeGitHub() {
       if (state.denyDismissal) throw new Error('Dismissal denied');
       const review = state.reviews.find(({ id }) => id === Number(match[1]));
       review.state = 'DISMISSED';
+      state.timeline.push({
+        event: 'review_dismissed',
+        actor: owner,
+        dismissed_review: { review_id: review.id, state: 'approved', dismissal_message: data.message },
+      });
       state.afterDismissal?.();
       return structuredClone(review);
     },
@@ -106,7 +115,7 @@ test('publishes one exact APPROVE tied to the reviewed head and links the truste
   assert.ok(write.data.body.includes(Buffer.from(baseRef).toString('base64url')));
   assert.doesNotMatch(write.data.body, /UNTRUSTED PR TEXT/u);
   const postIndex = state.calls.indexOf(`POST ${reviewPath}`);
-  assert.deepEqual(state.calls.slice(postIndex - 3, postIndex), [pull, basePath, pull]);
+  assert.deepEqual(state.calls.slice(postIndex - 4, postIndex), [pull, basePath, pull, basePath]);
   assert.ok(state.calls[0] === '/user' || state.calls.indexOf('/user') < postIndex);
 
   assert.equal(await run({ runId: '5678' }), 'skipped-existing');
@@ -182,6 +191,10 @@ test('honors a dismissal of the exact automated review on a different run', asyn
   const { state, run } = fakeGitHub();
   assert.equal(await run(), 'approved');
   state.reviews[0].state = 'DISMISSED';
+  state.timeline.push({
+    event: 'review_dismissed', actor: owner,
+    dismissed_review: { review_id: 300, state: 'approved', dismissal_message: 'Requires another human review' },
+  });
 
   assert.equal(await run({ runId: '5678' }), 'skipped-existing');
   assert.equal(state.writes.length, 1);
@@ -215,6 +228,20 @@ test('dismisses exactly the accepted automatic review when GitHub confirms a rap
       ['POST', reviewPath], ['PUT', `${reviewPath}/300/dismissals`],
     ]);
   }
+});
+
+test('dismisses the approval when the base branch advances during the final PR read', async () => {
+  const { state, run } = fakeGitHub();
+  state.afterPost = () => {
+    let baseRead = false;
+    state.beforeGet = (path) => {
+      if (path === basePath) baseRead = true;
+      if (path === pull && baseRead) state.base = otherSha;
+    };
+  };
+
+  assert.equal(await run(), 'dismissed-stale');
+  assert.equal(state.reviews[0].state, 'DISMISSED');
 });
 
 test('an uncertain approval write is reconciled by exact review identity without reposting', async () => {
@@ -259,6 +286,33 @@ test('a failed post-publication revision read withdraws the exact unverified app
   assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
 });
 
+test('retries a compensation dismissal on the same revision after GitHub recovers', async () => {
+  const { state, run } = fakeGitHub();
+  state.afterPost = () => {
+    state.beforeGet = (path) => {
+      if (path === pull) throw new Error('Revision read failed');
+    };
+  };
+  await assert.rejects(run(), /the approval was dismissed/iu);
+  const [dismissal] = state.timeline;
+  state.afterPost = undefined;
+  state.beforeGet = undefined;
+
+  for (const event of [
+    { ...dismissal, actor: contributor },
+    { ...dismissal, dismissed_review: { ...dismissal.dismissed_review, review_id: 301 } },
+  ]) {
+    state.timeline = [event];
+    assert.equal(await run({ runId: '5678' }), 'skipped-existing');
+  }
+
+  state.timeline = [...Array.from({ length: 100 }, () => ({ event: 'reviewed' })), dismissal];
+  assert.equal(await run({ runId: '5678' }), 'approved');
+  assert.equal(state.reviews[0].state, 'DISMISSED');
+  assert.equal(state.reviews[1].state, 'APPROVED');
+  assert.equal(state.writes.length, 3);
+});
+
 test('a stale review edited before cleanup is preserved as a manual review', async () => {
   const { state, run } = fakeGitHub();
   state.afterPost = () => {
@@ -297,6 +351,18 @@ test('dismisses only the new automatic approval when it raced the owner’s chan
   assert.equal(state.reviews[0].state, 'CHANGES_REQUESTED');
   assert.equal(state.reviews[1].state, 'DISMISSED');
   assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+});
+
+test('keeps a human changes request that arrived during the pre-publication revision check', async () => {
+  const { state, run } = fakeGitHub();
+  state.beforeGet = (path) => {
+    if (path === basePath && !state.reviews.length) {
+      state.reviews.push({ id: 101, user: owner, state: 'CHANGES_REQUESTED', commit_id: head });
+    }
+  };
+
+  assert.equal(await run(), 'skipped-changes-requested');
+  assert.deepEqual(state.writes, []);
 });
 
 function priorApproval({ id, author = owner, reviewHead = head, reviewBase = base, target = baseRef, state = 'APPROVED' }) {
@@ -350,7 +416,7 @@ test('an automated approval of the same head on an older base is withdrawn and r
   assert.equal(state.reviews[0].state, 'DISMISSED');
   assert.equal(state.reviews[1].commit_id, head);
   const postIndex = state.calls.indexOf(`POST ${reviewPath}`);
-  assert.deepEqual(state.calls.slice(postIndex - 3, postIndex), [pull, basePath, pull]);
+  assert.deepEqual(state.calls.slice(postIndex - 4, postIndex), [pull, basePath, pull, basePath]);
 });
 
 test('a target change between dismissal and publication prevents a new approval', async () => {
