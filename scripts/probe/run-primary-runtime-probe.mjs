@@ -19,8 +19,9 @@
  *     [--bundle <heluo-forge-enterprise-*.tgz>] [--keep] [--out <path>]
  *   resources 由 scripts/stage-desktop-payload.mjs 与 scripts/stage-primary-runtime.mjs 暂存，
  *   其中已有 `dsh/node_modules` 与 `primary-runtime/runtime.json`。给出 `--app` 时以打出来的应用包为准：
- *   dsh 闭包与载荷取自包内，并用应用自己的 Electron（Node 模式）与 app.asar 里的壳入口运行，
- *   与桌面壳的启动方式一致；目前只认 macOS 的 .app。
+ *   dsh 闭包取自应用归档之内、载荷取自归档之外，并用应用自己的 Electron（Node 模式）与 app.asar
+ *   里的壳入口运行，与桌面壳的启动方式一致；此时另核对归档布局（`packed-runtime-facts.mjs`）：
+ *   运行时交给操作系统的原生库与程序是否都落在归档之外的真实文件上。目前只认 macOS 的 .app。
  * 退出码：0 全部通过；1 有失败项；2 前置条件不具备。
  *
  * 不外联：不接真实模型或网关；web 服务器只绑 127.0.0.1 上的空闲端口。
@@ -32,8 +33,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../../services/forge-desktop/src/layout.mjs';
+import { APP_ARCHIVE_PARTS, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../../services/forge-desktop/src/layout.mjs';
 import { RUNTIME_ROWS } from '../../packages/forge-enterprise/src/reflow.mjs';
+import { PROGRAM_STARTS, insideArchive } from './packed-runtime-facts.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -121,13 +123,14 @@ function packagedApp(appPath) {
     console.error('probe: Info.plist 里没有 CFBundleExecutable');
     process.exit(2);
   }
-  return { command: join(contents, 'MacOS', executable), resources: join(contents, 'Resources'), archive: join(contents, 'Resources', 'app.asar') };
+  return { command: join(contents, 'MacOS', executable), resources: join(contents, 'Resources'), archive: join(contents, 'Resources', ...APP_ARCHIVE_PARTS) };
 }
 
 const packaged = options.app === undefined ? undefined : packagedApp(options.app);
 const resources = packaged?.resources ?? resolve(options.resources);
-// 在应用包里，壳的入口在 app.asar 之内；普通 Node 进程看不到归档内部，所以只核对归档本身在不在。
-const dsh = packaged === undefined ? join(resources, ...DSH_ENTRY_PARTS) : join(resources, 'app.asar', 'src', 'embedded-cli.mjs');
+// 在应用包里，运行时闭包在应用归档之内，壳的入口也在其中：普通 Node 进程看不到归档内部，所以这里只核对归档本身在不在。
+const runtime = packaged === undefined ? resources : packaged.archive;
+const dsh = packaged === undefined ? join(runtime, ...DSH_ENTRY_PARTS) : join(runtime, 'src', 'embedded-cli.mjs');
 const payload = join(resources, PRIMARY_RUNTIME_DIR);
 const command = packaged?.command ?? options.electron ?? process.execPath;
 const missing = [
@@ -150,6 +153,7 @@ if (unlock.length !== RUNTIME_ROWS.length) {
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'forge-primary-runtime-probe-'));
+const docx = join(dir, 'probe.docx');
 const checks = [];
 const record = (id, ok, detail) => {
   checks.push({ id, ok: ok === true, detail });
@@ -186,7 +190,9 @@ function launch(home, { unlocked, label }) {
             DSH_PERMISSION_MODE: 'danger-full-access',
             HELUO_RUNTIME_PROBE_OUT: out,
             HELUO_RUNTIME_PROBE_DIR: work,
-            HELUO_RUNTIME_PROBE_MODULES: join(resources, ...DSH_ENTRY_PARTS.slice(0, 2)),
+            HELUO_RUNTIME_PROBE_MODULES: join(runtime, ...DSH_ENTRY_PARTS.slice(0, 2)),
+            // 以应用包为准时才有：归档布局的事实由插件收集，docx 是让 agent 真的转换一份文档的输入。
+            ...(packaged === undefined ? {} : { HELUO_RUNTIME_PROBE_ARCHIVE: packaged.archive, HELUO_RUNTIME_PROBE_DOCX: docx }),
             ...(unlocked ? { DSH_PRIMARY_RUNTIME: payload } : {}),
           },
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -202,6 +208,28 @@ function launch(home, { unlocked, label }) {
         });
       }),
   );
+}
+
+/**
+ * 归档布局的核对，只在以应用包为准时有事实：逐项对应插件收集的几个方面。
+ * 运行时是从应用归档里加载的，它交给操作系统的每样东西都得是归档之外的真实文件。
+ */
+function recordArchiveChecks(archive) {
+  const have = archive ?? {};
+  const runs = (result) => result?.status === 0 && /ripgrep \d+\.\d+\.\d+/u.test(result.out ?? '');
+  const allLoaded = (entries) => Array.isArray(entries) && entries.length > 0 && entries.every((entry) => entry.loaded === true);
+  const ptyLoaded = Array.isArray(have.natives?.byLoader) && have.natives.byLoader.some((entry) => entry.name === 'node-pty' && entry.loaded === true);
+  record('归档：运行时闭包位于应用归档之内', have.modulesInsideArchive === true, { archive: have.archive, modules: have.modules });
+  record('归档：壳入口在 dsh 链接前装好了物理路径层', have.physicalLayer !== undefined && PROGRAM_STARTS.every((name) => have.physicalLayer?.[name] === true), have.physicalLayer);
+  record('归档：带加载器的原生包按名字加载', allLoaded(have.natives?.byLoader), have.natives?.byLoader ?? have.natives);
+  record('归档：解包树里的每个插件库都经归档路径加载', allLoaded(have.natives?.addons), have.natives?.addons ?? have.natives);
+  record('归档：dsh 把 ripgrep 解析到归档之外，且能运行', have.ripgrep?.physical === true && runs(have.ripgrep?.runs), have.ripgrep);
+  record('归档：按归档路径也能拉起 ripgrep', runs(have.ripgrep?.byArchivePath), have.ripgrep?.byArchivePath);
+  record('归档：node-pty 的 helper 是归档之外的可执行文件', process.platform === 'win32' ? ptyLoaded : have.pty?.outsideArchive === true && have.pty?.executable === true, have.pty);
+  record('归档：终端经 node-pty 起一个真实的 pty', have.pty?.spawned?.exitCode === 0 && /PTY_OK/u.test(have.pty.spawned.output ?? ''), have.pty?.spawned);
+  const engines = Object.values(have.office?.enginePackages ?? {});
+  record('归档：dsh 把 Office 引擎包解析到归档之外', engines.length > 0 && engines.every((path) => typeof path === 'string' && !insideArchive(path) && existsSync(path)), have.office?.enginePackages ?? have.office);
+  record('归档：Office 引擎把 docx 转成 pdf', have.office?.pdf === '%PDF', { outputPath: have.office?.outputPath, pdf: have.office?.pdf, error: have.office?.error });
 }
 
 async function scenario({ unlocked, label }) {
@@ -243,6 +271,7 @@ async function scenario({ unlocked, label }) {
   record('解锁：再次调用返回相同路径', facts.loadAgain?.text === load.text, textOf(facts.loadAgain).slice(0, 200));
   record('解锁：Office 技能把模型指向内置依赖', skill.isError === false && /load_workspace_dependencies/u.test(textOf(skill)) && !/python3` or `python` on PATH/u.test(textOf(skill)), textOf(skill).slice(0, 300));
   record('解锁：agent 的 shell 用内置 Python 跑起 Office 库', /PROBE_PY_OK \d+\.\d+\.\d+ /u.test(textOf(bash)), textOf(bash).slice(0, 400));
+  if (packaged !== undefined) recordArchiveChecks(facts.archive);
   if (typeof facts.python === 'string' && existsSync(facts.python)) {
     let output = '';
     try {
@@ -262,6 +291,13 @@ if (packaged !== undefined) {
   // 壳以应用二进制作 Node 运行一切；它自己得先能这样启动。
   const asNode = spawnSync(command, ['-p', 'process.version'], { encoding: 'utf8', env: { ...process.env, ...nodeMode } });
   record('应用二进制可作为 Node 运行', asNode.status === 0 && /^v\d+\.\d+\.\d+$/u.test(asNode.stdout?.trim() ?? ''), `${asNode.status} ${(asNode.stderr ?? '').slice(-200)}`.trim());
+  // 归档布局的核对要让 agent 真的转换一份文档：输入由载荷自带的 Python 与 python-docx 造出来。
+  try {
+    execFileSync(join(payload, 'dependencies', 'python', 'bin', process.platform === 'win32' ? 'python.exe' : 'python3'), ['-I', '-B', '-c', "import sys, docx; document = docx.Document(); document.add_heading('Packed runtime probe', 0); document.add_paragraph('Converted by the Office engine of the packaged app.'); document.save(sys.argv[1])", docx]);
+  } catch (error) {
+    console.error(`probe: 造不出供 Office 转换的 docx：${error?.message ?? error}`);
+    process.exit(2);
+  }
 }
 await scenario({ unlocked: true, label: 'unlocked' });
 await scenario({ unlocked: false, label: 'baseline' });

@@ -18,7 +18,7 @@ import * as electron from 'electron';
 import { diagnosticLogPath } from './diagnostic.mjs';
 import { fail } from './errors.mjs';
 import { EMBEDDED_ENTRY } from './embedded-cli.mjs';
-import { ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS, primaryRuntimeNodeParts } from './layout.mjs';
+import { APP_ARCHIVE_PARTS, ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS, primaryRuntimeNodeParts } from './layout.mjs';
 import { resolvePnpmStore } from './pnpm-store.mjs';
 import { embeddedExec, embeddedScriptExec, runCommand } from './process.mjs';
 import { primaryRuntimeVariable } from './primary-runtime.mjs';
@@ -50,7 +50,8 @@ const BIND_HOST = '127.0.0.1';
  * another program on it stops the shell from starting (`PORT_CONFLICT`).
  */
 const PORT = '30810';
-const DSH_ENTRY = join(process.resourcesPath, ...DSH_ENTRY_PARTS);
+// Inside the archive, where the embedded runtime travels; checked for here, started only through the entry.
+const DSH_ENTRY = join(process.resourcesPath, ...APP_ARCHIVE_PARTS, ...DSH_ENTRY_PARTS);
 // The package manager of every dsh package operation: the Node and the pnpm of
 // the bundled runtime, whose manifest the environment assembly already accepted.
 const RUNTIME_NODE = join(process.resourcesPath, ...primaryRuntimeNodeParts(process.platform));

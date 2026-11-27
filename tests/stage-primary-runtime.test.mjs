@@ -667,7 +667,8 @@ function workflowProblems(workflow) {
   // A staged command is a first line ending in a backslash and the lines it is joined to; the one-line lock check is not one.
   const stagings = (block) => [...block.matchAll(/stage-primary-runtime\.mjs[^\n]*\n(?:[^\S\n]+[^\n]*\\\n)+[^\S\n]+[^\n]*/gu)].map((match) => ({ command: match[0], at: match.index }));
   const problems = [];
-  for (const [name, target] of [['desktop-mac', 'mac-arm64'], ['desktop-windows', 'win-x64']]) {
+  // One entry per desktop job of the workflow; a job that is not listed here is not checked.
+  for (const [name, target] of [['desktop-mac', 'mac-arm64'], ['desktop-windows', 'win-x64'], ['desktop-linux-x64', 'linux-x64'], ['desktop-linux-arm64', 'linux-arm64']]) {
     const block = jobs[name];
     if (block === undefined) {
       problems.push(`${name}: no such job`);
@@ -689,14 +690,19 @@ function workflowProblems(workflow) {
     if (verified === -1 || verified > block.indexOf('stage-desktop-payload.mjs')) {
       problems.push(`${name}: the pinned lock must be compared with upstream before anything is staged`);
     }
-    for (const flag of [`--target ${target}`, '--output "$RUNNER_TEMP/staged/resources"', '--pnpm-tgz "$PNPM_TGZ"', '--dsh-modules "$RUNNER_TEMP/staged/resources/dsh/node_modules"', '--version "$GITHUB_REF_NAME"']) {
+    // Inside the app directory: electron-builder counts the paths it matches from there, and packs only what really lies inside it.
+    if (!block.includes('echo "STAGED_DIR=$GITHUB_WORKSPACE/services/forge-desktop/.staged" >> "$GITHUB_ENV"')) {
+      problems.push(`${name}: the payload must be staged inside the app directory, as STAGED_DIR`);
+    }
+    if (!block.includes('--resources "$STAGED_DIR/resources"')) problems.push(`${name}: the installer must be built from the staged payload`);
+    for (const flag of [`--target ${target}`, '--output "$STAGED_DIR/resources"', '--pnpm-tgz "$PNPM_TGZ"', '--dsh-modules "$STAGED_DIR/resources/dsh/node_modules"', '--version "$GITHUB_REF_NAME"']) {
       if (commands.length === 1 && !commands[0].command.includes(flag)) problems.push(`${name}: the staging must pass ${flag}`);
     }
   }
   return problems;
 }
 
-test('流水线契约：两个桌面任务先核对台账与上游一致，再在 dsh 闭包之后、打包之前为目标平台暂存运行时', () => {
+test('流水线契约：macOS、Windows 与两个 Linux 四个桌面任务先核对台账与上游一致，再在 dsh 闭包之后、打包之前为目标平台暂存运行时，暂存位于应用目录之内', () => {
   const workflow = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-bundle.yml'), 'utf8');
   assert.deepEqual(workflowProblems(workflow), []);
 });
@@ -708,6 +714,9 @@ test('反向：流水线里运行时暂缺的任何一环都被识别（变异�
     ['the Windows job builds the wrong payload', workflow.replace(/(stage-primary-runtime\.mjs[^\n]*\n\s+)--target win-x64/u, '$1--target linux-x64'), /desktop-windows: the staging must pass --target win-x64/u],
     ['the macOS job stages before the dsh closure', workflow.replace(/(      - name: Stage the desktop payload\n        run: \|\n(?:[^\n]*\n)*?)(      - name: Stage the bundled runtime\n        run: \|\n(?:[^\n]*\n)*?[^\n]*primary-runtime-record\.json"\n)/u, '$2$1'), /desktop-mac: the bundled runtime must be staged after the dsh closure/u],
     ['the runtime is not staged at all', workflow.replace(/      - name: Stage the bundled runtime\n        run: \|\n(?:[^\n]*\n)*?[^\n]*primary-runtime-record\.json"\n/u, ''), /desktop-mac: exactly one staging/u],
+    ['the payload is staged outside the app directory', workflow.replaceAll('echo "STAGED_DIR=$GITHUB_WORKSPACE/services/forge-desktop/.staged"', 'echo "STAGED_DIR=$RUNNER_TEMP/staged"'), /desktop-mac: the payload must be staged inside the app directory/u],
+    ['only one Linux job stages outside the app directory', workflow.replace(/(  desktop-linux-arm64:\n(?:[^\n]*\n)*?[^\S\n]*)echo "STAGED_DIR=\$GITHUB_WORKSPACE\/services\/forge-desktop\/\.staged"/u, '$1echo "STAGED_DIR=$RUNNER_TEMP/staged"'), /desktop-linux-arm64: the payload must be staged inside the app directory/u],
+    ['the installer is built from somewhere else', workflow.replace('--resources "$STAGED_DIR/resources"', '--resources "$RUNNER_TEMP/staged/resources"'), /desktop-mac: the installer must be built from the staged payload/u],
   ];
   for (const [label, variant, pattern] of variants) {
     assert.notEqual(variant, workflow, `${label}: the mutation must change the workflow`);

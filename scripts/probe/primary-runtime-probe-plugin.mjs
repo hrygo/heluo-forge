@@ -8,11 +8,17 @@
  *
  * 只用公开服务（ctx.tools / ctx.agents / ctx.get('agentPresets')），不读私有字段；
  * 拟定结果写 `HELUO_RUNTIME_PROBE_OUT`，随后退出进程（探针专用，不改宿主行为）。
+ *
+ * 以打出来的应用包为准时（`--app`），运行时是从应用归档里加载的：驱动再给出
+ * `HELUO_RUNTIME_PROBE_ARCHIVE`，这里在既有事实之后多收一份归档布局的事实
+ * （`packed-runtime-facts.mjs`），同样由驱动判定。
  */
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+import { packedRuntimeFacts } from './packed-runtime-facts.mjs';
 
 export const name = 'forge-primary-runtime-probe';
 export const inject = ['tools', 'agents'];
@@ -20,6 +26,8 @@ export const inject = ['tools', 'agents'];
 const OUT = 'HELUO_RUNTIME_PROBE_OUT';
 const DIR = 'HELUO_RUNTIME_PROBE_DIR';
 const MODULES = 'HELUO_RUNTIME_PROBE_MODULES';
+const ARCHIVE = 'HELUO_RUNTIME_PROBE_ARCHIVE';
+const DOCX = 'HELUO_RUNTIME_PROBE_DOCX';
 const TOOL = 'load_workspace_dependencies';
 /** How long to wait for the rest of the profile to finish starting. */
 const STARTUP_WAIT_ATTEMPTS = 200;
@@ -164,6 +172,12 @@ export function apply(ctx) {
         ? 'echo PROBE_NO_PYTHON'
         : `"${python}" -I -B -c "import sys, numpy, pandas, docx, pptx, openpyxl; print('PROBE_PY_OK', sys.version.split()[0], numpy.__version__, pandas.__version__)"`,
     });
+
+    // After everything above: the archive layout is a further question, and must not cost the first one its facts.
+    const archive = process.env[ARCHIVE];
+    if (typeof archive === 'string' && archive !== '') {
+      facts.archive = await packedRuntimeFacts({ archive, modules, dir, ctx, agent, docx: process.env[DOCX] ?? join(dir, 'probe.docx') });
+    }
     return facts;
   };
 

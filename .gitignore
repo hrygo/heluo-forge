@@ -40,6 +40,8 @@ node_modules/
 .pnpm-store/
 dist/
 build/
+# The desktop payload, staged inside the app directory for electron-builder.
+services/forge-desktop/.staged/
 coverage/
 .turbo/
 *.tsbuildinfo
