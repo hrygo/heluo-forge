@@ -266,6 +266,8 @@ async function execute(action, env) {
       action: env.PROTECTION_EVENT_ACTION ?? 'edited',
       repository: { full_name: env.PROTECTION_EVENT_REPO ?? repository },
     }));
+  } else if (env.GITHUB_EVENT_NAME === 'schedule') {
+    await writeFile(env.GITHUB_EVENT_PATH, JSON.stringify({ schedule: '17 * * * *' }));
   }
   return runFile(process.execPath, [script, action], { env });
 }
@@ -351,11 +353,12 @@ test('the approval credential is available only in the trusted, protected approv
   const approvalJob = workflow.split('\n  approve:\n')[1] ?? '';
   assert.match(workflow, /^  push:\n    branches: \[main\]$/mu);
   assert.match(workflow, /^  branch_protection_rule:\n    types: \[created, edited, deleted\]$/mu);
+  assert.match(workflow, /^  schedule:\n    - cron: '17 \* \* \* \*'$/mu);
   assert.match(approvalJob, /^    needs: review$/mu);
   assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
   assert.match(approvalJob, /vars\.PR_AGENT_APPROVAL_APP_CLIENT_ID != ''/u);
-  assert.match(approvalJob, /github\.event_name == 'push' \|\| github\.event_name == 'branch_protection_rule' \|\|\s+\(needs\.review\.result == 'success'/u);
-  assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true' \|\| fromJSON\(needs\.review\.outputs\.approval_revision\)\.allowApproval == false/u);
+  assert.match(approvalJob, /github\.event_name == 'schedule' \|\|\s+\(needs\.review\.result == 'success'/u);
+  assert.match(approvalJob, /fromJSON\(needs\.review\.outputs\.approval_revision\)\.allowApproval == false \|\|\s+\(vars\.PR_AGENT_AUTO_APPROVE == 'true' &&\s+fromJSON\(needs\.review\.outputs\.approval_revision\)\.runAttempt == github\.run_attempt/u);
   assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
   assert.match(approvalJob, /^    environment: luoshen-approval$/mu);
@@ -630,8 +633,12 @@ test('a P1 review retains approval cleanup through transient GitHub review-histo
       runId: next.GITHUB_RUN_ID, runAttempt: next.GITHUB_RUN_ATTEMPT });
 
     const priorRequests = state.requests.length;
-    await execute('approve', { ...next, GITHUB_RUN_ATTEMPT: '2', APPROVAL_REVISION: JSON.stringify(ineligible) });
+    await assert.rejects(execute('approve', { ...next, PR_AGENT_APPROVAL_TOKEN: '', APPROVAL_REVISION: JSON.stringify(ineligible) }),
+      { stderr: /Missing approval GitHub App installation token/u });
+    await assert.rejects(execute('approve', { ...next, GITHUB_RUN_ATTEMPT: '2', APPROVAL_REVISION: JSON.stringify(ineligible) }),
+      { stderr: /Withdrawal.*re-run all jobs/iu });
     assert.equal(state.requests.length, priorRequests);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED', 'COMMENTED']);
     const { stdout } = await execute('approve', {
       ...next, PR_AGENT_AUTO_APPROVE: '', APPROVAL_REVISION: JSON.stringify(ineligible),
     });
@@ -815,6 +822,30 @@ test('only trusted branch protection changes reconcile approvals without running
     assert.equal(state.requests.length, before);
 
     const { stdout } = await execute('approve', protectionChange);
+    assert.match(stdout, /Dismissed 1 stale Luoshen approval/u);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'DISMISS']);
+  });
+});
+
+test('scheduled reconciliation clears only the App approval after a ruleset-only change', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+    state.approvalRules = [{ type: 'pull_request', parameters: {
+      required_approving_review_count: 2, require_last_push_approval: false,
+    } }];
+
+    const scheduled = { ...mode, GITHUB_EVENT_NAME: 'schedule', PR_AGENT_AUTO_APPROVE: '', PR_AGENT_ENABLED: '' };
+    const before = state.requests.length;
+    await execute('approve', { ...scheduled, GITHUB_REF: 'refs/heads/other' });
+    await execute('capture', scheduled);
+    await execute('validate', scheduled);
+    assert.equal(state.requests.length, before);
+
+    const { stdout } = await execute('approve', scheduled);
     assert.match(stdout, /Dismissed 1 stale Luoshen approval/u);
     assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
     assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'DISMISS']);
