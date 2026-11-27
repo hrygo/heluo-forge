@@ -1,0 +1,98 @@
+# 企业会话状态收敛与派发前续期实施方案
+
+## 文档信息
+
+| 项 | 内容 |
+|---|---|
+| 文档编号 | CORP-DSH-PLAN-028 |
+| 文档名称 | 企业会话状态收敛与派发前续期实施方案 |
+| 版本 | V0.1.0 |
+| 文档状态 | 草案 |
+| 密级 | — |
+| 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
+| 审核 | 待定 |
+| 批准 | 待定 |
+| 最后更新 | 2026-11-27 |
+| 门禁 | 原缺陷回归、现有授权与轮换用例、全量离线检查及提交验签通过后提交 PR。真实 Windows 制品、企业 IAM 与网关按 §5 取证 |
+
+> 编制依据：[issue #509](https://github.com/hrygo/heluo-forge/issues/509)、`origin/main` 基线 `89432b3c`、2026-11-27 合成会话离线探针。
+>
+> 关联文档：[IAM 接入详细设计](../design/plugins/forge-iam.md)定义状态与调用语义，[DSH 插件高阶规范](../engineering/dsh-plugin-conventions.md)定义扩展边界。
+
+## 1. 缺陷与目标
+
+`0.1.0-corp.13` 在 Windows 报告模型调用返回 `IAM_LOGIN_REQUIRED` 时侧栏仍显示「企业认证有效」。现场日志定位到本地拒绝，`TRANSPORT` 是 SDK 外层分类。合成探针在预检后、派发前推动墙钟跨过到期点，得到同样分类和零模型 POST。SSE 最后一帧仍为 `ready`，重新读取 `/view` 后 Host 发布 `expired`。刷新令牌仍可用的探针同样拒绝首轮，随后一轮在同一登录完成单次换票和单次 POST。
+
+交付目标是让账号界面及时显示 Host 的有效会话状态，并让同一登录在推理尚未派发时获得一次有界续期机会。真实制品对应的源码、首次续期是否成功和现场掉线时刻的 Host 状态通过 Windows 证据确定。
+
+## 2. 状态与授权约定
+
+| 条件 | 会话视图与界面 | 推理请求 |
+|---|---|---|
+| 访问令牌可用，刷新窗口已过 | Host 仍可发布 `ready`，续期标记为 `unavailable` | 该令牌有效期内通过现有准入 |
+| 客户端已知 `ready` 快照到期，等待 Host 更新 | 以「正在核验企业会话」替代成功状态，触发一次共享读取 | Host 独立裁决 |
+| 已确认访问令牌到期，当前授权可续期 | `expired` / `renewal=available`，显示「企业会话待续期」 | 在原登录、存储和网关绑定下共享已有轮换或启动一次续期，核验新授权后派发 |
+| 已确认授权失效、退出或换号 | 显示当前 Host 状态，提供相应登录入口 | 作废属于旧登录的请求，旧请求派发数为零 |
+| 轮换未决、存储或 IAM 暂时不可用 | 保留对应恢复或错误状态 | 按既有错误分类失败关闭，等待超时后本次调用结束 |
+
+访问令牌的读取、适用范围、主体、模型准入和绑定由 Host 考核。浏览器只消费非敏感快照，核验提示属于展示状态。刷新操作仍使用 Host 单飞、受信凭据存储和轮换回执，未知结果保留 `pending`。恢复仅覆盖可信证据表明尚无模型 POST 的当前调用。已派发流继续按原授权截止、在途轮换回执和撤权规则处理。
+
+## 3. 实施步骤
+
+### 3.1 Host 会话期限与发布
+
+- [x] 在 `packages/forge-iam/test/session-renewal-view.test.mjs` 构造有效访问令牌、已耗尽刷新窗口的会话，用假时钟验证两件事。仅推进墙钟时，`getView()` 和新 `watch()` 的首帧为 `expired`。推进到期计时器时，已订阅的 `watch()` 主动收到 `expired`，无需调用模型或读取路由。
+- [x] 在 `packages/forge-iam/src/service-state.mjs` 让 `view()` 和 `notify()` 复用按 `now()` 计算的有效状态。`view()` 只投影视图。会话轴为当前已发布的访问令牌维护单个到期通知，回调复核当前授权与截止，续期、退出或销毁废弃旧计时器。续期排程继续通过现有端口委托。
+- [x] 复跑期限、续期和 SQLite 多 Host 回归，覆盖访问令牌仍有效时的展示、续期替换原期限，以及旧期限回调不能压过新授权。Host 装配与内部状态所有权由现有结构守卫核验。
+
+### 3.2 共享客户端状态核验
+
+- [x] 在 `packages/forge-iam/test/client-shared-session-stream.test.mjs` 挂载侧栏和账号页。SSE 首帧 `ready` 后保持静默，推进至截止或模拟返回前台。断言两处清除成功提示，只有一个有界的 `/view` 读取，更新后的 `ready`、`expired` 或 `signed-out` 到达所有适用订阅者。
+- [x] 在 `packages/forge-iam/client.js` §11 扩展共享 `sessionStream`。保留单 SSE 和 2 秒断流回退，加入到期及前台恢复触发的一次共享 `/view` 读取。读取可在 SSE 已收到首帧时执行，仍受连接代际、订阅操作代际和超时保护。新帧、换号、卸载或操作屏障之后到达的旧响应不得覆盖当前状态。
+- [x] 用 Host 的 `accessExpiresAt` 调度核验。核验中的侧栏和账号页渲染非成功状态，幅面内使用相同状态语义。`expired` 且 `renewal=available` 时保留恢复入口，点击侧栏核验状态不会发起登录。其他状态和动作取自 Host 快照。
+- [x] 覆盖重复 focus/visibility、断流恢复、GET 超时、延迟 SSE/GET、连续续期、退出或换号，以及最后一个订阅退出。旧快照不可复活，被拒绝的视图读取后可以再核验。
+
+### 3.3 最终派发前续期
+
+- [x] 在 `packages/forge-iam/test/iam-call-recovery.test.mjs` 复用真实服务、模拟 IdP 和受控模型传输。首轮预检完成后在发送前跨越访问令牌截止。刷新仍可用的路径断言原调用成功，IdP 恰好换票一次，网关恰好收到一次使用新令牌的 POST。刷新耗尽、等待中退出／换号、绑定变化、用户取消和五秒到期覆盖零派发。
+- [x] 在 `packages/forge-iam/src/managed-models.mjs` 与受控发送链路收敛派发前恢复。只在服务端已确认同一登录且访问令牌到期、仍能续期、尚无 POST 时进入既有 `renewBeforeCall()` / `captureModelSession()` 的单飞。首次实际等待起算的五秒预算涵盖本次派发的续期、绑定核验和最终读库。受监控的原生适配器在原 SDK fetch 内完成恢复，实际取票依旧在 POST 前核对持久授权。Host guard 与适配器共用请求取消边界，访问时钟到期后的租约替换限于当前未派发调用。
+- [x] 保留 `IAM_LOGIN_REQUIRED`、IAM 不可达、续期未确认、网关拒绝等分类。可观测的本地到期及换票沿用模型失败与会话续期两份脱敏日志。既有流式截断、凭据撤销、换绑及仅一次派发由受控模型和 SQLite 回归共同约束。
+
+### 3.4 验证与交付
+
+- 每项缺陷保留改前失败、改后通过的回归。以 Node `24.21.0` 运行 §4 定向用例、`pnpm check` 及 `git diff --check`。
+- 界面与派发语义见 [IAM 接入详细设计](../design/plugins/forge-iam.md)，自动化覆盖与外部待验边界见[模块验证记录](../design/verification/forge-iam.md)。
+- 从 `origin/main` 起分支，按范围提交并运行 `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD`。由同仓分支创建 PR，关联 issue #509。合并审查和企业验收分别使用各自证据。
+
+## 4. 回归与回退
+
+定向验证命令从仓库根目录执行。
+
+```sh
+node --test packages/forge-iam/test/session-renewal-view.test.mjs packages/forge-iam/test/client-shared-session-stream.test.mjs packages/forge-iam/test/client-launcher.test.mjs
+node --test packages/forge-iam/test/iam-call-recovery.test.mjs packages/forge-iam/test/model-transport.test.mjs packages/forge-iam/test/model-transport-sqlite.test.mjs
+pnpm check
+git diff --check
+node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD
+```
+
+以下既有行为并入回归验收。正常计划续期只写入一次且维持 `ready`，网关 Key 和模型选型仍按现有边界更新。已受理流可接续同一登录且已确认的轮换，授权终止时停止输出。旧请求遇到换号无法使用新主体的授权。读取超时和迟到回执没有追加派发。
+
+源码回退以 PR 的实现提交为单位。私版回退使用已验签的上一版完整制品并保留持久授权，由目标端验证回退后的登录、续期与模型请求。配置、凭据库和协议兼容面沿用现有契约。
+
+## 5. Windows 与真实 IAM 取证
+
+1. 核对 `0.1.0-corp.13` 以及修复版私制品的 SHA-256、基础包和 IAM 成员内容。记录目标端 DSH 版本与当前 Host 标识。
+2. 对齐最近一次 `ready` 至 2026-11-27 09:51（北京时间）的 `forge-iam-session-renewal.jsonl` 和模型失败日志。核对 `renewal-scheduled`、`renewal-fired`、`refresh-committed`、`refresh-failed` 和 `session-state`。若确有 Token 端点 401，按认证方式和脱敏 OAuth 分类核对 [issue #408](https://github.com/hrygo/heluo-forge/issues/408) 与[机密认证契约](../contracts/iam-client-auth-isolated.md)。
+3. 在修复版测试账号上完成首次计划续期，确认 `refresh-committed`、两处状态一致和模型调用成功。分别测试有效刷新窗口内的挂起恢复、超过刷新窗口的恢复、以及退出或换号。判据为可恢复时无额外登录、不可用时收敛为非成功状态，且每轮推理最多一笔网关 POST。
+4. 回填制品哈希、相对时间、请求次数、状态和脱敏错误分类。账号、凭据、内网地址和原始响应由现场保留。离线用例与 CI 验证支撑源码交付，Windows 和真实服务验收使用目标环境证据。
+
+## 6. 离线验证记录
+
+| 场景 | 证据 |
+|---|---|
+| 基线复现 | 原 Host 和浏览器的定向回归有 4 项失败，覆盖到期视图、静默订阅和恢复前台。派发回归在访问令牌到期且刷新可用时有 2 项失败，首轮得到 `IAM_LOGIN_REQUIRED` 且网关收到零 POST |
+| 实现后定向回归 | 180 项通过，耗时约 7 秒。覆盖浏览器渲染、Host 状态、直接调用及经 Host guard 转发的原生适配器、受信 SQLite 和环回传输 |
+| 带本机 DSH 的全量检查 | 5,543 项通过，2 项失败，2 项跳过。两项宿主探针在同一环境下的 `origin/main` `89432b3c` 同样失败。本机 SDK 的受保护根路径依赖未解析，委派服务启动检查也未通过。目标 Windows 与真服务证据见 §5 |
+| CI 等效离线检查 | Node `24.21.0`、pnpm `11.28.5`，使用不含 DSH 的命令搜索路径运行 `pnpm check`。静态检查通过，测试 5,540 项通过、0 失败、7 项因环境跳过，测试耗时约 50 秒 |

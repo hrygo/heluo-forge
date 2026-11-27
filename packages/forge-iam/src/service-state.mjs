@@ -41,6 +41,7 @@ export function createServiceState(env) {
   // Non-secret provenance/pin and the last authenticated session identity only.
   let sessionAuthentication = null;
   let disposed = false;
+  let expiry = null;
   let publishedState;
   let publishedError;
   const listeners = new Set();
@@ -65,21 +66,50 @@ export function createServiceState(env) {
     }
   }
 
+  function currentState(at) {
+    return state === 'ready' && isAccessExpired(lastGrant, at) ? 'expired' : state;
+  }
+
+  function cancelExpiry() {
+    clearTimeout(expiry?.timer);
+    expiry = null;
+  }
+
+  function scheduleExpiry() {
+    const deadline = Date.parse(lastGrant?.accessExpiresAt);
+    if (disposed || state !== 'ready' || !Number.isFinite(deadline)) {
+      cancelExpiry();
+      return;
+    }
+    if (expiry?.deadline === deadline) return;
+    cancelExpiry();
+    const timer = setTimeout(() => {
+      if (expiry?.timer !== timer) return;
+      expiry = null;
+      if (currentState(now()) === 'expired') notify();
+      else scheduleExpiry();
+    }, Math.max(0, Math.min(deadline - now(), 2_147_483_647)));
+    timer.unref?.();
+    expiry = { deadline, timer };
+  }
+
   function view() {
     recheckExclusive();
+    const at = now();
+    const current = currentState(at);
     const summary = lastGrant ? summarizeGrant(lastGrant) : {};
     const gateway = getGatewaySummary();
     // The catalogue is display state, not an authorization: keep the last known
     // list while the session is still recoverable (a signed-in subject whose
     // access token lapsed or whose revocation check is offline) so the panel
     // can mark it stale instead of erasing the model list.
-    const renewable = Boolean(lastGrant) && isRefreshUsable(lastGrant, now());
-    const recoverable = state === 'ready' || (state === 'unreachable' && error !== 'IAM_CREDENTIALS_UNAVAILABLE')
-      || (state === 'expired' && renewable);
-    return createView(state, {
+    const renewable = Boolean(lastGrant) && isRefreshUsable(lastGrant, at);
+    const recoverable = current === 'ready' || (current === 'unreachable' && error !== 'IAM_CREDENTIALS_UNAVAILABLE')
+      || (current === 'expired' && renewable);
+    return createView(current, {
       configured,
       missing: isConfigured(config).missing,
-      error,
+      error: current === state ? error : null,
       exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
       principal: summary.principal ?? null,
       accessExpiresAt: summary.accessExpiresAt ?? null,
@@ -99,10 +129,10 @@ export function createServiceState(env) {
   }
 
   function notify() {
-    // A notification can arrive after a still-running timer's access deadline.
-    // Publish the expired view before rescheduling its recoverable session.
-    if (state === 'ready' && lastGrant && isAccessExpired(lastGrant, now())) {
-      state = 'expired';
+    // Expiry can become observable before the Host timer runs after a wake.
+    const current = currentState(now());
+    if (state !== current) {
+      state = current;
       error = null;
     }
     const snapshot = view();
@@ -120,6 +150,7 @@ export function createServiceState(env) {
     }
     scheduleReconcile();
     scheduleRenewal?.();
+    scheduleExpiry();
     return snapshot;
   }
 
@@ -170,7 +201,10 @@ export function createServiceState(env) {
     get sessionAuthentication() { return sessionAuthentication; },
     set sessionAuthentication(next) { sessionAuthentication = next; },
     get disposed() { return disposed; },
-    set disposed(next) { disposed = next; },
+    set disposed(next) {
+      disposed = next;
+      if (next) cancelExpiry();
+    },
     get exclusive() { return exclusive; },
     set exclusive(next) { exclusive = next; },
 

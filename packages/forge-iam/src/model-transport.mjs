@@ -91,6 +91,7 @@ export function modelFetchOptions(options, baseURL, resolveIamToken, identity = 
         const request = { ...init, headers: outgoing, redirect: 'manual' };
         if (!attempt) return fetcher(input, request);
         attempt.calls++;
+        attempt.sent?.();
         attempt.failedBeforeSend = false;
         try {
           const response = await fetcher(input, request);
@@ -115,10 +116,10 @@ export function modelFetchOptions(options, baseURL, resolveIamToken, identity = 
         }
       };
       try {
-        attempt?.check();
         signal?.throwIfAborted();
         if (url !== endpoint || method !== 'POST') throw new IamError('IAM_MODEL_CONTEXT_CHANGED', 'Model transport binding changed');
-        if (attempt?.withDispatchAccessToken) return await attempt.withDispatchAccessToken(send);
+        if (attempt?.withDispatchAccessToken) return await attempt.withDispatchAccessToken(send, signal);
+        attempt?.check();
         return await send(await resolveIamToken?.());
       } catch (cause) {
         // SDKs may wrap this failure. Preserve a verified local refusal before
