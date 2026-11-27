@@ -34,8 +34,10 @@ async function withGitHub(run) {
     compareResponse: undefined,
     requests: [],
     postStatus: 200,
+    confirmationStatus: 200,
+    confirmation: { candidate: 1, priority: 'P1', line: 2, quote: '  return 0;', trigger: 'Default call', impact: 'Incorrect totals' },
     dismissStatus: 200,
-    files: [{ filename: 'src/example.js', patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
+    files: [{ filename: 'src/example.js', status: 'modified', patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
     reviews: [],
     comments: [],
     runs: {},
@@ -69,6 +71,9 @@ async function withGitHub(run) {
     } else if (request.method === 'GET' && /^\/repos\/corp\/example\/compare\/[a-f0-9]{40}\.\.\.[a-f0-9]{40}$/u.test(path)) {
       response.statusCode = state.compareStatus;
       response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
+    } else if (request.method === 'POST' && path === '/test/openai/chat/completions') {
+      response.statusCode = state.confirmationStatus;
+      response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(state.confirmation) } }] }));
     } else if (request.method === 'GET' && path === '/repos/corp/example/pulls/42/files') {
       response.end(JSON.stringify(state.files.slice((page - 1) * 100, page * 100)));
     } else if (request.method === 'GET' && path === '/repos/corp/example/pulls/42/reviews') {
@@ -98,12 +103,21 @@ async function withGitHub(run) {
       response.statusCode = run ? 200 : 404;
       response.end(JSON.stringify(run ?? {}));
     } else if (request.method === 'PUT' && /^\/repos\/corp\/example\/pulls\/42\/reviews\/\d+\/dismissals$/u.test(path)) {
+      if (state.dismissStatus === 'network error') {
+        response.destroy();
+        return;
+      }
       response.statusCode = state.dismissStatus;
       const id = Number(path.split('/').at(-2));
       const review = state.reviews.find((candidate) => candidate.id === id);
       if (review && state.dismissStatus === 200) review.state = 'DISMISSED';
       response.end(JSON.stringify(review ?? {}));
       if (state.headAfterDismiss) state.pr.head.sha = state.headAfterDismiss;
+    } else if (request.method === 'PUT' && /^\/repos\/corp\/example\/pulls\/42\/reviews\/\d+$/u.test(path)) {
+      const id = Number(path.split('/').at(-1));
+      const review = state.reviews.find((candidate) => candidate.id === id);
+      if (review) review.body = body.body;
+      response.end(JSON.stringify(review ?? {}));
     } else if (request.method === 'POST' && path === '/repos/corp/example/pulls/42/reviews') {
       response.statusCode = state.postStatus;
       const review = {
@@ -127,10 +141,13 @@ async function withGitHub(run) {
   const env = {
     ...process.env,
     GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`,
+    GITHUB_SERVER_URL: 'https://github.com',
     GITHUB_REPOSITORY: 'corp/example',
     GITHUB_OUTPUT: join(directory, 'output'),
     GITHUB_EVENT_PATH: join(directory, 'event.json'),
     GH_TOKEN: 'test-token',
+    OPENAI_API_KEY: 'test-key',
+    CONFIG__MODEL: 'openai/gpt-6.2-sol',
     PR_NUMBER: '42',
     EVENT_NAME: 'pull_request',
     EVENT_ACTION: 'opened',
@@ -146,7 +163,12 @@ async function withGitHub(run) {
 }
 
 async function execute(name, env) {
-  return runFile(process.execPath, ['--input-type=module', '--eval', stepScript(name)], { env });
+  const mockOpenAI = [
+    'const networkFetch = globalThis.fetch;',
+    "globalThis.fetch = (url, options) => networkFetch(url === 'https://api.openai.com/v1/chat/completions'",
+    "  ? process.env.GITHUB_API_URL + '/test/openai/chat/completions' : url, options);",
+  ].join('\n');
+  return runFile(process.execPath, ['--input-type=module', '--eval', mockOpenAI + '\n' + stepScript(name)], { env });
 }
 
 async function commentEvent(env, body) {
@@ -191,7 +213,7 @@ function prioritizedReview(priority, issue = {}) {
 }
 
 function reviewWrites(state) {
-  return state.requests.filter(({ method }) => method === 'POST' || method === 'PUT');
+  return state.requests.filter(({ method, url }) => method !== 'GET' && url.startsWith('/repos/corp/example/pulls/42/reviews'));
 }
 
 function recordAutomaticRun(state, { number = 42, sha = head, runId = 12, ranReview = true } = {}) {
@@ -363,6 +385,7 @@ test('repository reviews publish findings inline by default', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   const reviewerSettings = settings.split(/^\[pr_reviewer\]$/mu)[1]?.split(/^\[/mu)[0] ?? '';
   assert.ok(/^inline_key_issues = true$/mu.test(reviewerSettings), 'pr_reviewer.inline_key_issues must default to true');
+  assert.match(stepDefinition('Run PR-Agent'), /^ {10}PR_REVIEWER__INLINE_KEY_ISSUES: "true"$/mu);
 });
 
 test('automatic summaries use low effort, smaller budgets and skip review-only context', () => {
@@ -883,6 +906,7 @@ test('P0 on pull_request and P1 on manual /review each request changes for the r
     await withGitHub(async ({ state, env }) => {
       const reviewEnv = priority === 'P0' ? env : await commentEvent(env, '/review');
       const revision = await capture(reviewEnv);
+      state.confirmation.priority = priority;
       await submit(reviewEnv, revision, prioritizedReview(priority));
       const [request, ...otherWrites] = reviewWrites(state);
       assert.equal(otherWrites.length, 0);
@@ -890,7 +914,8 @@ test('P0 on pull_request and P1 on manual /review each request changes for the r
       assert.equal(request.url, '/repos/corp/example/pulls/42/reviews');
       assert.equal(request.body.event, 'REQUEST_CHANGES');
       assert.equal(request.body.commit_id, revision.head);
-      assert.match(request.body.body, /P0\/P1/u);
+      assert.ok(request.body.body.includes(`**${priority}**`));
+      assert.match(request.body.body, /https:\/\/github\.com\/corp\/example\/pull\/42\/files#diff-[a-f0-9]{64}R2/u);
       assert.doesNotMatch(request.body.body, /The default call now returns/u);
     });
   }
@@ -928,6 +953,39 @@ test('a manual review with arguments cannot override the automatic change reques
   });
 });
 
+test('only an independently confirmed P0/P1 with exact diff evidence can request changes', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const confirmed = state.confirmation;
+    for (const verdict of [
+      { ...confirmed, priority: 'none' },
+      { ...confirmed, quote: 'missing from the current diff' },
+      { ...confirmed, line: 1 },
+      { ...confirmed, candidate: 3 },
+    ]) {
+      state.confirmation = verdict;
+      await submit(env, revision, prioritizedReview('P1'));
+    }
+    assert.deepEqual(reviewWrites(state), []);
+    const calls = state.requests.filter(({ url }) => url === '/test/openai/chat/completions');
+    assert.equal(calls.length, 4);
+    assert.equal(calls[0].body.reasoning_effort, 'low');
+    assert.equal(calls[0].body.response_format.type, 'json_schema');
+    const input = calls[0].body.messages.find(({ role }) => role === 'user').content;
+    assert.doesNotMatch(input, /Example pull request|Count regression|The default call now returns/u);
+    assert.match(input, /return 0/u);
+  });
+});
+
+test('legacy high-risk findings can be confirmed before the priority settings arrive on the default branch', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const legacy = { ...JSON.parse(prioritizedReview('P1', { issue_header: 'Count regression' })), risk_level: 'high' };
+    await submit(env, revision, JSON.stringify(legacy));
+    assert.equal(reviewWrites(state).length, 1);
+  });
+});
+
 test('a P1 finding must have a location in the current PR diff', async () => {
   await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
@@ -935,7 +993,15 @@ test('a P1 finding must have a location in the current PR diff', async () => {
     await submit(env, revision, prioritizedReview('P1', { start_line: 20, end_line: 20 }));
     assert.deepEqual(reviewWrites(state), []);
 
-    state.files = [{ filename: 'src/example.js', patch: '@@ -2 +0,0 @@\n-  runRequiredCheck();' }];
+    await submit(env, revision, prioritizedReview('P1', { end_line: 4 }));
+    state.files = [{ filename: 'src/example.js', previous_filename: 'src/old.js', status: 'renamed',
+      patch: '@@ -1,2 +15,2 @@\n function count() {\n-  return 1;\n+  return 0;' }];
+    await submit(env, revision, prioritizedReview('P1'));
+    assert.deepEqual(reviewWrites(state), []);
+    assert.equal(state.requests.some(({ url }) => url === '/test/openai/chat/completions'), false);
+
+    state.files = [{ filename: 'src/example.js', status: 'removed', patch: '@@ -2 +0,0 @@\n-  runRequiredCheck();' }];
+    state.confirmation.quote = '  runRequiredCheck();';
     await submit(env, revision, prioritizedReview('P1'));
     assert.equal(reviewWrites(state).length, 1);
   });
@@ -988,16 +1054,35 @@ test('a rejected change request surfaces an error without attempting a second wr
   });
 });
 
-test('a revision change after submission is reported and leaves earlier reviews alone', async () => {
+test('a head or base advance after submission dismisses only the request from that run', async () => {
   for (const update of ['headAfterPost', 'baseAfterPost']) {
     await withGitHub(async ({ state, env }) => {
       const revision = await capture(env);
+      const prior = { id: 100, state: 'CHANGES_REQUESTED', user: { login: 'maintainer' }, commit_id: head };
+      state.reviews.push(prior);
       state[update] = 'c'.repeat(40);
-      await assert.rejects(
-        submit({ ...env, PR_AGENT_ALLOW_RETRY: 'true' }, revision, prioritizedReview('P1')),
-        /Change request \d+ was submitted.*revision/u);
+      await submit({ ...env, PR_AGENT_ALLOW_RETRY: 'true' }, revision, prioritizedReview('P1'));
+      assert.equal(prior.state, 'CHANGES_REQUESTED');
+      const created = state.reviews.at(-1);
+      assert.equal(created.state, 'DISMISSED');
+      assert.deepEqual(reviewWrites(state).map(({ method }) => method), ['POST', 'PUT']);
+      assert.ok(reviewWrites(state).at(-1).url.endsWith('/' + created.id + '/dismissals'));
+      assert.equal(/^retry=true$/mu.test(await readFile(env.GITHUB_OUTPUT, 'utf8')), update === 'baseAfterPost');
+    });
+  }
+});
+
+test('a failed dismissal marks that exact automatic request as stale', async () => {
+  for (const status of [403, 'network error']) {
+    await withGitHub(async ({ state, env }) => {
+      const revision = await capture(env);
+      state.baseAfterPost = 'c'.repeat(40);
+      state.dismissStatus = status;
+      await assert.rejects(submit(env, revision, prioritizedReview('P1')), /Stale change request \d+ requires maintainer dismissal/u);
+      const created = state.reviews.at(-1);
+      assert.equal(created.state, 'CHANGES_REQUESTED');
+      assert.match(created.body, /已过期/u);
       assert.doesNotMatch(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^retry=true$/mu);
-      assert.deepEqual(reviewWrites(state).map(({ method }) => method), ['POST']);
     });
   }
 });
