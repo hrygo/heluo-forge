@@ -709,7 +709,12 @@ window.__ModuleLoader__.load({
                 };
               }
               if (typeof sessionId === 'string' && sessionId.trim()) {
-                rememberPendingDraft(sessionId.trim(), draft);
+                const cleanSession = sessionId.trim();
+                const digestKey = typeof result.body.draftDigest === 'string' && result.body.draftDigest.trim()
+                  ? `${cleanSession}:${result.body.draftDigest.trim()}`
+                  : null;
+                if (digestKey) rememberPendingDraft(digestKey, draft);
+                rememberPendingDraft(cleanSession, draft);
               }
               return {
                 ok: true,
@@ -745,12 +750,16 @@ window.__ModuleLoader__.load({
             if (enableSelectionBinding && !reconcileInFlight && (lastReconcileAt === 0 || nowMs - lastReconcileAt >= RECONCILE_COOLDOWN_MS)) {
               reconcileInFlight = true;
               lastReconcileAt = nowMs;
-              // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重与冷却防重连风暴。
+              // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重与冷却防重连风暴，失败时重置冷却以允许下次重连重试。
               postReconcilePending().then((res) => {
-                if (res && !res.ok && typeof console !== 'undefined') {
-                  console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
+                if (res && !res.ok) {
+                  lastReconcileAt = 0;
+                  if (typeof console !== 'undefined') {
+                    console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
+                  }
                 }
               }).catch(() => {
+                lastReconcileAt = 0;
                 if (typeof console !== 'undefined') {
                   console.warn('[forge-experts] pending task reconciliation failed');
                 }
@@ -762,8 +771,17 @@ window.__ModuleLoader__.load({
           }
           if (payload.type === 'turn-finalized' && enableSelectionBinding) {
             const sessionKey = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
-            const recoveredDraft = sessionKey ? (pendingDrafts.get(sessionKey) ?? null) : null;
-            if (sessionKey) pendingDrafts.delete(sessionKey);
+            const digest = typeof payload.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
+            const exactKey = sessionKey && digest ? `${sessionKey}:${digest}` : null;
+            let recoveredDraft = null;
+            if (exactKey && pendingDrafts.has(exactKey)) {
+              recoveredDraft = pendingDrafts.get(exactKey);
+              pendingDrafts.delete(exactKey);
+              if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
+            } else if (!exactKey && sessionKey) {
+              recoveredDraft = pendingDrafts.get(sessionKey) ?? null;
+              pendingDrafts.delete(sessionKey);
+            }
             if (payload.preserveDraft !== true) return;
             const notice = typeof payload.notice === 'string' && payload.notice
               ? payload.notice

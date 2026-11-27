@@ -341,18 +341,34 @@ test('active turns are never evicted by capacity; expired turns are pruned by TT
   assert.equal(selection.pendingCount(), 0, 'expired turn pruning must also discard its unused token');
 });
 
-test('apply() logs warn when dispatchEnabled is true and agentHooks.registerPreStep is unavailable', async () => {
+test('apply() disables new dispatch tools when dispatchEnabled is true and agentHooks.registerPreStep is unavailable', async () => {
   const warnings = [];
+  const registeredTools = [];
+  let providedHost = null;
   const ctx = {
     get(serviceName) {
       if (serviceName === 'webServer') return { register: () => () => {} };
-      if (serviceName === 'tools') return { register: () => () => {} };
+      if (serviceName === 'tools') {
+        return {
+          register(def) {
+            registeredTools.push(def.name);
+            return () => {};
+          },
+        };
+      }
       return undefined;
     },
-    provide() {},
+    provide(name, value) {
+      if (name === 'forgeExperts') providedHost = value;
+    },
     effect() {},
     logger: { warn(msg) { warnings.push(msg); } },
   };
   await apply(ctx, { managementEnabled: true, dispatchEnabled: true });
   assert.ok(warnings.some((m) => m.includes('agentHooks.registerPreStep unavailable')));
+  assert.equal(providedHost.dispatchEnabled, false, 'new dispatch must fail closed when pre-step guard is unavailable');
+  assert.ok(!registeredTools.includes('forge_experts.delegate'), 'delegate tool must not be registered without pre-step guard');
+  assert.ok(!registeredTools.includes('forge_experts.followup'), 'followup tool must not be registered without pre-step guard');
+  assert.ok(registeredTools.includes('forge_experts.get_status'), 'readback tools remain available (§9.2)');
+  assert.ok(registeredTools.includes('forge_experts.cancel'), 'cancel tool remains available (§9.2)');
 });

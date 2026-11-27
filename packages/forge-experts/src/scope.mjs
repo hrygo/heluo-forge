@@ -16,6 +16,9 @@ function pickNonEmptyString(primary, fallback) {
 
 function normalizeIamSession(raw) {
   if (!raw || typeof raw !== 'object') return null;
+  // Reject contradictory session states (e.g. state: 'ready' paired with signedIn: false or non-ready status).
+  if (raw.signedIn === false) return null;
+  if (typeof raw.status === 'string' && raw.status !== 'ready') return null;
   // Support both test/adapter shape (`state: 'ready'`) and real @heluo/forge-iam
   // `sessionView()` shape (`status: 'ready', signedIn: true, principal: { issuer, subject }`).
   const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn === true);

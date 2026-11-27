@@ -137,7 +137,13 @@ export function createExpertsHost(ports) {
     onCorrelationPersistError: ports.onCorrelationPersistError,
     onPendingIndexError: ports.onPendingIndexError,
     onTaskReconciled: (event) => {
-      routesRef?.broadcast({ type: 'task-reconciled', ...event });
+      // Never broadcast originSessionRef or expertId on shared SSE streams.
+      routesRef?.broadcast({
+        type: 'task-reconciled',
+        requestId: event.requestId,
+        taskId: event.taskId,
+        status: event.status,
+      });
     },
     createDelegraTask: ports.createDelegraTask ?? (() => {
       throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task creation connector is not configured');
@@ -240,6 +246,15 @@ export function createExpertsHost(ports) {
 
 export async function apply(ctx, config = {}) {
   const managementEnabled = config?.managementEnabled === true;
+  const requestedDispatchEnabled = managementEnabled && config?.dispatchEnabled === true;
+  const agentHooks = readService(ctx, 'agentHooks');
+  const hasPreStepHook = Boolean(agentHooks && typeof agentHooks.registerPreStep === 'function');
+  if (requestedDispatchEnabled && !hasPreStepHook && typeof ctx.logger?.warn === 'function') {
+    ctx.logger.warn('[forge-experts] agentHooks.registerPreStep unavailable; pre-step turn guard missing, disabling new dispatch');
+  }
+  const effectiveConfig = requestedDispatchEnabled && !hasPreStepHook
+    ? { ...config, dispatchEnabled: false }
+    : config;
   const resolveExchangeCredential = () => {
     if (typeof config?.exchangeCredential === 'function') return config.exchangeCredential;
     const iam = readService(ctx, 'iam');
@@ -281,6 +296,13 @@ export async function apply(ctx, config = {}) {
           action: params.action,
           target: params.expertId ?? params.taskId ?? 'expert',
         });
+        // Never treat generic forge-policy 'out-of-scope' fallback as explicit expert egress authorization.
+        if (verdict?.rule === 'out-of-scope') {
+          return {
+            decision: 'deny',
+            reason: 'Action is out-of-scope in Forge Policy catalog; explicit egress policy is required',
+          };
+        }
         const rawDecision = verdict?.action ?? verdict?.decision;
         // Fail-closed allowlist: only explicit 'allow' or 'confirm' passes through; any other value becomes 'deny'.
         const decision = rawDecision === 'allow' || rawDecision === 'confirm' ? rawDecision : 'deny';
@@ -297,7 +319,7 @@ export async function apply(ctx, config = {}) {
     };
 
   const host = createExpertsHost({
-    config,
+    config: effectiveConfig,
     delegraClient,
     evaluatePolicy,
     onCorrelationPersistError: ({ requestId, status, message }) => {
@@ -396,7 +418,9 @@ export async function apply(ctx, config = {}) {
 
   const toolRegistry = readService(ctx, 'tools');
   const unregisterTools = [];
-  if (host.dispatchEnabled) {
+  // When dispatch was requested without a pre-step guard, host.dispatchEnabled is false
+  // so getToolDefinitions() exposes only readback/reconcile/cancel tools (§9.2).
+  if (requestedDispatchEnabled) {
     if (!toolRegistry || typeof toolRegistry.register !== 'function') {
       if (typeof ctx.logger?.warn === 'function') {
         ctx.logger.warn('[forge-experts] tool registry unavailable; restricted expert tools not registered');
@@ -420,27 +444,20 @@ export async function apply(ctx, config = {}) {
     }
   }
 
-  const agentHooks = readService(ctx, 'agentHooks');
   let unregisterPreStep = null;
-  if (host.dispatchEnabled) {
-    if (!agentHooks || typeof agentHooks.registerPreStep !== 'function') {
-      if (typeof ctx.logger?.warn === 'function') {
-        ctx.logger.warn('[forge-experts] agentHooks.registerPreStep unavailable; pre-step turn guard not registered');
+  if (host.dispatchEnabled && hasPreStepHook) {
+    try {
+      const dispose = agentHooks.registerPreStep(host.prestep);
+      if (typeof dispose === 'function') unregisterPreStep = dispose;
+    } catch (error) {
+      for (const dispose of unregisterTools) {
+        try { dispose(); } catch { /* best-effort rollback */ }
       }
-    } else {
-      try {
-        const dispose = agentHooks.registerPreStep(host.prestep);
-        if (typeof dispose === 'function') unregisterPreStep = dispose;
-      } catch (error) {
-        for (const dispose of unregisterTools) {
-          try { dispose(); } catch { /* best-effort rollback */ }
-        }
-        if (typeof unregisterRoute === 'function') {
-          try { unregisterRoute(); } catch { /* best-effort rollback */ }
-        }
-        await host.close().catch(() => {});
-        throw error;
+      if (typeof unregisterRoute === 'function') {
+        try { unregisterRoute(); } catch { /* best-effort rollback */ }
       }
+      await host.close().catch(() => {});
+      throw error;
     }
   }
 
