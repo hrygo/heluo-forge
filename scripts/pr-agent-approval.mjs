@@ -6,6 +6,7 @@ const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
 const approvalSummary = '洛神自动审批。完整审查未发现 P0、P1 或 P2 问题。';
 const verificationDismissal = '洛神未能核对发布后的状态，撤销本次自动审批。';
 const protectionDismissal = '洛神未能核对人工审批要求，撤销自动审批。';
+const ineligibleDismissal = '当前审查结论不满足自动审批条件，撤销此前的洛神自动审批。';
 const changeRequestDismissal = '维护者已请求修改，撤销洛神自动审批。';
 const staleDismissal = 'PR 或目标分支版本已变化，洛神自动审批已过期。';
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
@@ -67,7 +68,7 @@ async function hasPriorApproval(github, reviews, owner, revision) {
     const dismissal = event?.dismissed_review;
     if (event?.event !== 'review_dismissed' || !dismissed.has(dismissal?.review_id)) continue;
     if (!sameBot(event.actor, owner) || dismissal.state !== 'approved' ||
-        ![verificationDismissal, protectionDismissal].includes(dismissal.dismissal_message)) return true;
+        ![verificationDismissal, protectionDismissal, ineligibleDismissal].includes(dismissal.dismissal_message)) return true;
     dismissed.delete(dismissal.review_id);
     if (!dismissed.size) return false;
   }
@@ -199,9 +200,7 @@ export async function publishApproval({ github, approver, revision, appSlug, run
   for (const review of previousReviews) {
     const receipt = readActiveApproval(review, owner, prNumber);
     if (!receipt || (allowApproval && matchesRevision(receipt, revision))) continue;
-    const message = allowApproval
-      ? staleDismissal
-      : '当前审查结论不满足自动审批条件，撤销此前的洛神自动审批。';
+    const message = allowApproval ? staleDismissal : ineligibleDismissal;
     await dismissApproval(github, approver, pull, review, message);
     withdrawn.add(review.id);
   }

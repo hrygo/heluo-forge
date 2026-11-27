@@ -221,9 +221,9 @@ jobs:
     name: 洛神自动批准 (ubuntu-x64)
     needs: review
     if: >-
-      !cancelled() && vars.PR_AGENT_AUTO_APPROVE == 'true' && github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' || (needs.review.result == 'success' && needs.review.outputs.approval_revision != '' &&
-       fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))
+      !cancelled() && github.ref == 'refs/heads/main' && vars.PR_AGENT_APPROVAL_APP_CLIENT_ID != '' &&
+      (github.event_name == 'push' || (vars.PR_AGENT_AUTO_APPROVE == 'true' && needs.review.result == 'success' &&
+       needs.review.outputs.approval_revision != '' && fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     environment: luoshen-approval
