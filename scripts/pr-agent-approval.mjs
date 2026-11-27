@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
+import { isActiveLuoshenChangeRequest } from './pr-agent-change-request.mjs';
 import { hasIndependentApprovalGate } from './pr-agent-approval-policy.mjs';
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
@@ -110,8 +110,7 @@ async function hasBlockingChangeRequest(github, reviews) {
   for (const review of reviews) {
     if (!validId(review?.id)) continue;
     const { state, user } = review;
-    if (state === 'CHANGES_REQUESTED' && user?.id === 41898282 &&
-        user.login === 'github-actions[bot]' && user.type === 'Bot' && readChangeRequestReceipt(review)) return true;
+    if (isActiveLuoshenChangeRequest(review)) return true;
     if (['APPROVED', 'CHANGES_REQUESTED'].includes(state) && sameUser(user, user)) latestByReviewer.set(user.id, review);
   }
 
@@ -319,22 +318,12 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const protectionReason = async () => {
     if (!await hasIndependentApprovalGate(github, approver, revision, humanOwners)) return protectionDismissal;
   };
-  const pr = await readPull(github, pull, prNumber);
-  if (!validId(pr.user?.id)) throw new Error('Invalid pull request author');
-  if (pr.user.id === owner.id) return 'skipped-self';
-
-  const reviewUrl = `${server.origin}/${repository}/actions/runs/${runId}`;
-  const marker = `${approvalPrefix} ${formatRevision(revision)} -->`;
-  const execution = `${executionPrefix} ${runId} ${runAttempt} -->`;
-  const body = [
-    approvalSummary,
-    `[查看 GitHub Actions 审查运行](${reviewUrl})`,
-    `${execution}\n${marker}`,
-  ].join('\n\n');
+  const readWithdrawalPull = () => readWithRetry(() => readPull(github, pull, prNumber), [1000]);
   const preserveWithdrawal = async (cause) => {
     if (allowApproval || baseRef !== 'main') throw cause;
     try {
-      if (await reviewedRevisionIsCurrent()) {
+      const { user } = await readWithdrawalPull();
+      if (validId(user?.id) && user.id !== owner.id && await reviewedRevisionIsCurrent()) {
         const decision = withdrawalBody(revision);
         const record = await approver.post(`${pull}/reviews`, { event: 'COMMENT', commit_id: head, body: decision });
         if (record?.state !== 'COMMENTED' || !matchesReview(record, owner, head, decision)) {
@@ -346,6 +335,18 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     }
     throw cause;
   };
+  const pr = allowApproval ? await readPull(github, pull, prNumber) : await readWithdrawalPull().catch(preserveWithdrawal);
+  if (!validId(pr.user?.id)) throw new Error('Invalid pull request author');
+  if (pr.user.id === owner.id) return 'skipped-self';
+
+  const reviewUrl = `${server.origin}/${repository}/actions/runs/${runId}`;
+  const marker = `${approvalPrefix} ${formatRevision(revision)} -->`;
+  const execution = `${executionPrefix} ${runId} ${runAttempt} -->`;
+  const body = [
+    approvalSummary,
+    `[查看 GitHub Actions 审查运行](${reviewUrl})`,
+    `${execution}\n${marker}`,
+  ].join('\n\n');
   const previousReviews = await readReviewHistory(github, pull).catch(preserveWithdrawal);
   const currentAtStart = allowApproval ? await isCurrent(github, repository, pull, prNumber, revision) :
     await reviewedRevisionIsCurrent().catch(preserveWithdrawal);

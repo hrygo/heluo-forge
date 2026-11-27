@@ -359,8 +359,7 @@ test('the approval credential is available only in the trusted, protected approv
   assert.match(approvalJob, /^    needs: review$/mu);
   assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
   assert.match(approvalJob, /vars\.PR_AGENT_APPROVAL_APP_CLIENT_ID != ''/u);
-  assert.match(approvalJob, /github\.event_name == 'schedule' \|\|\s+\(needs\.review\.result == 'success'/u);
-  assert.match(approvalJob, /fromJSON\(needs\.review\.outputs\.approval_revision\)\.allowApproval == false \|\|\s+\(vars\.PR_AGENT_AUTO_APPROVE == 'true' &&\s+fromJSON\(needs\.review\.outputs\.approval_revision\)\.runAttempt == github\.run_attempt/u);
+  assert.match(approvalJob, /github\.event_name == 'schedule' \|\|\s+\(needs\.review\.outputs\.approval_revision != ''/u);
   assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
   assert.match(approvalJob, /^    environment: luoshen-approval$/mu);
@@ -380,6 +379,62 @@ test('the approval credential is available only in the trusted, protected approv
   assert.match(stepDefinition('Run PR-Agent'), /PR_AGENT_COVERAGE_PATH: [^\n]+\.pr-agent-coverage-/u);
   assert.match(stepDefinition('Validate PR-Agent review'), /PR_AGENT_COVERAGE_PATH: [^\n]+-initial\.json/u);
   assert.match(stepDefinition('Validate refreshed PR-Agent review'), /PR_AGENT_COVERAGE_PATH: [^\n]+-retry\.json/u);
+});
+
+test('the review job fails only for publication failure from the effective validation step', () => {
+  const output = /^ {6}publication_failed: \$\{\{ (.*) \}\}$/mu.exec(workflow)?.[1];
+  const report = stepDefinition('Report incomplete review publication');
+  const condition = /^ {8}if: \$\{\{ (.*) \}\}$/mu.exec(report)?.[1];
+  assert.ok(output);
+  assert.ok(condition);
+  assert.match(report, /^ {10}exit 1$/mu);
+  const jobOutput = new Function('steps', `return (${output});`);
+  const failJob = new Function('steps', 'cancelled', `return (${condition});`);
+  for (const [retry, first, second, failed] of [
+    ['', '', '', false], ['', '', 'true', false], ['', 'true', '', true],
+    ['true', 'true', '', false], ['true', '', 'true', true],
+  ]) {
+    const steps = {
+      validation: { outputs: { retry, publication_failed: first } },
+      retry_validation: { outputs: { publication_failed: second } },
+    };
+    assert.equal(jobOutput(steps) === 'true', failed);
+    assert.equal(failJob(steps, () => false), failed);
+    assert.equal(failJob(steps, () => true), false);
+  }
+});
+
+test('a failed review job only forwards an explicit publication failure for withdrawal', () => {
+  const approvalJob = workflow.split('\n  approve:\n')[1] ?? '';
+  const condition = /^ {4}if: >-\n((?: {6}.*\n)+)/mu.exec(approvalJob)?.[1];
+  const mint = stepDefinition('Mint the dedicated Luoshen approval token');
+  const mintCondition = /^ {8}if: \$\{\{ (.*) \}\}$/mu.exec(mint)?.[1];
+  assert.ok(condition);
+  assert.ok(mintCondition);
+  const approves = new Function('github', 'needs', 'vars', 'cancelled', 'fromJSON', `return (${condition});`);
+  const mints = new Function('github', 'needs', 'fromJSON', `return (${mintCondition});`);
+  const github = { ref: 'refs/heads/main', event_name: 'issue_comment', run_attempt: '2' };
+  const needs = (result, publication_failed, allowApproval, runAttempt = '2') => ({ review: { result, outputs: {
+    publication_failed, approval_revision: allowApproval === undefined ? '' : JSON.stringify({ allowApproval, runAttempt }),
+  } } });
+  const runs = (input, enabled = true, cancelled = false) => approves(github, input, {
+    PR_AGENT_APPROVAL_APP_CLIENT_ID: 'app-id', PR_AGENT_AUTO_APPROVE: String(enabled),
+  }, () => cancelled, JSON.parse);
+
+  assert.equal(runs(needs('failure', 'true', false), false), true);
+  assert.equal(runs(needs('failure', 'true', true)), false);
+  assert.equal(runs(needs('failure', '', false)), false);
+  assert.equal(runs(needs('failure', 'true')), false);
+  assert.equal(runs(needs('failure', 'true', false), true, true), false);
+  assert.equal(runs(needs('success', '', false), false), true);
+  assert.equal(runs(needs('success', '', true)), true);
+  assert.equal(runs(needs('success', 'true', true)), false);
+  assert.equal(runs(needs('success', '', true), false), false);
+  assert.equal(runs(needs('success', '', true, '1')), false);
+  const staleWithdrawal = needs('failure', 'true', false, '1');
+  assert.equal(runs(staleWithdrawal), true);
+  assert.equal(mints(github, staleWithdrawal, JSON.parse), false);
+  assert.equal(mints(github, needs('failure', 'true', false), JSON.parse), true);
 });
 
 test('a complete automatic or bare review with zero findings or P3 only emits an approval for that revision', async () => {
@@ -594,13 +649,59 @@ test('inline comment failures preserve a P1 review conclusion and withdraw only 
       state[endpoint] = 503;
       const pending = await approvalRevision(next, captured, prioritizedReview('P1'));
       assert.equal(pending?.allowApproval, false);
-      assert.doesNotMatch(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^(?:review_key|retry)=/mu);
+      const output = await readFile(next.GITHUB_OUTPUT, 'utf8');
+      assert.match(output, /^publication_failed=true$/mu);
+      assert.doesNotMatch(output, /^(?:review_key|retry)=/mu);
 
       const { stdout } = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(pending) });
       assert.match(stdout, /dismissed-ineligible/u);
       assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
     }));
   }
+});
+
+test('a bare /review reports an inline POST failure while preserving the summary and withdrawal', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+    const summary = structuredClone(state.comments);
+
+    const manual = await commentEvent({ ...mode, GITHUB_RUN_ID: '12346' }, '/review');
+    const captured = await capture(manual);
+    state.postStatus = 503;
+    const withdrawal = await approvalRevision(manual, captured, prioritizedReview('P1'));
+    assert.deepEqual(withdrawal, { prNumber: 42, head, base, baseRef: 'main', allowApproval: false,
+      runId: manual.GITHUB_RUN_ID, runAttempt: manual.GITHUB_RUN_ATTEMPT });
+    const output = await readFile(manual.GITHUB_OUTPUT, 'utf8');
+    assert.match(output, /^publication_failed=true$/mu);
+    assert.doesNotMatch(output, /^(?:review_key|retry)=/mu);
+    assert.deepEqual(state.comments, summary);
+    assert.deepEqual(state.inlineComments, []);
+
+    const result = await execute('approve', { ...manual, APPROVAL_REVISION: JSON.stringify(withdrawal) });
+    assert.match(result.stdout, /dismissed-ineligible/u);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'COMMENT', 'pending', 'DISMISS']);
+  });
+});
+
+test('an inline POST failure alone does not change an existing approval for a favorable review', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+
+    const next = { ...mode, GITHUB_RUN_ID: '12346' };
+    const captured = await capture(next);
+    const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
+    state.postStatus = 503;
+    assert.equal(await approvalRevision(next, captured, cleanReview({ key_issues_to_review: [issue] })), undefined);
+    assert.equal(await readFile(next.GITHUB_OUTPUT, 'utf8'), 'publication_failed=true\n');
+    assert.deepEqual(state.inlineComments, []);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED']);
+  });
 });
 
 test('a current unfavorable verdict can withdraw an approval when summary verification fails', async (t) => {
@@ -620,8 +721,10 @@ test('a current unfavorable verdict can withdraw an approval when summary verifi
       await writeFile(next.GITHUB_OUTPUT, '');
       const { stdout } = await submit(next, captured, prioritizedReview('P1'));
       assert.match(stdout, /::warning::Unable to verify refreshed PR-Agent comments/u);
-      const output = (await readFile(next.GITHUB_OUTPUT, 'utf8')).trim();
+      const [output, failure, ...rest] = (await readFile(next.GITHUB_OUTPUT, 'utf8')).trim().split('\n');
       assert.match(output, /^approval_revision=[^\n]+$/u);
+      assert.equal(failure, 'publication_failed=true');
+      assert.deepEqual(rest, []);
       const withdrawal = JSON.parse(output.slice('approval_revision='.length));
       assert.deepEqual(withdrawal, { prNumber: 42, head, base, baseRef: 'main', allowApproval: false,
         runId: next.GITHUB_RUN_ID, runAttempt: next.GITHUB_RUN_ATTEMPT });
@@ -933,13 +1036,14 @@ test('the approval entry point refuses a different event revision or branch befo
   });
 });
 
-function recordAutomaticRun(state, { number = 42, sha = head, runId = 12, ranReview = true, baseSha = base, ref = 'main' } = {}) {
+function recordAutomaticRun(state, { number = 42, sha = head, runId = 12, ranReview = true, baseSha = base, ref = 'main',
+  conclusion = 'success' } = {}) {
   state.runs[runId] = {
-    id: runId, event: 'workflow_run', conclusion: 'success', head_sha: 'f'.repeat(40),
+    id: runId, event: 'workflow_run', conclusion, head_sha: 'f'.repeat(40),
     display_title: '洛神 · PR #' + number + ' ' + sha, pull_requests: [],
   };
   state.jobs[runId] = [{
-    name: '洛神 (ubuntu-x64)', conclusion: 'success',
+    name: '洛神 (ubuntu-x64)', conclusion,
     steps: [{ name: 'Confirm completed automatic review ' + baseSha + ' ' + encodeURIComponent(ref),
       conclusion: ranReview ? 'success' : 'skipped' }],
   }];
@@ -1242,7 +1346,9 @@ test('a failed inline review POST allows the same revision to publish once on a 
     assert.equal(state.inlineComments.length, 0);
     assert.equal(reviewWrites(state).length, 1);
     const failedOutput = await readFile(env.GITHUB_OUTPUT, 'utf8');
-    recordAutomaticRun(state, { runId: Number(env.GITHUB_RUN_ID), ranReview: /^review_key=/mu.test(failedOutput) });
+    assert.match(failedOutput, /^publication_failed=true$/mu);
+    assert.doesNotMatch(failedOutput, /^(?:review_key|retry)=/mu);
+    recordAutomaticRun(state, { runId: Number(env.GITHUB_RUN_ID), ranReview: false, conclusion: 'failure' });
 
     state.postStatus = 200;
     state.comments = [freshComment('pr-agent:describe:persistent'), freshComment('pr-agent:review:full')];
@@ -1250,10 +1356,10 @@ test('a failed inline review POST allows the same revision to publish once on a 
     const retried = await capture(next);
     assert.equal(retried.head, revision.head, 'a failed COMMENT did not complete the revision');
     assert.equal(retried.base, revision.base);
-    assert.doesNotMatch(failedOutput, /^(?:review_key|retry)=/mu);
     await submit(next, retried, review);
     const successfulOutput = await readFile(next.GITHUB_OUTPUT, 'utf8');
     assert.match(successfulOutput, new RegExp(`^review_key=${base} main$`, 'mu'));
+    assert.doesNotMatch(successfulOutput, /^publication_failed=/mu);
     await submit(next, retried, review);
     assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT', 'COMMENT']);
     assert.equal(state.inlineComments.length, 1);

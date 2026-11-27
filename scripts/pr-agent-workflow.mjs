@@ -339,6 +339,7 @@ async function validateReview(github, env, scope) {
       if (withdrawal === 'no-work') throw error;
       if (withdrawal === 'emitted') {
         console.log('::warning::Unable to verify refreshed PR-Agent comments; continuing with automatic approval withdrawal.');
+        await appendFile(env.GITHUB_OUTPUT, 'publication_failed=true\n');
       }
       return;
     }
@@ -379,8 +380,11 @@ async function validateReview(github, env, scope) {
       }
     }
   }
-  if (await emitApprovalRevision(allowApproval) === 'revision-changed') return;
-  if (automatic && inlineCommentStatus === 'complete') {
+  const publicationFailed = inlineCommentStatus === 'incomplete';
+  if ((!publicationFailed || !allowApproval) && await emitApprovalRevision(allowApproval) === 'revision-changed') return;
+  if (publicationFailed) {
+    await appendFile(env.GITHUB_OUTPUT, 'publication_failed=true\n');
+  } else if (automatic) {
     await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
   }
 }
