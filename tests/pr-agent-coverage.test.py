@@ -106,8 +106,10 @@ class StubReviewer:
 
 class SelectedReview(unittest.TestCase):
     def run_review(self, finish="stop", sent=RENDERED, replace_result=False, second_attempt=False,
-                   action_failed=False):
+                   action_failed=False, missing_observer_state=False):
         reviewer = StubReviewer(finish, sent)
+        if missing_observer_state:
+            reviewer.incremental = SimpleNamespace()
 
         async def action():
             reviewer.prediction = await reviewer._get_prediction("synthetic-model")
@@ -156,6 +158,9 @@ class SelectedReview(unittest.TestCase):
 
     def test_no_proof_when_runner_fails_after_preparing_review(self):
         self.assertIsNone(self.run_review(action_failed=True))
+
+    def test_missing_observer_state_keeps_the_ordinary_review(self):
+        self.assertIsNone(self.run_review(missing_observer_state=True))
 
 
 if __name__ == "__main__":

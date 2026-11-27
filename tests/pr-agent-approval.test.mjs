@@ -520,6 +520,29 @@ test('a new review may replace an unverified approval from a failed attempt on t
   assert.ok(state.calls.includes(executionPath.replace('/attempts/1/', '/attempts/2/')));
 });
 
+test('an absent approval attempt is withdrawn through cleanup or a fresh review', async () => {
+  for (const cleanupFirst of [true, false]) {
+    const { state, run, reconcile } = fakeGitHub();
+    state.reviews.push(priorApproval({ id: 101, author: owner }));
+    assert.equal(await run(), 'approved');
+
+    let status = 503;
+    state.beforeGet = (path) => {
+      if (path === executionPath) throw Object.assign(new Error('Cannot read approval attempt'), { status });
+    };
+    await assert.rejects(reconcile(), /Could not reconcile all Luoshen approvals/u);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED']);
+
+    status = 404;
+    if (cleanupFirst) assert.equal(await reconcile(), 1);
+    else assert.equal(await run({ runId: '5678' }), 'approved');
+    const previous = state.reviews.slice(0, 2);
+    assert.deepEqual(previous.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+    assert.ok(state.writes.some(({ path }) => path === `${reviewPath}/300/dismissals`));
+    assert.equal(await reconcile(), 0);
+  }
+});
+
 test('a new review preserves a maintainer dismissal that raced compensation for an unverified approval', async () => {
   const { state, run } = fakeGitHub();
   assert.equal(await run(), 'approved');

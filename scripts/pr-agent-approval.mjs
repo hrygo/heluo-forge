@@ -178,8 +178,16 @@ async function approvalVerificationFailed(github, review) {
   if (!execution) return false;
   const [, runId, runAttempt] = execution;
   // A restarted job cannot confirm the earlier attempt that posted this review.
-  const { jobs } = await github.get(`/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
-    'Cannot read the originating automatic approval attempt');
+  let executionDetails;
+  try {
+    executionDetails = await github.get(`/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+      'Cannot read the originating automatic approval attempt');
+  } catch (error) {
+    // A deleted or expired attempt cannot prove that the approval was rechecked.
+    if (error.status === 404) return true;
+    throw error;
+  }
+  const { jobs } = executionDetails;
   const job = jobs?.find((entry) => entry.name === '洛神自动批准 (ubuntu-x64)' &&
     entry.run_id === Number(runId) && entry.run_attempt === Number(runAttempt));
   if (!job) throw new Error(`Cannot verify the job that published automatic approval ${review.id}`);
