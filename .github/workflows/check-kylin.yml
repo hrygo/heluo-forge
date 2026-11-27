@@ -1,0 +1,133 @@
+name: Kylin compatibility checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Container image pulls and compatibility checks stay optional until verified on target hosts.
+jobs:
+  changes:
+    name: classify Kylin changes (ubuntu-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_platforms: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
+    steps:
+      - name: Run all platforms for non-PR events
+        id: full
+        if: github.event_name != 'pull_request'
+        run: echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
+      - name: Checkout complete history for the change comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          show-progress: false
+      - name: Set up Node.js
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Classify changed paths
+        id: classify
+        if: github.event_name == 'pull_request'
+        run: node scripts/ci-classify-changes.mjs
+      - name: Validate platform decision
+        env:
+          RUN_PLATFORMS: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
+        run: |
+          case "$RUN_PLATFORMS" in
+            true|false) ;;
+            *) echo 'Invalid platform decision.' >&2; exit 1 ;;
+          esac
+
+  kylin-linux-arm64:
+    name: SQLite and IAM (linux-arm64, openkylin)
+    needs: changes
+    if: &run_platforms ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_platforms != 'false') }}
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: openkylin/openkylin:latest
+    continue-on-error: true
+    timeout-minutes: 10
+    env:
+      FORGE_CI_PLATFORM: linux
+      FORGE_CI_ARCH: arm64
+    defaults: &bash_defaults
+      run:
+        shell: bash
+    steps: &kylin_steps
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Link workspace packages
+        run: node scripts/link-workspace.mjs
+      - name: Assert the runner is the expected platform-arch
+        run: >-
+          node -e "const [p,a]=process.argv.slice(1);
+          if (process.platform!==p||process.arch!==a)
+          { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
+          "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
+      - name: Test credential storage
+        run: node --test packages/forge-credentials-keychain/test/*.test.mjs
+      - name: Test IAM read paths and CLI bridge
+        run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs packages/forge-iam/test/bridge-real-provider.test.mjs packages/forge-iam/test/cli-reader.test.mjs packages/forge-iam/test/gateway-save-confirmation.test.mjs packages/forge-iam/test/gateway-sqlite-regression.test.mjs packages/forge-iam/test/session-read-lock-recovery.test.mjs packages/forge-iam/test/pending-binding-sqlite.test.mjs packages/forge-iam/test/session-renewal-log.test.mjs packages/forge-iam/test/renewal-resume.test.mjs packages/forge-iam/test/client-auth-refresh.test.mjs packages/forge-iam/test/callback-port.test.mjs packages/forge-iam/test/signout-sqlite-crash.test.mjs packages/forge-iam/test/userinfo.test.mjs
+      - name: Build the release artifact and verify its bytes
+        run: |
+          set -euo pipefail
+          mkdir -p node_modules/.forge-ci
+          rm -rf node_modules/.forge-ci/bundle
+          node scripts/build-enterprise-bundle.mjs node_modules/.forge-ci/bundle > node_modules/.forge-ci/build.json
+          node scripts/verify-enterprise-bundle.mjs node_modules/.forge-ci/bundle/*.tgz \
+            --manifest node_modules/.forge-ci/bundle/bundle-manifest.json --json > node_modules/.forge-ci/verify.json
+          node -e "const v=require('./node_modules/.forge-ci/verify.json'); if(v.ok!==true){console.error(v.errors.join('\n')); process.exit(1)} console.log('artifact:', v.files, 'files,', v.bytes, 'bytes,', v.sha256)"
+      - name: Install and test the artifact offline
+        run: |
+          set -euo pipefail
+          rm -rf node_modules/.forge-ci/install
+          mkdir -p node_modules/.forge-ci/install
+          node --input-type=module -e "import { execNpm } from './scripts/lib/bundle-rules.mjs'; execNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', 'node_modules/.forge-ci/install', ...process.argv.slice(1)], { stdio: 'inherit' });" node_modules/.forge-ci/bundle/*.tgz
+          if [ -d node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise ]; then
+            PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-credentials-keychain
+          else
+            PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-credentials-keychain
+          fi
+          node scripts/probe/installed-credential-smoke.mjs "$PACKAGE"
+
+  kylin-linux-x64:
+    name: SQLite and IAM (linux-x64, openkylin)
+    needs: changes
+    if: *run_platforms
+    runs-on: ubuntu-24.04
+    container:
+      image: openkylin/openkylin:latest
+    continue-on-error: true
+    timeout-minutes: 10
+    env:
+      FORGE_CI_PLATFORM: linux
+      FORGE_CI_ARCH: x64
+    defaults: *bash_defaults
+    steps: *kylin_steps

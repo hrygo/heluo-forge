@@ -328,20 +328,25 @@ test('闭包去重、外平台 prebuilds 裁剪、Top 20 统计与预算门禁�
   assert.throws(() => stagePayload(args), refused('STAGE_DSH_IDENTITY_MISMATCH'));
 });
 
-test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品、只在运行时暂存交接它，按目标裁剪 prebuilds，macOS 产 dmg、Windows 产 exe', () => {
+test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制品、只在运行时暂存交接它，按目标裁剪 prebuilds，macOS 产 dmg、Windows 产 exe、Linux 产 deb', () => {
   // The workflow runs only on a tag, behind an approval: a handover it gets wrong would be found late.
   const count = (text, pattern) => (text.match(pattern) ?? []).length;
   // A staged command is a first line ending in a backslash and the lines it is joined to; a one-line call is not a staging.
   const commands = (text, tool) => [...text.matchAll(new RegExp(`node scripts/${tool}\\.mjs[^\\n]*\\n(?:[^\\S\\n]+[^\\n]*\\\\\\n)+[^\\S\\n]+[^\\n]*`, 'gu'))].map((match) => match[0]);
   const workflow = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-bundle.yml'), 'utf8');
   const stagings = commands(workflow, 'stage-desktop-payload');
-  assert.equal(stagings.length, 2, 'one desktop job per platform');
+  assert.equal(stagings.length, 4, 'one desktop job per platform');
   assert.equal(stagings.some((cmd) => /--target mac-arm64/u.test(cmd)), true, 'mac job stages for mac-arm64');
   assert.equal(stagings.some((cmd) => /--target win-x64/u.test(cmd)), true, 'win job stages for win-x64');
+  assert.equal(stagings.some((cmd) => /--target linux-x64/u.test(cmd)), true, 'linux-x64 job stages for linux-x64');
+  assert.equal(stagings.some((cmd) => /--target linux-arm64/u.test(cmd)), true, 'linux-arm64 job stages for linux-arm64');
   const installers = commands(workflow, 'build-desktop-installer');
   assert.equal(installers.some((cmd) => /--target mac/u.test(cmd) && /--arch arm64/u.test(cmd)), true, 'mac job builds dmg');
+  assert.equal(installers.some((cmd) => /--target linux/u.test(cmd) && /--arch x64/u.test(cmd)), true, 'linux-x64 job builds deb');
+  assert.equal(installers.some((cmd) => /--target linux/u.test(cmd) && /--arch arm64/u.test(cmd)), true, 'linux-arm64 job builds deb');
   assert.equal(/ditto -c -k/u.test(workflow), false, 'mac job no longer repacks .app with ditto zip');
   assert.equal(/heluo-forge-enterprise-\*-arm64\.dmg/u.test(workflow), true, 'mac job uploads dmg');
+  assert.equal(/heluo-forge-enterprise-\*\.deb/u.test(workflow), true, 'linux jobs upload deb');
   assert.equal(count(workflow, /node -p "require\('\.\/services\/forge-desktop\/runtime-lock\.json'\)\.pnpm\.version"/gu), stagings.length, 'the version comes from the ledger');
   assert.equal(count(workflow, /echo "PNPM_TGZ=/gu), stagings.length, 'the artifact path is published to the later steps');
   const handed = (command) => /--pnpm-tgz "\$PNPM_TGZ"/u.test(command);
