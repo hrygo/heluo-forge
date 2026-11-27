@@ -137,13 +137,13 @@ export function createExpertsHost(ports) {
     onCorrelationPersistError: ports.onCorrelationPersistError,
     onPendingIndexError: ports.onPendingIndexError,
     onTaskReconciled: (event) => {
-      // Never broadcast originSessionRef or expertId on shared SSE streams.
+      // Never broadcast originSessionRef, expertId, or internal scope on shared SSE streams.
       routesRef?.broadcast({
         type: 'task-reconciled',
         requestId: event.requestId,
         taskId: event.taskId,
         status: event.status,
-      });
+      }, event?.scope ?? null);
     },
     createDelegraTask: ports.createDelegraTask ?? (() => {
       throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task creation connector is not configured');
@@ -202,7 +202,8 @@ export function createExpertsHost(ports) {
     inspectSelection: (params) => selection.inspect(params),
     discardSelection: (token) => selection.discard(token),
     onTurnFinalized: (event) => {
-      routesRef?.broadcast({ type: 'turn-finalized', ...event });
+      const { scope: targetScope, ...wireEvent } = event ?? {};
+      routesRef?.broadcast({ type: 'turn-finalized', ...wireEvent }, targetScope ?? null);
     },
     now: ports.now,
     turnTtlMs: ports.turnTtlMs,
@@ -292,10 +293,19 @@ export async function apply(ctx, config = {}) {
       }
       const policy = readService(ctx, 'policy');
       if (policy && typeof policy.decide === 'function') {
-        const verdict = await policy.decide({
-          action: params.action,
-          target: params.expertId ?? params.taskId ?? 'expert',
-        });
+        let verdict;
+        try {
+          verdict = await policy.decide({
+            action: params.action,
+            target: params.expertId ?? params.taskId ?? 'expert',
+          });
+        } catch (error) {
+          if (error instanceof ExpertsError) throw error;
+          if (typeof ctx.logger?.warn === 'function') {
+            ctx.logger.warn('[forge-experts] policy.decide threw; failing closed', error?.message ?? String(error));
+          }
+          throw new ExpertsError('EXPERT_POLICY_DENIED', 'Forge Policy egress check failed closed');
+        }
         // Never treat generic forge-policy 'out-of-scope' fallback as explicit expert egress authorization.
         if (verdict?.rule === 'out-of-scope') {
           return {
