@@ -22,6 +22,7 @@ const revision = { prNumber: 42, head, base, baseRef };
 const pull = '/pulls/42';
 const reviewPath = `${pull}/reviews`;
 const basePath = '/git/ref/heads/main';
+const executionPath = '/actions/runs/1234/attempts/1/jobs?per_page=100';
 
 function fakeGitHub() {
   const state = {
@@ -44,6 +45,7 @@ function fakeGitHub() {
     reviews: [],
     nextReviewId: 300,
     timeline: [],
+    approvalSteps: new Map(),
     calls: [],
     writes: [],
   };
@@ -65,6 +67,17 @@ function fakeGitHub() {
       if (path === pull) return structuredClone(state.pr);
       if (path === '/pulls?state=open&per_page=100&page=1') return [{ number: 42 }];
       const [route, query] = path.split('?');
+      const execution = /^\/actions\/runs\/([1-9]\d*)\/attempts\/([1-9]\d*)\/jobs\?per_page=100$/u.exec(path);
+      if (execution) {
+        const step = state.approvalSteps.get(path) ?? { status: 'completed', conclusion: 'success' };
+        return { jobs: [{
+          name: '洛神自动批准 (ubuntu-x64)',
+          run_id: Number(execution[1]),
+          run_attempt: Number(execution[2]),
+          status: step.status,
+          steps: [{ name: 'Reconcile or approve the reviewed PR revision', ...step }],
+        }] };
+      }
       if ([`ref=${base}`, `ref=${otherSha}`].includes(query)) {
         if (route === '/contents/.github') return [{ path: ownerFile, type: 'file', sha: ownerBlob }];
         if (route === `/contents/${ownerFile}`) return {
@@ -136,7 +149,9 @@ function fakeGitHub() {
       return structuredClone(review);
     },
   };
-  const run = (options = {}) => publishApproval({ github, approver, revision, appSlug, humanOwners: owner.login, runId: '1234', ...options });
+  const run = (options = {}) => publishApproval({
+    github, approver, revision, appSlug, humanOwners: owner.login, runId: '1234', runAttempt: '1', ...options,
+  });
   const reconcile = (options = {}) => reconcileMainApprovals({ github, approver, appSlug, humanOwners: owner.login, ...options });
   return { state, run, reconcile };
 }
@@ -218,6 +233,21 @@ test('an approval is withdrawn if the independent protection disappears just aft
   assert.equal(await run(), 'dismissed-protection');
   assert.equal(state.reviews[0].state, 'DISMISSED');
   assert.match(state.writes.at(-1).data.message, /人工审批要求/u);
+});
+
+test('keeps the new approval if branch protection is restored before dismissal', async () => {
+  const { state, run } = fakeGitHub();
+  const protection = state.protection.required_pull_request_reviews;
+  state.afterPost = () => {
+    protection.require_code_owner_reviews = false;
+    state.beforeGet = (path) => {
+      if (path === `${reviewPath}/300`) protection.require_code_owner_reviews = true;
+    };
+  };
+
+  assert.equal(await run(), 'approved');
+  assert.equal(state.reviews[0].state, 'APPROVED');
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
 });
 
 test('skips self-authored PRs and those with an ineligible or changed revision', async () => {
@@ -334,6 +364,23 @@ test('keeps the accepted approval when only draft status changes during post-pub
   assert.equal(await run(), 'skipped-existing');
 });
 
+test('keeps the new approval if the reviewed base and target are restored before dismissal', async () => {
+  const { state, run } = fakeGitHub();
+  state.afterPost = () => {
+    state.base = otherSha;
+    state.pr.base.ref = 'another-target';
+    state.beforeGet = (path) => {
+      if (path !== `${reviewPath}/300`) return;
+      state.base = base;
+      state.pr.base.ref = baseRef;
+    };
+  };
+
+  assert.equal(await run(), 'approved');
+  assert.equal(state.reviews[0].state, 'APPROVED');
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+});
+
 test('dismisses the approval when the base branch advances during the final PR read', async () => {
   const { state, run } = fakeGitHub();
   state.afterPost = () => {
@@ -387,6 +434,48 @@ test('cleanup withdraws an already accepted approval after a lost write response
     state.reviews.push({ id: 102, user: reviewer, state: 'APPROVED', commit_id: head });
     assert.equal(await run({ runId: '6789' }), 'approved');
   }
+});
+
+test('cleanup withdraws an unverified approval after a lost response without a revision or protection change', async () => {
+  const { state, run, reconcile } = fakeGitHub();
+  const human = priorApproval({ id: 101, author: owner });
+  state.reviews.push(human);
+  state.afterPost = () => {
+    state.beforeGet = (path) => {
+      if (path.startsWith(`${reviewPath}?`)) throw new Error('Review history unavailable');
+    };
+    throw new Error('Response lost after creation');
+  };
+
+  await assert.rejects(run(), /review history unavailable/iu);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED']);
+  state.beforeGet = undefined;
+  state.afterPost = undefined;
+  state.approvalSteps.set(executionPath, { status: 'in_progress', conclusion: null });
+  assert.equal(await reconcile(), 0);
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+
+  state.approvalSteps.set(executionPath, { status: 'completed', conclusion: 'failure' });
+  assert.equal(await reconcile(), 1);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+  assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+  assert.ok(state.calls.includes(executionPath));
+  assert.ok(!state.calls.some((path) => path.includes('/actions/runs/1234/attempts/2/')));
+  assert.equal(await reconcile(), 0);
+});
+
+test('a new review may replace an unverified approval from a failed attempt on the same revision', async () => {
+  const { state, run, reconcile } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  assert.equal(await reconcile(), 0);
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+
+  state.approvalSteps.set(executionPath, { status: 'completed', conclusion: 'cancelled' });
+  assert.equal(await run({ runAttempt: '2' }), 'approved');
+  assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`, reviewPath]);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+  assert.equal(await reconcile(), 0);
+  assert.ok(state.calls.includes(executionPath.replace('/attempts/1/', '/attempts/2/')));
 });
 
 test('rejects a response with mismatched state, account, commit or body', async () => {

@@ -233,6 +233,7 @@ jobs:
     timeout-minutes: 3
     environment: luoshen-approval
     permissions:
+      actions: read
       contents: read
       pull-requests: read
     steps:
@@ -265,5 +266,6 @@ jobs:
           PR_AGENT_HUMAN_CODEOWNERS: ${{ vars.PR_AGENT_HUMAN_CODEOWNERS }}
           PR_AGENT_APPROVAL_TOKEN: ${{ steps.approval_app.outputs.token }}
           PR_AGENT_APPROVAL_APP_SLUG: ${{ steps.approval_app.outputs.app-slug }}
+          PR_AGENT_APPROVAL_EXPECTED_APP_SLUG: ${{ vars.PR_AGENT_APPROVAL_EXPECTED_APP_SLUG }}
           APPROVAL_REVISION: ${{ needs.review.outputs.approval_revision }}
         run: node scripts/pr-agent-workflow.mjs approve

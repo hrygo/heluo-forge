@@ -40,7 +40,6 @@ const repository = 'corp/example';
 const maintainer = { id: 774, login: 'maintainer', type: 'User' };
 const approver = { id: 789, login: 'luoshen[bot]', type: 'Bot' };
 const usersPath = '/users';
-const botProfile = `${usersPath}/${encodeURIComponent(approver.login)}`;
 const ownerFile = '.github/CODEOWNERS';
 const ownerBlob = 'd'.repeat(40);
 const owners = Buffer.from('* @maintainer\n');
@@ -49,6 +48,7 @@ const approvalEnv = {
   PR_AGENT_AUTO_APPROVE: 'true',
   PR_AGENT_APPROVAL_CONFIGURED: 'true',
   PR_AGENT_APPROVAL_APP_SLUG: 'luoshen',
+  PR_AGENT_APPROVAL_EXPECTED_APP_SLUG: 'luoshen',
   PR_AGENT_HUMAN_CODEOWNERS: 'maintainer',
 };
 
@@ -81,6 +81,7 @@ async function withGitHub(run) {
     } },
     compareStatus: 200,
     requests: [],
+    approvalBot: approver,
     postStatus: 200,
     permission: 'write',
     files: [{ filename: 'src/example.js', status: 'modified', additions: 1, deletions: 1, patch: examplePatch }],
@@ -105,8 +106,8 @@ async function withGitHub(run) {
     const path = url.pathname.replace(/^\/repos\/corp\/example/u, '');
     const page = Number(url.searchParams.get('page') ?? '1');
     const pageOf = (items) => items.slice((page - 1) * 100, page * 100);
-    if (request.method === 'GET' && path === botProfile) {
-      response.end(JSON.stringify(approver));
+    if (request.method === 'GET' && path === `${usersPath}/${encodeURIComponent(state.approvalBot.login)}`) {
+      response.end(JSON.stringify(state.approvalBot));
     } else if (request.method === 'GET' && path === '/installation/repositories') {
       response.end(JSON.stringify({ total_count: 1, repositories: [{ full_name: repository }] }));
     } else if (request.method === 'GET' && path === '/branches/main/protection') {
@@ -174,13 +175,19 @@ async function withGitHub(run) {
     } else if (request.method === 'GET' && /^\/actions\/runs\/\d+\/jobs$/u.test(path)) {
       const jobs = state.jobs[path.split('/').at(-2)] ?? [];
       response.end(JSON.stringify({ total_count: jobs.length, jobs: pageOf(jobs) }));
+    } else if (request.method === 'GET' && /^\/actions\/runs\/\d+\/attempts\/\d+\/jobs$/u.test(path)) {
+      const [, , , runId, , runAttempt] = path.split('/');
+      const jobs = [{ name: '洛神自动批准 (ubuntu-x64)', run_id: Number(runId), run_attempt: Number(runAttempt),
+        status: 'completed', steps: [{ name: 'Reconcile or approve the reviewed PR revision',
+          status: 'completed', conclusion: 'success' }] }];
+      response.end(JSON.stringify({ total_count: jobs.length, jobs: pageOf(jobs) }));
     } else if (request.method === 'POST' && path === '/pulls/42/reviews') {
       response.statusCode = state.postStatus;
       const review = {
         id: 101 + state.reviews.length,
         state: { APPROVE: 'APPROVED', COMMENT: 'COMMENTED', REQUEST_CHANGES: 'CHANGES_REQUESTED' }[body.event],
         commit_id: body.commit_id,
-        user: body.event === 'APPROVE' ? approver : { login: 'github-actions[bot]' },
+        user: body.event === 'APPROVE' ? state.approvalBot : { login: 'github-actions[bot]' },
         body: body.body,
       };
       if (state.postStatus < 300) {
@@ -348,7 +355,7 @@ test('the approval credential is available only in the trusted, protected approv
   assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
   assert.match(approvalJob, /^    environment: luoshen-approval$/mu);
-  assert.match(approvalJob, /^    permissions:\n      contents: read\n      pull-requests: read$/mu);
+  assert.match(approvalJob, /^    permissions:\n      actions: read\n      contents: read\n      pull-requests: read$/mu);
   assert.match(approvalJob, /ref: \$\{\{ github\.sha \}\}\n\s+persist-credentials: false/u);
   assert.doesNotMatch(approvalJob, /docker:|OPENAI|download-artifact/u);
   assert.equal((workflow.match(/secrets\.PR_AGENT_APPROVAL_APP_PRIVATE_KEY/gu) ?? []).length, 1);
@@ -356,7 +363,10 @@ test('the approval credential is available only in the trusted, protected approv
   assert.match(approvalJob, /actions\/create-github-app-token@[a-f0-9]{40}/u);
   assert.match(approvalJob, /permission-pull-requests: write\n\s+permission-administration: read/u);
   assert.match(approvalJob, /PR_AGENT_HUMAN_CODEOWNERS: \$\{\{ vars\.PR_AGENT_HUMAN_CODEOWNERS \}\}/u);
-  assert.match(approvalJob, /PR_AGENT_APPROVAL_TOKEN: \$\{\{ steps\.approval_app\.outputs\.token \}\}/u);
+  const approvalStep = stepDefinition('Reconcile or approve the reviewed PR revision');
+  assert.match(approvalStep, /PR_AGENT_APPROVAL_TOKEN: \$\{\{ steps\.approval_app\.outputs\.token \}\}/u);
+  assert.match(approvalStep, /PR_AGENT_APPROVAL_APP_SLUG: \$\{\{ steps\.approval_app\.outputs\.app-slug \}\}/u);
+  assert.match(approvalStep, /PR_AGENT_APPROVAL_EXPECTED_APP_SLUG: \$\{\{ vars\.PR_AGENT_APPROVAL_EXPECTED_APP_SLUG \}\}/u);
   assert.match(stepDefinition('Run PR-Agent'), /args: \/github\/workspace\/scripts\/pr-agent-coverage\.py/u);
   assert.match(stepDefinition('Run PR-Agent'), /PR_AGENT_COVERAGE_PATH: [^\n]+\.pr-agent-coverage-/u);
   assert.match(stepDefinition('Validate PR-Agent review'), /PR_AGENT_COVERAGE_PATH: [^\n]+-initial\.json/u);
@@ -639,6 +649,60 @@ test('the approval entry point uses the dedicated credential for identity and on
       prNumber: 42, head, base, baseRef: 'main', allowApproval: false,
       runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
     });
+  });
+});
+
+test('a different GitHub App scoped to the same repository cannot publish an APPROVE', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.approvalBot = { id: 790, login: 'other-automation[bot]', type: 'Bot' };
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token',
+      PR_AGENT_APPROVAL_APP_SLUG: 'other-automation' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    assert.equal(eligible?.allowApproval, true);
+
+    const priorRequests = state.requests.length;
+    const result = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) }).catch((error) => error);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), []);
+    assert.match(result.stderr, /Approval GitHub App does not match the expected App/u);
+    assert.equal(state.requests.length, priorRequests);
+  });
+});
+
+test('a different GitHub App scoped to the same repository cannot reconcile approvals', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.approvalBot = { id: 790, login: 'other-automation[bot]', type: 'Bot' };
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token',
+      PR_AGENT_APPROVAL_APP_SLUG: 'other-automation' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, PR_AGENT_APPROVAL_EXPECTED_APP_SLUG: 'other-automation',
+      APPROVAL_REVISION: JSON.stringify(eligible) });
+    assert.equal(state.reviews[0]?.state, 'APPROVED');
+    state.refs.main = 'c'.repeat(40);
+
+    const priorRequests = state.requests.length;
+    const result = await execute('approve', { ...mode, GITHUB_EVENT_NAME: 'push' }).catch((error) => error);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE']);
+    assert.match(result.stderr, /Approval GitHub App does not match the expected App/u);
+    assert.equal(state.requests.length, priorRequests);
+    assert.equal(state.reviews[0].state, 'APPROVED');
+  });
+});
+
+test('the approval entry point rejects missing or invalid App slugs before any GitHub requests', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    const approveEnv = { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) };
+    const priorRequests = state.requests.length;
+    for (const slug of ['', 'luoshen[bot]', 'luoshen\n', 'github-actions']) {
+      await assert.rejects(execute('approve', { ...approveEnv, PR_AGENT_APPROVAL_EXPECTED_APP_SLUG: slug }),
+        { stderr: /Invalid expected approval GitHub App slug/u });
+    }
+    for (const slug of ['', 'luoshen[bot]']) {
+      await assert.rejects(execute('approve', { ...approveEnv, PR_AGENT_APPROVAL_APP_SLUG: slug }),
+        { stderr: /Approval GitHub App does not match the expected App/u });
+    }
+    assert.equal(state.requests.length, priorRequests);
   });
 });
 

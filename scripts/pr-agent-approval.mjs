@@ -4,6 +4,7 @@ import { hasIndependentApprovalGate, hasLiveApprovalProtection } from './pr-agen
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
+const executionPrefix = '<!-- heluo-forge-pr-agent-approval-run:v1';
 const pendingDismissalMarker = '<!-- heluo-forge-pr-agent-approval-dismissal-pending:v1 -->';
 const approvalSummary = '洛神自动审批。完整审查未发现 P0、P1 或 P2 问题。';
 const verificationDismissal = '洛神未能核对发布后的状态，撤销本次自动审批。';
@@ -17,6 +18,7 @@ const recoverableDismissals = new Set([
 const transientHistoryCodes = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN']);
 const cleanupBatchSize = 4;
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
+const executionPattern = new RegExp(`^${executionPrefix} ([1-9][0-9]*) ([1-9][0-9]*) -->$`, 'u');
 
 function sameBot(left, right) {
   return validId(left?.id) && left.id === right?.id && left.type === 'Bot' && right.type === 'Bot' &&
@@ -119,6 +121,21 @@ function hasPendingDismissal(review) {
   return review.body.split('\n').at(-2) === pendingDismissalMarker;
 }
 
+async function approvalVerificationFailed(github, review) {
+  const execution = executionPattern.exec(review.body.split('\n').at(-2) ?? '');
+  if (!execution) return false;
+  const [, runId, runAttempt] = execution;
+  // A restarted job cannot confirm the earlier attempt that posted this review.
+  const { jobs } = await github.get(`/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+    'Cannot read the originating automatic approval attempt');
+  const job = jobs?.find((entry) => entry.name === '洛神自动批准 (ubuntu-x64)' &&
+    entry.run_id === Number(runId) && entry.run_attempt === Number(runAttempt));
+  if (!job) throw new Error(`Cannot verify the job that published automatic approval ${review.id}`);
+  if (job.status !== 'completed') return false;
+  const step = job.steps?.find(({ name }) => name === 'Reconcile or approve the reviewed PR revision');
+  return step?.status !== 'completed' || step.conclusion !== 'success';
+}
+
 async function recordPendingDismissal(github, approver, pull, review) {
   if (hasPendingDismissal(review)) return review;
   const url = `${pull}/reviews/${review.id}`;
@@ -217,6 +234,7 @@ export async function reconcileMainApprovals({ github, approver, appSlug, humanO
           if (await hasBlockingChangeRequest(scopedGitHub, history ?? await readReviewHistory(scopedGitHub, pull, signal))) {
             return changeRequestDismissal;
           }
+          if (await approvalVerificationFailed(scopedGitHub, review)) return verificationDismissal;
         };
         if (await reason(reviews) && await dismissApproval(scopedGitHub, scopedApprover, pull, review, reason)) dismissed++;
       }
@@ -240,7 +258,7 @@ export async function reconcileMainApprovals({ github, approver, appSlug, humanO
   return dismissed;
 }
 
-export async function publishApproval({ github, approver, revision, appSlug, humanOwners, runId, allowApproval = true }) {
+export async function publishApproval({ github, approver, revision, appSlug, humanOwners, runId, runAttempt, allowApproval = true }) {
   const { repository, serverUrl } = github;
   const { prNumber, head, base, baseRef } = revision;
   if (typeof allowApproval !== 'boolean') throw new Error('Invalid automatic approval verdict');
@@ -248,6 +266,9 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     throw new Error('Invalid automatic approval revision');
   }
   if (typeof runId !== 'string' || !/^[1-9][0-9]*$/u.test(runId)) throw new Error('Invalid automatic approval run ID');
+  if (typeof runAttempt !== 'string' || !/^[1-9][0-9]*$/u.test(runAttempt)) {
+    throw new Error('Invalid automatic approval run attempt');
+  }
   if (typeof repository !== 'string' || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/iu.test(repository)) {
     throw new Error('Invalid automatic approval repository');
   }
@@ -262,16 +283,23 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const changeRequestReason = async () => {
     if (await hasBlockingChangeRequest(github, await readReviewHistory(github, pull))) return changeRequestDismissal;
   };
+  const staleReason = async (receipt) => {
+    if (!await isCurrent(github, repository, pull, prNumber, receipt, { allowDraft: true })) return staleDismissal;
+  };
+  const liveProtectionReason = async () => {
+    if (!await hasLiveApprovalProtection(approver)) return protectionDismissal;
+  };
   const pr = await readPull(github, pull, prNumber);
   if (!validId(pr.user?.id)) throw new Error('Invalid pull request author');
   if (pr.user.id === owner.id) return 'skipped-self';
 
   const reviewUrl = `${server.origin}/${repository}/actions/runs/${runId}`;
   const marker = `${approvalPrefix} ${prNumber} ${head} ${base} ${Buffer.from(baseRef).toString('base64url')} -->`;
+  const execution = `${executionPrefix} ${runId} ${runAttempt} -->`;
   const body = [
     approvalSummary,
     `[查看 GitHub Actions 审查运行](${reviewUrl})`,
-    marker,
+    `${execution}\n${marker}`,
   ].join('\n\n');
   const previousReviews = await readReviewHistory(github, pull);
   if (!await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: !allowApproval })) return 'skipped-stale';
@@ -283,9 +311,7 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     const pending = hasPendingDismissal(review);
     if (allowApproval && !pending && matchesRevision(receipt, revision)) continue;
     const reviewToDismiss = allowApproval ? review : await recordPendingDismissal(github, approver, pull, review);
-    const reason = pending || !allowApproval ? ineligibleDismissal : async () => {
-      if (!await isCurrent(github, repository, pull, prNumber, receipt, { allowDraft: true })) return staleDismissal;
-    };
+    const reason = pending || !allowApproval ? ineligibleDismissal : () => staleReason(receipt);
     if (await dismissApproval(github, approver, pull, reviewToDismiss, reason)) withdrawn.add(review.id);
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';
@@ -308,7 +334,13 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     }
     return dismissed ? `dismissed-${rejection}` : 'skipped-existing';
   }
-  if (await hasPriorApproval(github, remaining, owner, revision)) return 'skipped-existing';
+  for (const review of remaining) {
+    if (readActiveApproval(review, owner, prNumber) && await approvalVerificationFailed(github, review) &&
+        await dismissApproval(github, approver, pull, review, verificationDismissal)) withdrawn.add(review.id);
+  }
+  if (await hasPriorApproval(github, remaining.filter((review) => !withdrawn.has(review?.id)), owner, revision)) {
+    return 'skipped-existing';
+  }
 
   if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
   const approval = await postApproval(github, approver, pull, reviews, owner, head, body);
@@ -329,15 +361,13 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     }
     throw new Error(`Could not verify automatic approval ${approval.id}; the approval was dismissed`, { cause });
   }
-  if (!current) {
-    await dismissApproval(github, approver, pull, approval, staleDismissal);
+  if (!current && await dismissApproval(github, approver, pull, approval, () => staleReason(revision))) {
     return 'dismissed-stale';
   }
   if (blocked && await dismissApproval(github, approver, pull, approval, changeRequestReason)) {
     return 'dismissed-changes-requested';
   }
-  if (!await hasLiveApprovalProtection(approver)) {
-    await dismissApproval(github, approver, pull, approval, protectionDismissal);
+  if (await liveProtectionReason() && await dismissApproval(github, approver, pull, approval, liveProtectionReason)) {
     return 'dismissed-protection';
   }
   return 'approved';

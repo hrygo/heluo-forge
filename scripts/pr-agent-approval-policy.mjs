@@ -19,7 +19,8 @@ function hasRequiredCodeOwner(protection) {
   const reviews = protection?.required_pull_request_reviews;
   return protection?.enforce_admins?.enabled === true &&
     reviews?.require_code_owner_reviews === true && reviews.dismiss_stale_reviews === true &&
-    Number.isSafeInteger(reviews.required_approving_review_count) && reviews.required_approving_review_count >= 1 &&
+    // A higher review count can let the App's approval occupy an additional review slot.
+    reviews.required_approving_review_count === 1 &&
     hasNoCustomActors(reviews.bypass_pull_request_allowances) &&
     // With standard dismissal permissions, the approval App can withdraw its stale approvals.
     hasNoCustomActors(reviews.dismissal_restrictions);

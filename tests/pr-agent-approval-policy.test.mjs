@@ -140,6 +140,7 @@ test('declines approval when the protected branch or effective native review rul
     ['admin enforcement disabled', { ...protection, enforce_admins: { enabled: false } }],
     ['required reviews missing', { ...protection, required_pull_request_reviews: null }],
     ['no required approvals', { ...protection, required_pull_request_reviews: { ...reviewRules, required_approving_review_count: 0 } }],
+    ['multiple required approvals', { ...protection, required_pull_request_reviews: { ...reviewRules, required_approving_review_count: 2 } }],
     ['no required code owner', { ...protection, required_pull_request_reviews: { ...reviewRules, require_code_owner_reviews: false } }],
     ['stale approval dismissal disabled', { ...protection, required_pull_request_reviews: { ...reviewRules, dismiss_stale_reviews: false } }],
     ['pull request bypass granted', { ...protection, required_pull_request_reviews: {
