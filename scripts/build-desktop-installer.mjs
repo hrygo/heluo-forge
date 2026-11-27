@@ -242,8 +242,9 @@ export function isPackaged(relativePath) {
   if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
     return true;
   }
-  if (segments.length < 2) return true;
-  if (segments.slice(1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
+  const innerSegments = segments[0].startsWith('@') ? segments.slice(2) : segments.slice(1);
+  if (innerSegments.length === 0) return true;
+  if (innerSegments.some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
   if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
@@ -252,24 +253,31 @@ export function isPackaged(relativePath) {
   return true;
 }
 
+const THIRD_PARTY_PACKAGE_SCOPES = ['dsh/node_modules/!(@*)', 'dsh/node_modules/@!(deepseek-ai)/*'];
+
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
  * and lets a later pattern override an earlier one, so license files and each
  * verbatim directory are re-included after the exclusions, not before them.
+ * Package scopes skip the full package name (unscoped `pkg` or scoped `@s/pkg`)
+ * before matching excluded dirs, docs and configs so a package named e.g.
+ * `@scope/fixtures` never has its own runtime entry excluded.
  */
 export function runtimeFilter() {
   return [
     '**/*',
     ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`),
-    ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
-      `!dsh/node_modules/!(@deepseek-ai)/**/${dir}`,
-      `!dsh/node_modules/!(@deepseek-ai)/**/${dir}/**`,
+    ...THIRD_PARTY_PACKAGE_SCOPES.flatMap((pkgRoot) => [
+      ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
+        `!${pkgRoot}/**/${dir}`,
+        `!${pkgRoot}/**/${dir}/**`,
+      ]),
+      `!${pkgRoot}/**/*.md`,
+      `!${pkgRoot}/**/*.markdown`,
+      `!${pkgRoot}/**/CHANGELOG*`,
+      `!${pkgRoot}/**/HISTORY*`,
+      ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!${pkgRoot}/**/${glob}`),
     ]),
-    '!dsh/node_modules/!(@deepseek-ai)/**/*.md',
-    '!dsh/node_modules/!(@deepseek-ai)/**/*.markdown',
-    '!dsh/node_modules/!(@deepseek-ai)/**/CHANGELOG*',
-    '!dsh/node_modules/!(@deepseek-ai)/**/HISTORY*',
-    ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
     ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
     ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
   ];
@@ -422,42 +430,24 @@ export function assertSafeCertificatePath(certificateFile, inputRoots = []) {
     if (!root) continue;
     const rootReal = resolveRealPath(root);
     const rel = relative(rootReal, certReal);
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+    const isOutside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+    if (!isOutside) {
       fail('BAD_ARGUMENT', 'certificate file must not reside inside packaged input directories');
     }
   }
 }
 
 /**
- * Reject `appDir/electron-builder.env` entries that would silently inject a
- * Windows signing password (passing `/p` to signtool.exe) or an unsafe
- * certificate path inside packaged input directories.
+ * Reject `appDir/electron-builder.env` on Windows targets so electron-builder
+ * CLI cannot implicitly load signing passwords (passing `/p` to signtool.exe)
+ * or an unsafe certificate path from an uncontrolled env file.
  */
 export function validateBuilderEnvFile(appDir, options = {}) {
   const envFile = join(resolve(appDir), 'electron-builder.env');
   if (!existsSync(envFile)) return;
   const isWin = options?.target === 'win' || options?.certificateFile !== undefined;
   if (!isWin) return;
-  const content = readFileSync(envFile, 'utf8');
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === '' || line.startsWith('#')) continue;
-    const stripped = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-    const eqIndex = stripped.indexOf('=');
-    if (eqIndex <= 0) continue;
-    const key = stripped.slice(0, eqIndex).trim().toUpperCase();
-    let value = stripped.slice(eqIndex + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (DISALLOWED_WIN_SIGNING_ENV_KEYS.has(key) && value.trim() !== '') {
-      fail('BAD_ARGUMENT', `${key} in electron-builder.env is not supported for target win: use a passwordless PFX or Windows certificate store`);
-    }
-    if (WIN_CSC_LINK_ENV_KEYS.has(key) && value.trim() !== '' && !isUrlLike(value) && Array.isArray(options?.inputRoots)) {
-      const candidate = isAbsolute(value) ? value : resolve(appDir, value);
-      assertSafeCertificatePath(candidate, options.inputRoots);
-    }
-  }
+  fail('BAD_ARGUMENT', `electron-builder.env under ${resolve(appDir)} is not supported for target win`);
 }
 
 /**

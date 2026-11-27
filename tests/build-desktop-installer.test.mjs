@@ -100,15 +100,16 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/pkg/.vscode/settings.json',
     'dsh/node_modules/pkg/fixtures/test.json',
     'dsh/node_modules/pkg/fixtures',
-    'dsh/node_modules/@scope/fixtures/index.js',
+    'dsh/node_modules/@scope/fixtures/fixtures/test.json',
     'dsh/node_modules/pkg/__fixtures__/mock.json',
   ]) {
     assert.equal(isPackaged(excluded), false, excluded);
   }
   // 第三方包的许可证文件（MIT/Apache 等版权保留义务合规保留，包含 fixtures 等子目录内的许可证）与 @deepseek-ai 作用域下的文档/技能文本必须保留；
-  // 顶层包名恰好为 fixtures 时其入口保留；与排除规则同前缀但非配置的正常源码（如 tsconfig-loader.js、.npmignore-helper.js）不得被误伤。
+  // 顶层包名或作用域包名恰好为 fixtures 时其入口保留；与排除规则同前缀但非配置的正常源码（如 tsconfig-loader.js、.npmignore-helper.js）不得被误伤。
   for (const kept of [
     'dsh/node_modules/fixtures/index.js',
+    'dsh/node_modules/@scope/fixtures/index.js',
     'dsh/node_modules/tsconfig.json',
     'dsh/node_modules/zod/LICENSE.md',
     'dsh/node_modules/pkg/license.txt',
@@ -169,6 +170,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/fixtures',
       'dsh/node_modules/fixtures/index.js',
       'dsh/node_modules/@scope/fixtures/index.js',
+      'dsh/node_modules/@scope/fixtures/fixtures/test.json',
       'dsh/node_modules/tsconfig.json',
       'dsh/node_modules/pkg/fixtures/LICENSE.md',
       'dsh/node_modules/pkg/fixtures/NOTICE.flow',
@@ -239,29 +241,29 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   const appDir = join(root, 'app');
   const outsideCert = join(root, 'certs', 'outside.pfx');
   const insideCert = join(resDir, 'nested', 'inside.pfx');
+  const dotDotSubdirCert = join(resDir, '..secrets', 'inside.pfx');
   const symlinkCert = join(root, 'certs', 'link-to-inside.pfx');
   mkdirSync(dirname(insideCert), { recursive: true });
+  mkdirSync(dirname(dotDotSubdirCert), { recursive: true });
   mkdirSync(dirname(outsideCert), { recursive: true });
   mkdirSync(appDir, { recursive: true });
   writeFileSync(insideCert, 'pfx');
+  writeFileSync(dotDotSubdirCert, 'pfx');
   writeFileSync(outsideCert, 'pfx');
   symlinkSync(insideCert, symlinkCert);
 
   const safeEnv = builderEnv({ certificateFile: outsideCert, target: 'win', inputRoots: [resDir, appDir] }, baseEnv);
   assert.equal(safeEnv.WIN_CSC_LINK, resolve(outsideCert));
   assert.throws(() => assertSafeCertificatePath(insideCert, [resDir, appDir]), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => assertSafeCertificatePath(dotDotSubdirCert, [resDir, appDir]), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => builderEnv({ certificateFile: symlinkCert, target: 'win', inputRoots: [resDir, appDir] }, baseEnv), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => builderEnv({ target: 'win', inputRoots: [resDir, appDir] }, { ...baseEnv, WIN_CSC_LINK: insideCert }), (err) => err.code === 'BAD_ARGUMENT');
 
-  // electron-builder.env 若含 Windows 口令或不安全证书路径，必须在启动前拒绝且不回显口令
+  // target win 下禁止 appDir/electron-builder.env 存在（防止任何语法隐式注入签名口令），target mac 不受限制
   const envFile = join(appDir, 'electron-builder.env');
-  writeFileSync(envFile, `WIN_CSC_KEY_PASSWORD=${syntheticPwd}\n`);
+  writeFileSync(envFile, `WIN_CSC_KEY_PASSWORD: ${syntheticPwd}\n`);
   assert.throws(() => validateBuilderEnvFile(appDir, { target: 'win', inputRoots: [resDir, appDir] }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
   assert.doesNotThrow(() => validateBuilderEnvFile(appDir, { target: 'mac', inputRoots: [resDir, appDir] }));
-  writeFileSync(envFile, `WIN_CSC_LINK=${insideCert}\n`);
-  assert.throws(() => validateBuilderEnvFile(appDir, { target: 'win', inputRoots: [resDir, appDir] }), (err) => err.code === 'BAD_ARGUMENT');
-  writeFileSync(envFile, `WIN_CSC_LINK=${outsideCert}\n`);
-  assert.doesNotThrow(() => validateBuilderEnvFile(appDir, { target: 'win', inputRoots: [resDir, appDir] }));
 });
 
 test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {
