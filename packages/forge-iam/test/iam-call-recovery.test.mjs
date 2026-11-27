@@ -675,14 +675,14 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
   };
 }
 
-async function modelRuntimeFor(t, service, { beforeModelFetch } = {}) {
+async function modelRuntimeFor(t, service, { beforeModelFetch, respondToPost } = {}) {
   await service.saveModelSelection({ models: { [options.model]: {} }, defaultModelId: options.model });
   const posts = [];
   const { adapter, runtime, guard } = fixture({
     iamOverride: service, native: true, beforeModelFetch,
     async sendModelRequest(url, init) {
       posts.push({ url, method: init.method, token: new Headers(init.headers).get('X-IAM-Token') });
-      return new Response('synthetic response');
+      return respondToPost ? respondToPost(init.signal) : new Response('synthetic response');
     },
   });
   t.after(() => runtime.dispose());
@@ -799,6 +799,45 @@ for (const outcome of ['sign-out', 'a same-subject replacement login']) {
     assert.deepEqual(posts, []);
   });
 }
+
+test('expiry aborts a native model POST waiting for its first response without renewal or replay', { timeout: 6000 }, async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const accessOffsetMs = 240_000;
+  const f = await sessionFixture(t, { accessOffsetMs });
+  const posted = Promise.withResolvers();
+  const response = Promise.withResolvers();
+  t.after(() => response.resolve(new Response('synthetic response')));
+  const { adapter, guard, posts, runtime } = await modelRuntimeFor(t, f.service, {
+    respondToPost(signal) {
+      signal.throwIfAborted();
+      return new Promise((resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        signal.addEventListener('abort', abort, { once: true });
+        void response.promise.then(value => {
+          signal.removeEventListener('abort', abort);
+          resolve(value);
+        });
+        posted.resolve(signal);
+      });
+    },
+  });
+  const prepared = await adapter.prepareCall(options.provider, options.model);
+  const call = chunks(guard(options, next => prepared.stream(next)));
+  const signal = await Promise.race([
+    posted.promise,
+    call.then(() => assert.fail('the request ended before the native transport posted')),
+  ]);
+  assert.equal(signal.aborted, false);
+  assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: f.grant.accessToken }]);
+
+  t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
+  f.advance(accessOffsetMs + 1, { notify: false });
+  assert.equal(runtime.getView().error, 'IAM_LOGIN_REQUIRED');
+  assert.equal(signal.aborted, true);
+  assert.equal(failureOf(await call), 'IAM_LOGIN_REQUIRED');
+  assert.equal(posts.length, 1);
+  assert.equal(f.oidc.counts.refresh, 0);
+});
 
 for (const [name, expireAt, priorPost, changeKey] of [
   ['a verified connection failure leaves the retry eligible for dispatch renewal', 'retry', false],

@@ -2414,12 +2414,12 @@ window.__ModuleLoader__.load({
             }
             const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
             const projectedAt = projectedSessionDeadlines.get(view);
-            if (inFlight && projectedAt !== undefined) {
+            if (inFlight) {
               // Include each subscriber's existing cutoff before retiring
-              // the read. A pre-cutoff sample may still leave it verifying.
+              // the read, including frames without a Host sample time.
               const stillVerifying = ({ subscriber }) => !subscriber.barrierRef?.current.pending
                 && deadlineNeedsVerification(calculateDeadline(subscriber, view, sampledAfter, projectedAt), arrival);
-              if (projectedAt <= arrivedAt || pending.some(stillVerifying)) return;
+              if ((projectedAt !== undefined && projectedAt <= arrivedAt) || pending.some(stillVerifying)) return;
             }
             streamReady = true;
             stopPolling();
