@@ -34,10 +34,12 @@ async function withGitHub(run) {
     compareResponse: undefined,
     requests: [],
     postStatus: 200,
+    losePostResponse: false,
     confirmationStatus: 200,
     confirmation: {
       candidate: 1, matches_claim: true, priority: 'P1', line: 2,
       quote: '  return 0;', trigger: 'Default call', impact: 'Incorrect totals',
+      trigger_kind: 'normal_use', impact_kind: 'correctness',
     },
     dismissStatus: 200,
     files: [{ filename: 'src/example.js', status: 'modified', patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
@@ -71,14 +73,15 @@ async function withGitHub(run) {
       response.end(JSON.stringify(state.pr));
     } else if (request.method === 'GET' && path.startsWith('/repos/corp/example/git/ref/heads/')) {
       const ref = decodeURIComponent(path.slice('/repos/corp/example/git/ref/heads/'.length));
-      if (state.retargetDuringPostCheck && state.reviews.some((review) => review.user.login === 'github-actions[bot]')) {
+      const posted = state.requests.some(({ method, url }) => method === 'POST' && url === '/repos/corp/example/pulls/42/reviews');
+      if (state.retargetDuringPostCheck && posted) {
         state.pr.base.ref = state.retargetDuringPostCheck;
         delete state.refs[ref];
         state.retargetDuringPostCheck = undefined;
       }
       response.statusCode = state.refStatus === 200 && !(ref in state.refs) ? 404 : state.refStatus;
       response.end(JSON.stringify(state.refResponse ?? { ref: `refs/heads/${ref}`, object: { type: 'commit', sha: state.refs[ref] } }));
-      if (state.headDuringPostCheck && state.reviews.some((review) => review.user.login === 'github-actions[bot]')) {
+      if (state.headDuringPostCheck && posted) {
         state.pr.head.sha = state.headDuringPostCheck;
         state.headDuringPostCheck = undefined;
       }
@@ -142,9 +145,10 @@ async function withGitHub(run) {
         body: body.body,
       };
       if (state.postStatus < 300) state.reviews.push(review);
-      response.end(JSON.stringify(review));
       if (state.headAfterPost) state.pr.head.sha = state.headAfterPost;
       if (state.baseAfterPost) state.refs.main = state.baseAfterPost;
+      if (state.losePostResponse) response.destroy();
+      else response.end(JSON.stringify(review));
     } else {
       response.statusCode = 404;
       response.end('{}');
@@ -921,7 +925,8 @@ test('P0 on pull_request and P1 on manual /review each request changes for the r
       const reviewEnv = priority === 'P0' ? env : await commentEvent(env, '/review');
       const revision = await capture(reviewEnv);
       state.confirmation.priority = priority;
-      state.confirmation.trigger = 'Default call\n<details>@someone</details>';
+      state.confirmation.trigger = 'Default call with synthetic-private-value-7824';
+      state.confirmation.impact = 'Incorrect totals for synthetic-person-7824';
       await submit(reviewEnv, revision, prioritizedReview(priority));
       const [request, ...otherWrites] = reviewWrites(state);
       assert.equal(otherWrites.length, 0);
@@ -931,9 +936,8 @@ test('P0 on pull_request and P1 on manual /review each request changes for the r
       assert.equal(request.body.commit_id, revision.head);
       assert.ok(request.body.body.includes(`**${priority}**`));
       assert.match(request.body.body, /https:\/\/github\.com\/corp\/example\/pull\/42\/files#diff-[a-f0-9]{64}R2/u);
-      assert.ok(request.body.body.includes('<code>Default call &lt;details&gt;&#64;someone&lt;/details&gt;</code>'));
-      assert.ok(request.body.body.includes('<code>Incorrect totals</code>'));
-      assert.doesNotMatch(request.body.body, /The default call now returns|return 0;/u);
+      assert.match(request.body.body, /触发场景 正常使用[\s\S]+影响类别 结果正确性/u);
+      assert.doesNotMatch(request.body.body, /synthetic-(?:private-value|person)-7824|The default call now returns|return 0;/u);
     });
   }
 });
@@ -1032,6 +1036,25 @@ test('a P1 finding must have a location in the current PR diff', async () => {
   });
 });
 
+test('a long changed line can be independently verified with a bounded excerpt', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const changedLine = 'return "' + 'x'.repeat(650) + '";';
+    const quote = changedLine.slice(0, 200);
+    state.files[0].patch = `@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  ${changedLine}`;
+    state.confirmation.quote = quote + ' altered';
+    await submit(env, revision, prioritizedReview('P1'));
+    assert.deepEqual(reviewWrites(state), []);
+
+    state.confirmation.quote = quote;
+    await submit(env, revision, prioritizedReview('P1'));
+    assert.equal(reviewWrites(state).length, 1);
+    const call = state.requests.find(({ url }) => url === '/test/openai/chat/completions');
+    const [candidate] = JSON.parse(call.body.messages.find(({ role }) => role === 'user').content);
+    assert.deepEqual(candidate.changed, [{ line: 2, quotes: [quote, changedLine.slice(-200)] }]);
+  });
+});
+
 test('a recorded automatic request is reused across reruns and respected after dismissal', async () => {
   await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
@@ -1095,6 +1118,24 @@ test('a head or base advance after submission dismisses only the request from th
       assert.equal(/^retry=true$/mu.test(await readFile(env.GITHUB_OUTPUT, 'utf8')), update === 'baseAfterPost');
     });
   }
+});
+
+test('an accepted change request with a lost response is recovered before stale cleanup', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const earlier = { id: 100, state: 'CHANGES_REQUESTED', user: { login: 'github-actions[bot]' }, commit_id: head, body: 'Prior review' };
+    state.reviews.push(earlier);
+    state.losePostResponse = true;
+    state.retargetDuringPostCheck = 'release';
+    const result = await submit(env, revision, prioritizedReview('P1'));
+    const created = state.reviews.at(-1);
+    const writes = reviewWrites(state);
+    assert.match(result.stdout, /Recovered submitted change request/u);
+    assert.equal(earlier.state, 'CHANGES_REQUESTED');
+    assert.equal(created.state, 'DISMISSED');
+    assert.deepEqual(writes.map(({ method }) => method), ['POST', 'PUT']);
+    assert.ok(writes.at(-1).url.endsWith('/' + created.id + '/dismissals'));
+  });
 });
 
 test('a failed dismissal marks that exact automatic request as stale', async () => {
