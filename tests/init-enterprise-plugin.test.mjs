@@ -1709,6 +1709,105 @@ test('provisionClientSecret 失败时保留密钥文件，且不静默降级', a
   );
 });
 
+test('IAM Discovery 连不上时原因带上底层错误，处理办法按失败类别给', async (t) => {
+  const root = tempRoot(t);
+  const { dir } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = { secret: readEmbeddedClientSecret(dir) };
+  const stopped = async (fetchImpl) => {
+    try {
+      await provisionClientSecret({ exec: async () => ({ code: 0 }), profile, release, lines: [], fetchImpl, storeDirectory: join(root, 'store') });
+    } catch (error) {
+      return error;
+    }
+    throw new Error('the run should have stopped at the discovery document');
+  };
+  const KEPT = '密钥文件仍保留在交付目录，重跑会重新预置。';
+  const url = 'https://iam.corp.example/.well-known/openid-configuration';
+
+  // Node 的 fetch 只说 "fetch failed"，真正的原因挂在 cause 上。
+  const dns = await stopped(async () => {
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND iam.corp.example'), { code: 'ENOTFOUND' }) });
+  });
+  assert.equal(dns.code, 'IAM_DISCOVERY_FAILED');
+  assert.equal(dns.message, `init: 读取 IAM Discovery 失败（fetch failed；getaddrinfo ENOTFOUND iam.corp.example）：${url}`);
+  assert.equal(dns.next, `主机名没有解析出来：确认这台机器已接入企业内网或 VPN，再重跑本脚本；${KEPT}`);
+
+  // 系统错误上除错误码与文本之外的字段，不进结论。
+  const refused = await stopped(async () => {
+    throw new TypeError('fetch failed', {
+      cause: Object.assign(new Error('connect ECONNREFUSED 192.0.2.10:80'), { code: 'ECONNREFUSED', syscall: 'connect', headers: { Authorization: 'synthetic-credential-value' } }),
+    });
+  });
+  assert.equal(refused.message, `init: 读取 IAM Discovery 失败（fetch failed；connect ECONNREFUSED 192.0.2.10:80）：${url}`);
+  assert.equal(refused.message.includes('synthetic-credential-value'), false);
+  assert.equal(refused.next, `连接被拒绝或不可达：确认 IAM 服务在运行，这台机器到它的网络与端口（含代理）放行，再重跑本脚本；${KEPT}`);
+
+  // 期限到了是 fetch 自己的失败，没有 cause；连接超时是 cause 上的一个码。
+  const late = await stopped(async () => {
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  });
+  assert.equal(late.message, `init: 读取 IAM Discovery 失败（The operation was aborted due to timeout）：${url}`);
+  assert.equal(late.next, `20 秒内没有拿到响应：确认到企业 IAM 的网络通畅后重跑本脚本；${KEPT}`);
+  const connectTimeout = await stopped(async () => {
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) });
+  });
+  assert.equal(connectTimeout.message, `init: 读取 IAM Discovery 失败（fetch failed；UND_ERR_CONNECT_TIMEOUT；Connect Timeout Error）：${url}`);
+  assert.equal(connectTimeout.next, late.next);
+
+  const certificate = await stopped(async () => {
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('C0A55B12E3F4A5B6C7D8E9F0A1B2C3D4E5F60718:certificate has expired'), { code: 'CERT_HAS_EXPIRED' }) });
+  });
+  assert.equal(certificate.message, `init: 读取 IAM Discovery 失败（fetch failed；CERT_HAS_EXPIRED；C0A55B12E3F4A5B6C7D8E9F0A1B2C3D4E5F60718:certificate has expired）：${url}`);
+  assert.equal(certificate.next, `TLS 证书校验没有通过：确认 Discovery 地址的证书受这台机器信任，再重跑本脚本；${KEPT}`);
+
+  // 原因是一行且有界：错误文本里的换行与超长内容不进结论；类别不明时处理办法照旧。
+  const long = await stopped(async () => {
+    throw new TypeError('fetch\nfailed', { cause: Object.assign(new Error(`first line\n${'x'.repeat(1000)}`), { code: 'SOMETHING_ELSE' }) });
+  });
+  assert.equal(long.message.includes('\n'), false);
+  assert.ok(long.message.length < 500, `the reason is ${long.message.length} characters long`);
+  assert.match(long.message, /^init: 读取 IAM Discovery 失败（fetch failed；SOMETHING_ELSE；first line x+…）：/u);
+  assert.equal(long.next, `确认这台机器能访问企业 IAM 后重跑本脚本；${KEPT}`);
+});
+
+test('反向：拿不到原因的 Discovery 失败，结论与原先一样；原因是字符串时照录', async (t) => {
+  const root = tempRoot(t);
+  const { dir } = writeSecretBundle(join(root, 'release'));
+  const profile = { dir: join(root, 'profile') };
+  const cli = join(profile.dir, 'node_modules', ENTRY_PACKAGE, 'node_modules', '@heluo', 'forge-iam', 'bin', 'heluo-forge.mjs');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '// placeholder\n');
+  const release = { secret: readEmbeddedClientSecret(dir) };
+  const stopped = async (fetchImpl) => {
+    try {
+      await provisionClientSecret({ exec: async () => ({ code: 0 }), profile, release, lines: [], fetchImpl, storeDirectory: join(root, 'store') });
+    } catch (error) {
+      return error;
+    }
+    throw new Error('the run should have stopped at the discovery document');
+  };
+  const url = 'https://iam.corp.example/.well-known/openid-configuration';
+  const usual = '确认这台机器能访问企业 IAM 后重跑本脚本；密钥文件仍保留在交付目录，重跑会重新预置。';
+  for (const [thrown, reason] of [[undefined, 'UNKNOWN'], ['a bare string', 'UNKNOWN'], [new TypeError('fetch failed'), 'fetch failed']]) {
+    const failure = await stopped(async () => {
+      throw thrown;
+    });
+    assert.equal(failure.code, 'IAM_DISCOVERY_FAILED');
+    assert.equal(failure.message, `init: 读取 IAM Discovery 失败（${reason}）：${url}`);
+    assert.equal(failure.next, usual);
+  }
+  // A cause that is a string is repeated as it is; it names no class.
+  const stringCause = await stopped(async () => {
+    throw new TypeError('fetch failed', { cause: 'ECONNREFUSED' });
+  });
+  assert.equal(stringCause.message, `init: 读取 IAM Discovery 失败（fetch failed；ECONNREFUSED）：${url}`);
+  assert.equal(stringCause.next, usual);
+});
+
 test('credentialStoreDirectory 与凭据库同规则，probeStoreDirectory 用空文件探针', (t) => {
   const root = tempRoot(t);
   const host = '/srv/people/a';
