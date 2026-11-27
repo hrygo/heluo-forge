@@ -995,6 +995,45 @@ test('截止前取样的同期限 SSE 帧保留在途核验', async (t) => {
   assert.equal(reads, 2);
 });
 
+test('无取样时间的同期限 SSE 帧保留最后一次在途核验', async (t) => {
+  const stream = events();
+  const now = Date.now();
+  const first = { ...ready, accessExpiresAt: new Date(now + 1000).toISOString() };
+  const expired = { ...first, state: 'expired', signedIn: false, renewal: 'unavailable' };
+  const confirmation = Promise.withResolvers();
+  let reads = 0;
+  let signal;
+  const page = await mountPage((path, init) => {
+    assert.equal(path, '/api/forge-iam/view');
+    if (++reads === 1) return Response.json(first);
+    if (reads === 2) return Response.json({}, { status: 503 });
+    signal = init.signal;
+    return confirmation.promise;
+  }, { eventSource: stream.EventSource, now });
+  t.after(() => { confirmation.resolve(Response.json(expired)); page.close(); });
+  page.mount('forge-iam-launcher', { wide: true });
+  await page.settled();
+  const sameStream = stream.streams.at(-1);
+  sameStream.emit(first);
+  assert.match(text(page.render('forge-iam-launcher')), /企业认证有效/);
+
+  page.advanceTime(1000);
+  await page.settled();
+  assert.equal(reads, 2);
+  page.advanceTime(2000);
+  assert.equal(reads, 3);
+  assert.match(text(page.render('forge-iam-launcher')), /正在核验企业会话/);
+  const originalReadSignal = signal;
+  sameStream.emit(first);
+  assert.equal(originalReadSignal.aborted, false);
+  assert.equal(reads, 3);
+
+  confirmation.resolve(Response.json(expired));
+  await page.settled();
+  assert.match(text(page.render('forge-iam-launcher')), /会话已过期/);
+  assert.equal(reads, 3);
+});
+
 test('长连接在投影截止后采样的同期限 SSE 帧确认有效会话', async (t) => {
   const stream = events();
   const hostNow = Date.now();
@@ -1401,10 +1440,12 @@ for (const frame of ['同期限', '已退出']) {
     const response = Promise.withResolvers();
     let checking = false;
     let reads = 0;
-    const page = await mountPage(async (path) => {
+    let signal;
+    const page = await mountPage(async (path, init) => {
       assert.equal(path, '/api/forge-iam/view');
       if (!checking) return Response.json(soon);
       reads++;
+      signal = init.signal;
       return Response.json(await response.promise);
     }, { eventSource: stream.EventSource, now });
     t.after(() => { response.resolve(soon); page.close(); });
@@ -1417,14 +1458,14 @@ for (const frame of ['同期限', '已退出']) {
     page.advanceTime(1000);
     assert.equal(reads, 1);
     original.emit(frame === '同期限' ? soon : signedOut);
+    assert.equal(signal.aborted, frame === '已退出');
     if (frame === '同期限') {
-      assert.equal(original.closed, true);
-      assert.equal(reads, 2);
+      assert.equal(original.closed, false);
       assert.match(text(page.render('forge-iam-launcher')), /正在核验企业会话/);
     }
     response.resolve(soon);
     await page.settled();
-    assert.equal(reads, frame === '同期限' ? 2 : 1);
+    assert.equal(reads, 1);
     assert.match(text(page.render('forge-iam-launcher')), frame === '同期限' ? /企业认证有效/ : /企业账号未登录/);
     assert.equal(stream.maxActive, 1);
   });
