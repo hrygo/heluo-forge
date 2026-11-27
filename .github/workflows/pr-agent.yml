@@ -1,6 +1,6 @@
 name: 洛神 (PR-Agent)
 run-name: >-
-  ${{ (github.event_name == 'push' || github.event_name == 'branch_protection_rule') && '洛神 · 核对已有批准' ||
+  ${{ (github.event_name == 'push' || github.event_name == 'branch_protection_rule' || github.event_name == 'schedule') && '洛神 · 核对已有批准' ||
   format('洛神 · PR #{0}{1}', github.event.workflow_run.pull_requests[0].number || github.event.issue.number,
     github.event_name == 'workflow_run' && format(' {0}', github.event.workflow_run.head_sha) || '') }}
 
@@ -28,10 +28,12 @@ on:
     branches: [main]
   branch_protection_rule:
     types: [created, edited, deleted]
+  schedule:
+    - cron: '17 * * * *'
 
 # Serialize publication and recovery for each PR, including quoted commands.
 concurrency:
-  group: pr-agent-${{ (github.event_name == 'push' || github.event_name == 'branch_protection_rule') && 'main-approval-cleanup' || github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type != 'User' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/')) && 'other-comment' || 'review' }}
+  group: pr-agent-${{ (github.event_name == 'push' || github.event_name == 'branch_protection_rule' || github.event_name == 'schedule') && 'main-approval-cleanup' || github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type != 'User' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/')) && 'other-comment' || 'review' }}
   queue: max
 
 permissions:
@@ -225,10 +227,11 @@ jobs:
     needs: review
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' && vars.PR_AGENT_APPROVAL_APP_CLIENT_ID != '' &&
-      (github.event_name == 'push' || github.event_name == 'branch_protection_rule' ||
+      (github.event_name == 'push' || github.event_name == 'branch_protection_rule' || github.event_name == 'schedule' ||
        (needs.review.result == 'success' && needs.review.outputs.approval_revision != '' &&
-       fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt &&
-       (vars.PR_AGENT_AUTO_APPROVE == 'true' || fromJSON(needs.review.outputs.approval_revision).allowApproval == false)))
+       (fromJSON(needs.review.outputs.approval_revision).allowApproval == false ||
+        (vars.PR_AGENT_AUTO_APPROVE == 'true' &&
+         fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))))
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     environment: luoshen-approval
@@ -251,6 +254,7 @@ jobs:
           package-manager-cache: false
 
       - name: Mint the dedicated Luoshen approval token
+        if: ${{ needs.review.outputs.approval_revision == '' || fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt }}
         id: approval_app
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:

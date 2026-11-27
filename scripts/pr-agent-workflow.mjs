@@ -387,6 +387,7 @@ async function approve(github, env, scope) {
   // GitHub can rerun this job using successful dependencies from a previous attempt.
   if (revision.runId !== env.GITHUB_RUN_ID || revision.runAttempt !== env.GITHUB_RUN_ATTEMPT ||
       !/^[1-9][0-9]*$/u.test(env.GITHUB_RUN_ATTEMPT ?? '')) {
+    if (!revision.allowApproval) throw new Error('An automatic approval withdrawal needs a fresh review. Re-run all jobs to complete it.');
     console.log('Skipping automatic approval without a review from this workflow attempt.');
     return;
   }
@@ -402,18 +403,19 @@ const github = githubClient(env);
 const event = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, 'utf8'));
 const scope = eventScope(event, env.GITHUB_EVENT_NAME, github);
 const action = process.argv[2];
+const cleanup = env.GITHUB_EVENT_NAME === 'schedule' ||
+  (event.repository?.full_name === github.repository &&
+   ((env.GITHUB_EVENT_NAME === 'push' && event.ref === env.GITHUB_REF && event.deleted === false) ||
+    (env.GITHUB_EVENT_NAME === 'branch_protection_rule' && ['created', 'edited', 'deleted'].includes(event.action))));
 if (scope) {
   if (action === 'capture') await capture(github, env, scope, event);
   else if (action === 'validate') await validateReview(github, env, scope);
   else if (action === 'approve') await approve(github, env, scope);
   else throw new Error('Unknown PR-Agent workflow command');
-} else if (action === 'approve' && env.GITHUB_REF === 'refs/heads/main' &&
-    event.repository?.full_name === github.repository &&
-    ((env.GITHUB_EVENT_NAME === 'push' && event.ref === env.GITHUB_REF && event.deleted === false) ||
-     (env.GITHUB_EVENT_NAME === 'branch_protection_rule' && ['created', 'edited', 'deleted'].includes(event.action)))) {
+} else if (action === 'approve' && env.GITHUB_REF === 'refs/heads/main' && cleanup) {
   const dismissed = await reconcileMainApprovals({
     github, ...approvalCredential(env), humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS,
   });
-  const change = env.GITHUB_EVENT_NAME === 'push' ? 'main changed' : 'branch protection changed';
-  console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after ${change}.`);
+  const trigger = { push: 'main changed', branch_protection_rule: 'branch protection changed', schedule: 'a scheduled check' };
+  console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after ${trigger[env.GITHUB_EVENT_NAME]}.`);
 }
