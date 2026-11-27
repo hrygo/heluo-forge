@@ -218,6 +218,11 @@ export function readAppIdentity(path) {
   return identity;
 }
 
+function hasExcludedRuntimeExtension(relativePath) {
+  const fileName = relativePath.slice(relativePath.lastIndexOf('/') + 1);
+  return RUNTIME_EXCLUDED_EXTENSIONS.some((extension) => fileName.endsWith(extension));
+}
+
 /**
  * Whether a staged file reaches the package. `relativePath` is `/`-separated
  * from the resources root, and the rule matches `runtimeFilter()` identically.
@@ -225,7 +230,7 @@ export function readAppIdentity(path) {
 export function isPackaged(relativePath) {
   if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
   if (!relativePath.startsWith('dsh/node_modules/')) {
-    if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
+    if (hasExcludedRuntimeExtension(relativePath)) return false;
     return true;
   }
   const segments = relativePath.slice('dsh/node_modules/'.length).split('/');
@@ -233,7 +238,7 @@ export function isPackaged(relativePath) {
   const upperFile = file.toUpperCase();
   const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
   if (isLicense) return true;
-  if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
+  if (hasExcludedRuntimeExtension(relativePath)) return false;
   if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
     return true;
   }
@@ -383,24 +388,22 @@ export function builderEntry(builderDir, exists = existsSync, read = readFileSyn
   return exists(cli) ? cli : null;
 }
 
+const DISALLOWED_WIN_SIGNING_ENV_KEYS = new Set(['WIN_CSC_KEY_PASSWORD', 'CSC_KEY_PASSWORD']);
+
 /**
  * Environment variables for the electron-builder subprocess.
  *
  * Code signing credentials must never travel via CLI arguments or get written
- * to disk in builder-config.json, nor may a certificate password be passed to
- * signtool.exe via `/p` command-line arguments. When --certificate-file is
- * given, the path to a passwordless PFX is passed via WIN_CSC_LINK. Any
- * non-empty WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD in the environment is
- * rejected (fail-closed) so no password can reach child process arguments.
+ * to disk in builder-config.json, nor may a Windows certificate password be
+ * passed to signtool.exe via `/p` command-line arguments. When
+ * --certificate-file is given, the path to a passwordless PFX is passed via
+ * WIN_CSC_LINK. For target `win`, any non-empty WIN_CSC_KEY_PASSWORD or
+ * CSC_KEY_PASSWORD (case-insensitive, matching Windows environment semantics)
+ * is rejected (fail-closed) so no password can reach child process arguments.
+ * Non-Windows targets (such as `mac`) keep their existing signing environment.
  */
 export function builderEnv(options = {}, env = process.env) {
   const next = { ...env };
-  for (const key of ['WIN_CSC_KEY_PASSWORD', 'CSC_KEY_PASSWORD']) {
-    if (typeof next[key] === 'string' && next[key].trim() !== '') {
-      fail('BAD_ARGUMENT', `${key} is not supported: use a passwordless PFX or Windows certificate store`);
-    }
-    delete next[key];
-  }
   if (options?.certificateFile !== undefined) {
     if (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '') {
       fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
@@ -409,6 +412,17 @@ export function builderEnv(options = {}, env = process.env) {
       fail('BAD_ARGUMENT', '--certificate-file is only supported for target win');
     }
     next.WIN_CSC_LINK = resolve(options.certificateFile);
+  }
+  if (options?.target === 'win' || options?.certificateFile !== undefined) {
+    for (const key of Object.keys(next)) {
+      const upper = key.toUpperCase();
+      if (!DISALLOWED_WIN_SIGNING_ENV_KEYS.has(upper)) continue;
+      const value = next[key];
+      if (typeof value === 'string' && value.trim() !== '') {
+        fail('BAD_ARGUMENT', `${upper} is not supported for target win: use a passwordless PFX or Windows certificate store`);
+      }
+      delete next[key];
+    }
   }
   return next;
 }

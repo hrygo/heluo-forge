@@ -90,6 +90,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/@scope/pkg/example/demo.js',
     'dsh/node_modules/@scope/pkg/examples/demo.js',
     'dsh/node_modules/pkg/lib/index.js.flow',
+    'dsh/node_modules/pkg/.flow',
     'dsh/node_modules/pkg/.eslintrc.json',
     'dsh/node_modules/pkg/.prettierrc.yml',
     'dsh/node_modules/pkg/.editorconfig',
@@ -152,6 +153,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/test/foo.js',
       'dsh/node_modules/@scope/pkg/docs/guide.md',
       'dsh/node_modules/pkg/lib/index.js.flow',
+      'dsh/node_modules/pkg/.flow',
       'dsh/node_modules/pkg/.eslintrc.json',
       'dsh/node_modules/pkg/.prettierrc.yml',
       'dsh/node_modules/pkg/.editorconfig',
@@ -208,10 +210,15 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   const existingEnv = builderEnv({}, { ...baseEnv, WIN_CSC_LINK: '/existing/cert.pfx' });
   assert.equal(existingEnv.WIN_CSC_LINK, '/existing/cert.pfx');
 
-  // 显式传入空白证书参数或非空口令环境变量必须直接报错拒绝，且报错中绝不回显合成口令
+  // 显式传入空白证书参数或非空口令环境变量（含混合大小写，Windows 环境变量不区分大小写）在 target win 下必须直接报错拒绝，且报错中绝不回显合成口令；
+  // 非 Windows 目标（如 macOS）仍保留既有的 CSC_KEY_PASSWORD 签名环境变量。
   const syntheticPwd = 'synthetic-secret-password-999';
   assert.throws(() => builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'win' }, { ...baseEnv, WIN_CSC_KEY_PASSWORD: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
-  assert.throws(() => builderEnv({}, { ...baseEnv, CSC_KEY_PASSWORD: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
+  assert.throws(() => builderEnv({ target: 'win' }, { ...baseEnv, CSC_KEY_PASSWORD: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
+  assert.throws(() => builderEnv({ target: 'win' }, { ...baseEnv, Win_Csc_Key_Password: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
+  assert.throws(() => builderEnv({ target: 'win' }, { ...baseEnv, csc_key_password: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
+  const macEnv = builderEnv({ target: 'mac' }, { ...baseEnv, CSC_KEY_PASSWORD: syntheticPwd });
+  assert.equal(macEnv.CSC_KEY_PASSWORD, syntheticPwd);
   assert.throws(() => builderEnv({ certificateFile: '', target: 'win' }), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => builderEnv({ certificateFile: '   ', target: 'win' }), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'mac' }), (err) => err.code === 'BAD_ARGUMENT');
