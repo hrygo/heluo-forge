@@ -259,6 +259,9 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const owner = await readApprovalBot(github, approver, appSlug);
 
   const pull = `/pulls/${prNumber}`;
+  const changeRequestReason = async () => {
+    if (await hasBlockingChangeRequest(github, await readReviewHistory(github, pull))) return changeRequestDismissal;
+  };
   const pr = await readPull(github, pull, prNumber);
   if (!validId(pr.user?.id)) throw new Error('Invalid pull request author');
   if (pr.user.id === owner.id) return 'skipped-self';
@@ -280,8 +283,10 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     const pending = hasPendingDismissal(review);
     if (allowApproval && !pending && matchesRevision(receipt, revision)) continue;
     const reviewToDismiss = allowApproval ? review : await recordPendingDismissal(github, approver, pull, review);
-    await dismissApproval(github, approver, pull, reviewToDismiss, pending || !allowApproval ? ineligibleDismissal : staleDismissal);
-    withdrawn.add(review.id);
+    const reason = pending || !allowApproval ? ineligibleDismissal : async () => {
+      if (!await isCurrent(github, repository, pull, prNumber, receipt, { allowDraft: true })) return staleDismissal;
+    };
+    if (await dismissApproval(github, approver, pull, reviewToDismiss, reason)) withdrawn.add(review.id);
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';
 
@@ -294,9 +299,14 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     const activeApprovals = remaining.filter((review) => readActiveApproval(review, owner, prNumber));
     if (!activeApprovals.length) return `skipped-${rejection}`;
     if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
-    const message = rejection === 'changes-requested' ? changeRequestDismissal : protectionDismissal;
-    for (const review of activeApprovals) await dismissApproval(github, approver, pull, review, message);
-    return `dismissed-${rejection}`;
+    const reason = rejection === 'changes-requested' ? changeRequestReason : async () => {
+      if (!await hasIndependentApprovalGate(github, approver, revision, humanOwners)) return protectionDismissal;
+    };
+    let dismissed = false;
+    for (const review of activeApprovals) {
+      if (await dismissApproval(github, approver, pull, review, reason)) dismissed = true;
+    }
+    return dismissed ? `dismissed-${rejection}` : 'skipped-existing';
   }
   if (await hasPriorApproval(github, remaining, owner, revision)) return 'skipped-existing';
 
@@ -308,11 +318,12 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   let current;
   let blocked;
   try {
-    blocked = await hasBlockingChangeRequest(github, await readReviewHistory(github, pull));
+    blocked = Boolean(await changeRequestReason());
     current = await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: true });
   } catch (cause) {
     try {
-      await dismissApproval(github, approver, pull, approval, verificationDismissal);
+      const pending = await recordPendingDismissal(github, approver, pull, approval);
+      await dismissApproval(github, approver, pull, pending, verificationDismissal);
     } catch (dismissalError) {
       throw new AggregateError([cause, dismissalError], `Could not verify or dismiss automatic approval ${approval.id}`);
     }
@@ -322,8 +333,7 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     await dismissApproval(github, approver, pull, approval, staleDismissal);
     return 'dismissed-stale';
   }
-  if (blocked) {
-    await dismissApproval(github, approver, pull, approval, changeRequestDismissal);
+  if (blocked && await dismissApproval(github, approver, pull, approval, changeRequestReason)) {
     return 'dismissed-changes-requested';
   }
   if (!await hasLiveApprovalProtection(approver)) {

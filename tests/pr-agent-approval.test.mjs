@@ -415,7 +415,27 @@ test('a failed post-publication revision read withdraws the exact unverified app
 
   await assert.rejects(run(), /could not verify.*approval 300/iu);
   assert.equal(state.reviews[0].state, 'DISMISSED');
-  assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+  assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300`, `${reviewPath}/300/dismissals`]);
+});
+
+test('cleanup retries an unverified App approval when post-publication verification and withdrawal both fail', async () => {
+  const { state, run, reconcile } = fakeGitHub();
+  state.reviews.push(priorApproval({ id: 101, author: owner }));
+  state.afterPost = () => {
+    state.beforeGet = (path) => { if (path === pull) throw new Error('Revision read failed'); };
+    state.denyDismissal = true;
+  };
+
+  await assert.rejects(run(), /Could not verify or dismiss automatic approval/u);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED']);
+  state.beforeGet = undefined;
+  state.denyDismissal = false;
+
+  assert.equal(await reconcile(), 1);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+  assert.deepEqual(state.writes.map(({ path }) => path), [
+    reviewPath, `${reviewPath}/300`, `${reviewPath}/300/dismissals`, `${reviewPath}/300/dismissals`,
+  ]);
 });
 
 test('retries a compensation dismissal on the same revision after GitHub recovers', async () => {
@@ -442,7 +462,7 @@ test('retries a compensation dismissal on the same revision after GitHub recover
   assert.equal(await run({ runId: '5678' }), 'approved');
   assert.equal(state.reviews[0].state, 'DISMISSED');
   assert.equal(state.reviews[1].state, 'APPROVED');
-  assert.equal(state.writes.length, 3);
+  assert.equal(state.writes.length, 4);
 });
 
 test('a stale review edited before cleanup is preserved as a manual review', async () => {
@@ -571,6 +591,26 @@ test('cleanup preserves a same-version App approval when a maintainer lifts the 
   assert.equal(await reconcile(), 0);
   assert.deepEqual(state.reviews.map(({ state }) => state), ['CHANGES_REQUESTED', 'APPROVED', 'APPROVED']);
   assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+});
+
+test('publication refreshes the human veto before withdrawing an existing or newly posted approval', async () => {
+  for (const existing of [true, false]) {
+    const { state, run } = fakeGitHub();
+    const openRequest = () => {
+      state.reviews.unshift({ id: 101, user: owner, state: 'CHANGES_REQUESTED', commit_id: head });
+      state.beforeGet = (path) => {
+        if (path === `${reviewPath}/300`) state.reviews.push({ id: 301, user: owner, state: 'APPROVED', commit_id: head });
+      };
+    };
+    if (existing) {
+      assert.equal(await run(), 'approved');
+      openRequest();
+    } else state.afterPost = openRequest;
+
+    assert.equal(await run(), existing ? 'skipped-existing' : 'approved');
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['CHANGES_REQUESTED', 'APPROVED', 'APPROVED']);
+    assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+  }
 });
 
 test('retries transient history before reconciling an existing approval with a human change request', async () => {
@@ -811,6 +851,8 @@ test('an unavailable collaborator permission read prevents a verified approval',
     else state.reviews.push(changesRequested);
 
     await assert.rejects(run(), duringPost ? /approval was dismissed/u : /Permission unavailable/u);
-    assert.deepEqual(state.writes.map(({ method }) => method), duringPost ? ['POST', 'PUT'] : []);
+    assert.deepEqual(state.writes.map(({ path }) => path), duringPost ? [
+      reviewPath, `${reviewPath}/300`, `${reviewPath}/300/dismissals`,
+    ] : []);
   }
 });
