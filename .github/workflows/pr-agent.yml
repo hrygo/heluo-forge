@@ -262,6 +262,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_AGENT_AUTO_APPROVE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
+          PR_AGENT_HUMAN_CODEOWNERS: ${{ vars.PR_AGENT_HUMAN_CODEOWNERS }}
           PR_AGENT_APPROVAL_TOKEN: ${{ steps.approval_app.outputs.token }}
           PR_AGENT_APPROVAL_APP_SLUG: ${{ steps.approval_app.outputs.app-slug }}
           APPROVAL_REVISION: ${{ needs.review.outputs.approval_revision }}

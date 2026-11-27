@@ -10,6 +10,10 @@ const protectionDismissal = '洛神未能核对人工审批要求，撤销自动
 const ineligibleDismissal = '当前审查结论不满足自动审批条件，撤销此前的洛神自动审批。';
 const changeRequestDismissal = '维护者已请求修改，撤销洛神自动审批。';
 const staleDismissal = 'PR 或目标分支版本已变化，洛神自动审批已过期。';
+const recoverableDismissals = new Set([
+  verificationDismissal, protectionDismissal, ineligibleDismissal, changeRequestDismissal, staleDismissal,
+]);
+const transientHistoryCodes = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN']);
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
 
 function sameBot(left, right) {
@@ -69,7 +73,7 @@ async function hasPriorApproval(github, reviews, owner, revision) {
     const dismissal = event?.dismissed_review;
     if (event?.event !== 'review_dismissed' || !dismissed.has(dismissal?.review_id)) continue;
     if (!sameBot(event.actor, owner) || dismissal.state !== 'approved' ||
-        ![verificationDismissal, protectionDismissal, ineligibleDismissal].includes(dismissal.dismissal_message)) return true;
+        !recoverableDismissals.has(dismissal.dismissal_message)) return true;
     dismissed.delete(dismissal.review_id);
     if (!dismissed.size) return false;
   }
@@ -147,14 +151,15 @@ async function readReviewHistory(github, pull) {
     try {
       return await listReviews(github, pull);
     } catch (error) {
-      if (error.name !== 'TimeoutError' && !(error.status >= 500 && error.status < 600)) throw error;
+      const networkFailure = error instanceof TypeError && transientHistoryCodes.has(error.cause?.code);
+      if (!networkFailure && error.name !== 'TimeoutError' && !(error.status >= 500 && error.status < 600)) throw error;
       await delay(delayMs);
     }
   }
   return listReviews(github, pull);
 }
 
-export async function reconcileMainApprovals({ github, approver, appSlug }) {
+export async function reconcileMainApprovals({ github, approver, appSlug, humanOwners }) {
   const owner = await readApprovalBot(github, approver, appSlug);
   let dismissed = 0;
   const errors = [];
@@ -171,7 +176,7 @@ export async function reconcileMainApprovals({ github, approver, appSlug }) {
         const current = await isCurrent(github, github.repository, pull, prNumber, receipt, { allowDraft: true });
         let reason;
         if (!current) reason = staleDismissal;
-        else if (!await hasIndependentApprovalGate(github, approver, receipt)) reason = protectionDismissal;
+        else if (!await hasIndependentApprovalGate(github, approver, receipt, humanOwners)) reason = protectionDismissal;
         else if (await hasBlockingChangeRequest(github, reviews)) reason = changeRequestDismissal;
         if (!reason) continue;
         await dismissApproval(github, approver, pull, review, reason);
@@ -185,7 +190,7 @@ export async function reconcileMainApprovals({ github, approver, appSlug }) {
   return dismissed;
 }
 
-export async function publishApproval({ github, approver, revision, appSlug, runId, allowApproval = true }) {
+export async function publishApproval({ github, approver, revision, appSlug, humanOwners, runId, allowApproval = true }) {
   const { repository, serverUrl } = github;
   const { prNumber, head, base, baseRef } = revision;
   if (typeof allowApproval !== 'boolean') throw new Error('Invalid automatic approval verdict');
@@ -232,7 +237,7 @@ export async function publishApproval({ github, approver, revision, appSlug, run
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
   let rejection;
   if (await hasBlockingChangeRequest(github, remaining)) rejection = 'changes-requested';
-  else if (!await hasIndependentApprovalGate(github, approver, revision)) rejection = 'protection';
+  else if (!await hasIndependentApprovalGate(github, approver, revision, humanOwners)) rejection = 'protection';
   if (rejection) {
     const activeApprovals = remaining.filter((review) => readActiveApproval(review, owner, prNumber));
     if (!activeApprovals.length) return `skipped-${rejection}`;

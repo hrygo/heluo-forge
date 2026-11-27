@@ -124,8 +124,8 @@ function fakeGitHub() {
       return structuredClone(review);
     },
   };
-  const run = (options = {}) => publishApproval({ github, approver, revision, appSlug, runId: '1234', ...options });
-  const reconcile = () => reconcileMainApprovals({ github, approver, appSlug });
+  const run = (options = {}) => publishApproval({ github, approver, revision, appSlug, humanOwners: owner.login, runId: '1234', ...options });
+  const reconcile = () => reconcileMainApprovals({ github, approver, appSlug, humanOwners: owner.login });
   return { state, run, reconcile };
 }
 
@@ -372,6 +372,8 @@ test('cleanup withdraws an already accepted approval after a lost write response
     assert.equal(await reconcile(), 0);
     assert.equal(await run({ runId: '5678' }), 'skipped-changes-requested');
     assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+    state.reviews.push({ id: 102, user: reviewer, state: 'APPROVED', commit_id: head });
+    assert.equal(await run({ runId: '6789' }), 'approved');
   }
 });
 
@@ -554,6 +556,22 @@ test('main advancing withdraws the old App approval without another model review
   assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED', 'APPROVED']);
   assert.deepEqual(state.writes.map(({ method, path }) => [method, path]), [['PUT', `${reviewPath}/101/dismissals`]]);
   assert.equal(await reconcile(), 0);
+});
+
+test('a fresh review can recover a bot withdrawal when a PR returns to the original target revision', async () => {
+  const { state, run, reconcile } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  state.pr.base.ref = 'release';
+  assert.equal(await reconcile(), 1);
+  assert.equal(state.reviews[0].state, 'DISMISSED');
+
+  state.pr.base.ref = baseRef;
+  const automatic = state.timeline[0];
+  state.timeline = [{ ...automatic, actor: owner }];
+  assert.equal(await run({ runId: '5678' }), 'skipped-existing');
+  state.timeline = [automatic];
+  assert.equal(await run({ runId: '5678' }), 'approved');
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
 });
 
 test('main cleanup ignores a draft toggle for an approval of the same revision', async () => {

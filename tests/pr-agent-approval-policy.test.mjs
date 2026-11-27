@@ -9,6 +9,7 @@ const directoryPath = `/contents/.github?ref=${revision.base}`;
 const contentPath = `/contents/${codeOwnersPath}?ref=${revision.base}`;
 const parserPath = `/codeowners/errors?ref=${revision.base}`;
 const codeOwners = '* @maintainer @another-maintainer\n';
+const humanLogins = 'maintainer,another-maintainer';
 const fileEntry = { path: codeOwnersPath, type: 'file', sha: 'c'.repeat(40) };
 const emptyActorLists = { users: [], teams: [], apps: [] };
 const reviewRules = {
@@ -56,13 +57,51 @@ function githubClients(options = {}) {
   return { github, approver, calls };
 }
 
-test('requires live protection and the checked base revision’s catch-all of individual code owners', async () => {
+test('requires live protection and the checked base revision’s catch-all of configured human code owners', async () => {
   const { github, approver, calls } = githubClients({ source: `# 人工批准\n\n${codeOwners}` });
-  assert.equal(await hasIndependentApprovalGate(github, approver, revision), true);
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), true);
   assert.equal(calls.length, 4);
   assert.deepEqual(new Set(calls.map(([client, path]) => `${client} ${path}`)), new Set([
     `approver ${protectionPath}`, `github ${directoryPath}`, `github ${contentPath}`, `github ${parserPath}`,
   ]));
+});
+
+test('requires every catch-all owner to be in the configured human allowlist', async () => {
+  const { github, approver } = githubClients({ source: '* @maintainer @forge-review-service\n' });
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
+});
+
+test('matches human logins case-insensitively and accepts horizontal spacing around CSV entries', async () => {
+  const { github, approver } = githubClients({ source: '* @Maintainer @another-maintainer\n' });
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision,
+    ' MAINTAINER,\tAnother-Maintainer , unused-maintainer '), true);
+});
+
+test('declines missing, empty, or malformed human login configuration without using credentials', async (t) => {
+  const cases = [
+    ['missing', undefined],
+    ['wrong type', ['maintainer', 'another-maintainer']],
+    ['empty', ''],
+    ['whitespace only', ' \t '],
+    ['leading comma', `,${humanLogins}`],
+    ['trailing comma', `${humanLogins},`],
+    ['blank entry', `${humanLogins}, ,other-maintainer`],
+    ['CODEOWNERS syntax', `${humanLogins},@other-maintainer`],
+    ['team syntax', `${humanLogins},example/maintainers`],
+    ['bot syntax', `${humanLogins},reviewer[bot]`],
+    ['leading or trailing hyphen', `${humanLogins},-maintainer,maintainer-`],
+    ['consecutive hyphens', `${humanLogins},other--maintainer`],
+    ['too long', `${humanLogins},${'a'.repeat(40)}`],
+    ['line break', `${humanLogins}\n`],
+    ['non-ASCII character', `${humanLogins},\u212Aelvin`],
+  ];
+  for (const [name, configuredHumanLogins] of cases) {
+    await t.test(name, async () => {
+      const { github, approver, calls } = githubClients();
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, configuredHumanLogins), false);
+      assert.deepEqual(calls, []);
+    });
+  }
 });
 
 test('accepts the documented empty dismissal lists in the protected branch response', async () => {
@@ -73,7 +112,7 @@ test('accepts the documented empty dismissal lists in the protected branch respo
       dismissal_restrictions: { url: 'https://api.github.com/repos/example/repository/dismissal_restrictions', ...emptyActorLists },
     },
   } });
-  assert.equal(await hasIndependentApprovalGate(github, approver, revision), true);
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), true);
 });
 
 test('declines approval under custom or unknown review dismissal restrictions', async (t) => {
@@ -90,7 +129,7 @@ test('declines approval under custom or unknown review dismissal restrictions', 
         ...protection,
         required_pull_request_reviews: { ...reviewRules, dismissal_restrictions: restrictions },
       } });
-      assert.equal(await hasIndependentApprovalGate(github, approver, revision), false);
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
       assert.deepEqual(calls, [['approver', protectionPath]]);
     });
   }
@@ -111,7 +150,7 @@ test('declines approval when the protected branch or effective native review rul
   for (const [name, result] of cases) {
     await t.test(name, async () => {
       const { github, approver, calls } = githubClients({ protection: result });
-      assert.equal(await hasIndependentApprovalGate(github, approver, revision), false);
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
       assert.deepEqual(calls, [['approver', protectionPath]]);
     });
   }
@@ -129,7 +168,7 @@ test('declines coverage gaps and owner forms outside the individual catch-all', 
   for (const [name, source] of cases) {
     await t.test(name, async () => {
       const { github, approver } = githubClients({ source });
-      assert.equal(await hasIndependentApprovalGate(github, approver, revision), false);
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
     });
   }
 });
@@ -147,14 +186,14 @@ test('declines unknown or contradictory CODEOWNERS evidence', async (t) => {
   for (const [name, options] of cases) {
     await t.test(name, async () => {
       const { github, approver } = githubClients(options);
-      assert.equal(await hasIndependentApprovalGate(github, approver, revision), false);
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision, humanLogins), false);
     });
   }
 });
 
 test('declines incomplete or non-main revisions without using credentials', async () => {
   const { github, approver, calls } = githubClients();
-  assert.equal(await hasIndependentApprovalGate(github, approver, { ...revision, baseRef: 'release' }), false);
-  assert.equal(await hasIndependentApprovalGate(github, approver, { ...revision, base: 'main' }), false);
+  assert.equal(await hasIndependentApprovalGate(github, approver, { ...revision, baseRef: 'release' }, humanLogins), false);
+  assert.equal(await hasIndependentApprovalGate(github, approver, { ...revision, base: 'main' }, humanLogins), false);
   assert.deepEqual(calls, []);
 });

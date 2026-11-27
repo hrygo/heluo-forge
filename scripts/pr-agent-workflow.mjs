@@ -115,6 +115,32 @@ async function readReviewCoverage(path) {
   }
 }
 
+async function publishReviewComments(github, prPath, head, comments, currentRevision) {
+  const seen = new Set();
+  try {
+    for await (const comment of pages(github, `${prPath}/comments`, 'Cannot read PR review comments')) {
+      if (comment?.user?.login === 'github-actions[bot]' && comment.commit_id === head) {
+        seen.add(getReviewCommentMarker(comment.body));
+      }
+    }
+  } catch {
+    console.log('::warning::Unable to read existing inline comments. Findings are available in the review summary.');
+    return true;
+  }
+  const unpublished = comments.filter((comment) => !seen.has(getReviewCommentMarker(comment.body)));
+  if (!unpublished.length) return true;
+  if (!await currentRevision()) return false;
+  try {
+    const posted = await github.post(`${prPath}/reviews`, {
+      event: 'COMMENT', commit_id: head, body: '洛神审查意见', comments: unpublished,
+    });
+    if (posted?.state !== 'COMMENTED' || posted.commit_id !== head) throw new Error('Invalid GitHub COMMENT response');
+  } catch {
+    console.log('::warning::Unable to confirm inline comments. Findings are available in the review summary.');
+  }
+  return true;
+}
+
 async function alreadyReviewed(github, env, scope, base, ref) {
   const query = new URLSearchParams({ event: 'workflow_run', status: 'success', per_page: '100' });
   const title = `洛神 · PR #${scope.prNumber} ${scope.head}`;
@@ -292,10 +318,9 @@ async function validateReview(github, env, scope) {
       const files = [];
       try {
         for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
-      } catch (error) {
-        if (issues.length) throw error;
+      } catch {
         files.length = 0;
-        console.log('::warning::Unable to compare optional approval coverage for this review.');
+        console.log('::warning::Unable to read complete PR files for inline comments or approval coverage.');
       }
       const textCovered = Boolean(coverage) && verifyReviewCoverage(coverage, {
         repository: github.repository, prNumber, head, base, baseRef: ref, review, files,
@@ -303,22 +328,7 @@ async function validateReview(github, env, scope) {
         invocation: env.PR_AGENT_COVERAGE_INVOCATION,
       });
       const comments = buildReviewComments({ issues, files, head });
-      if (comments.length) {
-        const seen = new Set();
-        for await (const comment of pages(github, `${prPath}/comments`, 'Cannot read PR review comments')) {
-          if (comment?.user?.login === 'github-actions[bot]' && comment.commit_id === head) {
-            seen.add(getReviewCommentMarker(comment.body));
-          }
-        }
-        const unpublished = comments.filter((comment) => !seen.has(getReviewCommentMarker(comment.body)));
-        if (unpublished.length) {
-          if (!await currentRevision()) return;
-          const posted = await github.post(`${prPath}/reviews`, {
-            event: 'COMMENT', commit_id: head, body: '洛神审查意见', comments: unpublished,
-          });
-          if (posted?.state !== 'COMMENTED' || posted.commit_id !== head) throw new Error('Invalid GitHub COMMENT response');
-        }
-      }
+      if (comments.length && !await publishReviewComments(github, prPath, head, comments, currentRevision)) return;
       if (textCovered) {
         try {
           allowApproval = verifyReviewFileModes(await github.getDiff(prPath), files);
@@ -369,7 +379,7 @@ async function approve(github, env, scope) {
   if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
   const status = await publishApproval({
     github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), revision,
-    appSlug: env.PR_AGENT_APPROVAL_APP_SLUG, runId: env.GITHUB_RUN_ID,
+    appSlug: env.PR_AGENT_APPROVAL_APP_SLUG, humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS, runId: env.GITHUB_RUN_ID,
     allowApproval: revision.allowApproval,
   });
   console.log(`GitHub approval for PR #${scope.prNumber}: ${status}`);
@@ -392,6 +402,7 @@ if (scope) {
   if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
   const dismissed = await reconcileMainApprovals({
     github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), appSlug: env.PR_AGENT_APPROVAL_APP_SLUG,
+    humanOwners: env.PR_AGENT_HUMAN_CODEOWNERS,
   });
   const change = env.GITHUB_EVENT_NAME === 'push' ? 'main changed' : 'branch protection changed';
   console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after ${change}.`);
