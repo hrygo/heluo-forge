@@ -253,9 +253,11 @@ async function validateReview(github, env, scope) {
   }
 
   const nativeReview = usesNativeReview(scope);
-  const checkApprovals = nativeReview && env.PR_AGENT_AUTO_APPROVE === 'true' && !pr.draft &&
+  const checkApprovals = nativeReview && env.PR_AGENT_APPROVAL_CONFIGURED === 'true' &&
     validId(pr.user?.id) && pr.user.type === 'User';
-  const eligible = checkApprovals && ref === 'main' && validId(pr.changed_files) && reviewCanBeApproved(review);
+  const canCreateApproval = env.PR_AGENT_AUTO_APPROVE === 'true' && !pr.draft;
+  const favorable = ref === 'main' && reviewCanBeApproved(review);
+  const eligible = checkApprovals && canCreateApproval && favorable && validId(pr.changed_files);
   if (automatic) {
     const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
@@ -309,14 +311,15 @@ async function validateReview(github, env, scope) {
       }
     }
   }
-  if (checkApprovals) {
+  if (checkApprovals && (canCreateApproval || !favorable)) {
     let hasApprovalWork = allowApproval;
     if (!hasApprovalWork) {
       try {
         hasApprovalWork = (await listReviews(github, prPath)).some((previous) =>
           previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
       } catch {
-        console.log('::warning::Unable to check for older automatic approvals to reconcile.');
+        hasApprovalWork = true;
+        console.log('::warning::Unable to list older automatic approvals; the approval job will retry reconciliation.');
       }
     }
     if (hasApprovalWork && await currentRevision()) {
@@ -331,13 +334,14 @@ async function validateReview(github, env, scope) {
 }
 
 async function approve(github, env, scope) {
-  if (env.PR_AGENT_AUTO_APPROVE !== 'true' || env.GITHUB_REF !== 'refs/heads/main' || !usesNativeReview(scope)) return;
+  if (env.GITHUB_REF !== 'refs/heads/main' || !usesNativeReview(scope) || !env.APPROVAL_REVISION) return;
   const revision = JSON.parse(env.APPROVAL_REVISION);
   if (revision?.prNumber !== scope.prNumber || (scope.automatic && revision.head !== scope.head) ||
       !isSha(revision.head) || !isSha(revision.base) || !isBranch(revision.baseRef) ||
       typeof revision.allowApproval !== 'boolean') {
     throw new Error('Invalid PR revision for approval');
   }
+  if (revision.allowApproval && env.PR_AGENT_AUTO_APPROVE !== 'true') return;
   // GitHub can rerun this job using successful dependencies from a previous attempt.
   if (revision.runId !== env.GITHUB_RUN_ID || revision.runAttempt !== env.GITHUB_RUN_ATTEMPT ||
       !/^[1-9][0-9]*$/u.test(env.GITHUB_RUN_ATTEMPT ?? '')) {
