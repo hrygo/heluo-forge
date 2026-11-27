@@ -15,6 +15,7 @@ export async function mountPage(fetch, { eventSource, now = Date.now() } = {}) {
   let current = null;
   let nextTimer = 0;
   let clock = 0;
+  let wall = now;
   const localStorage = {
     get length() { return persisted.size; },
     key: (index) => [...persisted.keys()][index] ?? null,
@@ -59,10 +60,10 @@ export async function mountPage(fetch, { eventSource, now = Date.now() } = {}) {
     location: { assign() {} }, open: () => null,
   });
   class PageDate extends Date {
-    static now() { return now + clock; }
+    static now() { return wall; }
   }
   runInNewContext(source, {
-    window, document, fetch, AbortController, Date: PageDate,
+    window, document, fetch, AbortController, Date: PageDate, performance: { now: () => clock },
     setTimeout: (fn, delay = 0) => { const id = ++nextTimer; timeouts.set(id, { fn, at: clock + delay }); return id; },
     clearTimeout: (id) => timeouts.delete(id),
     setInterval: (fn) => { const id = ++nextTimer; intervals.set(id, fn); return id; },
@@ -100,8 +101,9 @@ export async function mountPage(fetch, { eventSource, now = Date.now() } = {}) {
     mount, unmount, render,
     async settled() { await new Promise(setImmediate); },
     async tick() { await Promise.all([...intervals.values()].map((callback) => callback())); },
-    advanceTime(ms) {
+    advanceTime(ms, { advanceWall = true } = {}) {
       clock += ms;
+      if (advanceWall) wall += ms;
       for (const [id, timer] of timeouts) if (timer.at <= clock) { timeouts.delete(id); timer.fn(); }
     },
     focus() { window.dispatchEvent(new Event('focus')); },

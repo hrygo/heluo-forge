@@ -431,6 +431,8 @@ export interface IamView {
   readonly state: IamState;
   readonly principal?: IamPrincipal;
   readonly accessExpiresAt?: string;
+  /** HTTP 与 SSE 视图的 Host 取样时间，Unix 毫秒。与会话状态及到期字段取自同一次计算。 */
+  readonly sampledAt?: number;
   /** 会话是否仍能自行续期；`unavailable` 表示滑动刷新窗口已过，必须重新登录 */
   readonly renewal?: 'available' | 'unavailable' | 'none';
   readonly refreshExpiresAt?: string;
@@ -494,7 +496,7 @@ export interface IamView {
 - **Remote 接缝**：生产 Client 未接 Remote/watch；隔离只读观察接缝不由普通 `apply` 注册为 Remote 贡献；
 - **状态流式推送**。Host 的 `getView()` 与 `watch()` 首帧按当前时钟投影有效会话。Host 在访问令牌到期时推送 `expired`，在已知刷新窗口结束时推送 `renewal=unavailable`。窗口结束时，有效的访问令牌保持 `ready`。续期替换当前期限，退出或销毁结束期限通知。
 - **页面状态核验**。同页组件共享一条 `/api/forge-iam/events` 连接。连接不可用时按 2 秒共享轮询并尝试恢复。组件已采纳的初始、HTTP 核验和 SSE 快照均参与期限排程。到达有效访问期限、过期会话的已知刷新期限或窗口恢复前台时，页面共享一次有界的 `/api/forge-iam/view` 读取。已知期限到达后显示「正在核验企业会话」。Host 确认 `expired` 且 `renewal=available` 时显示「企业会话待续期」。期限缺失或无法解析时使用 Host 状态，继续依靠 SSE 和前台核验。
-- **到期核验回执**。到期前发出的读取仍在途时，空出的共享读取接续到期核验。一次读取未能确认仍待核验的期限时，静默连接下间隔 2 秒补查一次。浏览器时钟超前时，期限后发起的会话读取或期限后连接的 SSE 可确认 Host 当前状态。同一主体、状态、期限与操作代际的后续快照延用确认结果，后续状态继续由 Host 推送、断流回退和前台读取核验。实际模型授权由 Host 裁决。
+- **到期核验回执**。浏览器用 Host 快照的 `sampledAt` 与有效期限计算剩余时长，以本地单调时钟排程。同一主体、状态、期限与操作代际的迟到快照保留已排程的较早截止。期限后发起的会话读取或期限后连接的 SSE 可确认 Host 当前状态，并按新确认的剩余时长继续排程。缺少 `sampledAt` 的视图沿用绝对期限和 Host 回执。到期前发出的读取仍在途时，空出的共享读取接续到期核验。一次读取未能确认时，静默连接下间隔 2 秒补查一次。实际模型授权由 Host 裁决。
 - **侧栏动作**。核验中的主按钮发起只读状态核验。Host 确认会话过期、续期可用且 `canSignIn=true` 时，侧栏保留显式重新登录入口。
 - **快照顺序**。共享 HTTP 核验投递后重建旧 SSE 连接，旧连接排队的帧不再生效。GET 返回前到达的有效 SSE 帧仍优先。共享读取按订阅者核对请求发起时的操作代际和视图修订。账号页的会话读取与目录读取并行时，一方已采纳的新快照保留，另一方迟到的响应不覆盖它。
 - **连接守卫**：全量事件与管理端点均受宿主 Connection 守卫拦截保护。
@@ -1001,7 +1003,7 @@ flowchart TD
 
 连接恢复仅接受受控适配器对绑定网关发起的一次原始推理 POST。受控适配器关闭 SDK 自动重试与自动跟随重定向，只有使用 Node 内置 `fetch`、直接提供地址、无逐请求自定义传输且未收到 HTTP 响应的调用可以确认未发送。允许的失败证据包括 `getaddrinfo` 阶段的 `EAI_AGAIN`、`connect` 阶段的 `ECONNREFUSED` 或 `ETIMEDOUT`，以及 Undici 的 `UND_ERR_CONNECT_TIMEOUT`。Node 的多地址连接失败只有在每项均通过上述判据时才可恢复。满足判据时随机等待 200–400 毫秒再尝试，等待期间可取消。[Node 网络连接文档](https://nodejs.org/docs/latest-v24.x/api/net.html)、[Undici 错误说明](https://undici.nodejs.org/api/Errors)、[AWS 退避与抖动实践](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)（核验于 2026-11-18）。
 
-连接失败已确认未发送且同一调用没有更早的派发时，重试仍可在最终取票处走同会话续期。若同一调用已有派发，例如图片请求已收到 HTTP 拒绝，后续的未发送连接失败保留早先的派发记录。
+连接失败已确认未发送且同一调用没有更早的派发时，访问令牌在退避期间或最终取票时到期，可在共用的五秒预算内续期。退避后仅接续原调用的时钟到期，并复核会话、模型准入、网关位置及凭据代次。若同一调用已有派发，例如图片请求已收到 HTTP 拒绝，后续的未发送连接失败保留早先的派发记录。
 
 收到 HTTP 响应、已有输出或派发状态不明时，原调用继续输出或报告失败。普通 `429` 和 `503` 回执的 `Retry-After` 用于诊断。网关拒绝后的自动重试以可核验的未受理且无副作用语义，或覆盖推理与计费的端到端幂等契约为前提，并遵守响应提供的退避提示和总等待预算。鉴权、撤权、额度耗尽和取消直接沿用各自的终止路径。真实网关的受理、计费及流恢复待联调。[网关目标契约](../../contracts/gateway-contract.md#412-阶段能力矩阵)、[RFC 9110 重试语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)、[RFC 9110 Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)（核验于 2026-11-18）。
 

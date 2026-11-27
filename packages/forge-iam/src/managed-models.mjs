@@ -435,6 +435,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const allowed = (route, model) => Boolean(enabledModel(route, model));
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let lastSettingsIdentity; let lastSessionIdentity; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
+  let clockExpiryVersion;
   const activeStreams = new Set();
   const forwardedCalls = new WeakMap();
 
@@ -528,6 +529,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   }
   function expireAuthorization(reason) {
     version++;
+    if (reason === accessDeadlineReached) clockExpiryVersion = version;
     lease.abort(reason);
     stopRotationCheck();
     cancelRetry();
@@ -825,6 +827,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     let emitted = false; let retried = false; let downgraded = false; let downgradePending = false;
     let output = false;
     let retryVersion;
+    let retryBinding;
     const streamRefusal = (localFailure = false) => {
       const denied = authorizationRefusal(subject);
       if (denied) {
@@ -837,14 +840,24 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       try { session?.assertCurrent(); } catch (cause) { return failureCode(cause); }
       return signal.aborted && !request.signal?.aborted ? 'IAM_LOGIN_REQUIRED' : null;
     };
+    const preconnectFaultOf = attempt => {
+      const fault = modelPreconnectFault(attempt);
+      // Restore the prior dispatch status before observing any clock expiry.
+      // A failed connect cannot undo an earlier POST in this logical call.
+      if (fault) call.sent = attempt.sentBeforeAttempt;
+      return fault;
+    };
+    const retryAfterClockExpiry = (denial, capturedVersion) => bound && !call.sent
+      && call.lease.signal.reason === accessDeadlineReached
+      && version === clockExpiryVersion && capturedVersion === version - 1
+      && (denial?.code === 'IAM_LOGIN_REQUIRED' || denial?.code === 'IAM_MODEL_CONTEXT_CHANGED');
     const retryTransport = async (attempt, cause, mapped) => {
-      if (emitted || retried || signal.aborted || mapped !== 'ENTERPRISE_GATEWAY_UNAVAILABLE' || !modelPreconnectFault(attempt)
-        || Boolean(refusal(request, attempt.version))) return false;
+      if (emitted || retried || signal.aborted || mapped !== 'ENTERPRISE_GATEWAY_UNAVAILABLE' || !modelPreconnectFault(attempt)) return false;
+      const denial = refusal(request, attempt.version);
+      if (denial && !retryAfterClockExpiry(denial, attempt.version)) return false;
       retried = true;
       retryVersion = attempt.version;
-      // The transport proved this attempt did not send. Preserve any earlier
-      // dispatch in the same logical call, such as a rejected image request.
-      call.sent = attempt.sentBeforeAttempt;
+      retryBinding = attempt.expectedBinding;
       reportFailure(request, cause, mapped, 'unknown', modelTransportDiagnostic(attempt, output, true));
       const delayMs = PRECONNECT_RETRY_DELAY_MS + Math.floor(Math.random() * (PRECONNECT_RETRY_JITTER_MS + 1));
       try { await delay(delayMs, undefined, { signal }); }
@@ -870,7 +883,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     try {
       engine: for (;;) {
         let stopWatching;
-        const expectedBinding = { baseURL: connectionBaseURL, subject, generation: iam.getView()?.gatewayCredential?.generation };
+        let reconfirmRetryBinding = false;
+        let expectedBinding = { baseURL: connectionBaseURL, subject, generation: iam.getView()?.gatewayCredential?.generation };
         const expectedContext = last;
         const currentBoundView = () => {
           checkSession();
@@ -914,7 +928,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
             return budget.expiresAt === undefined || call.sent ? consume(caller)
               : withinModelRenewalBudget(caller, budget.expiresAt, consume);
           };
-          try { return await useGrant(); }
+          try { return await useGrant(reconfirmRetryBinding); }
           catch (cause) {
             if (call.sent || (cause !== accessDeadlineReached
               && !(cause instanceof IamError && cause.details?.modelAccessExpired === true))) throw cause;
@@ -931,7 +945,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           return useGrant(true);
         });
         const attempt = observeTransport ? {
-          calls: 0, version, binding: lastId, withDispatchAccessToken, sentBeforeAttempt: call.sent,
+          calls: 0, version, binding: lastId, expectedBinding, withDispatchAccessToken, sentBeforeAttempt: call.sent,
           sent() { call.sent = true; },
           accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, call.lease, signal); },
           revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },
@@ -954,14 +968,39 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         try {
           checkSession();
           signal.throwIfAborted();
-          const retryDenial = refusal(request, retryVersion);
+          const retryView = sample();
+          let retryDenial = refusal(request, retryVersion, retryView);
+          if (retryAfterClockExpiry(retryDenial, retryVersion)) {
+            // Only the captured lease's clock invalidation may advance the
+            // retry version. A routing change while waiting must still fail.
+            const expiredVersion = version;
+            try {
+              const renewal = renewBeforeCall({ ...request, signal }, retryView, session, budget);
+              if (renewal) await renewal;
+              checkSession();
+              signal.throwIfAborted();
+              retryDenial = refusal(request, expiredVersion);
+            } catch (cause) {
+              attempt.refuse(cause);
+              throw cause;
+            }
+            if (!retryDenial) {
+              call.follow(renewLease());
+              attempt.version = retryVersion = expiredVersion;
+              budget.expiresAt ??= performance.now() + MODEL_RENEWAL_WAIT_MS;
+              expectedBinding = retryBinding;
+              reconfirmRetryBinding = true;
+            }
+          }
           if (retryDenial) { yield failed(request, null, retryDenial.code, 'local', undefined, retryDenial.message); return; }
           const send = () => dispatch({ ...current, signal });
           for await (const chunk of attempt ? trackModelAttempt(send, attempt) : send()) {
             if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
             const failure = chunk.type === 'finish' && chunk.reason?.kind !== 'aborted' ? chunk.reason?.failure : undefined;
+            const preconnectFault = preconnectFaultOf(attempt);
             if (chunk.type === 'usage' && attempt?.denied && !attempt.calls) continue;
-            const localFailure = Boolean(failure && (attempt?.denied || diagnosed.has(chunk)));
+            const localFailure = Boolean(failure && (attempt?.denied || diagnosed.has(chunk) || preconnectFault))
+              || (chunk.type === 'usage' && Boolean(preconnectFault));
             code = streamRefusal(localFailure);
             if (code) {
               // An inner wrapper may already have recorded this failure. Still
@@ -993,7 +1032,6 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
             }
             // The SDK emits an empty usage chunk before its error even when the
             // socket was never connected. No usage was incurred for this attempt.
-            const preconnectFault = modelPreconnectFault(attempt);
             if (chunk.type === 'usage' && preconnectFault) continue;
             if (failure) {
               // The model layer turns an HTTP error into a finish chunk, so the code
@@ -1015,8 +1053,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           return;
         } catch (cause) {
           if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-          const authorization = streamRefusal(Boolean(attempt?.denied) && !attempt.calls);
-          code = authorization ?? attempt?.denied ?? attempt?.revocation ?? attempt?.authFailure ?? failureCode(cause, modelPreconnectFault(attempt));
+          const preconnectFault = preconnectFaultOf(attempt);
+          const authorization = streamRefusal(Boolean(preconnectFault || (attempt?.denied && !attempt.calls)));
+          code = authorization ?? attempt?.denied ?? attempt?.revocation ?? attempt?.authFailure ?? failureCode(cause, preconnectFault);
           if (!authorization && await retryTransport(attempt, cause, code)) continue engine;
           if (!authorization && downgradeImages(code)) continue engine;
           // Retry only before the first chunk leaves: after emission a second

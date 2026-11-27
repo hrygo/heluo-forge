@@ -110,7 +110,7 @@ export function createServiceState(env) {
     const renewable = Boolean(lastGrant) && isRefreshUsable(lastGrant, at);
     const recoverable = current === 'ready' || (current === 'unreachable' && error !== 'IAM_CREDENTIALS_UNAVAILABLE')
       || (current === 'expired' && renewable);
-    return createView(current, {
+    const snapshot = createView(current, {
       configured,
       missing: isConfigured(config).missing,
       error: current === state ? error : null,
@@ -130,6 +130,9 @@ export function createServiceState(env) {
           : {}),
       },
     });
+    // Sampling time accompanies the browser transport. Internal equality and
+    // observer projections continue to compare the account state itself.
+    return Object.defineProperty(snapshot, 'sampledAt', { value: at });
   }
 
   function notify() {

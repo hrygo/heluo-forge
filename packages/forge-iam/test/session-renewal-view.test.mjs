@@ -95,12 +95,18 @@ test('view and first watch frame project expiry even before any timer or notific
     accessExpiresAt: new Date(now + 60_000).toISOString(),
     refreshExpiresAt: new Date(now - 1).toISOString(),
   }));
-  assert.equal((await service.hydrate()).state, 'ready');
+  const ready = await service.hydrate();
+  assert.equal(ready.state, 'ready');
+  assert.equal(ready.sampledAt, clock.wall);
   clock.wall += 60_000;
   const watch = service.watch();
   try {
-    assert.equal(service.getView().state, 'expired');
-    assert.equal((await watch.next()).value.state, 'expired');
+    const expired = service.getView();
+    assert.equal(expired.state, 'expired');
+    assert.equal(expired.sampledAt, clock.wall);
+    const first = (await watch.next()).value;
+    assert.equal(first.state, 'expired');
+    assert.equal(first.sampledAt, clock.wall);
     assert.equal(service.getView().renewal, 'unavailable');
   } finally {
     await watch.return();
