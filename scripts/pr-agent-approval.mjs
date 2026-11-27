@@ -4,6 +4,7 @@ import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, val
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
 const approvalSummary = '洛神自动审批。完整审查未发现 P0、P1 或 P2 问题。';
 const verificationDismissal = '洛神未能核对发布后的状态，撤销本次自动审批。';
+const changeRequestDismissal = '维护者已请求修改，撤销洛神自动审批。';
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
 
 export function readApprovalReceipt(review, prNumber) {
@@ -16,6 +17,10 @@ export function readApprovalReceipt(review, prNumber) {
   const baseRef = Buffer.from(encodedRef, 'base64url').toString('utf8');
   if (!isBranch(baseRef) || Buffer.from(baseRef).toString('base64url') !== encodedRef) return;
   return { prNumber, head, base, baseRef };
+}
+
+function readActiveApproval(review, owner, prNumber) {
+  if (review?.state === 'APPROVED' && sameUser(review.user, owner)) return readApprovalReceipt(review, prNumber);
 }
 
 function matchesRevision(receipt, revision) {
@@ -45,11 +50,11 @@ async function hasPriorApproval(github, reviews, owner, revision) {
   return true;
 }
 
-async function hasBlockingChangeRequest(github, reviews, owner, excludedId) {
+async function hasBlockingChangeRequest(github, reviews, owner, prNumber) {
   const latestByReviewer = new Map();
-  // GitHub returns reviews in chronological order. Comments and dismissed reviews do not decide.
+  // Evaluate human decisions without letting a prior Luoshen approval supersede one.
   for (const review of reviews) {
-    if (!validId(review?.id) || review.id === excludedId) continue;
+    if (!validId(review?.id) || readActiveApproval(review, owner, prNumber)) continue;
     const { state, user } = review;
     if (state === 'CHANGES_REQUESTED' && user?.id === 41898282 &&
         user.login === 'github-actions[bot]' && user.type === 'Bot' && readChangeRequestReceipt(review)) return true;
@@ -149,8 +154,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
 
   const withdrawn = new Set();
   for (const review of previousReviews) {
-    if (review?.state !== 'APPROVED' || !sameUser(review.user, owner)) continue;
-    const receipt = readApprovalReceipt(review, prNumber);
+    const receipt = readActiveApproval(review, owner, prNumber);
     if (!receipt || (allowApproval && matchesRevision(receipt, revision))) continue;
     const message = allowApproval
       ? 'PR 或目标分支版本已变化，洛神自动审批已过期。'
@@ -162,7 +166,13 @@ export async function publishApproval({ github, approver, revision, approverLogi
 
   const reviews = await listReviews(github, pull);
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
-  if (await hasBlockingChangeRequest(github, remaining, owner)) return 'skipped-changes-requested';
+  if (await hasBlockingChangeRequest(github, remaining, owner, prNumber)) {
+    const activeApprovals = remaining.filter((review) => readActiveApproval(review, owner, prNumber));
+    if (!activeApprovals.length) return 'skipped-changes-requested';
+    if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
+    for (const review of activeApprovals) await dismissApproval(github, approver, pull, review, changeRequestDismissal);
+    return 'dismissed-changes-requested';
+  }
   if (await hasPriorApproval(github, remaining, owner, revision)) return 'skipped-existing';
 
   if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
@@ -173,7 +183,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
   let current;
   let blocked;
   try {
-    blocked = await hasBlockingChangeRequest(github, await listReviews(github, pull), owner, approval.id);
+    blocked = await hasBlockingChangeRequest(github, await listReviews(github, pull), owner, prNumber);
     current = await isCurrent(github, repository, pull, prNumber, revision);
   } catch (cause) {
     try {
@@ -188,7 +198,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
     return 'dismissed-stale';
   }
   if (blocked) {
-    await dismissApproval(github, approver, pull, approval, '维护者已请求修改，撤销本次洛神自动审批。');
+    await dismissApproval(github, approver, pull, approval, changeRequestDismissal);
     return 'dismissed-changes-requested';
   }
   return 'approved';
