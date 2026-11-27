@@ -333,20 +333,47 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
   const count = (text, pattern) => (text.match(pattern) ?? []).length;
   // A staged command is a first line ending in a backslash and the lines it is joined to; a one-line call is not a staging.
   const commands = (text, tool) => [...text.matchAll(new RegExp(`node scripts/${tool}\\.mjs[^\\n]*\\n(?:[^\\S\\n]+[^\\n]*\\\\\\n)+[^\\S\\n]+[^\\n]*`, 'gu'))].map((match) => match[0]);
+  const jobBlock = (text, jobId) => {
+    const start = text.indexOf(`\n  ${jobId}:\n`);
+    if (start === -1) return '';
+    const rest = text.slice(start + 1);
+    const next = rest.slice(1).search(/\n  [a-zA-Z0-9_-]+:\n/u);
+    return next === -1 ? rest : rest.slice(0, next + 1);
+  };
+  const checkDesktopJobs = (text) => {
+    const expectedJobs = [
+      { id: 'desktop-mac', runner: 'macos-15', target: 'mac-arm64', installerTarget: 'mac', installerArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*-arm64\.dmg/u },
+      { id: 'desktop-windows', runner: 'windows-2025', target: 'win-x64', installerTarget: 'win', installerArch: null, artifactPattern: /heluo-forge-enterprise-\*-setup-\*\.exe/u },
+      { id: 'desktop-linux-x64', runner: 'ubuntu-24.04', target: 'linux-x64', installerTarget: 'linux', installerArch: 'x64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
+      { id: 'desktop-linux-arm64', runner: 'ubuntu-24.04-arm', target: 'linux-arm64', installerTarget: 'linux', installerArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
+    ];
+    for (const job of expectedJobs) {
+      const block = jobBlock(text, job.id);
+      assert.notEqual(block, '', `missing job ${job.id}`);
+      assert.match(block, new RegExp(`runs-on:\\s*${job.runner}\\b`, 'u'), `${job.id} runner`);
+      const jobStagings = commands(block, 'stage-desktop-payload');
+      assert.equal(jobStagings.length, 1, `${job.id} must have one payload staging`);
+      assert.match(jobStagings[0], new RegExp(`--target ${job.target}\\b`, 'u'), `${job.id} payload target`);
+      const jobRuntimes = commands(block, 'stage-primary-runtime');
+      assert.equal(jobRuntimes.length, 1, `${job.id} must have one runtime staging`);
+      assert.match(jobRuntimes[0], new RegExp(`--target ${job.target}\\b`, 'u'), `${job.id} runtime target`);
+      const jobInstallers = commands(block, 'build-desktop-installer');
+      assert.equal(jobInstallers.length, 1, `${job.id} must have one installer build`);
+      assert.match(jobInstallers[0], new RegExp(`--target ${job.installerTarget}\\b`, 'u'), `${job.id} installer target`);
+      if (job.installerArch !== null) {
+        assert.match(jobInstallers[0], new RegExp(`--arch ${job.installerArch}\\b`, 'u'), `${job.id} installer arch`);
+      }
+      assert.match(block, job.artifactPattern, `${job.id} artifact glob`);
+      const uploads = commands(block, 'upload-draft-release');
+      assert.equal(uploads.length, 1, `${job.id} must attach its artifact to the draft release`);
+    }
+  };
+
   const workflow = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'release-bundle.yml'), 'utf8');
+  checkDesktopJobs(workflow);
   const stagings = commands(workflow, 'stage-desktop-payload');
   assert.equal(stagings.length, 4, 'one desktop job per platform');
-  assert.equal(stagings.some((cmd) => /--target mac-arm64/u.test(cmd)), true, 'mac job stages for mac-arm64');
-  assert.equal(stagings.some((cmd) => /--target win-x64/u.test(cmd)), true, 'win job stages for win-x64');
-  assert.equal(stagings.some((cmd) => /--target linux-x64/u.test(cmd)), true, 'linux-x64 job stages for linux-x64');
-  assert.equal(stagings.some((cmd) => /--target linux-arm64/u.test(cmd)), true, 'linux-arm64 job stages for linux-arm64');
-  const installers = commands(workflow, 'build-desktop-installer');
-  assert.equal(installers.some((cmd) => /--target mac/u.test(cmd) && /--arch arm64/u.test(cmd)), true, 'mac job builds dmg');
-  assert.equal(installers.some((cmd) => /--target linux/u.test(cmd) && /--arch x64/u.test(cmd)), true, 'linux-x64 job builds deb');
-  assert.equal(installers.some((cmd) => /--target linux/u.test(cmd) && /--arch arm64/u.test(cmd)), true, 'linux-arm64 job builds deb');
   assert.equal(/ditto -c -k/u.test(workflow), false, 'mac job no longer repacks .app with ditto zip');
-  assert.equal(/heluo-forge-enterprise-\*-arm64\.dmg/u.test(workflow), true, 'mac job uploads dmg');
-  assert.equal(/heluo-forge-enterprise-\*\.deb/u.test(workflow), true, 'linux jobs upload deb');
   assert.equal(count(workflow, /node -p "require\('\.\/services\/forge-desktop\/runtime-lock\.json'\)\.pnpm\.version"/gu), stagings.length, 'the version comes from the ledger');
   assert.equal(count(workflow, /echo "PNPM_TGZ=/gu), stagings.length, 'the artifact path is published to the later steps');
   const handed = (command) => /--pnpm-tgz "\$PNPM_TGZ"/u.test(command);
@@ -366,6 +393,17 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
   );
   assert.notEqual(extra, workflow, 'the mutation must land somewhere');
   assert.equal([...commands(extra, 'stage-desktop-payload')].some((command) => handed(command)), true);
+  // ...and on swapped Linux installer arches or a missing Linux upload step.
+  const swappedArch = workflow
+    .replace('--target linux \\\n            --arch x64', '--target linux \\\n            --arch __TMP_ARCH__')
+    .replace('--target linux \\\n            --arch arm64', '--target linux \\\n            --arch x64')
+    .replace('--target linux \\\n            --arch __TMP_ARCH__', '--target linux \\\n            --arch arm64');
+  assert.throws(() => checkDesktopJobs(swappedArch), /desktop-linux-x64 installer arch/u);
+  const missingUpload = workflow.replace(
+    '      - name: Attach the deb installer to the draft Release\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n          node scripts/upload-draft-release.mjs \\\n            --tag "$GITHUB_REF_NAME" \\\n            --directory "$RUNNER_TEMP/upload" \\\n            --repo "$GITHUB_REPOSITORY"',
+    '      - name: Attach skipped',
+  );
+  assert.throws(() => checkDesktopJobs(missingUpload), /desktop-linux-x64 must attach its artifact/u);
 });
 
 /** Kept pure so the mutation below proves the agreement check fails. */
