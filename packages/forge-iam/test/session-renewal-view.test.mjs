@@ -88,3 +88,48 @@ test('a renewed session keeps reporting an available renewal window', async (t) 
   assert.equal(oidc.counts.refresh, 1);
   assert.equal(service.getView().renewal, 'available');
 });
+
+test('view and first watch frame project expiry even before any timer or notification runs', async (t) => {
+  const { service, clock } = await serviceWith(t, (now) => ({
+    accessToken: 'synthetic-access',
+    accessExpiresAt: new Date(now + 60_000).toISOString(),
+    refreshExpiresAt: new Date(now - 1).toISOString(),
+  }));
+  assert.equal((await service.hydrate()).state, 'ready');
+  clock.wall += 60_000;
+  const watch = service.watch();
+  try {
+    assert.equal(service.getView().state, 'expired');
+    assert.equal((await watch.next()).value.state, 'expired');
+    assert.equal(service.getView().renewal, 'unavailable');
+  } finally {
+    await watch.return();
+  }
+});
+
+test('Host publishes natural access expiry to existing watchers while idle', async (t) => {
+  const { service, oidc, clock } = await serviceWith(t, (now) => ({
+    accessToken: 'synthetic-access',
+    accessExpiresAt: new Date(now + 60_000).toISOString(),
+    refreshExpiresAt: new Date(now - 1).toISOString(),
+  }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  assert.equal((await service.hydrate()).state, 'ready');
+  const controller = new AbortController();
+  const watch = service.watch(controller.signal);
+  assert.equal((await watch.next()).value.state, 'ready');
+  let expired;
+  const received = watch.next().then(({ value }) => { expired = value; });
+  try {
+    clock.wall += 60_000;
+    t.mock.timers.tick(60_000);
+    await new Promise(setImmediate);
+    assert.equal(expired?.state, 'expired');
+    assert.equal(expired.renewal, 'unavailable');
+    assert.equal(oidc.counts.refresh, 0);
+  } finally {
+    controller.abort();
+    await received;
+    await watch.return();
+  }
+});

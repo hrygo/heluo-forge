@@ -1470,8 +1470,11 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    function getLauncherStatus(view) {
-      const ui = deriveSessionUi(view);
+    function getLauncherStatus(view, ui) {
+      if (ui.verifying || ui.expiredRenewable) {
+        const label = ui.verifying ? SESSION_VERIFYING_NOTICE : SESSION_RENEWING_NOTICE;
+        return { kind: 'checking', dotClass: 'warn', label, tooltip: label };
+      }
       if (!view || ui.signedOut || ui.unconfigured) {
         return { kind: 'signed-out', dotClass: 'idle', label: '企业账号未登录', tooltip: '点击登录企业账号' };
       }
@@ -1634,21 +1637,26 @@ window.__ModuleLoader__.load({
       error: { label: '需要处理', badge: 'error' },
     };
     const STORAGE_RECOVERY_NOTICE = '本地凭据存储繁忙，正在自动重试';
+    const SESSION_VERIFYING_NOTICE = '正在核验企业会话';
+    const SESSION_RENEWING_NOTICE = '企业会话待续期';
 
     // §4.1 会话状态派生
     // view.state 只在这里读一次：其余代码用布尔量判断，新增状态时只改这里。
-    function deriveSessionUi(view) {
+    function deriveSessionUi(view, pastDeadline = false) {
       const state = typeof view?.state === 'string' ? view.state : null;
+      const verifying = state === 'ready' && pastDeadline;
       return {
         state,
         known: state !== null && Object.hasOwn(STATUS, state),
-        ready: state === 'ready',
+        ready: state === 'ready' && !verifying,
+        verifying,
         authenticating: state === 'authenticating',
         signedOut: state === 'signed-out',
         expired: state === 'expired',
         // `renewal` is the Host's own answer to "can this session renew itself".
         // Unknown (older Host, or no grant) stays optimistic so nothing regresses.
         renewable: view?.renewal !== 'unavailable',
+        expiredRenewable: state === 'expired' && view?.renewal === 'available',
         expiredUnrenewable: state === 'expired' && view?.renewal === 'unavailable',
         unreachable: state === 'unreachable',
         storageRecovering: state === 'unreachable' && view?.error === 'IAM_CREDENTIALS_UNAVAILABLE',
@@ -1656,6 +1664,10 @@ window.__ModuleLoader__.load({
         failed: state === 'error',
         unconfigured: state === 'unconfigured',
       };
+    }
+
+    function presentSession(view) {
+      return deriveSessionUi(view, Date.parse(view?.accessExpiresAt) <= Date.now());
     }
 
     // §4.2 模型目录派生
@@ -2143,6 +2155,58 @@ window.__ModuleLoader__.load({
       let timer = null;
       let inFlight = null;
       let generation = 0;
+      let accessDeadline = NaN;
+      let deadlineTimer = null;
+      let unverified = false;
+
+      function setUnverified(value) {
+        if (unverified === value) return;
+        unverified = value;
+        for (const subscriber of subscribers) subscriber.setUnverified(value);
+      }
+
+      function clearDeadline() {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+      }
+
+      function scheduleDeadline() {
+        clearDeadline();
+        const remaining = accessDeadline - Date.now();
+        setUnverified(remaining <= 0);
+        if (remaining > 0 && Number.isFinite(remaining)) {
+          deadlineTimer = setTimeout(() => {
+            scheduleDeadline();
+            if (unverified) void poll(true);
+          }, Math.min(remaining, 2_147_483_647));
+        }
+      }
+
+      function revalidate() {
+        if (accessDeadline <= Date.now()) setUnverified(true);
+        return poll(true);
+      }
+
+      function onWake() {
+        if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void revalidate();
+      }
+
+      function broadcast(view, pending) {
+        let delivered = false;
+        for (const { subscriber, epoch } of pending) {
+          if (!subscribers.has(subscriber)) continue;
+          const barrier = subscriber.barrierRef?.current;
+          if (!barrier || (!barrier.pending && barrier.epoch === epoch)) {
+            deliver(subscriber, view);
+            delivered = true;
+          }
+        }
+        if (delivered && subscribers.size > 0) {
+          accessDeadline = deriveSessionUi(view).ready ? Date.parse(view.accessExpiresAt) : NaN;
+          scheduleDeadline();
+        }
+        return delivered;
+      }
 
       function deliver(subscriber, view) {
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
@@ -2182,11 +2246,7 @@ window.__ModuleLoader__.load({
             // Once admitted, this frame belongs to every current subscriber,
             // even if one callback synchronously replaces the physical stream.
             const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
-            for (const { subscriber, epoch } of pending) {
-              if (!subscribers.has(subscriber)) continue;
-              const barrier = subscriber.barrierRef?.current;
-              if (!barrier || (!barrier.pending && barrier.epoch === epoch)) deliver(subscriber, view);
-            }
+            broadcast(view, pending);
           };
           opened.onerror = () => {
             if (!isCurrent()) return;
@@ -2201,7 +2261,7 @@ window.__ModuleLoader__.load({
           return false;
         }
       }
-      async function poll() {
+      async function poll(revalidate = false) {
         if (subscribers.size === 0) return;
         // A stalled view request must not prevent a later stream reconnect.
         // Two unresolved reads are the upper bound even if a nonconforming
@@ -2229,16 +2289,8 @@ window.__ModuleLoader__.load({
         const deadline = setTimeout(() => current.cancel(), 10000);
         try {
           const result = await Promise.race([request, cancelled]);
-          if (result && !streamReady && generation === readGeneration) {
-            let delivered = false;
-            for (const { subscriber, epoch } of pending) {
-              if (!subscribers.has(subscriber)) continue;
-              const barrier = subscriber.barrierRef?.current;
-              if (!barrier || (!barrier.pending && barrier.epoch === epoch)) {
-                deliver(subscriber, result.view);
-                delivered = true;
-              }
-            }
+          if (result && (revalidate || !streamReady) && generation === readGeneration) {
+            const delivered = broadcast(result.view, pending);
             // The pending source may contain a snapshot older than this read.
             // Do not close a replacement created during subscriber callbacks.
             if (delivered && stream && !streamReady && generation === readGeneration) restart();
@@ -2259,6 +2311,11 @@ window.__ModuleLoader__.load({
       }
       function subscribe(subscriber) {
         subscribers.add(subscriber);
+        subscriber.setUnverified(unverified);
+        if (subscribers.size === 1) {
+          if (typeof window !== 'undefined') window.addEventListener?.('focus', onWake);
+          if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onWake);
+        }
         if (stream) restart();
         else if (subscribers.size === 1 && timer === null && !openStream()) startPolling();
         return () => {
@@ -2267,20 +2324,27 @@ window.__ModuleLoader__.load({
             if (stream) closeStream(); else generation += 1;
             stopPolling();
             inFlight?.cancel();
+            clearDeadline();
+            accessDeadline = NaN;
+            unverified = false;
+            if (typeof window !== 'undefined') window.removeEventListener?.('focus', onWake);
+            if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onWake);
           }
         };
       }
-      return { restart, subscribe };
+      return { restart, subscribe, revalidate };
     })();
 
     function useSessionPoll(enabled, update, barrierRef, revisionRef) {
+      // The shared clock wakes render; each component checks its own view.
+      const [, setUnverified] = React.useState(false);
       const updateRef = React.useRef(update);
       updateRef.current = update;
       React.useEffect(() => {
         if (!enabled) return undefined;
         const restartStream = () => sessionStream.restart();
         if (barrierRef) barrierRef.current.restartStream = restartStream;
-        const unsubscribe = sessionStream.subscribe({ updateRef, barrierRef, revisionRef });
+        const unsubscribe = sessionStream.subscribe({ updateRef, barrierRef, revisionRef, setUnverified });
         return () => {
           if (barrierRef?.current.restartStream === restartStream) delete barrierRef.current.restartStream;
           unsubscribe();
@@ -2293,10 +2357,10 @@ window.__ModuleLoader__.load({
       const { h, ui: input, actions } = ctx;
       const {
         view, label, principal, expiry, missing, issues, exclusive, hostError, notice, loginLink, state, copy, copyTools,
-        renewalNotice,
+        renewalNotice, sessionUi: ui,
       } = input;
       const { login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity } = actions;
-      const ui = deriveSessionUi(view);
+      const badge = ui.verifying || ui.expiredRenewable || ui.storageRecovering ? 'warn' : statusBadge(ui.state);
       return h('div', { id: 'fiam-section-account', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
@@ -2311,7 +2375,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'fiam-card-subtitle' }, ui.ready ? '已登录企业账号' : '单点登录至企业账号'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${ui.storageRecovering ? 'warn' : statusBadge(ui.state)}` },
+          h('span', { className: `fiam-badge fiam-badge-${badge}` },
             h('span', { className: 'fiam-badge-dot' }),
             label,
           ),
@@ -2866,8 +2930,7 @@ window.__ModuleLoader__.load({
     // §12.3 旅程条
     function renderJourneyBar(ctx) {
       const { h, ui: input, model } = ctx;
-      const { view, gateway, onNavigateStep, canNavigateModels } = input;
-      const ui = deriveSessionUi(view);
+      const { view, gateway, onNavigateStep, canNavigateModels, sessionUi: ui } = input;
       const gatewayUi = deriveGatewayUi(gateway);
       const catalogue = deriveModelUi(view);
       const step1Done = ui.ready;
@@ -2883,7 +2946,10 @@ window.__ModuleLoader__.load({
           num: '1',
           title: '身份',
           targetId: 'fiam-section-account',
-          status: step1Done ? '已认证' : (ui.authenticating ? '认证中' : (ui.unconfigured ? '待配置登录' : (ui.unreachable ? unreachableStatus : (step1Warn ? '需重新登录' : '待认证')))),
+          status: step1Done ? '已认证'
+            : ui.verifying ? '核验中'
+              : ui.expiredRenewable ? '待续期'
+                : (ui.authenticating ? '认证中' : (ui.unconfigured ? '待配置登录' : (ui.unreachable ? unreachableStatus : (step1Warn ? '需重新登录' : '待认证')))),
           done: step1Done,
           warn: step1Warn,
           active: !step1Done && !step1Warn,
@@ -4262,10 +4328,12 @@ window.__ModuleLoader__.load({
       }
 
       const view = state.view ?? {};
-      const sessionUi = deriveSessionUi(state.view);
-      const label = sessionUi.signOutPending ? '退出结果未确认'
-        : sessionUi.storageRecovering ? '正在恢复会话'
-          : sessionUi.known ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state)) : '未知状态';
+      const sessionUi = presentSession(state.view);
+      const label = sessionUi.verifying ? SESSION_VERIFYING_NOTICE
+        : sessionUi.expiredRenewable ? SESSION_RENEWING_NOTICE
+          : sessionUi.signOutPending ? '退出结果未确认'
+            : sessionUi.storageRecovering ? '正在恢复会话'
+              : sessionUi.known ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state)) : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
@@ -4363,13 +4431,13 @@ window.__ModuleLoader__.load({
       };
       const journeyBar = renderJourneyBar({
         h,
-        ui: { view, gateway, onNavigateStep: navigateStep, canNavigateModels: typeof props?.navigate === 'function' },
+        ui: { view, gateway, sessionUi, onNavigateStep: navigateStep, canNavigateModels: typeof props?.navigate === 'function' },
         model: { enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length },
       });
 
       const accountCard = renderAccountCard({
         h,
-        ui: { view, label, principal, expiry, missing, issues, hostError, notice, loginLink, state, copy: session.copy, copyTools, renewalNotice },
+        ui: { view, sessionUi, label, principal, expiry, missing, issues, hostError, notice, loginLink, state, copy: session.copy, copyTools, renewalNotice },
         actions: {
           login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
           copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
@@ -4460,11 +4528,13 @@ window.__ModuleLoader__.load({
       }
 
       const view = state.view ?? {};
-      const sessionUi = deriveSessionUi(state.view);
+      const sessionUi = presentSession(state.view);
       const gateway = view.gatewayCredential ?? { state: 'unknown' };
       const gatewayUi = deriveGatewayUi(gateway);
       const blocked = !sessionUi.ready || !gatewayUi.configured;
-      const blockerTitle = !sessionUi.ready ? '请先登录企业账号' : '尚未启用 AI 服务';
+      const sessionNotice = sessionUi.verifying ? SESSION_VERIFYING_NOTICE
+        : sessionUi.expiredRenewable ? SESSION_RENEWING_NOTICE : null;
+      const blockerTitle = sessionNotice ?? (!sessionUi.ready ? '请先登录企业账号' : '尚未启用 AI 服务');
       const blockerBody = !sessionUi.ready
         ? '请前往「设置 → 企业账号」登录企业账号并启用 AI 服务后，即可使用企业模型。'
         : (gatewayUi.ownerMismatch
@@ -4477,7 +4547,7 @@ window.__ModuleLoader__.load({
         ? h('div', { id: 'fiam-models-blocker', className: 'fiam-card fiam-models-blocker', role: 'status', 'aria-live': 'polite' },
           h('div', { style: { flex: '1 1 260px', minWidth: 0 } },
             h('div', { className: 'fiam-card-title' }, blockerTitle),
-            h('div', { className: 'fiam-card-subtitle', style: { marginTop: 4 } }, blockerBody),
+            sessionNotice ? null : h('div', { className: 'fiam-card-subtitle', style: { marginTop: 4 } }, blockerBody),
           ),
           h('div', { className: 'fiam-actions', style: { marginTop: 0 } },
             typeof props?.navigate === 'function'
@@ -4658,13 +4728,14 @@ window.__ModuleLoader__.load({
         return () => { live = false; };
       }, []);
 
-      useSessionPoll(true, (nextView) => {
-        setView(nextView);
-        if (nextView?.state !== 'ready') {
-          setMenuOpen(false);
-          setConfirmSignOut(false);
-        }
-      }, undefined, viewRevision);
+      useSessionPoll(true, setView, undefined, viewRevision);
+      const sessionUi = presentSession(view);
+      const isSignedIn = sessionUi.ready;
+      React.useEffect(() => {
+        if (isSignedIn) return;
+        setMenuOpen(false);
+        setConfirmSignOut(false);
+      }, [isSignedIn]);
 
       React.useEffect(() => {
         if (!menuOpen) return undefined;
@@ -4688,11 +4759,14 @@ window.__ModuleLoader__.load({
         };
       }, [menuOpen]);
 
-      const status = getLauncherStatus(view);
-      const isSignedIn = deriveSessionUi(view).ready;
+      const status = getLauncherStatus(view, sessionUi);
 
       const handleMainClick = (e) => {
         e.stopPropagation();
+        if (sessionUi.verifying || sessionUi.expiredRenewable) {
+          void sessionStream.revalidate();
+          return;
+        }
         if (!isSignedIn) {
           if (signingInRef.current) return;
           signingInRef.current = true;
@@ -4802,7 +4876,7 @@ window.__ModuleLoader__.load({
         },
           h(GearIcon, { size: 16 }),
         ) : null,
-        menuOpen ? h(IamLauncherMenu, {
+        menuOpen && isSignedIn ? h(IamLauncherMenu, {
           view,
           status,
           onCopyDiagnostics,
@@ -4946,7 +5020,7 @@ window.__ModuleLoader__.load({
 
       if (!state.visible) return null;
       const sessionUi = deriveSessionUi(state.view);
-      const dotColor = state.reason === 'gateway'
+      const dotColor = state.reason === 'gateway' || sessionUi.expiredRenewable
         ? 'var(--dsw-alias-state-warn-primary)'
         : state.sessionState === 'authenticating'
           ? 'var(--dsw-alias-state-business-primary)'
@@ -4971,8 +5045,9 @@ window.__ModuleLoader__.load({
                 : state.gateway.unknown ? '无法确认个人访问凭证状态'
                   : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
             : (sessionUi.storageRecovering ? STORAGE_RECOVERY_NOTICE
-              : sessionUi.expiredUnrenewable ? SESSION_LABEL.expiredUnrenewable
-                : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
+              : sessionUi.expiredRenewable ? SESSION_RENEWING_NOTICE
+                : sessionUi.expiredUnrenewable ? SESSION_LABEL.expiredUnrenewable
+                  : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
         ),
         state.reason === 'gateway'
           ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway.ownerMismatch || state.gateway.invalid || state.gateway.unknown

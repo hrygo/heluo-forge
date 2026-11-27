@@ -808,3 +808,77 @@ for (const lateResult of ['success', 'failure']) {
     });
   }
 }
+
+test('静默 SSE 跨访问截止时，侧栏和账号页共享一次核验且暂时清除成功状态', async (t) => {
+  const stream = events();
+  const now = Date.now();
+  const soon = { ...ready, accessExpiresAt: new Date(now + 1000).toISOString(), renewal: 'unavailable' };
+  const response = Promise.withResolvers();
+  let hold = false;
+  let reads = 0;
+  const page = await mountPage(async (path) => {
+    if (path === '/api/forge-iam/models') return Response.json({});
+    assert.equal(path, '/api/forge-iam/view');
+    reads++;
+    return hold ? response.promise : Response.json(soon);
+  }, { eventSource: stream.EventSource, now });
+  t.after(() => page.close());
+  await mountAll(page);
+  page.mount('forge-models');
+  await page.settled();
+  stream.streams.at(-1).emit(soon);
+  assert.match(text(page.render('forge-iam-launcher')), /企业认证有效/);
+  const before = reads;
+  hold = true;
+
+  page.advanceTime(1000);
+  assert.equal(reads, before + 1);
+  for (const id of ['forge-iam', 'forge-iam-launcher']) {
+    assert.match(text(page.render(id)), /正在核验企业会话/);
+  }
+  assert.equal(page.intervalCount, 0);
+
+  const expired = { ...soon, state: 'expired', signedIn: false, canSignIn: true };
+  response.resolve(Response.json({ ...expired, renewal: 'available' }));
+  await page.settled();
+  for (const id of ['forge-iam', 'forge-iam-launcher', 'forge-models']) {
+    assert.match(text(page.render(id)), /企业会话待续期/);
+  }
+
+  stream.streams.at(-1).emit(expired);
+  for (const id of ['forge-iam', 'forge-iam-launcher']) {
+    assert.match(text(page.render(id)), /会话已过期/);
+  }
+});
+
+test('恢复前台时共用一次视图读取，新 SSE 帧优先于迟到的读取', async (t) => {
+  const stream = events();
+  const response = Promise.withResolvers();
+  let hold = false;
+  let reads = 0;
+  const page = await mountPage(async (path) => {
+    if (path === '/api/forge-iam/models') return Response.json({});
+    assert.equal(path, '/api/forge-iam/view');
+    reads++;
+    return hold ? response.promise : Response.json(ready);
+  }, { eventSource: stream.EventSource });
+  t.after(() => page.close());
+  await mountAll(page);
+  const source = stream.streams.at(-1);
+  source.emit(ready);
+  const before = reads;
+  hold = true;
+
+  page.visibility('hidden');
+  assert.equal(reads, before);
+  page.visibility('visible');
+  page.focus();
+  assert.equal(reads, before + 1);
+  assert.equal(stream.active, 1);
+  source.emit(other);
+  response.resolve(Response.json(ready));
+  await page.settled();
+  for (const id of ['forge-iam', 'forge-iam-launcher']) {
+    assert.match(text(page.render(id)), /synthetic-other/);
+  }
+});

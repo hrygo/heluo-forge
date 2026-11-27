@@ -26,7 +26,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
 function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false,
-  manual = [], failMovedAdapter = false, iamOverride, sendModelRequest } = {}) {
+  manual = [], failMovedAdapter = false, iamOverride, sendModelRequest, beforeModelFetch } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -132,6 +132,7 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
           openAICompletionsApi: () => ({
             async *stream(model, context, streamOptions) {
               if (sendModelRequest) {
+                beforeModelFetch?.();
                 await streamOptions.fetch(`${model.baseUrl}/chat/completions`, {
                   method: 'POST', headers: streamOptions.headers, signal: streamOptions.signal,
                 });
@@ -612,23 +613,24 @@ test('a transport that reports the binding change as a finish chunk is not retri
 // --- service layer: the key no longer waits on a token refresh -------------
 
 async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3_600_000, tokenOutage = false, beforeJwks } = {}) {
-  const oidc = await startMockOidc({ accessTtl: 600 });
+  const subject = 'E1001';
+  const oidc = await startMockOidc({ accessTtl: 600, subject });
   t.after(() => oidc.close());
   const atomic = createAtomicGatewayFixture();
   let credentials = atomic.credentials;
   const start = Date.now();
   let clock = start;
-  oidc.refreshTokens.set('refresh-a', { subject: 'E1001' });
+  oidc.refreshTokens.set('refresh-a', { subject });
   const store = createGrantStore(credentials);
   const grant = {
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer,
-    subject: 'E1001', clientId: oidc.clientId, refreshToken: 'refresh-a', accessToken: 'access-a', scope: 'openid',
+    subject, clientId: oidc.clientId, refreshToken: 'refresh-a', accessToken: 'access-a', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + accessOffsetMs).toISOString(),
     refreshExpiresAt: new Date(clock + refreshOffsetMs).toISOString(),
   };
   await store.write(grant);
   seedGateway(atomic.credentials, {
-    value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: 'E1001', issuer: oidc.endpoints.issuer,
+    value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: subject, issuer: oidc.endpoints.issuer,
     deviceLabel: 'synthetic', enteredAt: new Date(clock).toISOString(),
   });
   const openService = async () => {
@@ -657,16 +659,19 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
   const service = await openService();
   return { service, oidc, store, grant, credentials: atomic.credentials, key: 'uag-synthetic-key',
     openService,
-    advance(ms) { clock += ms; return service.notifyView(); },
+    advance(ms, { notify = true } = {}) {
+      clock += ms;
+      if (notify) return service.notifyView();
+    },
     replaceProvider(next) { credentials = next; },
   };
 }
 
-async function modelRuntimeFor(t, service) {
+async function modelRuntimeFor(t, service, { beforeModelFetch } = {}) {
   await service.saveModelSelection({ models: { [options.model]: {} }, defaultModelId: options.model });
   const posts = [];
-  const { adapter, runtime } = fixture({
-    iamOverride: service, native: true,
+  const { adapter, runtime, guard } = fixture({
+    iamOverride: service, native: true, beforeModelFetch,
     async sendModelRequest(url, init) {
       posts.push({ url, method: init.method, token: new Headers(init.headers).get('X-IAM-Token') });
       return new Response('synthetic response');
@@ -675,7 +680,7 @@ async function modelRuntimeFor(t, service) {
   t.after(() => runtime.dispose());
   await runtime.ready;
   assert.deepEqual((await adapter.listModels(options.provider)).map(model => model.id), [options.model]);
-  return { adapter, posts };
+  return { adapter, posts, guard, runtime };
 }
 
 function holdNextGrantRead(t, credentials) {
@@ -694,6 +699,112 @@ function holdNextGrantRead(t, credentials) {
     return record;
   };
   return { started: started.promise, release: release.resolve };
+}
+
+for (const [scenario, holdGrantRead, refreshAvailable, guarded] of [
+  ['before fetch', false, true, false],
+  ['during the dispatch grant read', true, true, false],
+  ['during the dispatch grant read through the Host guard', true, true, true],
+  ['during the dispatch grant read without a refresh window', true, false, false],
+]) {
+  test(`a model call crosses its access expiry ${scenario}`, { timeout: 6000 }, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const accessOffsetMs = 240_000;
+    const f = await sessionFixture(t, { accessOffsetMs, refreshOffsetMs: refreshAvailable ? 3_600_000 : accessOffsetMs });
+    const expireAccess = () => {
+      // Simulate the wall clock crossing the deadline before the Host's timer fires.
+      t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
+      f.advance(accessOffsetMs + 1, { notify: false });
+    };
+    const readStarted = Promise.withResolvers();
+    let fetchEntered = false;
+    const { adapter, posts, guard, runtime } = await modelRuntimeFor(t, f.service, {
+      beforeModelFetch() {
+        if (fetchEntered) return;
+        fetchEntered = true;
+        if (holdGrantRead) readStarted.resolve(holdNextGrantRead(t, f.credentials));
+        else expireAccess();
+      },
+    });
+    assert.equal(f.service.getView().state, 'ready');
+
+    const prepared = guarded ? await adapter.prepareCall(options.provider, options.model) : null;
+    const call = chunks(prepared ? guard(options, next => prepared.stream(next)) : adapter.stream(options));
+    if (holdGrantRead) {
+      const read = await readStarted.promise;
+      await read.started;
+      assert.deepEqual(posts, []);
+      assert.equal(f.oidc.counts.refresh, 0);
+      expireAccess();
+      if (guarded) assert.equal(runtime.getView().error, 'IAM_LOGIN_REQUIRED');
+      read.release();
+    }
+
+    const finish = finishOf(await call);
+    assert.equal(fetchEntered, true, 'the native SDK must reach the dispatch fetch');
+    assert.deepEqual({ kind: finish.kind, code: finish.failure?.code, refreshes: f.oidc.counts.refresh, posts: posts.length }, refreshAvailable
+      ? { kind: 'stop', code: undefined, refreshes: 1, posts: 1 }
+      : { kind: 'error', code: 'IAM_LOGIN_REQUIRED', refreshes: 0, posts: 0 });
+    if (refreshAvailable) {
+      const { grant: complete } = await f.store.read();
+      assert.equal(complete.sessionInstanceId, f.grant.sessionInstanceId);
+      assert.notEqual(complete.accessToken, f.grant.accessToken);
+      assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: complete.accessToken }]);
+    }
+  });
+}
+
+for (const [outcome, expected] of [
+  ['the renewal budget is exhausted', 'ENTERPRISE_IAM_UNAVAILABLE'],
+  ['the caller cancels', 'aborted'],
+  ['the session signs out', 'IAM_LOGIN_REQUIRED'],
+  ['the gateway key changes', 'IAM_MODEL_CONTEXT_CHANGED'],
+]) {
+  test(`local dispatch renewal cannot send after ${outcome}`, { timeout: 6000 }, async t => {
+    const started = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    t.after(() => release.resolve());
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    const f = await sessionFixture(t, {
+      accessOffsetMs: 240_000,
+      async beforeJwks() {
+        started.resolve();
+        await release.promise;
+      },
+    });
+    let observedExpiry = false;
+    const { adapter, posts, guard, runtime } = await modelRuntimeFor(t, f.service, {
+      beforeModelFetch() {
+        if (observedExpiry) return;
+        observedExpiry = true;
+        t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
+        f.advance(240_001, { notify: false });
+        runtime.getView();
+      },
+    });
+    const controller = new AbortController();
+    const call = chunks(guard({ ...options, signal: controller.signal }, next => adapter.stream(next)));
+    await started.promise;
+    if (expected === 'ENTERPRISE_IAM_UNAVAILABLE') {
+      t.mock.timers.tick(5000);
+      assert.equal(failureOf(await call), expected, 'the timeout must be reported before the issuer replies');
+    } else if (expected === 'aborted') {
+      controller.abort();
+      assert.equal(finishOf(await call).kind, expected);
+    } else if (expected === 'IAM_LOGIN_REQUIRED') {
+      const signedOut = f.service.signOut();
+      release.resolve();
+      await signedOut;
+    } else {
+      await f.service.saveGatewayCredential({ key: 'another-synthetic-key' });
+    }
+    release.resolve();
+    const finish = finishOf(await call);
+    assert.equal(finish.failure?.code ?? finish.kind, expected);
+    assert.deepEqual(posts, []);
+    await tick();
+    assert.deepEqual(posts, []);
+  });
 }
 
 test('a model call adopts a local rotation while its first grant read is stalled', { timeout: 6000 }, async t => {

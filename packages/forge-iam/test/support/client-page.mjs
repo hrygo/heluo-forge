@@ -4,7 +4,7 @@ import { runInNewContext } from 'node:vm';
 
 // Mount several registered slots in the same module factory, as one browser
 // page does. Each component has its own hook cells and cleanup lifecycle.
-export async function mountPage(fetch, { eventSource } = {}) {
+export async function mountPage(fetch, { eventSource, now = Date.now() } = {}) {
   const source = await readFile(new URL('../../client.js', import.meta.url), 'utf8');
   const components = new Map();
   const instances = new Map();
@@ -46,7 +46,8 @@ export async function mountPage(fetch, { eventSource } = {}) {
       if (!(index in instance.cells)) { instance.cells[index] = true; instance.effects.push(fn); }
     },
   };
-  const window = {
+  const document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+  const window = Object.assign(new EventTarget(), {
     __ModuleLoader__: { load(definition) {
       const plugin = definition.factory((name) => { assert.equal(name, 'react'); return React; });
       plugin.apply({ slots: {
@@ -56,9 +57,12 @@ export async function mountPage(fetch, { eventSource } = {}) {
     } },
     localStorage, EventSource: eventSource, AbortSignal: globalThis.AbortSignal,
     location: { assign() {} }, open: () => null,
-  };
+  });
+  class PageDate extends Date {
+    static now() { return now + clock; }
+  }
   runInNewContext(source, {
-    window, fetch, AbortController,
+    window, document, fetch, AbortController, Date: PageDate,
     setTimeout: (fn, delay = 0) => { const id = ++nextTimer; timeouts.set(id, { fn, at: clock + delay }); return id; },
     clearTimeout: (id) => timeouts.delete(id),
     setInterval: (fn) => { const id = ++nextTimer; intervals.set(id, fn); return id; },
@@ -99,6 +103,11 @@ export async function mountPage(fetch, { eventSource } = {}) {
     advanceTime(ms) {
       clock += ms;
       for (const [id, timer] of timeouts) if (timer.at <= clock) { timeouts.delete(id); timer.fn(); }
+    },
+    focus() { window.dispatchEvent(new Event('focus')); },
+    visibility(state) {
+      document.visibilityState = state;
+      document.dispatchEvent(new Event('visibilitychange'));
     },
     get intervalCount() { return intervals.size; },
     get lateUpdates() { return retired.reduce((total, instance) => total + instance.lateUpdates, 0); },

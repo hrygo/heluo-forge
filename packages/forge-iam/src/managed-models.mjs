@@ -122,6 +122,33 @@ const sameBinding = (bound, next) => bound?.baseURL === next?.baseURL
 const BINDING_RECOVERY_MS = 5000;
 const MODEL_RENEWAL_WAIT_MS = 5000;
 const MODEL_RENEWAL_RECHECK_MS = 4000;
+const nativeAdapters = new WeakSet();
+const accessDeadlineReached = error('IAM_LOGIN_REQUIRED');
+const accessExpired = view => view?.state === 'expired' || (view?.state === 'ready' && expires(view) <= Date.now());
+
+function withinModelRenewalBudget(signal, expiresAt, work) {
+  signal.throwIfAborted();
+  const timeLimit = error('ENTERPRISE_IAM_UNAVAILABLE');
+  const remaining = expiresAt - performance.now();
+  if (remaining <= 0) throw timeLimit;
+  const deadline = new AbortController();
+  const waiting = AbortSignal.any([signal, deadline.signal]);
+  const timeout = setTimeout(() => deadline.abort(timeLimit), remaining);
+  timeout.unref?.();
+  const stopped = Promise.withResolvers();
+  const onAbort = () => stopped.reject(waiting.reason);
+  waiting.addEventListener('abort', onAbort, { once: true });
+  const stop = () => {
+    clearTimeout(timeout);
+    waiting.removeEventListener('abort', onAbort);
+    deadline.abort();
+  };
+  const check = () => {
+    waiting.throwIfAborted();
+    if (performance.now() >= expiresAt) throw timeLimit;
+  };
+  return Promise.race([Promise.resolve().then(() => work(waiting, check, stop)), stopped.promise]).finally(stop);
+}
 const STREAM_ROTATION_CHECK_LEADS_MS = [1000, 100];
 const PRECONNECT_RETRY_DELAY_MS = 200;
 const PRECONNECT_RETRY_JITTER_MS = 200;
@@ -407,6 +434,36 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let lastSettingsIdentity; let lastSessionIdentity; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
   const activeStreams = new Set();
+  const forwardedCalls = new WeakMap();
+
+  // The guard and the native adapter share a stable signal. A clock expiry
+  // interrupts the final grant read, but only an unsent bound call can ever
+  // replace that lease. All other reasons and every sent call abort as before.
+  function openCall(request, renewal) {
+    const controller = new AbortController();
+    const signal = AbortSignal.any([lifetime.signal, controller.signal, ...(request.signal ? [request.signal] : [])]);
+    const onAbort = () => {
+      const reason = call.lease.signal.reason;
+      if (reason !== accessDeadlineReached || !call.bound || call.sent) controller.abort(reason);
+    };
+    const close = () => {
+      call.lease?.signal.removeEventListener('abort', onAbort);
+      forwardedCalls.delete(signal);
+    };
+    const call = {
+      signal, renewal, provider: request.provider, model: request.model, bound: false, sent: false,
+      follow(next) {
+        call.lease?.signal.removeEventListener('abort', onAbort);
+        call.lease = next;
+        if (next.signal.aborted) onAbort();
+        else next.signal.addEventListener('abort', onAbort, { once: true });
+      },
+      close,
+    };
+    call.follow(renewLease());
+    forwardedCalls.set(signal, call);
+    return call;
+  }
   let rotationCheck;
   // The catalogue can move ahead of a failed adapter rebuild. Only the
   // unchanged subset installed for this binding is still safe to dispatch.
@@ -467,9 +524,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     rotationCheck.controller.abort();
     rotationCheck = undefined;
   }
-  function expireAuthorization() {
+  function expireAuthorization(reason) {
     version++;
-    lease.abort();
+    lease.abort(reason);
     stopRotationCheck();
     cancelRetry();
     markFailed('IAM_LOGIN_REQUIRED');
@@ -573,11 +630,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         const expired = Number.isFinite(deadline) && !lease.signal.aborted
           && (view?.state === 'expired' || (activeStreams.size > 0 && deadline <= Date.now()));
         deadline = nextDeadline; clearTimeout(timer);
-        if (expired) expireAuthorization();
+        if (expired) expireAuthorization(accessDeadlineReached);
         const remaining = deadline - Date.now();
         if (deadline !== null && remaining > 0) {
-          timer = setTimeout(expireAuthorization, Math.min(remaining, 2147483647)); timer.unref?.();
-        } else if (deadline !== null && !expired) expireAuthorization();
+          timer = setTimeout(() => expireAuthorization(accessDeadlineReached), Math.min(remaining, 2147483647)); timer.unref?.();
+        } else if (deadline !== null && !expired) expireAuthorization(accessDeadlineReached);
       }
       scheduleRotationCheck();
       return view;
@@ -586,8 +643,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     }
   }
   /** Answered before a stream starts: the call must still belong to this context. */
-  function refusal(request, captured) {
-    const denied = permit(sample());
+  function refusal(request, captured, view = sample()) {
+    const denied = permit(view);
     const plain = code => (code ? { code, message: MESSAGES[code] } : null);
     if (disposed) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
     if (denied) return plain(denied);
@@ -693,40 +750,28 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 
   // Only the pre-dispatch path may wait for a new AT. The existing resolver
   // owns token rotation, so cancelling this caller leaves the shared flight alone.
-  function renewBeforeCall(request, view, session) {
-    if (disposed || !session || request.provider !== provider || view?.renewal !== 'available'
+  function renewBeforeCall(request, view, session, budget = {}) {
+    if (disposed || budget.expiresAt !== undefined || !session || request.provider !== provider || view?.renewal !== 'available'
       || !view.principal || view.gatewayCredential?.state !== 'configured' || view.gatewayCredential.matchesAccount !== true
-      || credentialRevoked() || (view.state !== 'expired' && !(view.state === 'ready' && expires(view) <= Date.now()))) return;
-    const deadline = new AbortController();
-    const signal = AbortSignal.any([lifetime.signal, deadline.signal, ...(request.signal ? [request.signal] : [])]);
-    signal.throwIfAborted();
-    const expiresAt = performance.now() + MODEL_RENEWAL_WAIT_MS;
-    const timeLimit = error('ENTERPRISE_IAM_UNAVAILABLE');
-    const timeout = setTimeout(() => deadline.abort(timeLimit), MODEL_RENEWAL_WAIT_MS);
-    timeout.unref?.();
-    const stopped = Promise.withResolvers();
-    const onAbort = () => stopped.reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
-    const renew = async () => {
-      const completed = session.waitForCompletedRotation?.(signal, MODEL_RENEWAL_RECHECK_MS);
+      || credentialRevoked() || !accessExpired(view)) return;
+    budget.expiresAt = performance.now() + MODEL_RENEWAL_WAIT_MS;
+    const signal = request.signal ? AbortSignal.any([lifetime.signal, request.signal]) : lifetime.signal;
+    return withinModelRenewalBudget(signal, budget.expiresAt, async (waiting, check) => {
+      const completed = session.waitForCompletedRotation?.(waiting, MODEL_RENEWAL_RECHECK_MS);
       const renewal = session.renew();
       await (completed ? Promise.race([renewal, completed]) : renewal);
-      signal.throwIfAborted();
-      if (performance.now() >= expiresAt) throw timeLimit;
+      check();
       session.assertCurrent();
       // A cold runtime may have been unable to install the user's saved route.
       if (!permit(sample()) && !backend && !credentialRevoked()) await rebuildBinding(request);
-      signal.throwIfAborted();
-      if (performance.now() >= expiresAt) throw timeLimit;
-    };
-    return Promise.race([renew(), stopped.promise]).finally(() => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      deadline.abort();
+      check();
     });
   }
 
   async function* protect(request, dispatch, { captured, redispatch, preparedSubject, preparedSession, observeTransport = false } = {}) {
+    const parent = forwardedCalls.get(request.signal);
+    const inherited = parent?.provider === request.provider && parent?.model === request.model ? parent : undefined;
+    const budget = inherited?.renewal ?? {};
     const view = sample();
     const session = preparedSession === undefined ? iam.captureModelSession?.() : preparedSession;
     const checkSession = () => {
@@ -736,7 +781,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
     try {
       checkSession();
-      const renewal = renewBeforeCall(request, view, session);
+      const renewal = renewBeforeCall(request, view, session, budget);
       if (renewal) { await renewal; checkSession(); }
     } catch (cause) {
       if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
@@ -759,19 +804,30 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         }
       }
     }
-    if (denial) { if (process.env.DBG304) console.error('DENIAL', JSON.stringify(denial)); yield failed(request, null, denial.code, 'local', undefined, denial.message); return; }
+    if (denial) { yield failed(request, null, denial.code, 'local', undefined, denial.message); return; }
     // Reused by the streaming loop below; the initial refusal above is already
     // settled, so this holds only per-attempt failure codes.
     let code;
     const subject = iam.getView()?.principal;
-    const streamLease = renewLease();
-    const signal = AbortSignal.any([lifetime.signal, streamLease.signal, ...(request.signal ? [request.signal] : [])]);
+    const streamContext = last;
+    const call = inherited ?? openCall(request, budget);
+    const signal = call.signal;
+    // Self-reported adapter support is insufficient. Only the constructor of
+    // the transport with a verified last-send gate can defer clock expiry.
+    const bound = observeTransport && nativeAdapters.has(backend) && Boolean(session?.withDispatchAccessToken);
+    if (bound) call.bound = true;
     let emitted = false; let retried = false; let downgraded = false; let downgradePending = false;
     let output = false;
     let retryVersion;
-    const streamRefusal = () => {
+    const streamRefusal = (localFailure = false) => {
       const denied = authorizationRefusal(subject);
-      if (denied) return denied;
+      if (denied) {
+        // A proven local failure can report its renewal outcome after the
+        // clock expired. No stream output passes this exception.
+        if (localFailure && denied === 'IAM_LOGIN_REQUIRED' && call.bound && !call.sent && !signal.aborted
+          && last === streamContext && accessExpired(iam.getView())) return null;
+        return denied;
+      }
       try { session?.assertCurrent(); } catch (cause) { return failureCode(cause); }
       return signal.aborted && !request.signal?.aborted ? 'IAM_LOGIN_REQUIRED' : null;
     };
@@ -802,127 +858,187 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       try { logFailure?.('IMAGE_REQUEST_REFUSED', code); } catch { /* diagnostics never change the answer */ }
       return true;
     };
-    engine: for (;;) {
-      let stopWatching;
-      const expectedBinding = { baseURL: connectionBaseURL, subject, generation: iam.getView()?.gatewayCredential?.generation };
-      const confirmBinding = async () => {
-        const current = await iam.resolveGatewayConnection();
-        if (!sameBinding(expectedBinding, current) || (expectedBinding.generation ?? null) !== (current.generation ?? null)) {
-          throw error('IAM_MODEL_CONTEXT_CHANGED');
-        }
-      };
-      const attempt = observeTransport ? {
-        calls: 0, version, binding: lastId,
-        withDispatchAccessToken: session?.withDispatchAccessToken && (send => session.withDispatchAccessToken(send, signal, confirmBinding)),
-        accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, streamLease, signal); },
-        revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },
-        refuse(cause) { this.denied ??= failureCode(cause); },
-        check() {
-          try {
-            checkSession();
-            signal.throwIfAborted();
-            // Keep the denial object: flattening it loses the message and even
-            // leaks `code: true` into the failure that reaches the person.
-            const denial = refusal(request, this.version);
-            if (denial) { this.denied ??= denial.code; throw error(denial.code); }
-          } catch (cause) {
-            this.denied ??= streamRefusal() ?? failureCode(cause);
-            throw cause;
+    try {
+      engine: for (;;) {
+        let stopWatching;
+        const expectedBinding = { baseURL: connectionBaseURL, subject, generation: iam.getView()?.gatewayCredential?.generation };
+        const expectedContext = last;
+        const currentBoundView = () => {
+          checkSession();
+          signal.throwIfAborted();
+          const view = sample();
+          signal.throwIfAborted();
+          if (last !== expectedContext || connectionBaseURL !== expectedBinding.baseURL) throw error('IAM_MODEL_CONTEXT_CHANGED');
+          return view;
+        };
+        const checkBoundContext = () => {
+          const view = currentBoundView();
+          if (accessExpired(view)) throw accessDeadlineReached;
+          const denial = refusal(request, undefined, view);
+          if (denial) throw error(denial.code);
+        };
+        const confirmBinding = async () => {
+          const current = await iam.resolveGatewayConnection();
+          if (!sameBinding(expectedBinding, current) || (expectedBinding.generation ?? null) !== (current.generation ?? null)) {
+            throw error('IAM_MODEL_CONTEXT_CHANGED');
           }
-        },
-      } : undefined;
-      try {
-        checkSession();
-        signal.throwIfAborted();
-        const retryDenial = refusal(request, retryVersion);
-        if (retryDenial) { yield failed(request, null, retryDenial.code, 'local', undefined, retryDenial.message); return; }
-        const send = () => dispatch({ ...current, signal });
-        for await (const chunk of attempt ? trackModelAttempt(send, attempt) : send()) {
+        };
+        const withDispatchAccessToken = session?.withDispatchAccessToken && (async (send, transportSignal) => {
+          const caller = transportSignal ? AbortSignal.any([signal, transportSignal]) : signal;
+          if (!bound) {
+            attempt.check();
+            return session.withDispatchAccessToken(send, caller, confirmBinding);
+          }
+          const useGrant = (reconfirm = false) => {
+            caller.throwIfAborted();
+            checkBoundContext();
+            const consume = async (waiting, check, stop) => {
+              const readSignal = AbortSignal.any([waiting, call.lease.signal]);
+              if (reconfirm) await confirmBinding();
+              readSignal.throwIfAborted();
+              return session.withDispatchAccessToken(token => {
+                check?.();
+                stop?.();
+                return send(token);
+              }, readSignal, confirmBinding);
+            };
+            return budget.expiresAt === undefined || call.sent ? consume(caller)
+              : withinModelRenewalBudget(caller, budget.expiresAt, consume);
+          };
+          try { return await useGrant(); }
+          catch (cause) {
+            if (call.sent || (cause !== accessDeadlineReached
+              && !(cause instanceof IamError && cause.details?.modelAccessExpired === true))) throw cause;
+          }
+          caller.throwIfAborted();
+          const renewal = renewBeforeCall({ ...request, signal: caller }, currentBoundView(), session, budget);
+          if (renewal) await renewal;
+          checkBoundContext();
+          // The old deadline only cancelled the read. Rebind to the new valid
+          // lease and reconfirm the exact gateway/key before sending.
+          call.follow(renewLease());
+          attempt.version = version;
+          budget.expiresAt ??= performance.now() + MODEL_RENEWAL_WAIT_MS;
+          return useGrant(true);
+        });
+        const attempt = observeTransport ? {
+          calls: 0, version, binding: lastId, withDispatchAccessToken,
+          sent() { call.sent = true; },
+          accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, call.lease, signal); },
+          revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },
+          refuse(cause) { this.denied ??= failureCode(cause); },
+          check() {
+            try {
+              checkSession();
+              signal.throwIfAborted();
+              if (bound) checkBoundContext();
+              else {
+                const denial = refusal(request, this.version);
+                if (denial) throw error(denial.code);
+              }
+            } catch (cause) {
+              if (cause !== accessDeadlineReached) this.denied ??= streamRefusal() ?? failureCode(cause);
+              throw cause;
+            }
+          },
+        } : undefined;
+        try {
+          checkSession();
+          signal.throwIfAborted();
+          const retryDenial = refusal(request, retryVersion);
+          if (retryDenial) { yield failed(request, null, retryDenial.code, 'local', undefined, retryDenial.message); return; }
+          const send = () => dispatch({ ...current, signal });
+          for await (const chunk of attempt ? trackModelAttempt(send, attempt) : send()) {
+            if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
+            const failure = chunk.type === 'finish' && chunk.reason?.kind !== 'aborted' ? chunk.reason?.failure : undefined;
+            if (chunk.type === 'usage' && attempt?.denied && !attempt.calls) continue;
+            const localFailure = Boolean(failure && (attempt?.denied || diagnosed.has(chunk)));
+            code = streamRefusal(localFailure);
+            if (code) {
+              // An inner wrapper may already have recorded this failure. Still
+              // report the current authorization refusal, without logging twice.
+              if (diagnosed.has(chunk)) {
+                const result = finish(code);
+                diagnosed.add(result);
+                yield result;
+              } else yield failed(request, null, code, 'unknown', modelTransportDiagnostic(attempt, output, false));
+              return;
+            }
+            if (diagnosed.has(chunk)) { yield chunk; return; }
+            if (attempt?.revocation || (failure && failureCode(failure) === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED')) {
+              // A confirmed refusal must reach other consumers immediately, even
+              // while this accepted response is otherwise pausing its output.
+              const revoked = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', attempt?.binding);
+              noteMapped(failure, revoked);
+              yield failed(request, failure, revoked, 'unknown', modelTransportDiagnostic(attempt, output, false));
+              return;
+            }
+            if (attempt?.accepted) {
+              const renewal = session?.waitForModelOutput?.(signal);
+              if (renewal) {
+                await renewal;
+                if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
+                code = streamRefusal();
+                if (code) throw error(code);
+              }
+            }
+            // The SDK emits an empty usage chunk before its error even when the
+            // socket was never connected. No usage was incurred for this attempt.
+            const preconnectFault = modelPreconnectFault(attempt);
+            if (chunk.type === 'usage' && preconnectFault) continue;
+            if (failure) {
+              // The model layer turns an HTTP error into a finish chunk, so the code
+              // arrives here without ever passing through the thrown-error branch.
+              const mapped = attempt?.denied ?? attempt?.authFailure ?? record(failureCode(failure, preconnectFault), attempt?.binding);
+              noteMapped(failure, mapped);
+              if (await retryTransport(attempt, failure, mapped)) continue engine;
+              if (downgradeImages(mapped)) continue engine;
+              yield failed(request, failure, mapped, attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false)); return;
+            }
+            emitted = true;
+            if (chunk.type !== 'usage' && chunk.type !== 'finish') output = true;
+            yield chunk;
+          }
           code = streamRefusal();
-          if (code) {
-            // An inner wrapper may already have recorded this failure. Still
-            // report the current authorization refusal, without logging twice.
-            if (diagnosed.has(chunk)) {
-              const result = finish(code);
-              diagnosed.add(result);
-              yield result;
-            } else yield failed(request, null, code, 'unknown', modelTransportDiagnostic(attempt, output, false));
-            return;
-          }
+          if (code) { yield failed(request, null, code, 'unknown', modelTransportDiagnostic(attempt, output, false)); return; }
+          // Remember the downgrade only after the replacement request succeeds.
+          if (downgradePending) rememberRefusal(key);
+          return;
+        } catch (cause) {
           if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-          if (diagnosed.has(chunk)) { yield chunk; return; }
-          const failure = chunk.type === 'finish' && chunk.reason?.kind !== 'aborted' ? chunk.reason?.failure : undefined;
-          if (attempt?.revocation || (failure && failureCode(failure) === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED')) {
-            // A confirmed refusal must reach other consumers immediately, even
-            // while this accepted response is otherwise pausing its output.
-            const revoked = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', attempt?.binding);
-            noteMapped(failure, revoked);
-            yield failed(request, failure, revoked, 'unknown', modelTransportDiagnostic(attempt, output, false));
-            return;
-          }
-          if (attempt?.accepted) {
-            const renewal = session?.waitForModelOutput?.(signal);
-            if (renewal) {
-              await renewal;
+          const authorization = streamRefusal(Boolean(attempt?.denied) && !attempt.calls);
+          code = authorization ?? attempt?.denied ?? attempt?.revocation ?? attempt?.authFailure ?? failureCode(cause, modelPreconnectFault(attempt));
+          if (!authorization && await retryTransport(attempt, cause, code)) continue engine;
+          if (!authorization && downgradeImages(code)) continue engine;
+          // Retry only before the first chunk leaves: after emission a second
+          // dispatch would deliver the same answer twice. The failure must be the
+          // plugin's own binding change (not a mapped user code), and the budget
+          // is one attempt.
+          if (!authorization && !emitted && !retried && !attempt?.calls && cause?.code === 'IAM_GATEWAY_BINDING_CHANGED') {
+            retried = true;
+            try {
+              await rebuildBinding(request);
+              checkSession();
+              // A successful directory read can finish without a usable route.
+              const reboundDenial = refusal(request);
+              if (reboundDenial) { yield failed(request, null, reboundDenial.code, 'local', undefined, reboundDenial.message); return; }
+              if (redispatch) await redispatch();
+              continue;
+            }
+            catch (next) {
               if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-              code = streamRefusal();
-              if (code) throw error(code);
+              const mapped = record(failureCode(next)); yield failed(request, next, mapped, 'unknown'); return;
             }
           }
-          // The SDK emits an empty usage chunk before its error even when the
-          // socket was never connected. No usage was incurred for this attempt.
-          const preconnectFault = modelPreconnectFault(attempt);
-          if (chunk.type === 'usage' && preconnectFault) continue;
-          if (failure) {
-            // The model layer turns an HTTP error into a finish chunk, so the code
-            // arrives here without ever passing through the thrown-error branch.
-            const mapped = attempt?.denied ?? attempt?.authFailure ?? record(failureCode(failure, preconnectFault), attempt?.binding);
-            noteMapped(failure, mapped);
-            if (await retryTransport(attempt, failure, mapped)) continue engine;
-            if (downgradeImages(mapped)) continue engine;
-            yield failed(request, failure, mapped, attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false)); return;
-          }
-          emitted = true;
-          if (chunk.type !== 'usage' && chunk.type !== 'finish') output = true;
-          yield chunk;
+          noteMapped(cause, code);
+          yield failed(request, cause, record(code, attempt?.binding), attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false));
+          return;
+        } finally {
+          stopWatching?.();
         }
-        code = streamRefusal();
-        if (code) { yield failed(request, null, code, 'unknown', modelTransportDiagnostic(attempt, output, false)); return; }
-        // Remember the downgrade only after the replacement request succeeds.
-        if (downgradePending) rememberRefusal(key);
-        return;
-      } catch (cause) {
-        if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-        const authorization = streamRefusal();
-        code = authorization ?? attempt?.denied ?? attempt?.revocation ?? attempt?.authFailure ?? failureCode(cause, modelPreconnectFault(attempt));
-        if (!authorization && await retryTransport(attempt, cause, code)) continue engine;
-        if (!authorization && downgradeImages(code)) continue engine;
-        // Retry only before the first chunk leaves: after emission a second
-        // dispatch would deliver the same answer twice. The failure must be the
-        // plugin's own binding change (not a mapped user code), and the budget
-        // is one attempt.
-        if (!authorization && !emitted && !retried && !attempt?.calls && cause?.code === 'IAM_GATEWAY_BINDING_CHANGED') {
-          retried = true;
-          try {
-            await rebuildBinding(request);
-            checkSession();
-            // A successful directory read can finish without a usable route.
-            const reboundDenial = refusal(request);
-            if (reboundDenial) { yield failed(request, null, reboundDenial.code, 'local', undefined, reboundDenial.message); return; }
-            if (redispatch) await redispatch();
-            continue;
-          }
-          catch (next) {
-            if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-            const mapped = record(failureCode(next)); yield failed(request, next, mapped, 'unknown'); return;
-          }
-        }
-        noteMapped(cause, code);
-        yield failed(request, cause, record(code, attempt?.binding), attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false));
-        return;
-      } finally {
-        stopWatching?.();
       }
+    } finally {
+      if (!inherited) call.close();
     }
   }
   /**
@@ -1785,7 +1901,7 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
   // history carries an image — before it is sent — with `UNSUPPORTED_CONTENT`,
   // which leaves the session unable to complete any later request because the
   // image rides in every one of them.
-  return new PiAiAdapter({
+  const adapter = new PiAiAdapter({
     profiles: () => profiles, resolveApiKey: resolveKey,
     ...typeof resolveAttachments === 'function' ? { resolveAttachments } : {},
     ...typeof prepareHeaders === 'function' ? { prepareHeaders } : {},
@@ -1802,4 +1918,6 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
       authContext: { env: async () => undefined, fileExists: async () => false },
     }
   });
+  nativeAdapters.add(adapter);
+  return adapter;
 }

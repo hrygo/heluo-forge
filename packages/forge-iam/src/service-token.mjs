@@ -1399,7 +1399,10 @@ export function createTokenResolver(env) {
             check();
           }
           if (rotationOnly && !completedRotationOf(local, latest)) return false;
-          if (isAccessExpired(latest, now())) break;
+          if (isAccessExpired(latest, now())) {
+            if (rotationOnly) return false;
+            throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'), { modelAccessExpired: true });
+          }
           if (claim?.store === targetStore && claim.grant.refreshToken === latest.refreshToken) {
             // The owner may still be committing its claim. Wait without using
             // the previous token or starting a new refresh.
