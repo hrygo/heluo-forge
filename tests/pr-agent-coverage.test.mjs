@@ -1,0 +1,130 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import test from 'node:test';
+import { verifyReviewCoverage } from '../scripts/pr-agent-coverage.mjs';
+import { buildReviewComments } from '../scripts/pr-agent-review-comments.mjs';
+
+function digest(rows) {
+  return createHash('sha256').update(rows).digest('hex');
+}
+
+const review = { merge_recommendation: 'no_concerns_found', security_concerns: 'No', key_issues_to_review: [] };
+const modified = {
+  filename: 'src/新 文件.js',
+  status: 'modified',
+  patch: '@@ -1,3 +1,3 @@ function f()\n context\n-before \t\r\n+之后 \t\r\n tail\n@@ -10 +10 @@\n-old end\n+',
+  additions: 2,
+  deletions: 2,
+};
+const added = { filename: 'added.js', patch: '@@ -0,0 +1,2 @@\n+first\n+second\n', additions: 2, deletions: 0 };
+const removed = { filename: 'removed.js', patch: '@@ -1 +0,0 @@\n-deleted', additions: 0, deletions: 1 };
+const identity = {
+  repository: 'corp-example/project', prNumber: 510, head: 'a'.repeat(40), base: 'b'.repeat(40), baseRef: 'main',
+  runId: '12345678', runAttempt: '2', invocation: 'initial',
+};
+const input = { ...identity, review, files: [modified, added, removed], changedFileCount: 3 };
+const proof = {
+  version: 1,
+  runId: identity.runId,
+  runAttempt: identity.runAttempt,
+  invocation: identity.invocation,
+  pr: {
+    provider: 'github', repo: identity.repository, number: identity.prNumber, head: identity.head,
+    base: identity.base, baseRef: identity.baseRef,
+  },
+  review: structuredClone(review),
+  files: [
+    { path: removed.filename, left: digest('1\tdeleted\n'), right: digest('') },
+    { path: modified.filename, left: digest('2\tbefore \t\r\n10\told end\n'), right: digest('2\t之后 \t\r\n10\t\n') },
+    { path: added.filename, left: digest(''), right: digest('1\tfirst\n2\tsecond\n') },
+  ],
+};
+
+function verifiesPatch(patch, additions, deletions, left, right) {
+  const files = [{ ...modified, patch, additions, deletions }];
+  const manifest = [{ path: modified.filename, left: digest(left), right: digest(right) }];
+  return verifyReviewCoverage({ ...proof, files: manifest }, { ...input, files, changedFileCount: files.length });
+}
+
+test('matches full changed rows and both empty sides by current API path in either invocation', () => {
+  assert.equal(verifyReviewCoverage(proof, input), true);
+  assert.equal(verifyReviewCoverage({ ...proof, invocation: 'retry' }, { ...input, invocation: 'retry' }), true);
+  assert.equal(verifiesPatch('@@ -1,0 +2 @@\n+inserted\n@@ -4 +4,0 @@\n-deleted', 1, 1,
+    '4\tdeleted\n', '2\tinserted\n'), true);
+});
+
+test('rejects a standalone no-final-newline marker while retaining the comment anchor', () => {
+  const text = '\\ No newline at end of file';
+  const patch = `@@ -1 +1 @@\n-value\n+value\n${text}`;
+  assert.equal(verifiesPatch(patch, 1, 1, '1\tvalue\n', '1\tvalue\n'), false);
+  assert.equal(verifiesPatch(`@@ -1 +1 @@\n-value\n+${text}`, 1, 1, '1\tvalue\n', `1\t${text}\n`), true);
+  const issues = [{ issue_header: '[P1] [RIGHT] Inspect EOF', issue_content: 'Inspect the ending.',
+    relevant_file: modified.filename, start_line: 1, end_line: 1 }];
+  const comments = buildReviewComments({ issues, files: [{ ...modified, patch }], head: identity.head });
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].line, 1);
+});
+
+test('rejects content-matching proof for a rename when the previous path is outside the manifest', () => {
+  const file = { ...modified, status: 'renamed', previous_filename: 'src/旧文件.js' };
+  assert.equal(verifyReviewCoverage(proof, { ...input, files: [file, added, removed] }), false);
+});
+
+test('rejects a mismatched run, invocation, PR revision, or native review result', () => {
+  for (const [key, value] of Object.entries({ version: 2, runId: '12345679', runAttempt: '3', invocation: 'retry' })) {
+    assert.equal(verifyReviewCoverage({ ...proof, [key]: value }, input), false, key);
+  }
+  for (const [key, value] of Object.entries({ provider: 'gitlab', repo: 'corp-example/other', number: '510',
+    head: 'c'.repeat(40), base: 'c'.repeat(40), baseRef: 'develop' })) {
+    assert.equal(verifyReviewCoverage({ ...proof, pr: { ...proof.pr, [key]: value } }, input), false, key);
+  }
+  assert.equal(verifyReviewCoverage({ ...proof, review: { ...review, security_concerns: 'Yes' } }, input), false);
+  assert.equal(verifyReviewCoverage({ ...proof, review: {} }, { ...input, review: {} }), false);
+  assert.equal(verifyReviewCoverage({ ...proof, runId: '' }, { ...input, runId: '' }), false);
+  assert.equal(verifyReviewCoverage(null, input), false);
+});
+
+test('rejects missing, extra, duplicate, unrecognized, and malformed manifest entries', () => {
+  const [first, second, third] = proof.files;
+  for (const files of [[], [first, second], [first, second, third, first], [first, first, third],
+    [first, { ...second, path: 'src/旧文件.js' }, third], [first, null, third],
+    [first, { ...second, left: second.left.toUpperCase() }, third],
+    [first, { ...second, right: digest('2\t之后 \t\n10\t\n') }, third],
+    [first, { ...second, right: digest('3\t之后 \t\r\n10\t\n') }, third]]) {
+    assert.equal(verifyReviewCoverage({ ...proof, files }, input), false);
+  }
+});
+
+test('rejects unavailable patches, incomplete API pagination, duplicate API paths, and count mismatches', () => {
+  assert.equal(verifyReviewCoverage(proof, { ...input, changedFileCount: 4 }), false);
+  assert.equal(verifyReviewCoverage(proof, { ...input, files: [modified, modified, removed] }), false);
+  for (const changes of [{ patch: null }, { patch: 'Binary files differ' }, { additions: 3 }, { deletions: '2' },
+    { patch: modified.patch.replace(' tail', 'unexpected row') }, { patch: modified.patch.replace(' tail\n', '\n') }]) {
+    assert.equal(verifyReviewCoverage(proof, { ...input, files: [{ ...modified, ...changes }, added, removed] }), false);
+  }
+});
+
+test('rejects invalid or overlapping hunks even when changed rows and total counts match', () => {
+  const exactFirstHunk = '@@ -1,2 +1,2 @@\n-old\n+new\n context';
+  for (const patch of [
+    `header noise\n${exactFirstHunk}`,
+    `${exactFirstHunk}\n@@ -5,2 +5,2 @@\n context with truncated tail`,
+    `@@ -1,2 +1,2 @@\n\\ No newline at end of file\n-old\n+new\n context`,
+    `@@ -1,2 +1,2 @@\n-old\n\\ No newline at end of file\n+new\n context`,
+    `${exactFirstHunk}\n@@ -5 +5 @@\n context with no changes`,
+  ]) assert.equal(verifiesPatch(patch, 1, 1, '1\told\n', '1\tnew\n'), false, patch);
+
+  assert.equal(verifiesPatch(`${exactFirstHunk}\n@@ -2 +2 @@\n-second old\n+second new`, 2, 2,
+    '1\told\n2\tsecond old\n', '1\tnew\n2\tsecond new\n'), false);
+  assert.equal(verifiesPatch(`${exactFirstHunk}\n${exactFirstHunk}`, 2, 2,
+    '1\told\n1\told\n', '1\tnew\n1\tnew\n'), false);
+});
+
+test('keeps comment anchors from a complete hunk before a truncated hunk', () => {
+  const file = { ...modified, patch: '@@ -1 +1 @@\n-old\n+new\n@@ -4,2 +4,2 @@\n incomplete' };
+  const issues = [{ issue_header: '[P1] [RIGHT] Inspect change', issue_content: 'Inspect this line.',
+    relevant_file: file.filename, start_line: 1, end_line: 1 }];
+  const comments = buildReviewComments({ issues, files: [file], head: identity.head });
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].line, 1);
+});

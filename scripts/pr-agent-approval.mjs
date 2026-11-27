@@ -1,11 +1,35 @@
 import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
+import { hasIndependentApprovalGate } from './pr-agent-approval-policy.mjs';
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
 const approvalSummary = '洛神自动审批。完整审查未发现 P0、P1 或 P2 问题。';
 const verificationDismissal = '洛神未能核对发布后的状态，撤销本次自动审批。';
+const protectionDismissal = '洛神未能核对人工审批要求，撤销自动审批。';
 const changeRequestDismissal = '维护者已请求修改，撤销洛神自动审批。';
+const staleDismissal = 'PR 或目标分支版本已变化，洛神自动审批已过期。';
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
+
+function sameBot(left, right) {
+  return validId(left?.id) && left.id === right?.id && left.type === 'Bot' && right.type === 'Bot' &&
+    left.login === right.login && /^[a-z0-9-]+\[bot\]$/u.test(left.login ?? '');
+}
+
+async function readApprovalBot(github, approver, appSlug) {
+  if (typeof appSlug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(appSlug) || appSlug === 'github-actions') {
+    throw new Error('Invalid dedicated approval GitHub App');
+  }
+  const login = `${appSlug}[bot]`;
+  const [account, access] = await Promise.all([github.getAccount(login), approver.getInstallationRepositories()]);
+  if (!sameBot(account, { id: account?.id, login, type: 'Bot' })) {
+    throw new Error('Unexpected automatic approval approver identity');
+  }
+  if (access?.total_count !== 1 || access.repositories?.length !== 1 ||
+      access.repositories[0]?.full_name !== github.repository) {
+    throw new Error('Approval GitHub App token is not scoped to this repository');
+  }
+  return account;
+}
 
 export function readApprovalReceipt(review, prNumber) {
   if (!validId(review?.id) || !validId(prNumber) || typeof review.body !== 'string' ||
@@ -20,7 +44,7 @@ export function readApprovalReceipt(review, prNumber) {
 }
 
 function readActiveApproval(review, owner, prNumber) {
-  if (review?.state === 'APPROVED' && sameUser(review.user, owner)) return readApprovalReceipt(review, prNumber);
+  if (review?.state === 'APPROVED' && sameBot(review.user, owner)) return readApprovalReceipt(review, prNumber);
 }
 
 function matchesRevision(receipt, revision) {
@@ -31,7 +55,7 @@ function matchesRevision(receipt, revision) {
 async function hasPriorApproval(github, reviews, owner, revision) {
   const dismissed = new Set();
   for (const review of reviews) {
-    if (!sameUser(review?.user, owner) || review.commit_id !== revision.head) continue;
+    if (!sameBot(review?.user, owner) || review.commit_id !== revision.head) continue;
     if (review.state === 'APPROVED') return true;
     const receipt = review.state === 'DISMISSED' && readApprovalReceipt(review, revision.prNumber);
     if (receipt && matchesRevision(receipt, revision)) dismissed.add(review.id);
@@ -42,19 +66,19 @@ async function hasPriorApproval(github, reviews, owner, revision) {
   for await (const event of pages(github, `/issues/${revision.prNumber}/timeline`, 'Pull request timeline')) {
     const dismissal = event?.dismissed_review;
     if (event?.event !== 'review_dismissed' || !dismissed.has(dismissal?.review_id)) continue;
-    if (!sameUser(event.actor, owner) || dismissal.state !== 'approved' ||
-        dismissal.dismissal_message !== verificationDismissal) return true;
+    if (!sameBot(event.actor, owner) || dismissal.state !== 'approved' ||
+        ![verificationDismissal, protectionDismissal].includes(dismissal.dismissal_message)) return true;
     dismissed.delete(dismissal.review_id);
     if (!dismissed.size) return false;
   }
   return true;
 }
 
-async function hasBlockingChangeRequest(github, reviews, owner, prNumber) {
+async function hasBlockingChangeRequest(github, reviews) {
   const latestByReviewer = new Map();
   // Evaluate human decisions without letting a prior Luoshen approval supersede one.
   for (const review of reviews) {
-    if (!validId(review?.id) || readActiveApproval(review, owner, prNumber)) continue;
+    if (!validId(review?.id)) continue;
     const { state, user } = review;
     if (state === 'CHANGES_REQUESTED' && user?.id === 41898282 &&
         user.login === 'github-actions[bot]' && user.type === 'Bot' && readChangeRequestReceipt(review)) return true;
@@ -63,7 +87,6 @@ async function hasBlockingChangeRequest(github, reviews, owner, prNumber) {
 
   for (const { state, user } of latestByReviewer.values()) {
     if (state !== 'CHANGES_REQUESTED') continue;
-    if (sameUser(user, owner)) return true;
     try {
       const access = await github.get(`/collaborators/${encodeURIComponent(user.login)}/permission`,
         'Cannot verify a change request reviewer’s repository permission');
@@ -76,7 +99,7 @@ async function hasBlockingChangeRequest(github, reviews, owner, prNumber) {
 }
 
 function matchesApproval(review, owner, head, body) {
-  return validId(review?.id) && sameUser(review.user, owner) && review.commit_id === head && review.body === body;
+  return validId(review?.id) && sameBot(review.user, owner) && review.commit_id === head && review.body === body;
 }
 
 async function postApproval(github, approver, pull, reviews, owner, head, body) {
@@ -116,7 +139,30 @@ async function dismissApproval(github, approver, pull, review, message) {
   }
 }
 
-export async function publishApproval({ github, approver, revision, approverLogin, runId, allowApproval = true }) {
+export async function reconcileMainApprovals({ github, approver, appSlug }) {
+  const owner = await readApprovalBot(github, approver, appSlug);
+  let dismissed = 0;
+  const errors = [];
+  for await (const pr of pages(github, '/pulls?state=open&base=main', 'Open main pull requests')) {
+    const prNumber = pr?.number;
+    if (!validId(prNumber)) throw new Error('Invalid open pull request');
+    const pull = `/pulls/${prNumber}`;
+    try {
+      for (const review of await listReviews(github, pull)) {
+        const receipt = readActiveApproval(review, owner, prNumber);
+        if (!receipt || await isCurrent(github, github.repository, pull, prNumber, receipt)) continue;
+        await dismissApproval(github, approver, pull, review, staleDismissal);
+        dismissed++;
+      }
+    } catch (cause) {
+      errors.push(new Error(`Could not reconcile Luoshen approvals for PR #${prNumber}`, { cause }));
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, 'Could not reconcile all Luoshen approvals');
+  return dismissed;
+}
+
+export async function publishApproval({ github, approver, revision, appSlug, runId, allowApproval = true }) {
   const { repository, serverUrl } = github;
   const { prNumber, head, base, baseRef } = revision;
   if (typeof allowApproval !== 'boolean') throw new Error('Invalid automatic approval verdict');
@@ -132,10 +178,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
     throw new Error('Invalid automatic approval server URL');
   }
 
-  const owner = await approver.getUser();
-  if (!sameUser(owner, { id: owner?.id, login: approverLogin, type: 'User' })) {
-    throw new Error('Unexpected automatic approval approver identity');
-  }
+  const owner = await readApprovalBot(github, approver, appSlug);
 
   const pull = `/pulls/${prNumber}`;
   const pr = await readPull(github, pull, prNumber);
@@ -157,7 +200,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
     const receipt = readActiveApproval(review, owner, prNumber);
     if (!receipt || (allowApproval && matchesRevision(receipt, revision))) continue;
     const message = allowApproval
-      ? 'PR 或目标分支版本已变化，洛神自动审批已过期。'
+      ? staleDismissal
       : '当前审查结论不满足自动审批条件，撤销此前的洛神自动审批。';
     await dismissApproval(github, approver, pull, review, message);
     withdrawn.add(review.id);
@@ -166,12 +209,16 @@ export async function publishApproval({ github, approver, revision, approverLogi
 
   const reviews = await listReviews(github, pull);
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
-  if (await hasBlockingChangeRequest(github, remaining, owner, prNumber)) {
+  let rejection;
+  if (await hasBlockingChangeRequest(github, remaining)) rejection = 'changes-requested';
+  else if (!await hasIndependentApprovalGate(github, approver, revision)) rejection = 'protection';
+  if (rejection) {
     const activeApprovals = remaining.filter((review) => readActiveApproval(review, owner, prNumber));
-    if (!activeApprovals.length) return 'skipped-changes-requested';
+    if (!activeApprovals.length) return `skipped-${rejection}`;
     if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
-    for (const review of activeApprovals) await dismissApproval(github, approver, pull, review, changeRequestDismissal);
-    return 'dismissed-changes-requested';
+    const message = rejection === 'changes-requested' ? changeRequestDismissal : protectionDismissal;
+    for (const review of activeApprovals) await dismissApproval(github, approver, pull, review, message);
+    return `dismissed-${rejection}`;
   }
   if (await hasPriorApproval(github, remaining, owner, revision)) return 'skipped-existing';
 
@@ -183,7 +230,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
   let current;
   let blocked;
   try {
-    blocked = await hasBlockingChangeRequest(github, await listReviews(github, pull), owner, prNumber);
+    blocked = await hasBlockingChangeRequest(github, await listReviews(github, pull));
     current = await isCurrent(github, repository, pull, prNumber, revision);
   } catch (cause) {
     try {
@@ -194,7 +241,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
     throw new Error(`Could not verify automatic approval ${approval.id}; the approval was dismissed`, { cause });
   }
   if (!current) {
-    await dismissApproval(github, approver, pull, approval, 'PR 或目标分支版本已变化，洛神自动审批已过期。');
+    await dismissApproval(github, approver, pull, approval, staleDismissal);
     return 'dismissed-stale';
   }
   if (blocked) {

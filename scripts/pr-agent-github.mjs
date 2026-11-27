@@ -20,8 +20,9 @@ export function sameUser(left, right) {
 }
 
 export async function* pages(github, path, label) {
+  const separator = path.includes('?') ? '&' : '?';
   for (let page = 1; page <= 100; page++) {
-    const rows = await github.get(`${path}?per_page=100&page=${page}`, label);
+    const rows = await github.get(`${path}${separator}per_page=100&page=${page}`, label);
     if (!Array.isArray(rows)) throw new Error(`Invalid ${label.toLowerCase()} response`);
     yield* rows;
     if (rows.length < 100) return;
