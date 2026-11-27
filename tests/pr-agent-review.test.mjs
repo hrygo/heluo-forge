@@ -78,7 +78,9 @@ async function withGitHub(run) {
     inlineCommentsStatus: 200,
     approvalProtection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
       require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
+      require_last_push_approval: false,
     } },
+    approvalRules: [],
     compareStatus: 200,
     requests: [],
     approvalBot: approver,
@@ -112,6 +114,8 @@ async function withGitHub(run) {
       response.end(JSON.stringify({ total_count: 1, repositories: [{ full_name: repository }] }));
     } else if (request.method === 'GET' && path === '/branches/main/protection') {
       response.end(JSON.stringify(state.approvalProtection));
+    } else if (request.method === 'GET' && path === '/rules/branches/main') {
+      response.end(JSON.stringify(pageOf(state.approvalRules)));
     } else if (request.method === 'GET' && path === '/contents/.github') {
       response.end(JSON.stringify([{ path: ownerFile, type: 'file', sha: ownerBlob }]));
     } else if (request.method === 'GET' && path === '/contents/.github/CODEOWNERS') {
@@ -508,6 +512,21 @@ test('code owners limited to unrelated paths cannot authorize an APPROVE', async
   });
 });
 
+test('an effective ruleset requiring an additional approval preserves the official COMMENT only', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    state.approvalRules = [{ type: 'pull_request', parameters: {
+      required_approving_review_count: 2, require_last_push_approval: false,
+    } }];
+    const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
+    const candidate = await approvalRevision(mode, await capture(mode), cleanReview({ key_issues_to_review: [issue] }));
+    assert.equal(candidate?.allowApproval, true);
+    const { stdout } = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(candidate) });
+    assert.match(stdout, /skipped-protection/u);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+  });
+});
+
 test('unavailable file-mode evidence preserves the native COMMENT and review key', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv };
@@ -639,8 +658,10 @@ test('the approval entry point uses the dedicated credential for identity and on
     assert.deepEqual(state.approverRequests, [
       { method: 'GET', url: '/installation/repositories?per_page=2' },
       { method: 'GET', url: '/repos/corp/example/branches/main/protection' },
+      { method: 'GET', url: '/repos/corp/example/rules/branches/main?per_page=100&page=1' },
       { method: 'POST', url: '/repos/corp/example/pulls/42/reviews' },
       { method: 'GET', url: '/repos/corp/example/branches/main/protection' },
+      { method: 'GET', url: '/repos/corp/example/rules/branches/main?per_page=100&page=1' },
     ]);
     const [write] = reviewWrites(state);
     assert.equal(write.body.event, 'APPROVE');

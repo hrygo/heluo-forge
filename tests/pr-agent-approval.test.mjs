@@ -22,6 +22,8 @@ const revision = { prNumber: 42, head, base, baseRef };
 const pull = '/pulls/42';
 const reviewPath = `${pull}/reviews`;
 const basePath = '/git/ref/heads/main';
+const protectionPath = '/branches/main/protection';
+const rulesPath = '/rules/branches/main?per_page=100&page=1';
 const executionPath = '/actions/runs/1234/attempts/1/jobs?per_page=100';
 
 function fakeGitHub() {
@@ -40,6 +42,7 @@ function fakeGitHub() {
     installation: { total_count: 1, repositories: [{ full_name: repository }] },
     protection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
       require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
+      require_last_push_approval: false,
     } },
     permissions: new Map([[owner.login, { user: owner, permission: 'admin' }]]),
     reviews: [],
@@ -106,8 +109,10 @@ function fakeGitHub() {
   const approver = {
     withSignal() { return this; },
     async get(path) {
-      assert.equal(path, '/branches/main/protection');
       state.calls.push(path);
+      if (path === rulesPath) return [];
+      assert.equal(path, protectionPath);
+      if (state.protectionError) throw state.protectionError;
       return structuredClone(state.protection);
     },
     async getInstallationRepositories() {
@@ -119,7 +124,11 @@ function fakeGitHub() {
       state.writes.push({ method: 'POST', path, data });
       assert.equal(path, reviewPath);
       if (state.failPost) throw new Error('POST timed out');
-      const review = { id: state.nextReviewId++, user: approvalBot, commit_id: data.commit_id, body: data.body, state: 'APPROVED' };
+      assert.ok(['APPROVE', 'COMMENT'].includes(data.event));
+      const review = {
+        id: state.nextReviewId++, user: approvalBot, commit_id: data.commit_id, body: data.body,
+        state: data.event === 'APPROVE' ? 'APPROVED' : 'COMMENTED',
+      };
       if (!state.hideApproval) state.reviews.push(review);
       state.afterPost?.(review);
       return structuredClone(state.postResponse ?? review);
@@ -233,6 +242,18 @@ test('an approval is withdrawn if the independent protection disappears just aft
   assert.equal(await run(), 'dismissed-protection');
   assert.equal(state.reviews[0].state, 'DISMISSED');
   assert.match(state.writes.at(-1).data.message, /人工审批要求/u);
+});
+
+test('a persistent protection read failure after publication withdraws only the new App approval', async () => {
+  const { state, run } = fakeGitHub();
+  state.reviews.push(priorApproval({ id: 101, author: owner }));
+  state.afterPost = () => {
+    state.protectionError = Object.assign(new Error('GitHub protection unavailable'), { status: 503 });
+  };
+
+  assert.equal(await run(), 'dismissed-protection');
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+  assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
 });
 
 test('keeps the new approval if branch protection is restored before dismissal', async () => {
@@ -667,6 +688,35 @@ test('a later same-version cleanup retries a failed withdrawal recorded on the e
   ]);
   assert.equal(await reconcile(), 0);
   assert.equal(await run({ runId: '5678' }), 'approved');
+});
+
+test('a negative review keeps its withdrawal when the history or exact approval cannot be read', async () => {
+  for (const [unavailable, cleanup] of [[`${reviewPath}?`, true], [`${reviewPath}?`, false], [`${reviewPath}/300`, true]]) {
+    const { state, run, reconcile } = fakeGitHub();
+    state.reviews.push(priorApproval({ id: 101, author: owner }));
+    assert.equal(await run(), 'approved');
+    state.beforeGet = (path) => {
+      if (path.startsWith(unavailable)) throw new Error('Review state unavailable');
+    };
+
+    await assert.rejects(run({ allowApproval: false, runId: '2345' }), /review state unavailable/iu);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'APPROVED', 'COMMENTED']);
+    assert.deepEqual(state.writes.map(({ data }) => data.event), ['APPROVE', 'COMMENT']);
+    state.beforeGet = undefined;
+
+    const record = state.reviews.at(-1);
+    record.user = contributor;
+    assert.equal(await reconcile(), 0);
+    record.user = approvalBot;
+    if (cleanup) assert.equal(await reconcile(), 1);
+    else assert.equal(await run({ runId: '3456' }), 'approved');
+    assert.equal(state.reviews[0].state, 'APPROVED');
+    assert.equal(state.reviews[1].state, 'DISMISSED');
+    assert.equal(state.writes[2].path, `${reviewPath}/300/dismissals`);
+    if (cleanup) assert.equal(await run({ runId: '3456' }), 'approved');
+    assert.equal(await reconcile(), 0);
+    assert.equal(state.reviews.at(-1).state, 'APPROVED');
+  }
 });
 
 test('cleanup preserves a same-version App approval when a maintainer lifts the blocking change request before dismissal', async () => {
