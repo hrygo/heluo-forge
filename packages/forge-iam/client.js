@@ -1473,7 +1473,8 @@ window.__ModuleLoader__.load({
     function getLauncherStatus(view, ui) {
       if (ui.verifying || ui.expiredRenewable) {
         const label = ui.verifying ? SESSION_VERIFYING_NOTICE : SESSION_RENEWING_NOTICE;
-        return { kind: 'checking', dotClass: 'warn', label, tooltip: label };
+        const tooltip = !ui.verifying && view?.canSignIn === true ? `${label}，点击重新登录` : label;
+        return { kind: 'checking', dotClass: 'warn', label, tooltip };
       }
       if (!view || ui.signedOut || ui.unconfigured) {
         return { kind: 'signed-out', dotClass: 'idle', label: '企业账号未登录', tooltip: '点击登录企业账号' };
@@ -2158,6 +2159,9 @@ window.__ModuleLoader__.load({
     }
 
     // §11 会话轮询
+    const SESSION_POLL_INTERVAL_MS = 2000;
+    const MAX_DEADLINE_READ_ATTEMPTS = 2;
+
     function advanceViewEpoch(barrierRef) {
       barrierRef.current.epoch += 1;
       barrierRef.current.restartStream?.();
@@ -2175,7 +2179,7 @@ window.__ModuleLoader__.load({
       let inFlight = null;
       let generation = 0;
       let deadlineTimer = null;
-      let deadlineReadQueued = false;
+      let deadlineRetryTimer = null;
 
       function trackDeadline(subscriber, view, sampledAfter = -Infinity) {
         const ui = deriveSessionUi(view);
@@ -2189,18 +2193,43 @@ window.__ModuleLoader__.load({
         // the browser crossed it before the Host did. Keep that confirmation
         // for subsequent snapshots of the same session state and cutoff.
         if (at <= sampledAfter || (same && confirmedSessionViews.has(previous.view))) confirmedSessionViews.add(view);
-        subscriber.deadline = { at, epoch, view, state: ui.state, reached: same && previous.reached };
+        subscriber.deadline = {
+          at, epoch, view, state: ui.state, reached: same && previous.reached,
+          attempts: same ? previous.attempts : 0,
+        };
       }
 
-      function hasUnconfirmedDeadline() {
-        return [...subscribers].some(({ deadline }) => deadline?.reached && !confirmedSessionViews.has(deadline.view));
+      function needsDeadlineConfirmation(deadline, at) {
+        return deadline?.reached && deadline.at <= at && !confirmedSessionViews.has(deadline.view);
       }
 
-      function flushDeadlineRead() {
-        if (!deadlineReadQueued) return;
-        // poll consumes the queued read only when a request can start.
-        if (hasUnconfirmedDeadline()) void poll(true);
-        else deadlineReadQueued = false;
+      function nextDeadlineAttempts() {
+        const at = Date.now();
+        let attempts = Infinity;
+        for (const { deadline } of subscribers) {
+          if (needsDeadlineConfirmation(deadline, at)) attempts = Math.min(attempts, deadline.attempts);
+        }
+        return attempts;
+      }
+
+      function clearDeadlineRetry() {
+        clearTimeout(deadlineRetryTimer);
+        deadlineRetryTimer = null;
+      }
+
+      function flushDeadlineRead(immediate = false) {
+        if (inFlight || unsettledReads.size >= 2) return;
+        const attempts = nextDeadlineAttempts();
+        if (attempts >= MAX_DEADLINE_READ_ATTEMPTS) { clearDeadlineRetry(); return; }
+        if (attempts === 0 || immediate) {
+          clearDeadlineRetry();
+          void poll(true);
+        } else if (deadlineRetryTimer === null) {
+          deadlineRetryTimer = setTimeout(() => {
+            deadlineRetryTimer = null;
+            flushDeadlineRead(true);
+          }, SESSION_POLL_INTERVAL_MS);
+        }
       }
 
       function scheduleDeadline() {
@@ -2216,7 +2245,6 @@ window.__ModuleLoader__.load({
             continue;
           }
           deadline.reached = true;
-          deadlineReadQueued = true;
           subscriber.invalidatePresentation();
         }
         if (Number.isFinite(next)) {
@@ -2300,13 +2328,13 @@ window.__ModuleLoader__.load({
             // even if one callback synchronously replaces the physical stream.
             const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
             broadcast(view, pending, openedAt);
-            if (interruptedDeadlineRead && hasUnconfirmedDeadline()) {
+            const needsFreshSource = interruptedDeadlineRead && Number.isFinite(nextDeadlineAttempts());
+            if (needsFreshSource && isCurrent()) {
               // This frame won the view but may have been sampled before the
               // cutoff. Require a fresh source for the outstanding confirmation.
-              deadlineReadQueued = true;
-              if (isCurrent()) restart();
+              restart();
             }
-            flushDeadlineRead();
+            flushDeadlineRead(needsFreshSource);
           };
           opened.onerror = () => {
             if (!isCurrent()) return;
@@ -2332,11 +2360,18 @@ window.__ModuleLoader__.load({
         }
         const readGeneration = generation;
         const startedAt = Date.now();
-        const checksDeadline = deadlineReadQueued;
-        deadlineReadQueued = false;
         const pending = [...subscribers].map((subscriber) => ({
           subscriber, epoch: subscriber.barrierRef?.current.epoch, revision: subscriber.revisionRef?.current,
         }));
+        let checksDeadline = false;
+        for (const { subscriber } of pending) {
+          const cutoff = subscriber.deadline;
+          if (needsDeadlineConfirmation(cutoff, startedAt)) {
+            cutoff.attempts = Math.min(cutoff.attempts + 1, MAX_DEADLINE_READ_ATTEMPTS);
+            checksDeadline = true;
+          }
+        }
+        if (checksDeadline) clearDeadlineRetry();
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         let release;
         const cancelled = new Promise((resolve) => { release = resolve; });
@@ -2374,7 +2409,7 @@ window.__ModuleLoader__.load({
           flushDeadlineRead();
         }
       }
-      function startPolling() { if (timer === null) timer = setInterval(poll, 2000); }
+      function startPolling() { if (timer === null) timer = setInterval(poll, SESSION_POLL_INTERVAL_MS); }
       function restart() {
         if (!stream) { generation += 1; return; }
         closeStream();
@@ -2393,10 +2428,10 @@ window.__ModuleLoader__.load({
           if (subscribers.size === 0) {
             if (stream) closeStream(); else generation += 1;
             stopPolling();
-            deadlineReadQueued = false;
             inFlight?.cancel();
             clearTimeout(deadlineTimer);
             deadlineTimer = null;
+            clearDeadlineRetry();
             if (typeof window !== 'undefined') window.removeEventListener?.('focus', onWake);
             if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onWake);
           } else {
@@ -4853,7 +4888,7 @@ window.__ModuleLoader__.load({
 
       const handleMainClick = (e) => {
         e.stopPropagation();
-        if (sessionUi.verifying || sessionUi.expiredRenewable) {
+        if (sessionUi.verifying || (sessionUi.expiredRenewable && view?.canSignIn !== true)) {
           void sessionStream.revalidate();
           return;
         }
