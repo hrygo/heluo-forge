@@ -1,0 +1,1 @@
+GitHub App approval acceptance fixture. This branch is used only to observe GitHub review decisions.
