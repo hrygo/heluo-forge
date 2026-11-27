@@ -297,18 +297,51 @@ async function validateReview(github, env, scope) {
   const canCreateApproval = env.PR_AGENT_AUTO_APPROVE === 'true' && !pr.draft;
   const favorable = ref === 'main' && reviewCanBeApproved(review);
   const eligible = checkApprovals && canCreateApproval && favorable && validId(pr.changed_files);
+
+  async function emitApprovalRevision(allowApproval) {
+    if (!checkApprovals || (!canCreateApproval && favorable)) return 'no-work';
+    let hasApprovalWork = allowApproval;
+    if (!hasApprovalWork) {
+      try {
+        hasApprovalWork = (await listReviews(github, prPath)).some((previous) =>
+          previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
+      } catch {
+        hasApprovalWork = true;
+        console.log('::warning::Unable to list older automatic approvals; the approval job will retry reconciliation.');
+      }
+    }
+    if (!hasApprovalWork) return 'no-work';
+    if (!await currentRevision()) return 'revision-changed';
+    const revision = {
+      prNumber, head, base, baseRef: ref, allowApproval,
+      runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
+    };
+    await appendFile(env.GITHUB_OUTPUT, `approval_revision=${JSON.stringify(revision)}\n`);
+    return 'emitted';
+  }
+
   if (automatic) {
     const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
     const markers = new Set([summaryMarker, reviewMarker]);
     const earliest = Math.floor(started / 1000) * 1000;
-    for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
-      if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
-          !(Date.parse(comment.updated_at) >= earliest)) continue;
-      for (const marker of markers) if (comment.body.includes(marker)) markers.delete(marker);
-      if (!markers.size) break;
+    try {
+      for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
+        if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
+            !(Date.parse(comment.updated_at) >= earliest)) continue;
+        for (const marker of markers) if (comment.body.includes(marker)) markers.delete(marker);
+        if (!markers.size) break;
+      }
+      if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
+    } catch (error) {
+      if (favorable) throw error;
+      const withdrawal = await emitApprovalRevision(false);
+      if (withdrawal === 'no-work') throw error;
+      if (withdrawal === 'emitted') {
+        console.log('::warning::Unable to verify refreshed PR-Agent comments; continuing with automatic approval withdrawal.');
+      }
+      return;
     }
-    if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
     if (!await currentRevision()) return;
   }
 
@@ -346,26 +379,7 @@ async function validateReview(github, env, scope) {
       }
     }
   }
-  if (checkApprovals && (canCreateApproval || !favorable)) {
-    let hasApprovalWork = allowApproval;
-    if (!hasApprovalWork) {
-      try {
-        hasApprovalWork = (await listReviews(github, prPath)).some((previous) =>
-          previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
-      } catch {
-        hasApprovalWork = true;
-        console.log('::warning::Unable to list older automatic approvals; the approval job will retry reconciliation.');
-      }
-    }
-    if (hasApprovalWork) {
-      if (!await currentRevision()) return;
-      const revision = {
-        prNumber, head, base, baseRef: ref, allowApproval,
-        runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
-      };
-      await appendFile(env.GITHUB_OUTPUT, `approval_revision=${JSON.stringify(revision)}\n`);
-    }
-  }
+  if (await emitApprovalRevision(allowApproval) === 'revision-changed') return;
   if (automatic && inlineCommentStatus === 'complete') {
     await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
   }

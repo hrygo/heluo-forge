@@ -76,6 +76,7 @@ async function withGitHub(run) {
     transientReviewHistoryFailures: 0,
     disconnectReviewHistory: false,
     inlineCommentsStatus: 200,
+    persistentCommentsStatus: 200,
     approvalProtection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
       require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
       require_last_push_approval: false,
@@ -163,6 +164,7 @@ async function withGitHub(run) {
       const review = state.reviews.find(({ id }) => id === Number(path.split('/').at(-1)));
       response.end(JSON.stringify(review ?? {}));
     } else if (request.method === 'GET' && path === '/issues/42/comments') {
+      response.statusCode = state.persistentCommentsStatus;
       response.end(JSON.stringify(pageOf(state.comments)));
       if (state.headAfterCommentList) state.pr.head.sha = state.headAfterCommentList;
       if (state.baseAfterCommentList) state.refs.main = state.baseAfterCommentList;
@@ -599,6 +601,66 @@ test('inline comment failures preserve a P1 review conclusion and withdraw only 
       assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
     }));
   }
+});
+
+test('a current unfavorable verdict can withdraw an approval when summary verification fails', async (t) => {
+  for (const scenario of ['HTTP 503', 'missing review marker', 'HTTP 503 with unavailable approval history']) {
+    await t.test(scenario, () => withGitHub(async ({ state, env }) => {
+      const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+      const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+      await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+      state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+
+      const next = { ...mode, GITHUB_RUN_ID: '12346', PR_AGENT_AUTO_APPROVE: '' };
+      const captured = await capture(next);
+      if (scenario === 'missing review marker') state.comments = [freshComment('pr-agent:describe:persistent')];
+      else state.persistentCommentsStatus = 503;
+      if (scenario === 'HTTP 503 with unavailable approval history') state.transientReviewHistoryFailures = 1;
+
+      await writeFile(next.GITHUB_OUTPUT, '');
+      const { stdout } = await submit(next, captured, prioritizedReview('P1'));
+      assert.match(stdout, /::warning::Unable to verify refreshed PR-Agent comments/u);
+      const output = (await readFile(next.GITHUB_OUTPUT, 'utf8')).trim();
+      assert.match(output, /^approval_revision=[^\n]+$/u);
+      const withdrawal = JSON.parse(output.slice('approval_revision='.length));
+      assert.deepEqual(withdrawal, { prNumber: 42, head, base, baseRef: 'main', allowApproval: false,
+        runId: next.GITHUB_RUN_ID, runAttempt: next.GITHUB_RUN_ATTEMPT });
+
+      const approved = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(withdrawal) });
+      assert.match(approved.stdout, /dismissed-ineligible/u);
+      assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+      assert.deepEqual(reviewWrites(state).map(({ body }) => body.event ?? 'pending'), ['APPROVE', 'pending', 'DISMISS']);
+    }));
+  }
+});
+
+test('summary verification failure still fails when only an approval or no withdrawal could be emitted', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const revision = await capture(mode);
+    state.persistentCommentsStatus = 503;
+    for (const review of [cleanReview(), prioritizedReview('P1')]) {
+      await assert.rejects(approvalRevision(mode, revision, review), /Cannot verify PR-Agent comments \(HTTP 503\)/u);
+      assert.equal(await readFile(mode.GITHUB_OUTPUT, 'utf8'), '');
+    }
+    assert.deepEqual(reviewWrites(state), []);
+  });
+});
+
+test('a target advance during failed summary verification keeps withdrawal bound to the reviewed revision', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+
+    const next = { ...mode, GITHUB_RUN_ID: '12346', PR_AGENT_ALLOW_RETRY: 'true' };
+    const captured = await capture(next);
+    state.persistentCommentsStatus = 503;
+    state.baseAfterCommentList = 'c'.repeat(40);
+    assert.equal(await approvalRevision(next, captured, prioritizedReview('P1')), undefined);
+    assert.equal(await readFile(next.GITHUB_OUTPUT, 'utf8'), 'retry=true\n');
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED']);
+  });
 });
 
 test('a GitHub connection reset reading review history is retried before withdrawal', async () => {

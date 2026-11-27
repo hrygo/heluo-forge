@@ -147,8 +147,9 @@ function fakeGitHub() {
       const match = /^\/pulls\/42\/reviews\/(\d+)\/dismissals$/u.exec(path);
       assert.ok(match);
       assert.equal(data.event, 'DISMISS');
-      if (state.denyDismissal) throw new Error('Dismissal denied');
       const review = state.reviews.find(({ id }) => id === Number(match[1]));
+      state.beforeDismissal?.(review);
+      if (state.denyDismissal) throw new Error('Dismissal denied');
       review.state = 'DISMISSED';
       state.timeline.push({
         event: 'review_dismissed',
@@ -255,6 +256,25 @@ test('a persistent protection read failure after publication withdraws only the 
   assert.equal(await run(), 'dismissed-protection');
   assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
   assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+});
+
+test('a code-owner eligibility change after publication withdraws only the new App approval', async () => {
+  for (const change of [
+    (state) => {
+      state.beforeGet = (path) => {
+        if (path === `/codeowners/errors?ref=${base}`) return { errors: [{ message: 'Owner no longer has write access' }] };
+      };
+    },
+    (state) => { state.permissions.get(owner.login).permission = 'read'; },
+  ]) {
+    const { state, run } = fakeGitHub();
+    state.reviews.push(priorApproval({ id: 101, author: owner }));
+    state.afterPost = () => change(state);
+
+    assert.equal(await run(), 'dismissed-protection');
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+    assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+  }
 });
 
 test('keeps the new approval if branch protection is restored before dismissal', async () => {
@@ -498,6 +518,24 @@ test('a new review may replace an unverified approval from a failed attempt on t
   assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
   assert.equal(await reconcile(), 0);
   assert.ok(state.calls.includes(executionPath.replace('/attempts/1/', '/attempts/2/')));
+});
+
+test('a new review preserves a maintainer dismissal that raced compensation for an unverified approval', async () => {
+  const { state, run } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  state.approvalSteps.set(executionPath, { status: 'completed', conclusion: 'failure' });
+  state.beforeDismissal = (review) => {
+    review.state = 'DISMISSED';
+    state.timeline.push({
+      event: 'review_dismissed', actor: owner,
+      dismissed_review: { review_id: review.id, state: 'approved', dismissal_message: 'Maintainer revoked approval' },
+    });
+    throw new Error('The maintainer dismissed this review first');
+  };
+
+  assert.equal(await run({ runId: '5678' }), 'skipped-existing');
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED']);
+  assert.deepEqual(state.writes.map(({ data }) => data.event), ['APPROVE', 'DISMISS']);
 });
 
 test('rejects a response with mismatched state, account, commit or body', async () => {
