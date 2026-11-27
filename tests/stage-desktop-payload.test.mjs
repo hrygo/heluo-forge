@@ -345,7 +345,7 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
       { id: 'desktop-mac', runner: 'macos-15', target: 'mac-arm64', installerTarget: 'mac', installerArch: 'arm64', debArch: null, artifactPattern: /heluo-forge-enterprise-\*-arm64\.dmg/u },
       { id: 'desktop-windows', runner: 'windows-2025', target: 'win-x64', installerTarget: 'win', installerArch: null, debArch: null, artifactPattern: /heluo-forge-enterprise-\*-setup-\*\.exe/u },
       { id: 'desktop-linux-x64', runner: 'ubuntu-24.04', target: 'linux-x64', installerTarget: 'linux', installerArch: 'x64', debArch: 'amd64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
-      { id: 'desktop-linux-arm64', runner: 'ubuntu-24.04-arm', target: 'linux-arm64', installerTarget: 'linux', installerArch: 'arm64', debArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
+      { id: 'desktop-linux-arm64', runner: 'ubuntu-24.04', target: 'linux-arm64', installerTarget: 'linux', installerArch: 'arm64', debArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
     ];
     for (const job of expectedJobs) {
       const block = jobBlock(text, job.id);

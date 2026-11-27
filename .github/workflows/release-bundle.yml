@@ -458,7 +458,8 @@ jobs:
   desktop-linux-arm64:
     name: desktop installer (linux-arm64, deb)
     needs: employee
-    runs-on: ubuntu-24.04-arm
+    # electron-builder bundles an x86 fpm binary for .deb packaging; cross-build arm64 on x64.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: release-bundle
     steps:
