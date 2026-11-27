@@ -166,6 +166,8 @@ GitHub 正式审查绑定 PR 头提交。洛神批准记录包含所核对的目
    - 保持 PR 版本和隔离规则一致，由另一名具备仓库写权限的真人协作者批准，再用同一查询取证。响应须保留原 App 批准，且只新增该协作者对同一头提交的 `APPROVED`，同时 `reviewDecision` 转为 `APPROVED`。遇到 App 批准撤回、版本或规则变化、响应不完整时，本轮作废并重测。[GitHub 必需审批](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)
    - 测试结束后撤回测试批准并恢复隔离分支规则。两种计票结果均符合预期后设置 `PR_AGENT_AUTO_APPROVE=true`。
 
+   GraphQL 的 `author.login` 使用裸 slug，例如 `example-review-app`。同一 App 在 REST 审查接口的 `user.login` 为 `example-review-app[bot]`。
+
    将 `OWNER`、`REPO` 和 `123` 替换为测试仓库及 PR 编号。
 
    ```sh
