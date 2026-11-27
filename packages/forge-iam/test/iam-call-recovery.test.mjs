@@ -132,7 +132,8 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
           openAICompletionsApi: () => ({
             async *stream(model, context, streamOptions) {
               if (sendModelRequest || beforeModelFetch) {
-                beforeModelFetch?.();
+                const beforeFetch = beforeModelFetch?.();
+                if (beforeFetch) await beforeFetch;
                 const response = await streamOptions.fetch(`${model.baseUrl}/chat/completions`, {
                   method: 'POST', headers: streamOptions.headers, signal: streamOptions.signal,
                 }).catch(cause => {
@@ -758,6 +759,44 @@ for (const [scenario, holdGrantRead, refreshAvailable, guarded] of [
       assert.notEqual(complete.accessToken, f.grant.accessToken);
       assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: complete.accessToken }]);
     }
+  });
+}
+
+for (const outcome of ['sign-out', 'a same-subject replacement login']) {
+  test(`a native model call cannot renew or send after ${outcome} before fetch`, { timeout: 6000 }, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const accessOffsetMs = 240_000;
+    const f = await sessionFixture(t, { accessOffsetMs });
+    let fetchEntered = false;
+    let invalidatedView;
+    const { adapter, posts } = await modelRuntimeFor(t, f.service, {
+      async beforeModelFetch() {
+        fetchEntered = true;
+        t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
+        f.advance(accessOffsetMs + 1, { notify: false });
+        if (outcome === 'sign-out') {
+          await f.service.signOut();
+          invalidatedView = f.service.getView();
+        } else {
+          await f.store.write({
+            ...f.grant, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url'), accessToken: 'replacement-access',
+          });
+          invalidatedView = await f.service.syncFromStore();
+        }
+      },
+    });
+    assert.equal(f.service.getView().state, 'ready');
+    assert.equal(failureOf(await chunks(adapter.stream(options))), 'IAM_LOGIN_REQUIRED');
+    assert.equal(fetchEntered, true, 'the native SDK must reach the final fetch after preflight');
+    if (outcome === 'sign-out') {
+      assert.equal(invalidatedView.state, 'signed-out');
+    } else {
+      assert.equal(invalidatedView.principal, f.grant.subject);
+      assert.equal(invalidatedView.state, 'expired');
+      assert.equal(invalidatedView.renewal, 'available');
+    }
+    assert.equal(f.oidc.counts.refresh, 0);
+    assert.deepEqual(posts, []);
   });
 }
 
