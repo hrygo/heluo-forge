@@ -342,15 +342,15 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
   };
   const checkDesktopJobs = (text) => {
     const expectedJobs = [
-      { id: 'desktop-mac', runner: 'macos-15', target: 'mac-arm64', installerTarget: 'mac', installerArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*-arm64\.dmg/u },
-      { id: 'desktop-windows', runner: 'windows-2025', target: 'win-x64', installerTarget: 'win', installerArch: null, artifactPattern: /heluo-forge-enterprise-\*-setup-\*\.exe/u },
-      { id: 'desktop-linux-x64', runner: 'ubuntu-24.04', target: 'linux-x64', installerTarget: 'linux', installerArch: 'x64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
-      { id: 'desktop-linux-arm64', runner: 'ubuntu-24.04-arm', target: 'linux-arm64', installerTarget: 'linux', installerArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
+      { id: 'desktop-mac', runner: 'macos-15', target: 'mac-arm64', installerTarget: 'mac', installerArch: 'arm64', debArch: null, artifactPattern: /heluo-forge-enterprise-\*-arm64\.dmg/u },
+      { id: 'desktop-windows', runner: 'windows-2025', target: 'win-x64', installerTarget: 'win', installerArch: null, debArch: null, artifactPattern: /heluo-forge-enterprise-\*-setup-\*\.exe/u },
+      { id: 'desktop-linux-x64', runner: 'ubuntu-24.04', target: 'linux-x64', installerTarget: 'linux', installerArch: 'x64', debArch: 'amd64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
+      { id: 'desktop-linux-arm64', runner: 'ubuntu-24.04-arm', target: 'linux-arm64', installerTarget: 'linux', installerArch: 'arm64', debArch: 'arm64', artifactPattern: /heluo-forge-enterprise-\*\.deb/u },
     ];
     for (const job of expectedJobs) {
       const block = jobBlock(text, job.id);
       assert.notEqual(block, '', `missing job ${job.id}`);
-      assert.match(block, new RegExp(`runs-on:\\s*${job.runner}\\b`, 'u'), `${job.id} runner`);
+      assert.match(block, new RegExp(`^\\s*runs-on:[ \\t]*${job.runner}[ \\t]*$`, 'mu'), `${job.id} runner`);
       const jobStagings = commands(block, 'stage-desktop-payload');
       assert.equal(jobStagings.length, 1, `${job.id} must have one payload staging`);
       assert.match(jobStagings[0], new RegExp(`--target ${job.target}\\b`, 'u'), `${job.id} payload target`);
@@ -362,6 +362,9 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
       assert.match(jobInstallers[0], new RegExp(`--target ${job.installerTarget}\\b`, 'u'), `${job.id} installer target`);
       if (job.installerArch !== null) {
         assert.match(jobInstallers[0], new RegExp(`--arch ${job.installerArch}\\b`, 'u'), `${job.id} installer arch`);
+      }
+      if (job.debArch !== null) {
+        assert.match(block, new RegExp(`dpkg-deb -f "\\$DEB_FILE" Architecture[\\s\\S]*\\$ARCH" != '${job.debArch}'`, 'u'), `${job.id} deb Architecture check`);
       }
       assert.match(block, job.artifactPattern, `${job.id} artifact glob`);
       const uploads = commands(block, 'upload-draft-release');
@@ -404,6 +407,8 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
     '      - name: Attach skipped',
   );
   assert.throws(() => checkDesktopJobs(missingUpload), /desktop-linux-x64 must attach its artifact/u);
+  const wrongRunner = workflow.replace('  desktop-linux-x64:\n    name: desktop installer (linux-x64, deb)\n    needs: employee\n    runs-on: ubuntu-24.04\n', '  desktop-linux-x64:\n    name: desktop installer (linux-x64, deb)\n    needs: employee\n    runs-on: ubuntu-24.04-arm\n');
+  assert.throws(() => checkDesktopJobs(wrongRunner), /desktop-linux-x64 runner/u);
 });
 
 /** Kept pure so the mutation below proves the agreement check fails. */
