@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { isBranch, isCurrent, listReviews, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const bot = 'github-actions[bot]';
 const shaPattern = '[a-f0-9]{40}';
-const sha = new RegExp(`^${shaPattern}$`, 'u');
 const commandPattern = new RegExp(`^/request-changes (P[01]) (${shaPattern}) (${shaPattern}) (\\S+)$`, 'u');
 const publicationPattern = '[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}';
 const receiptPrefix = '<!-- heluo-forge-pr-agent-request-changes:v2';
@@ -16,25 +16,6 @@ const staleBanner = '**此修改请求已过期。请仓库维护者解除此 Gi
 export function parseChangeRequest(body) {
   const match = typeof body === 'string' && commandPattern.exec(body.trim());
   if (match && isBranch(match[4])) return { priority: match[1], head: match[2], base: match[3], baseRef: match[4] };
-}
-
-function validId(id) {
-  return Number.isSafeInteger(id) && id > 0;
-}
-
-function isSha(value) {
-  return typeof value === 'string' && sha.test(value);
-}
-
-function isBranch(ref) {
-  return typeof ref === 'string' && ref.length > 0 &&
-    !/[\u0000-\u0020\u007f~^:?*\[\\]|\.\.|@\{/u.test(ref) && !ref.endsWith('.') &&
-    ref.split('/').every((part) => part && !part.startsWith('.') && !part.endsWith('.lock'));
-}
-
-function sameUser(left, right) {
-  return validId(left?.id) && left.id === right?.id && left.login === right.login &&
-    left.type === 'User' && right.type === 'User' && /^[a-zA-Z0-9_-]+$/u.test(left.login ?? '');
 }
 
 function commentIsOnPull(comment, repository, prNumber) {
@@ -64,17 +45,6 @@ async function authorize(github, repository, prNumber, command, event) {
   return sameUser(access?.user, event.sender) && ['write', 'maintain', 'admin'].includes(access.permission);
 }
 
-async function listReviews(github, pull) {
-  const reviews = [];
-  for (let page = 1; page <= 100; page++) {
-    const items = await github.get(`${pull}/reviews?per_page=100&page=${page}`);
-    if (!Array.isArray(items)) throw new Error('Invalid pull request review list');
-    reviews.push(...items);
-    if (items.length < 100) return reviews;
-  }
-  throw new Error('Pull request review list exceeds the pagination limit');
-}
-
 function isBotReview(review) {
   return validId(review?.id) && review.user?.login === bot && typeof review.body === 'string' &&
     ['CHANGES_REQUESTED', 'DISMISSED'].includes(review.state);
@@ -99,43 +69,6 @@ function renderReceipt(receipt, state) {
   const { publication, priority, head, base, baseRef, commentId } = receipt;
   const encodedRef = Buffer.from(baseRef).toString('base64url');
   return `${receiptPrefix} ${state} ${publication} ${priority} ${head} ${base} ${encodedRef} ${commentId} -->`;
-}
-
-async function readPull(github, pull, prNumber) {
-  const pr = await github.get(pull);
-  if (pr?.number !== prNumber || !['open', 'closed'].includes(pr.state) || typeof pr.draft !== 'boolean' ||
-      !isSha(pr.head?.sha) || !isBranch(pr.base?.ref) ||
-      ![pr.head.repo, pr.base.repo].every((repo) => repo === null || typeof repo?.full_name === 'string')) {
-    throw new Error('Invalid pull request revision response');
-  }
-  return pr;
-}
-
-function matchesPull(pr, repository, revision) {
-  return pr.state === 'open' && !pr.draft &&
-    pr.head.repo?.full_name === repository && pr.base.repo?.full_name === repository &&
-    pr.head.sha === revision.head && pr.base.ref === revision.baseRef;
-}
-
-async function isCurrent(github, repository, pull, prNumber, revision, observed) {
-  const first = observed ?? await readPull(github, pull, prNumber);
-  if (!matchesPull(first, repository, revision)) return false;
-  let reference;
-  let readError;
-  try {
-    reference = await github.get(`/git/ref/heads/${encodeURIComponent(revision.baseRef)}`);
-  } catch (error) {
-    readError = error;
-  }
-  // A retarget can remove the first ref. The second PR read distinguishes it from a ref API failure.
-  const latest = await readPull(github, pull, prNumber);
-  if (!matchesPull(latest, repository, revision)) return false;
-  if (readError) throw readError;
-  if (reference?.ref !== `refs/heads/${revision.baseRef}` ||
-      reference?.object?.type !== 'commit' || !isSha(reference.object.sha)) {
-    throw new Error('Invalid target branch revision response');
-  }
-  return reference.object.sha === revision.base;
 }
 
 function matchesReview(review, expected, body) {

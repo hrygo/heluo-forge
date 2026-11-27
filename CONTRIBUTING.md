@@ -143,6 +143,10 @@ OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启�
 
 维护者可在开放的 PR 直接留言 `/review`。洛神对自动审查和无参数命令发布 GitHub `COMMENT`，覆盖 P0 至 P3。工作流依据 GitHub 差异校验 `LEFT` 或 `RIGHT` 的完整范围，评论锚定在同侧变更行。未能确认位置的发现留在审查摘要。带参数的手动命令由固定版本 PR-Agent 处理。
 
-模型分级和合入建议供维护者参考。拥有 `write`、`maintain` 或 `admin` 权限的维护者确认 P0/P1 后，可在非草稿 PR 单独留言 `/request-changes P1 <head SHA> <base SHA> <target branch>`，填写 PR 头提交、目标分支最新提交的完整 SHA 和目标分支名。洛神重新核对留言、发起人权限和版本，然后代发 GitHub `Request changes`。该命令无需模型调用。
+自动批准适用于其他作者发起的同仓非草稿 PR。自动审查或无参数 `/review` 给出明确的无重要问题建议、无另列安全风险，且确认所有发现为 P3 或发现列表为空时，洛神以 `hrygo` 身份对该版本提交 GitHub `APPROVE`。GitHub 须返回每个变更文件的完整文本差异。审查缺失、有覆盖缺口、达到发现上限或经过分块合并时跳过批准。发布前核对审批人身份、现有修改请求、PR 和目标分支版本。同一版本已有批准时跳过。新的审查判定不符合批准条件，或发现旧批准对应的版本已变化时，只撤销洛神先前发出的自动批准。发布后发现版本变化、维护者请求修改或无法核实结果时，工作流尝试撤销自己创建的批准。GitHub 未确认撤销时，运行日志会记录审查 ID。该流程复用本次审查结果，无额外模型调用。[GitHub 审查接口](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request)
+
+启用自动批准须在仓库建立 `luoshen-approval` Actions 环境，并将部署分支限定为 `main`。以 `hrygo` 创建用途限定为本仓库、仅授予 `Pull requests: Read and write` 的 fine-grained PAT，存入该环境的 Secret `PR_AGENT_APPROVAL_TOKEN`。随后设置仓库变量 `PR_AGENT_AUTO_APPROVE=true`，删除该变量可关闭自动批准。GitHub 禁止 PR 作者以自身身份批准该 PR。[环境保护规则](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#deployment-branches-and-tags) · [GitHub 所需审查规则](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)
+
+拥有 `write`、`maintain` 或 `admin` 权限的维护者确认 P0/P1 后，可在非草稿 PR 单独留言 `/request-changes P1 <head SHA> <base SHA> <target branch>`，填写 PR 头提交、目标分支最新提交的完整 SHA 和目标分支名。洛神重新核对留言、发起人权限和版本，然后代发 GitHub `Request changes`。该命令无需模型调用。
 
 正式请求发布时带待确认标记，版本核对通过后移除。响应丢失时按发布标识查回请求；复查失败时由后续自动审查或无参数 `/review` 继续核对。发现版本变化时，仅撤销对应的待确认请求。GitHub 拒绝撤销时，洛神标记过期并由维护者解除。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)

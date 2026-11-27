@@ -49,6 +49,19 @@ function changedLines(patch) {
   return hunks;
 }
 
+export function hasCompleteReviewPatches(files, changedFileCount) {
+  if (files.length === 0 || files.length !== changedFileCount) return false;
+  const paths = new Set();
+  for (const file of files) {
+    if (typeof file?.filename !== 'string' || !file.filename || paths.has(file.filename)) return false;
+    paths.add(file.filename);
+    const hunks = changedLines(file.patch);
+    if (!hunks.length || hunks.reduce((count, hunk) => count + hunk.LEFT.lines.length, 0) !== file.deletions ||
+        hunks.reduce((count, hunk) => count + hunk.RIGHT.lines.length, 0) !== file.additions) return false;
+  }
+  return true;
+}
+
 function indexChangedPaths(files) {
   const paths = new Map();
   function add(path, file, onlySide) {
