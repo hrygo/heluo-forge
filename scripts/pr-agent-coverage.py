@@ -190,15 +190,15 @@ def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocatio
         if len(attempts) != 1 or not markdown:
             return markdown
         attempt = attempts[0]
-        if (
-            attempt.reviewer is not reviewer or attempt.calls != 1 or not attempt.response
-            or reviewer.prediction is not attempt.response or reviewer.prediction_data is not None
-            or reviewer.review_chunk_count != 1 or reviewer.review_failed_chunk_count
-            or reviewer.remaining_files_list or reviewer.partial_files_list
-            or reviewer.incremental.is_incremental or reviewer.is_answer
-        ):
-            return markdown
         try:
+            if (
+                attempt.reviewer is not reviewer or attempt.calls != 1 or not attempt.response
+                or reviewer.prediction is not attempt.response or reviewer.prediction_data is not None
+                or reviewer.review_chunk_count != 1 or reviewer.review_failed_chunk_count
+                or reviewer.remaining_files_list or reviewer.partial_files_list
+                or reviewer.incremental.is_incremental or reviewer.is_answer
+            ):
+                return markdown
             pr = revision(reviewer)
             if attempt.revision != pr or pr["provider"] != "github":
                 return markdown
