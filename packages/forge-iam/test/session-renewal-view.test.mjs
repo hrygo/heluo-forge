@@ -133,3 +133,31 @@ test('Host publishes natural access expiry to existing watchers while idle', asy
     await watch.return();
   }
 });
+
+test('Host publishes the renewal cutoff to existing watchers after access expiry', async (t) => {
+  const { service, oidc, clock } = await serviceWith(t, (now) => ({
+    accessToken: 'synthetic-access',
+    accessExpiresAt: new Date(now - 30_000).toISOString(),
+    refreshExpiresAt: new Date(now + 60_000).toISOString(),
+  }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await service.hydrate();
+  const controller = new AbortController();
+  const watch = service.watch(controller.signal);
+  assert.equal((await watch.next()).value.renewal, 'available');
+  let terminal;
+  const received = watch.next().then(({ value }) => { terminal = value; });
+  try {
+    clock.wall += 60_000;
+    t.mock.timers.tick(60_000);
+    await new Promise(setImmediate);
+    assert.equal(terminal?.state, 'expired');
+    assert.equal(terminal.renewal, 'unavailable');
+    assert.equal(terminal.canSignIn, true);
+    assert.equal(oidc.counts.refresh, 0);
+  } finally {
+    controller.abort();
+    await received;
+    await watch.return();
+  }
+});

@@ -1642,14 +1642,12 @@ window.__ModuleLoader__.load({
 
     // §4.1 会话状态派生
     // view.state 只在这里读一次：其余代码用布尔量判断，新增状态时只改这里。
-    function deriveSessionUi(view, pastDeadline = false) {
+    function deriveSessionUi(view) {
       const state = typeof view?.state === 'string' ? view.state : null;
-      const verifying = state === 'ready' && pastDeadline;
       return {
         state,
         known: state !== null && Object.hasOwn(STATUS, state),
-        ready: state === 'ready' && !verifying,
-        verifying,
+        ready: state === 'ready',
         authenticating: state === 'authenticating',
         signedOut: state === 'signed-out',
         expired: state === 'expired',
@@ -1666,8 +1664,28 @@ window.__ModuleLoader__.load({
       };
     }
 
+    function sessionDeadline(view, ui = deriveSessionUi(view)) {
+      const value = ui.ready ? view.accessExpiresAt : ui.expiredRenewable ? view.refreshExpiresAt : null;
+      // A Host may omit a deadline. Its status still applies, and SSE and
+      // foreground reads continue to revalidate it.
+      const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
     function presentSession(view) {
-      return deriveSessionUi(view, Date.parse(view?.accessExpiresAt) <= Date.now());
+      const ui = deriveSessionUi(view);
+      const deadline = sessionDeadline(view, ui);
+      const verifying = deadline !== null && deadline <= Date.now();
+      return { ...ui, verifying, ready: ui.ready && !verifying };
+    }
+
+    function accountStatusLabel(ui) {
+      if (ui.verifying) return SESSION_VERIFYING_NOTICE;
+      if (ui.expiredRenewable) return SESSION_RENEWING_NOTICE;
+      if (ui.signOutPending) return '退出结果未确认';
+      if (ui.storageRecovering) return '正在恢复会话';
+      if (ui.expiredUnrenewable) return '会话已过期，需重新登录';
+      return ui.known ? statusLabel(ui.state) : '未知状态';
     }
 
     // §4.2 模型目录派生
@@ -2155,35 +2173,49 @@ window.__ModuleLoader__.load({
       let timer = null;
       let inFlight = null;
       let generation = 0;
-      let accessDeadline = NaN;
       let deadlineTimer = null;
-      let unverified = false;
 
-      function setUnverified(value) {
-        if (unverified === value) return;
-        unverified = value;
-        for (const subscriber of subscribers) subscriber.setUnverified(value);
-      }
-
-      function clearDeadline() {
-        clearTimeout(deadlineTimer);
-        deadlineTimer = null;
+      function trackDeadline(subscriber, view) {
+        const deadline = sessionDeadline(view);
+        if (subscriber.deadline === deadline) return false;
+        subscriber.deadline = deadline;
+        subscriber.deadlineReached = false;
+        return true;
       }
 
       function scheduleDeadline() {
-        clearDeadline();
-        const remaining = accessDeadline - Date.now();
-        setUnverified(remaining <= 0);
-        if (remaining > 0 && Number.isFinite(remaining)) {
-          deadlineTimer = setTimeout(() => {
-            scheduleDeadline();
-            if (unverified) void poll(true);
-          }, Math.min(remaining, 2_147_483_647));
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+        const at = Date.now();
+        let next = Infinity;
+        let reached = false;
+        for (const subscriber of subscribers) {
+          const deadline = subscriber.deadline;
+          if (deadline === null || subscriber.deadlineReached) continue;
+          if (deadline > at) {
+            next = Math.min(next, deadline);
+            continue;
+          }
+          subscriber.deadlineReached = true;
+          subscriber.invalidatePresentation();
+          reached = true;
         }
+        if (Number.isFinite(next)) {
+          deadlineTimer = setTimeout(() => {
+            if (scheduleDeadline()) void poll(true);
+          }, Math.min(next - at, 2_147_483_647));
+        }
+        return reached;
+      }
+
+      function noteView(subscriber, view) {
+        if (!subscribers.has(subscriber)) return;
+        if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
+        if (trackDeadline(subscriber, view) && scheduleDeadline()) void poll(true);
       }
 
       function revalidate() {
-        if (accessDeadline <= Date.now()) setUnverified(true);
+        scheduleDeadline();
         return poll(true);
       }
 
@@ -2201,15 +2233,13 @@ window.__ModuleLoader__.load({
             delivered = true;
           }
         }
-        if (delivered && subscribers.size > 0) {
-          accessDeadline = deriveSessionUi(view).ready ? Date.parse(view.accessExpiresAt) : NaN;
-          scheduleDeadline();
-        }
+        if (delivered && scheduleDeadline()) void poll(true);
         return delivered;
       }
 
       function deliver(subscriber, view) {
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
+        trackDeadline(subscriber, view);
         subscriber.updateRef.current(view);
       }
 
@@ -2291,9 +2321,9 @@ window.__ModuleLoader__.load({
           const result = await Promise.race([request, cancelled]);
           if (result && (revalidate || !streamReady) && generation === readGeneration) {
             const delivered = broadcast(result.view, pending);
-            // The pending source may contain a snapshot older than this read.
-            // Do not close a replacement created during subscriber callbacks.
-            if (delivered && stream && !streamReady && generation === readGeneration) restart();
+            // Even a ready source may have queued frames older than this read.
+            // Retire that generation without disturbing a callback's replacement.
+            if (delivered && stream && generation === readGeneration) restart();
           }
         } finally {
           clearTimeout(deadline);
@@ -2311,7 +2341,6 @@ window.__ModuleLoader__.load({
       }
       function subscribe(subscriber) {
         subscribers.add(subscriber);
-        subscriber.setUnverified(unverified);
         if (subscribers.size === 1) {
           if (typeof window !== 'undefined') window.addEventListener?.('focus', onWake);
           if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onWake);
@@ -2324,32 +2353,39 @@ window.__ModuleLoader__.load({
             if (stream) closeStream(); else generation += 1;
             stopPolling();
             inFlight?.cancel();
-            clearDeadline();
-            accessDeadline = NaN;
-            unverified = false;
+            clearTimeout(deadlineTimer);
+            deadlineTimer = null;
             if (typeof window !== 'undefined') window.removeEventListener?.('focus', onWake);
             if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onWake);
-          }
+          } else if (scheduleDeadline()) void poll(true);
         };
       }
-      return { restart, subscribe, revalidate };
+      return { restart, subscribe, revalidate, noteView };
     })();
 
     function useSessionPoll(enabled, update, barrierRef, revisionRef) {
       // The shared clock wakes render; each component checks its own view.
-      const [, setUnverified] = React.useState(false);
+      const [, invalidate] = React.useState(0);
       const updateRef = React.useRef(update);
+      const subscription = React.useRef(null);
       updateRef.current = update;
       React.useEffect(() => {
         if (!enabled) return undefined;
         const restartStream = () => sessionStream.restart();
+        const subscriber = {
+          updateRef, barrierRef, revisionRef, deadline: null, deadlineReached: false,
+          invalidatePresentation: () => invalidate((revision) => revision + 1),
+        };
+        subscription.current = subscriber;
         if (barrierRef) barrierRef.current.restartStream = restartStream;
-        const unsubscribe = sessionStream.subscribe({ updateRef, barrierRef, revisionRef, setUnverified });
+        const unsubscribe = sessionStream.subscribe(subscriber);
         return () => {
+          subscription.current = null;
           if (barrierRef?.current.restartStream === restartStream) delete barrierRef.current.restartStream;
           unsubscribe();
         };
       }, [enabled]);
+      return React.useCallback((view) => sessionStream.noteView(subscription.current, view), []);
     }
 
     // §12 卡片与旅程条
@@ -2928,6 +2964,16 @@ window.__ModuleLoader__.load({
     }
 
     // §12.3 旅程条
+    function journeyIdentityStatus(ui, warn) {
+      if (ui.ready) return '已认证';
+      if (ui.verifying) return '核验中';
+      if (ui.expiredRenewable) return '待续期';
+      if (ui.authenticating) return '认证中';
+      if (ui.unconfigured) return '待配置登录';
+      if (ui.unreachable) return ui.storageRecovering ? '正在恢复' : '连接受阻';
+      return warn ? '需重新登录' : '待认证';
+    }
+
     function renderJourneyBar(ctx) {
       const { h, ui: input, model } = ctx;
       const { view, gateway, onNavigateStep, canNavigateModels, sessionUi: ui } = input;
@@ -2935,7 +2981,6 @@ window.__ModuleLoader__.load({
       const catalogue = deriveModelUi(view);
       const step1Done = ui.ready;
       const step1Warn = ui.expired || ui.failed || ui.unconfigured || ui.unreachable;
-      const unreachableStatus = ui.storageRecovering ? '正在恢复' : '连接受阻';
       const step2Done = step1Done && gatewayUi.configured && gateway.matchesAccount !== false;
       const step2Warn = step1Done && (gatewayUi.ownerMismatch || gatewayUi.invalid || gatewayUi.unknown);
       const step3Loading = step2Done && catalogue.loading;
@@ -2946,10 +2991,7 @@ window.__ModuleLoader__.load({
           num: '1',
           title: '身份',
           targetId: 'fiam-section-account',
-          status: step1Done ? '已认证'
-            : ui.verifying ? '核验中'
-              : ui.expiredRenewable ? '待续期'
-                : (ui.authenticating ? '认证中' : (ui.unconfigured ? '待配置登录' : (ui.unreachable ? unreachableStatus : (step1Warn ? '需重新登录' : '待认证')))),
+          status: journeyIdentityStatus(ui, step1Warn),
           done: step1Done,
           warn: step1Warn,
           active: !step1Done && !step1Warn,
@@ -4062,13 +4104,15 @@ window.__ModuleLoader__.load({
           const at = Date.now();
           if (wakeRef.current.inFlight || at - wakeRef.current.at < 30000) return;
           const view = viewRef.current;
-          if (!deriveSessionUi(view).ready || deriveModelUi(view).loading) return;
+          if (!presentSession(view).ready || deriveModelUi(view).loading) return;
           wakeRef.current.at = at;
           wakeRef.current.inFlight = true;
           const epoch = viewBarrier.current.epoch;
+          const revision = viewRevision.current;
           void getJson('/api/forge-iam/models')
             .then((result) => {
-              if (result?.ok && result.body?.view && isCurrentEpoch(epoch)) {
+              if (result?.ok && result.body?.view && isCurrentEpoch(epoch) && viewRevision.current === revision) {
+                noteSessionView(result.body.view);
                 form.observeView(result.body.view);
                 setState((current) => ({ ...current, view: result.body.view }));
               }
@@ -4101,6 +4145,7 @@ window.__ModuleLoader__.load({
         try {
           const view = await fetchView();
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch || viewRevision.current !== revision) return;
+          noteSessionView(view);
           const readyNow = deriveSessionUi(view).ready;
           if (wasReadyRef.current && !readyNow) viewBarrier.current.epoch += 1;
           wasReadyRef.current = readyNow;
@@ -4111,6 +4156,7 @@ window.__ModuleLoader__.load({
           void catalogue.actions.syncFromView(view);
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch || viewRevision.current !== revision) return;
+          noteSessionView(null);
           wasReadyRef.current = false;
           linkIdentity.current = null;
           setState({ phase: 'error', view: null, error: error.message, notice: null, authorizationUrl: null });
@@ -4118,7 +4164,7 @@ window.__ModuleLoader__.load({
       }, []);
 
       React.useEffect(() => { load(); }, [load]);
-      useSessionPoll(true, (view) => {
+      const noteSessionView = useSessionPoll(true, (view) => {
         // Invalidate before enqueueing React state, not only on the next render.
         const readyNow = deriveSessionUi(view).ready;
         if (wasReadyRef.current && !readyNow) viewBarrier.current.epoch += 1;
@@ -4329,11 +4375,7 @@ window.__ModuleLoader__.load({
 
       const view = state.view ?? {};
       const sessionUi = presentSession(state.view);
-      const label = sessionUi.verifying ? SESSION_VERIFYING_NOTICE
-        : sessionUi.expiredRenewable ? SESSION_RENEWING_NOTICE
-          : sessionUi.signOutPending ? '退出结果未确认'
-            : sessionUi.storageRecovering ? '正在恢复会话'
-              : sessionUi.known ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state)) : '未知状态';
+      const label = accountStatusLabel(sessionUi);
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
@@ -4356,11 +4398,10 @@ window.__ModuleLoader__.load({
       const expiry = view.accessExpiresAt ? h('div', { style: muted }, `当前访问授权到期：${formatTime(view.accessExpiresAt)}`) : null;
       // A lapsed refresh window is terminal: say so instead of letting the next
       // token request be the first place the user learns it.
+      const refreshRemaining = Date.parse(view.refreshExpiresAt) - Date.now();
       const renewalNotice = sessionUi.expiredUnrenewable
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '长时间未使用，会话已过期且无法自动续期，请重新登录。')
-        : (sessionUi.renewable && view.refreshExpiresAt
-          && Number.isFinite(Date.parse(view.refreshExpiresAt))
-          && Date.parse(view.refreshExpiresAt) - Date.now() < RENEWAL_WARNING_MS
+        : (sessionUi.renewable && refreshRemaining > 0 && refreshRemaining < RENEWAL_WARNING_MS
           ? h('div', { className: 'fiam-notice fiam-notice-warn' }, `会话续期窗口即将结束（${formatTime(view.refreshExpiresAt)}），请及时保存工作并准备重新登录。`)
           : null);
       // The server reports the exclusive-config conflict twice: as the issue
@@ -4723,12 +4764,16 @@ window.__ModuleLoader__.load({
         let live = true;
         const revision = viewRevision.current;
         fetchView()
-          .then((v) => { if (live && viewRevision.current === revision) setView(v); })
+          .then((next) => {
+            if (!live || viewRevision.current !== revision) return;
+            noteSessionView(next);
+            setView(next);
+          })
           .catch(() => { });
         return () => { live = false; };
       }, []);
 
-      useSessionPoll(true, setView, undefined, viewRevision);
+      const noteSessionView = useSessionPoll(true, setView, undefined, viewRevision);
       const sessionUi = presentSession(view);
       const isSignedIn = sessionUi.ready;
       React.useEffect(() => {
@@ -4951,7 +4996,11 @@ window.__ModuleLoader__.load({
         let live = true;
         const revision = viewRevision.current;
         fetchView()
-          .then((view) => { if (live && viewRevision.current === revision) setState((current) => ({ ...current, ...bannerFor(view), view })); })
+          .then((view) => {
+            if (!live || viewRevision.current !== revision) return;
+            noteSessionView(view);
+            setState((current) => ({ ...current, ...bannerFor(view), view }));
+          })
           .catch(() => {
             if (live && viewRevision.current === revision) setState((current) => ({ ...current, visible: true, notice: '无法读取登录状态，正在重试。' }));
           });
@@ -4961,7 +5010,7 @@ window.__ModuleLoader__.load({
       // Observe for as long as the banner is mounted: display is derived from
       // the view, so keying the poll on `visible` would stop observing as soon
       // as a session becomes ready and never notice a later sign-out.
-      useSessionPoll(true, (view) => setState((current) => ({
+      const noteSessionView = useSessionPoll(true, (view) => setState((current) => ({
         ...current,
         view,
         ...bannerFor(view),
@@ -5018,9 +5067,10 @@ window.__ModuleLoader__.load({
         }
       };
 
-      if (!state.visible) return null;
-      const sessionUi = deriveSessionUi(state.view);
-      const dotColor = state.reason === 'gateway' || sessionUi.expiredRenewable
+      const sessionUi = presentSession(state.view);
+      if (!state.visible && !sessionUi.verifying) return null;
+      const gatewayIssue = state.reason === 'gateway' && !sessionUi.verifying;
+      const dotColor = gatewayIssue || sessionUi.verifying || sessionUi.expiredRenewable
         ? 'var(--dsw-alias-state-warn-primary)'
         : state.sessionState === 'authenticating'
           ? 'var(--dsw-alias-state-business-primary)'
@@ -5039,22 +5089,23 @@ window.__ModuleLoader__.load({
               ...(state.sessionState === 'authenticating' ? { animation: 'fiam-pulse 1.4s ease-in-out infinite' } : {}),
             },
           }),
-          state.reason === 'gateway'
+          gatewayIssue
             ? (state.gateway.ownerMismatch ? '个人访问凭证属于其他账号'
               : state.gateway.invalid ? '个人访问凭证信息需要检查，已保留'
                 : state.gateway.unknown ? '无法确认个人访问凭证状态'
                   : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
-            : (sessionUi.storageRecovering ? STORAGE_RECOVERY_NOTICE
-              : sessionUi.expiredRenewable ? SESSION_RENEWING_NOTICE
-                : sessionUi.expiredUnrenewable ? SESSION_LABEL.expiredUnrenewable
-                  : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
+            : (sessionUi.verifying ? SESSION_VERIFYING_NOTICE
+              : sessionUi.storageRecovering ? STORAGE_RECOVERY_NOTICE
+                : sessionUi.expiredRenewable ? SESSION_RENEWING_NOTICE
+                  : sessionUi.expiredUnrenewable ? SESSION_LABEL.expiredUnrenewable
+                    : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
         ),
-        state.reason === 'gateway'
+        gatewayIssue
           ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway.ownerMismatch || state.gateway.invalid || state.gateway.unknown
             ? '到“设置 → 企业账号”核对现有记录'
             : '到“设置 → 企业账号”录入个人访问凭证')
           : null,
-        state.reason !== 'gateway' && state.view?.canSignIn
+        !sessionUi.verifying && !gatewayIssue && state.view?.canSignIn
           ? h('button', { type: 'button', className: 'forge-iam-primary', style: { ...primaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: login }, '登录')
           : null,
         sessionUi.authenticating
@@ -5267,6 +5318,7 @@ window.__ModuleLoader__.load({
             .then((view) => {
               if (!live || viewRevision.current !== revision) return;
               initialized.current = true;
+              noteSessionView(view);
               observeOnboardingView(view);
               setState((current) => ({ ...current, phase: 'ready', view, step: 0, notice: null, open: deriveSessionUi(view).signedOut, authorizationUrl: null }));
             })
@@ -5282,7 +5334,7 @@ window.__ModuleLoader__.load({
         return () => { live = false; if (timer) clearTimeout(timer); };
       }, []);
 
-      useSessionPoll(true, (view) => {
+      const noteSessionView = useSessionPoll(true, (view) => {
         observeOnboardingView(view);
         const initializing = !initialized.current;
         initialized.current = true;
