@@ -2238,7 +2238,8 @@ window.__ModuleLoader__.load({
         }
         if (projectedAt !== undefined) projectedSessionDeadlines.set(view, projectedAt);
         else if (at <= sampledAfter?.wall || (same && confirmedSessionViews.has(previous.view))) confirmedSessionViews.add(view);
-        const reached = same && previous.reached && !(postDeadlineSample && projectedAt !== undefined);
+        const renewedProjection = postDeadlineSample && projectedAt !== undefined && projectedAt > sessionMonotonicNow();
+        const reached = same && previous.reached && !renewedProjection;
         subscriber.deadline = {
           at, projectedAt, epoch, view, state: ui.state, reached,
           attempts: reached ? previous.attempts : 0,
@@ -2365,6 +2366,7 @@ window.__ModuleLoader__.load({
         try {
           const openedAt = sessionClock();
           const opened = new window.EventSource('/api/forge-iam/events');
+          let firstSample;
           stream = opened;
           streamReady = false;
           const sourceGeneration = ++generation;
@@ -2374,9 +2376,25 @@ window.__ModuleLoader__.load({
             let view;
             try { view = JSON.parse(event.data); } catch { return; }
             if (!view || typeof view !== 'object' || Array.isArray(view) || deriveSessionUi(view).state === null) return;
-            // Bound only the first snapshot by connection start. Later
-            // updates can come from a new authorization on this same source.
-            if (!streamReady) rememberSampledDeadline(view, openedAt.monotonic);
+            const arrivedAt = sessionMonotonicNow();
+            const hasMonotonicSample = Number.isFinite(view.sampledMonotonicAt) && view.sampledMonotonicAt >= 0;
+            const tick = hasMonotonicSample ? view.sampledMonotonicAt : view.sampledAt;
+            if (Number.isFinite(tick) && tick >= 0) {
+              firstSample ??= { tick, monotonic: hasMonotonicSample };
+              const elapsed = tick - firstSample.tick;
+              const from = openedAt.monotonic + elapsed;
+              const projectedAt = projectSampledDeadline(view, from);
+              if (projectedAt !== undefined) {
+                // Inconsistent clocks establish no presentation time. A
+                // replacement opened after a fresh read can anchor again.
+                const consistent = hasMonotonicSample === firstSample.monotonic && elapsed >= 0 && from <= arrivedAt;
+                projectedSessionDeadlines.set(view, consistent ? projectedAt : arrivedAt);
+              }
+            }
+            // A buffered timed frame cannot settle newer verification.
+            // Leave the read and its subscriber revisions eligible to apply.
+            const projectedAt = projectedSessionDeadlines.get(view);
+            if (inFlight && projectedAt !== undefined && projectedAt <= arrivedAt) return;
             streamReady = true;
             stopPolling();
             // A read started before this frame cannot replace it when late.
@@ -2407,7 +2425,7 @@ window.__ModuleLoader__.load({
           return false;
         }
       }
-      async function poll(revalidate = false) {
+      async function poll(isRevalidation = false) {
         if (subscribers.size === 0) return;
         // A stalled view request must not prevent a later stream reconnect.
         // Two unresolved reads are the upper bound even if a nonconforming
@@ -2451,7 +2469,7 @@ window.__ModuleLoader__.load({
         const deadline = setTimeout(() => current.cancel(), 10000);
         try {
           const result = await Promise.race([request, cancelled]);
-          if (result?.view && (revalidate || checksDeadline || !streamReady) && generation === readGeneration) {
+          if (result?.view && (isRevalidation || checksDeadline || !streamReady) && generation === readGeneration) {
             const delivered = broadcast(result.view, pending, startedAt);
             // Even a ready source may have queued frames older than this read.
             // Retire that generation without disturbing a callback's replacement.

@@ -121,6 +121,8 @@ export function modelFetchOptions(options, baseURL, resolveIamToken, identity = 
       try {
         signal?.throwIfAborted();
         if (url !== endpoint || method !== 'POST') throw new IamError('IAM_MODEL_CONTEXT_CHANGED', 'Model transport binding changed');
+        // Both token paths enter send(), which rechecks the attempt and
+        // cancellation after token resolution and immediately before fetch.
         if (attempt?.withDispatchAccessToken) return await attempt.withDispatchAccessToken(send, signal);
         attempt?.check();
         return await send(await resolveIamToken?.());

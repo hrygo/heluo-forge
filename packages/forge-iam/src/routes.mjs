@@ -10,7 +10,10 @@ const MAX_BODY_BYTES = 8 * 1024;
 
 function clientView(view) {
   // Promote the Host timing metadata at the browser response boundary.
-  return Number.isFinite(view?.sampledAt) ? { ...view, sampledAt: view.sampledAt } : view;
+  if (!Number.isFinite(view?.sampledAt)) return view;
+  const snapshot = { ...view, sampledAt: view.sampledAt };
+  if (Number.isFinite(view.sampledMonotonicAt)) snapshot.sampledMonotonicAt = view.sampledMonotonicAt;
+  return snapshot;
 }
 
 function sendJson(res, status, body) {

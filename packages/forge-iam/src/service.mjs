@@ -79,6 +79,7 @@ export function createIamService(rawConfig, options = {}) {
     options,
     configured,
     now,
+    monotonic,
     logRenewal,
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
