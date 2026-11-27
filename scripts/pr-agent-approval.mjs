@@ -15,7 +15,7 @@ const staleDismissal = 'PR 或目标分支版本已变化，洛神自动审批�
 const recoverableDismissals = new Set([
   verificationDismissal, protectionDismissal, ineligibleDismissal, changeRequestDismissal, staleDismissal,
 ]);
-const transientHistoryCodes = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN']);
+const transientNetworkCodes = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EAI_AGAIN']);
 const cleanupBatchSize = 4;
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
 const executionPattern = new RegExp(`^${executionPrefix} ([1-9][0-9]*) ([1-9][0-9]*) -->$`, 'u');
@@ -218,18 +218,22 @@ async function dismissApproval(github, approver, pull, review, reason) {
   return true;
 }
 
-async function readReviewHistory(github, pull, signal) {
-  // Retry history reads in the same workflow attempt, including recovery after a lost write response.
-  for (const delayMs of [1000, 4000, 12000]) {
+async function readWithRetry(read, retryDelays, signal) {
+  for (const delayMs of retryDelays) {
     try {
-      return await listReviews(github, pull);
+      return await read();
     } catch (error) {
-      const networkFailure = error instanceof TypeError && transientHistoryCodes.has(error.cause?.code);
+      const networkFailure = error instanceof TypeError && transientNetworkCodes.has(error.cause?.code);
       if (!networkFailure && error.name !== 'TimeoutError' && !(error.status >= 500 && error.status < 600)) throw error;
       await delay(delayMs, undefined, { signal });
     }
   }
-  return listReviews(github, pull);
+  return read();
+}
+
+function readReviewHistory(github, pull, signal) {
+  // Recover in the same attempt, including a lost approval write response.
+  return readWithRetry(() => listReviews(github, pull), [1000, 4000, 12000], signal);
 }
 
 export async function reconcileMainApprovals({ github, approver, appSlug, humanOwners, pullTimeoutMs = 10_000 }) {
@@ -307,7 +311,8 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const staleReason = async (receipt) => {
     if (!await isCurrent(github, repository, pull, prNumber, receipt, { allowDraft: true })) return staleDismissal;
   };
-  const reviewedRevisionIsCurrent = () => isCurrent(github, repository, pull, prNumber, revision, { allowDraft: true });
+  const reviewedRevisionIsCurrent = () => readWithRetry(
+    () => isCurrent(github, repository, pull, prNumber, revision, { allowDraft: true }), [1000]);
   const ineligibleReason = async () => {
     if (await reviewedRevisionIsCurrent()) return ineligibleDismissal;
   };
@@ -342,7 +347,9 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     throw cause;
   };
   const previousReviews = await readReviewHistory(github, pull).catch(preserveWithdrawal);
-  if (!await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: !allowApproval })) return 'skipped-stale';
+  const currentAtStart = allowApproval ? await isCurrent(github, repository, pull, prNumber, revision) :
+    await reviewedRevisionIsCurrent().catch(preserveWithdrawal);
+  if (!currentAtStart) return 'skipped-stale';
 
   const withdrawn = new Set();
   for (const review of previousReviews) {

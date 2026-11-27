@@ -592,7 +592,7 @@ test('inline comment failures preserve a P1 review conclusion and withdraw only 
       state[endpoint] = 503;
       const pending = await approvalRevision(next, captured, prioritizedReview('P1'));
       assert.equal(pending?.allowApproval, false);
-      assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+      assert.doesNotMatch(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^(?:review_key|retry)=/mu);
 
       const { stdout } = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(pending) });
       assert.match(stdout, /dismissed-ineligible/u);
@@ -1171,6 +1171,38 @@ test('subsequent automatic events skip a review already completed for the same P
   });
 });
 
+test('a failed inline review POST allows the same revision to publish once on a later run', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const review = prioritizedReview('P1');
+    const revision = await capture(env);
+    state.postStatus = 503;
+    await submit(env, revision, review);
+    assert.equal(state.inlineComments.length, 0);
+    assert.equal(reviewWrites(state).length, 1);
+    const failedOutput = await readFile(env.GITHUB_OUTPUT, 'utf8');
+    recordAutomaticRun(state, { runId: Number(env.GITHUB_RUN_ID), ranReview: /^review_key=/mu.test(failedOutput) });
+
+    state.postStatus = 200;
+    state.comments = [freshComment('pr-agent:describe:persistent'), freshComment('pr-agent:review:full')];
+    const next = { ...env, GITHUB_RUN_ID: '12346' };
+    const retried = await capture(next);
+    assert.equal(retried.head, revision.head, 'a failed COMMENT did not complete the revision');
+    assert.equal(retried.base, revision.base);
+    assert.doesNotMatch(failedOutput, /^(?:review_key|retry)=/mu);
+    await submit(next, retried, review);
+    const successfulOutput = await readFile(next.GITHUB_OUTPUT, 'utf8');
+    assert.match(successfulOutput, new RegExp(`^review_key=${base} main$`, 'mu'));
+    await submit(next, retried, review);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT', 'COMMENT']);
+    assert.equal(state.inlineComments.length, 1);
+    assert.equal(state.inlineComments[0].commit_id, head);
+    assert.match(state.inlineComments[0].body, /Count regression/u);
+
+    recordAutomaticRun(state, { runId: Number(next.GITHUB_RUN_ID), ranReview: /^review_key=/mu.test(successfulOutput) });
+    assert.deepEqual(await capture({ ...env, GITHUB_RUN_ID: '12347' }), {});
+  });
+});
+
 test('a new head is reviewed even when the previous commit was already reviewed', async () => {
   await withGitHub(async ({ state, env }) => {
     recordAutomaticRun(state);
@@ -1567,7 +1599,11 @@ test('ambiguous findings stay in the already published summary', async () => {
       { end_line: 4 },
       { relevant_file: 'src/absent.js' },
       { issue_content: '' },
-    ]) await submit(env, revision, prioritizedReview('P1', issue));
+    ]) {
+      await writeFile(env.GITHUB_OUTPUT, '');
+      await submit(env, revision, prioritizedReview('P1', issue));
+      assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+    }
     assert.deepEqual(reviewWrites(state), []);
   });
 });
