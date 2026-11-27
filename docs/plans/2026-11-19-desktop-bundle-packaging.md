@@ -159,6 +159,7 @@
 | `HELUO_IAM_REVOCATION_ENDPOINT` | `revocationEndpoint` | 完整端点地址，不带查询参数；由 IAM 方提供 |
 | `HELUO_IAM_CLIENT_ID` | `clientId` | IAM 登记的客户端标识 |
 | `HELUO_IAM_SCOPES` | `scopes` | 须包含 `openid` |
+| `HELUO_IAM_PROFILE_FIELDS` | `profileFields` | 可选。统一制包从环境或配置文件读取映射，省略时使用 `workNo=employeeNumber` |
 | `HELUO_IAM_CALLBACK_PORT` | `callbackPort` | 整数；系统分配或固定端口 |
 | `HELUO_IAM_CALLBACK_ADDRESS` | `callbackAddress` | 回环回调地址 |
 | `HELUO_IAM_MANAGED_MODELS_BASE_URL` | `managedModels.baseURL` | 企业网关地址 |

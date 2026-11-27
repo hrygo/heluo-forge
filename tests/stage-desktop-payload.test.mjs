@@ -341,6 +341,8 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
     return next === -1 ? rest : rest.slice(0, next + 1);
   };
   const checkDesktopJobs = (text) => {
+    const profileMapping = 'HELUO_IAM_PROFILE_FIELDS: ${{ secrets.HELUO_IAM_PROFILE_FIELDS }}';
+    assert.ok(jobBlock(text, 'employee').includes(profileMapping), 'employee profile mapping');
     const expectedJobs = [
       { id: 'desktop-mac', runner: 'macos-15', target: 'mac-arm64', installerTarget: 'mac', installerArch: 'arm64', debArch: null, artifactPattern: /heluo-forge-enterprise-\*-arm64\.dmg/u },
       { id: 'desktop-windows', runner: 'windows-2025', target: 'win-x64', installerTarget: 'win', installerArch: null, debArch: null, artifactPattern: /heluo-forge-enterprise-\*-setup-\*\.exe/u },
@@ -350,6 +352,7 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
     for (const job of expectedJobs) {
       const block = jobBlock(text, job.id);
       assert.notEqual(block, '', `missing job ${job.id}`);
+      assert.ok(block.includes(profileMapping), `${job.id} profile mapping`);
       assert.match(block, new RegExp(`^\\s*runs-on:[ \\t]*${job.runner}[ \\t]*$`, 'mu'), `${job.id} runner`);
       const jobStagings = commands(block, 'stage-desktop-payload');
       assert.equal(jobStagings.length, 1, `${job.id} must have one payload staging`);
@@ -402,6 +405,9 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
     .replace('--target linux \\\n            --arch arm64', '--target linux \\\n            --arch x64')
     .replace('--target linux \\\n            --arch __TMP_ARCH__', '--target linux \\\n            --arch arm64');
   assert.throws(() => checkDesktopJobs(swappedArch), /desktop-linux-x64 installer arch/u);
+  const windowsJob = jobBlock(workflow, 'desktop-windows');
+  const missingProfileMapping = workflow.replace(windowsJob, windowsJob.replace(/^ *HELUO_IAM_PROFILE_FIELDS:.*\n/mu, ''));
+  assert.throws(() => checkDesktopJobs(missingProfileMapping), /desktop-windows profile mapping/u);
   const missingUpload = workflow.replace(
     '      - name: Attach the deb installer to the draft Release\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n          node scripts/upload-draft-release.mjs \\\n            --tag "$GITHUB_REF_NAME" \\\n            --directory "$RUNNER_TEMP/upload" \\\n            --repo "$GITHUB_REPOSITORY"',
     '      - name: Attach skipped',

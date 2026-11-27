@@ -94,13 +94,15 @@ test('the configuration list is part of the maker schema', () => {
 });
 
 test('every configuration key reaches its plugin field, and a bad value is refused by name', () => {
-  const config = resolveEmployeeConfig({ env: VALUES });
+  const env = { ...VALUES, HELUO_IAM_PROFILE_FIELDS: 'workNo=staffNumber,name=displayName' };
+  const config = resolveEmployeeConfig({ env });
   const fieldOf = {
     HELUO_IAM_AUTH_MODE: () => config.iam.authMode,
     HELUO_IAM_DISCOVERY_URL: () => config.iam.discoveryUrl,
     HELUO_IAM_REVOCATION_ENDPOINT: () => config.iam.revocationEndpoint,
     HELUO_IAM_CLIENT_ID: () => config.iam.clientId,
     HELUO_IAM_SCOPES: () => config.iam.scopes,
+    HELUO_IAM_PROFILE_FIELDS: () => config.iam.profileFields,
     HELUO_IAM_CALLBACK_PORT: () => config.iam.callbackPort,
     HELUO_IAM_CALLBACK_ADDRESS: () => config.iam.callbackAddress,
     HELUO_IAM_MANAGED_MODELS_BASE_URL: () => config.iam.managedModels.baseURL,
@@ -114,9 +116,14 @@ test('every configuration key reaches its plugin field, and a bad value is refus
   };
   // `HELUO_IAM_ISSUER` is the one listed key with no valid use in this build.
   assert.deepEqual(Object.keys(fieldOf).sort(), RELEASE_CONFIG_KEYS.filter((key) => key !== 'HELUO_IAM_ISSUER').sort());
-  const parsed = { HELUO_IAM_SCOPES: ['openid', 'profile-4a6c'], HELUO_IAM_CALLBACK_PORT: 17321, HELUO_IAM_ALLOW_INSECURE_HTTP: true };
+  const parsed = {
+    HELUO_IAM_SCOPES: ['openid', 'profile-4a6c'],
+    HELUO_IAM_PROFILE_FIELDS: { workNo: 'staffNumber', name: 'displayName' },
+    HELUO_IAM_CALLBACK_PORT: 17321,
+    HELUO_IAM_ALLOW_INSECURE_HTTP: true,
+  };
   for (const [key, read] of Object.entries(fieldOf)) {
-    assert.deepEqual(read(), parsed[key] ?? VALUES[key], `${key} did not reach its field`);
+    assert.deepEqual(read(), parsed[key] ?? env[key], `${key} did not reach its field`);
   }
   assert.equal(Object.hasOwn(config.iam, 'clientSecret'), false);
 
@@ -128,6 +135,7 @@ test('every configuration key reaches its plugin field, and a bad value is refus
     ['HELUO_IAM_REVOCATION_ENDPOINT', 'https://idp-7f3a.corp.example/revoke?token=bad-9c1d', /HELUO_IAM_REVOCATION_ENDPOINT must be an https URL/],
     ['HELUO_IAM_CLIENT_ID', 'client-$(whoami)-5b2e', /HELUO_IAM_CLIENT_ID/],
     ['HELUO_IAM_SCOPES', 'profile-4a6c', /HELUO_IAM_SCOPES must include openid/],
+    ['HELUO_IAM_PROFILE_FIELDS', 'workNo=employeeNumber,workNo=staffNumber', /HELUO_IAM_PROFILE_FIELDS lists workNo more than once/],
     ['HELUO_IAM_CALLBACK_PORT', '80', /HELUO_IAM_CALLBACK_PORT must be 0/],
     ['HELUO_IAM_CALLBACK_ADDRESS', 'cb-addr-7f3a.corp.example', /HELUO_IAM_CALLBACK_ADDRESS must be auto/],
     ['HELUO_IAM_MANAGED_MODELS_BASE_URL', 'gw-3e9b.corp.example/v1', /HELUO_IAM_MANAGED_MODELS_BASE_URL must be an https URL/],
@@ -310,6 +318,7 @@ test('the package is complete, self-verifying and carries the configuration wher
   const entries = readBundleEntries(join(output, manifest.packages[0].file), { withContent: true });
   const patch = entries.find((entry) => entry.path === 'cordis.patch.yml').content.toString('utf8');
   assert.ok(patch.includes(VALUES.HELUO_IAM_DISCOVERY_URL));
+  assert.match(patch, /\n +profileFields:\n +workNo: "employeeNumber"\n/u);
   assert.match(patch, /allowInsecureClientAuthHttp: true/);
   assert.doesNotMatch(patch, /allowInsecureHttp:/);
   // The client secret does not: it travels as a 0600 file for first-run provisioning.
@@ -420,7 +429,9 @@ test('a configuration file is read only when it is private to the packager', (t)
     .join('\n');
   writeFileSync(configPath, `${text}\n`, { mode: 0o600 });
   chmodSync(configPath, 0o600);
-  assert.equal(resolveEmployeeConfig({ configPath }).iam.clientId, VALUES.HELUO_IAM_CLIENT_ID);
+  const config = resolveEmployeeConfig({ configPath });
+  assert.equal(config.iam.clientId, VALUES.HELUO_IAM_CLIENT_ID);
+  assert.deepEqual(config.iam.profileFields, { workNo: 'employeeNumber' });
   chmodSync(configPath, 0o644);
   expectCode(() => resolveEmployeeConfig({ configPath }), 'CONFIG_PERMISSIONS', /chmod 600/);
 });

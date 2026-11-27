@@ -43,7 +43,7 @@
 | 独占断言服务列表 | 同上 | `exclusiveServices` 命中任一残留服务即 `exclusive-violation`，`officialServicePresent` 给出具体服务名；空列表回落默认服务，回落值与 `config.mjs` 的 schema 默认值由用例断言相等 |
 | UserInfo 映射入口 | 同上 + [private-bundle.test.mjs](<../../../tests/private-bundle.test.mjs>) | 插件配置只接受 `workNo`/`name` 与 claim token；私版 `HELUO_IAM_PROFILE_FIELDS` 生成同一映射，非法键、重复键或非法 claim 直接 `CONFIG_INVALID` |
 | 网关身份头 | [model-transport](<../../../packages/forge-iam/test/model-transport.test.mjs>)、[managed-models](<../../../packages/forge-iam/test/managed-models.test.mjs>) | 请求头名 `X-IAM-Token` 与 `X-Consumer-Type: personal` 硬编码在传输层，无法按部署切换；改用 `Authorization: Bearer` 需改代码。用例固定现有头形态，尚无用例覆盖可配置头名 |
-| 身份画像字段映射 | [userinfo](<../../../packages/forge-iam/test/userinfo.test.mjs>) | 端点读取、严格投影与失败只丢弃画像的行为已覆盖；字段名映射仅由 Host 选项注入，私版配置无对应键，未配置时不请求 UserInfo。claim 名待 IAM 书面答复 |
+| 身份画像字段映射 | [userinfo](<../../../packages/forge-iam/test/userinfo.test.mjs>)、[员工制包](<../../../tests/build-employee-package.test.mjs>) | 本地用例覆盖统一制包在企业插件内写入 `employeeNumber` 工号映射，以及新登录、恢复登录后的按需读取与并发合并。企业 IAM 和 Windows 扫码绑定待实机验证 |
 
 ### 按策略关闭项与剩余可模拟项
 

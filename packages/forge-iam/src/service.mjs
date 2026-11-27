@@ -16,7 +16,7 @@ import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
-import { grantIdentity, safeMessage } from './service-helpers.mjs';
+import { safeMessage } from './service-helpers.mjs';
 import { createCredentialRegistry } from './credential-registry.mjs';
 import { createExtTokenStore } from './ext-token-store.mjs';
 import { createExtTokensService, createCredentialBroker } from './service-ext-tokens.mjs';
@@ -406,14 +406,9 @@ clearGatewayCredential: gateway.clearCredential,
       return { issuer: ctx.lastGrant.issuer, subject: ctx.lastGrant.subject };
     },
 
-    /** Projected UserInfo for future display; empty until IAM confirms fields. */
-    getIdentityProfile() {
-      // A profile is only valid for the grant that produced it: every path that
-      // clears or replaces lastGrant hides it, without touching each call site.
-      if (!ctx.lastGrant || !grants.identityProfile) return undefined;
-      if (!isDeepStrictEqual(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
-      return { ...grants.identityProfile.profile };
-    },
+    /** Host-only UserInfo projection for the current logged-in account. */
+    getIdentityProfile: grants.getIdentityProfile,
+    resolveIdentityProfile: () => grants.resolveIdentityProfile(() => !signout.signingOut && service.getSession().status === 'ready'),
 
     /** Sign-out owns its flight and cleanup order. */
     signOut: signout.signOut,

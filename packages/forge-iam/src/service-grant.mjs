@@ -11,6 +11,7 @@ import {
 } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
 import { parseHttpUrl, parseRedirectUri } from './http-url.mjs';
+import { isAccessExpired } from './record.mjs';
 import { addSeconds, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, safeMessage } from './service-helpers.mjs';
 
 const METADATA_TTL_MS = 5 * 60 * 1000;
@@ -32,6 +33,7 @@ export function createServiceGrant(env) {
   let optionalMetadataFlight = null;
   let jwksCache = null;
   let identityProfile;
+  let profileRead;
   // A weak association prevents a discarded cached grant retaining its provider.
   const grantOwners = new WeakMap();
 
@@ -92,10 +94,41 @@ export function createServiceGrant(env) {
     return metadataCache.value;
   }
 
-  async function loadIdentityProfile(grant) {
+  function getIdentityProfile() {
+    const grant = state.lastGrant;
+    if (!grant || !identityProfile || !isDeepStrictEqual(identityProfile.identity, grantIdentity(grant))) return undefined;
+    return { ...identityProfile.profile };
+  }
+
+  async function resolveIdentityProfile(canRead) {
+    if (!canRead()) return undefined;
+    const grant = state.lastGrant;
+    if (isAccessExpired(grant, now())) return undefined;
+    const profile = getIdentityProfile();
+    if (profile) return profile;
+
+    const epoch = getAuthEpoch();
+    await loadIdentityProfile(grant);
+    if (!canRead() || getAuthEpoch() !== epoch || !isDeepStrictEqual(state.lastGrant, grant)
+      || isAccessExpired(grant, now())) return undefined;
+    return getIdentityProfile();
+  }
+
+  function loadIdentityProfile(grant) {
     if (Object.keys(profileFields).length === 0) return;
     const epoch = getAuthEpoch();
     const targetStore = grantOwners.get(grant);
+    if (profileRead?.epoch === epoch && profileRead.targetStore === targetStore
+      && isDeepStrictEqual(profileRead.grant, grant)) return profileRead.promise;
+
+    const promise = readIdentityProfile(grant, epoch, targetStore).finally(() => {
+      if (profileRead?.promise === promise) profileRead = undefined;
+    });
+    profileRead = { epoch, targetStore, grant, promise };
+    return promise;
+  }
+
+  async function readIdentityProfile(grant, epoch, targetStore) {
     const credentials = provider.storeCredentials;
     const binding = provider.atomicBinding(targetStore, credentials);
     // A panel read can adopt a fresh copy of the same durable grant.
@@ -250,11 +283,15 @@ export function createServiceGrant(env) {
     };
   }
   return {
-    get identityProfile() { return identityProfile; },
+    getIdentityProfile,
+    resolveIdentityProfile,
     own(grant, target) { grantOwners.set(grant, target); },
     ownerOf(grant) { return grantOwners.get(grant); },
     had(grant) { return grantOwners.has(grant); },
-    clearProfile() { identityProfile = undefined; },
+    clearProfile() {
+      identityProfile = undefined;
+      profileRead = undefined;
+    },
     cachedIssuer() { return metadataCache?.value?.issuer ?? ''; },
     get metadataCache() { return metadataCache?.value ?? null; },
     prepareAuthentication,
