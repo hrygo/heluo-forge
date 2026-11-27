@@ -1,8 +1,9 @@
 import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
-import { isBranch, isCurrent, isSha, listReviews, readPull, sameUser, validId } from './pr-agent-github.mjs';
+import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
 const approvalSummary = '洛神自动审批。完整审查未发现 P0、P1 或 P2 问题。';
+const verificationDismissal = '洛神未能核对发布后的状态，撤销本次自动审批。';
 const receiptPattern = new RegExp(`^${approvalPrefix} ([1-9][0-9]*) (\\S+) (\\S+) ([A-Za-z0-9_-]+) -->$`, 'u');
 
 export function readApprovalReceipt(review, prNumber) {
@@ -20,6 +21,28 @@ export function readApprovalReceipt(review, prNumber) {
 function matchesRevision(receipt, revision) {
   return receipt.prNumber === revision.prNumber && receipt.head === revision.head &&
     receipt.base === revision.base && receipt.baseRef === revision.baseRef;
+}
+
+async function hasPriorApproval(github, reviews, owner, revision) {
+  const dismissed = new Set();
+  for (const review of reviews) {
+    if (!sameUser(review?.user, owner) || review.commit_id !== revision.head) continue;
+    if (review.state === 'APPROVED') return true;
+    const receipt = review.state === 'DISMISSED' && readApprovalReceipt(review, revision.prNumber);
+    if (receipt && matchesRevision(receipt, revision)) dismissed.add(review.id);
+  }
+  if (!dismissed.size) return false;
+
+  // Only an exact compensation dismissal permits another approval of the same revision.
+  for await (const event of pages(github, `/issues/${revision.prNumber}/timeline`, 'Pull request timeline')) {
+    const dismissal = event?.dismissed_review;
+    if (event?.event !== 'review_dismissed' || !dismissed.has(dismissal?.review_id)) continue;
+    if (!sameUser(event.actor, owner) || dismissal.state !== 'approved' ||
+        dismissal.dismissal_message !== verificationDismissal) return true;
+    dismissed.delete(dismissal.review_id);
+    if (!dismissed.size) return false;
+  }
+  return true;
 }
 
 async function hasBlockingChangeRequest(github, reviews, owner, excludedId) {
@@ -121,11 +144,11 @@ export async function publishApproval({ github, approver, revision, approverLogi
     `[查看 GitHub Actions 审查运行](${reviewUrl})`,
     marker,
   ].join('\n\n');
-  let reviews = await listReviews(github, pull);
+  const previousReviews = await listReviews(github, pull);
   if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
 
   const withdrawn = new Set();
-  for (const review of reviews) {
+  for (const review of previousReviews) {
     if (review?.state !== 'APPROVED' || !sameUser(review.user, owner)) continue;
     const receipt = readApprovalReceipt(review, prNumber);
     if (!receipt || (allowApproval && matchesRevision(receipt, revision))) continue;
@@ -136,17 +159,11 @@ export async function publishApproval({ github, approver, revision, approverLogi
     withdrawn.add(review.id);
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';
-  if (withdrawn.size) reviews = await listReviews(github, pull);
 
+  const reviews = await listReviews(github, pull);
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
   if (await hasBlockingChangeRequest(github, remaining, owner)) return 'skipped-changes-requested';
-  const alreadyReviewed = remaining.some((review) => {
-    if (!sameUser(review?.user, owner) || review.commit_id !== head) return false;
-    if (review.state === 'APPROVED') return true;
-    const receipt = review.state === 'DISMISSED' && readApprovalReceipt(review, prNumber);
-    return receipt && matchesRevision(receipt, revision);
-  });
-  if (alreadyReviewed) return 'skipped-existing';
+  if (await hasPriorApproval(github, remaining, owner, revision)) return 'skipped-existing';
 
   if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
   const approval = await postApproval(github, approver, pull, reviews, owner, head, body);
@@ -160,7 +177,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
     current = await isCurrent(github, repository, pull, prNumber, revision);
   } catch (cause) {
     try {
-      await dismissApproval(github, approver, pull, approval, '洛神未能核对发布后的状态，撤销本次自动审批。');
+      await dismissApproval(github, approver, pull, approval, verificationDismissal);
     } catch (dismissalError) {
       throw new AggregateError([cause, dismissalError], `Could not verify or dismiss automatic approval ${approval.id}`);
     }
