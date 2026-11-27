@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { fail } from './errors.mjs';
-import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts } from './layout.mjs';
+import { APP_ARCHIVE_PARTS, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts } from './layout.mjs';
+import { archiveRootOf, installPhysicalPaths } from './physical-paths.mjs';
 
 /**
  * The one entry the shell starts whenever it needs dsh: the web profile, and
@@ -39,10 +40,15 @@ const loadEntry = (path) => import(pathToFileURL(path).href);
  * manager. dsh's public entry takes the package manager as an option, which is
  * how the install reaches pnpm: nothing of dsh is modified or wrapped.
  *
- * @param {{dshEntry: string, nodeEntry: string, pnpmEntry: string, load?: Function}} input
- *   `load` is an injection point for tests.
+ * @param {{dshEntry: string, nodeEntry: string, pnpmEntry: string, install?: Function, load?: Function}} input
+ *   `install` and `load` are injection points for tests.
  */
-export async function runEmbeddedCli({ dshEntry, nodeEntry, pnpmEntry, load = loadEntry }) {
+export async function runEmbeddedCli({ dshEntry, nodeEntry, pnpmEntry, install = installPhysicalPaths, load = loadEntry }) {
+  // Before any of dsh is linked. A builtin's named exports are bound to the
+  // functions an importer finds at that moment, so a runtime loaded from inside
+  // the archive must have the physical path layer in place first.
+  const archiveRoot = archiveRootOf(dshEntry);
+  if (archiveRoot !== null) install({ archiveRoot });
   const entry = await load(dshEntry);
   if (typeof entry?.runCli !== 'function') fail('EMBEDDED_RUNTIME_MISSING', 'the embedded runtime does not provide the command line entry');
   await entry.runCli({ packageManager: packageManagerFor({ nodeEntry, pnpmEntry }) });
@@ -51,7 +57,8 @@ export async function runEmbeddedCli({ dshEntry, nodeEntry, pnpmEntry, load = lo
 /**
  * Where the packaged app keeps the three entries; outside it there is nothing
  * to run. All are looked for before anything is imported, so a missing one is
- * refused as such, not reported as a load error.
+ * refused as such, not reported as a load error. The embedded runtime is inside
+ * the archive; the bundled runtime it uses for pnpm travels unpacked beside it.
  */
 function entryPaths() {
   const resources = process.resourcesPath;
@@ -59,7 +66,7 @@ function entryPaths() {
     fail('EMBEDDED_RUNTIME_MISSING', 'this entry runs only from the packaged application');
   }
   const paths = {
-    dshEntry: join(resources, ...DSH_ENTRY_PARTS),
+    dshEntry: join(resources, ...APP_ARCHIVE_PARTS, ...DSH_ENTRY_PARTS),
     nodeEntry: join(resources, ...primaryRuntimeNodeParts(process.platform)),
     pnpmEntry: join(resources, ...PRIMARY_RUNTIME_PNPM_PARTS),
   };

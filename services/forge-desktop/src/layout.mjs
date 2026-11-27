@@ -1,13 +1,22 @@
 /**
- * Resource layout of the packaged shell, shared with the staging tools.
+ * Resource layout of the packaged shell, shared with the staging and packaging
+ * tools.
  *
  * These relative paths are the contract between `stage-desktop-payload.mjs`
- * and `stage-primary-runtime.mjs` (which fill `<resources>/`) and `main.mjs`
- * (which reads it): a change on either side without the other fails the layout
- * contract test instead of a packaged app at first run.
+ * and `stage-primary-runtime.mjs` (which fill `<resources>/`) and the shell
+ * (which reads it once packed): a change on either side without the other
+ * fails the layout contract test instead of a packaged app at first run.
  */
 
-/** The embedded runtime entry, relative to the resources root. */
+/**
+ * The archive the shell's own code and the embedded runtime travel in,
+ * relative to the resources root. What the runtime hands to the operating
+ * system — native libraries, programs, the directories a native process reads
+ * — is unpacked beside it as `app.asar.unpacked`, under the same relative path.
+ */
+export const APP_ARCHIVE_PARTS = ['app.asar'];
+
+/** The embedded runtime entry, relative to the archive root. */
 export const DSH_ENTRY_PARTS = ['dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'];
 
 /**

@@ -391,7 +391,7 @@ test('流水线契约：release-bundle 的每个桌面任务都取得 pnpm 制�
   assert.equal([...commands(dropped, 'stage-primary-runtime')].some((command) => !handed(command)), true);
   // ...and on one that hands it to the shell staging as well.
   const extra = workflow.replace(
-    '          node scripts/stage-desktop-payload.mjs \\\n            --output "$RUNNER_TEMP/staged" \\\n            --dsh-tgz "$DSH_TGZ" \\\n',
+    '          node scripts/stage-desktop-payload.mjs \\\n            --output "$STAGED_DIR" \\\n            --dsh-tgz "$DSH_TGZ" \\\n',
     '          node scripts/stage-desktop-payload.mjs \\\n            --output "$RUNNER_TEMP/staged" \\\n            --dsh-tgz "$DSH_TGZ" \\\n            --pnpm-tgz "$PNPM_TGZ" \\\n',
   );
   assert.notEqual(extra, workflow, 'the mutation must land somewhere');

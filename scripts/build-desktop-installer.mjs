@@ -7,18 +7,30 @@
  * appId, upgrade GUID, productName, executable name and display name must not
  * drift between the plugin brand and the OS-level app.
  *
+ * The staged resources go to two places (`scripts/lib/desktop-payload.mjs`): the
+ * embedded runtime under `dsh/` into the app's archive as one file, everything
+ * else beside the archive as it was staged. What the runtime hands to the
+ * operating system is unpacked beside the archive, and `afterPack` checks the
+ * archive against the staged tree before the build may continue.
+ *
+ * The staged resources have to be a real directory inside the app directory:
+ * electron-builder counts the paths it matches from the app directory, and
+ * refuses a file whose real location is outside the tree it packs. They are
+ * therefore staged there (`services/forge-desktop/.staged/`, ignored by git).
+ *
  * 用法：
  *   node scripts/build-desktop-installer.mjs --identity <app-identity.json> \
- *     --resources <staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
+ *     --resources <app-dir 内的 staged resources dir> --version <vX.Y.Z | x.y.z> --output <dir> \
  *     [--app-dir <services/forge-desktop>] [--brand-dir <dir>] \
  *     [--target dir|mac|win|linux] [--arch x64|arm64|universal] [--config-only] [--json]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../services/forge-desktop/src/layout.mjs';
+import { ASAR_UNPACK, payloadFilter, resourcesFilter, summarizeResources, treeFilter, unpackedTrees } from './lib/desktop-payload.mjs';
+import { ARCHIVE_VERIFIED_PREFIX } from './lib/desktop-after-pack.mjs';
 import { readManifest, verifyAsset } from './derive-brand-icons.mjs';
 
 const WIN_ICON = 'icons/app-icon.ico';
@@ -34,95 +46,6 @@ const TARGET_ARCHES = Object.freeze({
   win: ['x64'],
   linux: ['x64', 'arm64'],
 });
-
-/**
- * File types the packaged runtime never reads. TypeScript sources and
- * declarations: the embedded Node refuses to strip types under node_modules
- * (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING) and nothing in the closure
- * compiles TypeScript. Source maps: the shell drops NODE_OPTIONS from every
- * child environment, so `--enable-source-maps` cannot reach the runtime. Debug
- * symbols: only a debugger opens them. electron-builder's own default excludes
- * apply to the app files, not to `extraResources`, where the runtime travels.
- */
-const RUNTIME_EXCLUDED_EXTENSIONS = ['.ts', '.cts', '.mts', '.map', '.pdb', '.flow', '.c', '.cc', '.cpp', '.h', '.hpp', '.gyp', '.gypi', '.tsbuildinfo'];
-
-/**
- * Third-party packages inside `dsh/node_modules` (outside `@deepseek-ai/`)
- * carry test suites, docs, examples and changelogs that are never needed at
- * runtime; license/notice files are always preserved.
- */
-const THIRD_PARTY_EXCLUDED_DIRS = [
-  'test',
-  'tests',
-  '__tests__',
-  'docs',
-  'example',
-  'examples',
-  '.github',
-  '.vscode',
-  '.idea',
-  'fixtures',
-  '__fixtures__',
-];
-const THIRD_PARTY_EXCLUDED_DIR_SET = new Set(THIRD_PARTY_EXCLUDED_DIRS);
-const THIRD_PARTY_EXCLUDED_DOC_EXTS = new Set(['.md', '.markdown']);
-const THIRD_PARTY_EXCLUDED_DOC_PREFIXES = ['CHANGELOG', 'HISTORY'];
-const THIRD_PARTY_EXCLUDED_CONFIG_GLOBS = [
-  '.eslintrc*',
-  '.prettier*',
-  '.editorconfig',
-  '.npmignore',
-  '.flowconfig',
-  '.babelrc*',
-  'tsconfig*.json',
-  'binding.gyp',
-  'Makefile',
-  'CMakeLists.txt',
-  'biome.json',
-  'biome.jsonc',
-  'jest.config.*',
-  'vitest.config.*',
-  '.DS_Store',
-  'Thumbs.db',
-];
-const THIRD_PARTY_LICENSE_PREFIXES = ['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'];
-const THIRD_PARTY_LICENSE_GLOBS = ['[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*', '[Nn][Oo][Tt][Ii][Cc][Ee]*', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*'];
-
-export function isExcludedConfigFile(file) {
-  if (
-    file === '.editorconfig' ||
-    file === '.npmignore' ||
-    file === '.flowconfig' ||
-    file === 'binding.gyp' ||
-    file === 'Makefile' ||
-    file === 'CMakeLists.txt' ||
-    file === 'biome.json' ||
-    file === 'biome.jsonc' ||
-    file === '.DS_Store' ||
-    file === 'Thumbs.db'
-  ) {
-    return true;
-  }
-  if (
-    file.startsWith('.eslintrc') ||
-    file.startsWith('.prettier') ||
-    file.startsWith('.babelrc') ||
-    file.startsWith('jest.config.') ||
-    file.startsWith('vitest.config.')
-  ) {
-    return true;
-  }
-  if (file.startsWith('tsconfig') && file.endsWith('.json')) return true;
-  return false;
-}
-
-/**
- * The directories that travel exactly as they were staged: the dsh artifact
- * `runtime-lock.json` pins by digest, and the bundled runtime, whose staged
- * bytes are the ones its checks ran against and its record counts. Everything
- * else under `dsh/node_modules` is the registry closure.
- */
-const VERBATIM_RUNTIME_DIRS = Object.freeze([`${DSH_ENTRY_PARTS.slice(0, 4).join('/')}/`, `${PRIMARY_RUNTIME_DIR}/`]);
 
 /**
  * The locales Electron keeps, each named the way the platform names its locale
@@ -233,82 +156,41 @@ export function readAppIdentity(path) {
 }
 
 /**
- * Whether a staged file reaches the package. `relativePath` is `/`-separated
- * from the resources root, and the rule matches `runtimeFilter()` identically.
+ * The app directory and the staged resources, as where they really are, after
+ * checking that the latter is inside the former.
+ *
+ * electron-builder matches its unpack patterns against a path it counts from
+ * the app directory — by length, not by resolving — and refuses to pack a file
+ * whose real location is outside the tree it was handed. A staged tree anywhere
+ * else would be unpacked by a path that means nothing, differently on every
+ * machine; one reached through a link would be refused. Both are refused here
+ * first, with the reason.
+ *
+ * @param {{appDir: string, resourcesDir: string, real?: (path: string) => string}} input `real` is an injection point for the offline tests
+ * @returns {{appDir: string, resourcesDir: string}}
  */
-export function isPackaged(relativePath) {
-  if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
-  if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
-  if (!relativePath.startsWith('dsh/node_modules/') || relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
-    return true;
+export function stagedInsideAppDir(appDir, resourcesDir, { real = realpathSync } = {}) {
+  const realAppDir = real(resolve(appDir));
+  const realResourcesDir = real(resolve(resourcesDir));
+  if (realResourcesDir !== realAppDir && !realResourcesDir.startsWith(`${realAppDir}${sep}`)) {
+    fail('RESOURCES_OUTSIDE_APP_DIR', `the staged resources must be a real directory inside the app directory: electron-builder counts the paths it matches from there, and packs only what really lies inside it. App directory ${realAppDir}; staged resources ${realResourcesDir}`);
   }
-  const segments = relativePath.slice('dsh/node_modules/'.length).split('/');
-  const file = segments.at(-1) ?? '';
-  const upperFile = file.toUpperCase();
-  const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
-  if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
-    return false;
-  }
-  if (isLicense) return true;
-  if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
-  if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
-  if (isExcludedConfigFile(file)) return false;
-  return true;
-}
-
-/**
- * The `extraResources` filter. electron-builder applies its patterns in order
- * and lets a later pattern override an earlier one, so license files and each
- * verbatim directory are re-included after the exclusions, not before them.
- */
-export function runtimeFilter() {
-  return [
-    '**/*',
-    ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`),
-    ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
-      `!dsh/node_modules/!(@deepseek-ai)/**/${dir}`,
-      `!dsh/node_modules/!(@deepseek-ai)/**/${dir}/**`,
-    ]),
-    '!dsh/node_modules/!(@deepseek-ai)/**/*.md',
-    '!dsh/node_modules/!(@deepseek-ai)/**/*.markdown',
-    '!dsh/node_modules/!(@deepseek-ai)/**/CHANGELOG*',
-    '!dsh/node_modules/!(@deepseek-ai)/**/HISTORY*',
-    ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!dsh/node_modules/!(@deepseek-ai)/**/${glob}`),
-    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
-    ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
-  ];
-}
-
-/**
- * What the staged resources amount to, and how much of them the rule leaves
- * out: the numbers every build log keeps. Regular files only; links are copied
- * as links and are not counted.
- */
-export function summarizeResources(resourcesDir) {
-  const root = resolve(resourcesDir);
-  const summary = { files: 0, bytes: 0, excluded: { files: 0, bytes: 0 } };
-  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const path = join(entry.parentPath, entry.name);
-    const size = statSync(path).size;
-    summary.files += 1;
-    summary.bytes += size;
-    if (!isPackaged(relative(root, path).split(sep).join('/'))) {
-      summary.excluded.files += 1;
-      summary.excluded.bytes += size;
-    }
-  }
-  return summary;
+  return { appDir: realAppDir, resourcesDir: realResourcesDir };
 }
 
 /**
  * The electron-builder configuration derived from the identity truth. Kept
  * pure: the identity fields are literals of the identity, the paths are the
- * ones this tool was handed, and the rules are what this file owns — what
- * travels, which locales ship, how the installer upgrades/preserves user data,
- * and which platform architecture is targeted.
+ * ones this tool was handed, and the rules are what `desktop-payload.mjs` owns
+ * — what travels, what the archive holds and what lies unpacked beside it,
+ * which locales ship, how the installer upgrades/preserves user data, and
+ * which platform architecture is targeted.
+ *
+ * @param {{identity: object, version: string, resourcesDir: string, iconsDir: string, appDir: string, outputDir: string,
+ *   target?: string, arch?: string, afterPackPath?: string, unpackedTrees?: readonly {from: string, to: string}[]}} input
+ *   `unpackedTrees` are the whole-unpacked trees the staged resources hold (`unpackedTrees()` of the rules).
  */
-export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir, target = 'dir', arch, afterPackPath = DEFAULT_AFTER_PACK }) {
+export function builderConfig({ identity, version, resourcesDir, iconsDir, appDir, outputDir, target = 'dir', arch, afterPackPath = DEFAULT_AFTER_PACK, unpackedTrees: trees = [] }) {
   const resolvedArch = resolveTargetArch(target, arch);
   const macArch = target === 'mac' || target === 'dir' ? resolvedArch : 'arm64';
   const linuxArch = target === 'linux' ? resolvedArch : 'x64';
@@ -319,9 +201,20 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
     executableName: identity.executableName,
     artifactName: `${identity.executableName}-\${version}-\${arch}.\${ext}`,
     directories: { output: resolve(outputDir), buildResources: resolve(appDir) },
-    files: ['src/**/*', 'package.json', 'runtime-lock.json'],
-    extraResources: [{ from: resolve(resourcesDir), to: '.', filter: runtimeFilter() }],
+    // The shell's own code, then the staged `dsh/` tree: one archive. The trees
+    // that are unpacked whole are file sets of their own, each passed to the
+    // archive as the directory it is unpacked from.
+    files: [
+      'src/**/*',
+      'package.json',
+      'runtime-lock.json',
+      { from: resolve(resourcesDir), to: '.', filter: payloadFilter() },
+      ...trees.map((tree) => ({ from: tree.from, to: tree.to, filter: treeFilter() })),
+    ],
+    // The staged resources minus that tree, as they were staged.
+    extraResources: [{ from: resolve(resourcesDir), to: '.', filter: resourcesFilter() }],
     asar: true,
+    asarUnpack: [...ASAR_UNPACK],
     compression: 'maximum',
     afterPack: afterPackPath,
     extraMetadata: { version },
@@ -396,7 +289,8 @@ async function main() {
   if (!existsSync(resolve(options.resources))) fail('RESOURCES_MISSING', `staged resources not found: ${options.resources}`);
   const brandDir = resolve(options.brandDir ?? join(repoRoot, DEFAULT_BRAND_DIR));
   verifiedIcons(brandDir);
-  const appDir = resolve(options.appDir ?? join(repoRoot, DEFAULT_APP_DIR));
+  // Refused here, before anything is packed, when the staged tree is not where electron-builder can match it.
+  const { appDir, resourcesDir } = stagedInsideAppDir(resolve(options.appDir ?? join(repoRoot, DEFAULT_APP_DIR)), options.resources);
   const outputDir = resolve(options.output);
   const version = normalizeVersion(options.version);
   mkdirSync(outputDir, { recursive: true });
@@ -404,12 +298,13 @@ async function main() {
   const config = builderConfig({
     identity,
     version,
-    resourcesDir: options.resources,
+    resourcesDir,
     iconsDir: join(brandDir, 'icons'),
     appDir,
     outputDir,
     target: options.target,
     arch: options.arch,
+    unpackedTrees: unpackedTrees(resourcesDir),
   });
   const configPath = join(outputDir, 'builder-config.json');
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -421,7 +316,7 @@ async function main() {
     target: options.target,
     arch: options.arch,
     config: configPath,
-    resources: summarizeResources(options.resources),
+    resources: summarizeResources(resourcesDir),
   };
   if (options.configOnly) {
     process.stdout.write(options.json ? `${JSON.stringify(summary, null, 2)}\n` : `config: ${configPath}\n`);
@@ -441,6 +336,10 @@ async function main() {
     const outcome = run.error === undefined ? `exited ${run.status}` : `could not start (${run.error.message})`;
     fail('BUILDER_FAILED', `electron-builder ${outcome}\n${(run.stdout ?? '').slice(-4000)}\n${(run.stderr ?? '').slice(-4000)}`);
   }
+  // What afterPack found when it checked the archive, in the one line it logs for this tool to keep.
+  const verified = new RegExp(`^.*${ARCHIVE_VERIFIED_PREFIX}(\\{[^\\n]*\\})`, 'mu').exec(run.stdout ?? '')?.[1];
+  if (verified === undefined) fail('ARCHIVE_UNVERIFIED', 'electron-builder finished without the afterPack check of the packed runtime reporting');
+  summary.archive = JSON.parse(verified);
   summary.builderLog = `${run.stdout ?? ''}`.trim().split('\n').slice(-3).join(' | ');
   process.stdout.write(options.json ? `${JSON.stringify(summary, null, 2)}\n` : `built: ${outputDir} (${options.target}/${options.arch})\n`);
 }

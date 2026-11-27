@@ -133,19 +133,30 @@ export function entryProblems(main, cli, layout) {
   if (!/export const PRIMARY_RUNTIME_PNPM_PARTS/u.test(layout)) problems.push('layout.mjs must export PRIMARY_RUNTIME_PNPM_PARTS');
   if (!/export function primaryRuntimeNodeParts/u.test(layout)) problems.push('layout.mjs must export primaryRuntimeNodeParts');
   if (!/export const DSH_ENTRY_PARTS/u.test(layout)) problems.push('layout.mjs must export DSH_ENTRY_PARTS');
+  // The shell's own code and the embedded runtime travel in one archive; its name is the layout's.
+  if (!/export const APP_ARCHIVE_PARTS/u.test(layout)) problems.push('layout.mjs must export APP_ARCHIVE_PARTS');
   // The entry takes its resource paths from the layout, and runs as Node: no Electron in it.
-  if (!/\{ DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts \} from '\.\/layout\.mjs'/u.test(cli)) problems.push('embedded-cli.mjs must read both entries from layout.mjs');
+  if (!/\{ APP_ARCHIVE_PARTS, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts \} from '\.\/layout\.mjs'/u.test(cli)) problems.push('embedded-cli.mjs must read both entries from layout.mjs');
   if (/from 'electron'|import\('electron'\)/u.test(cli)) problems.push('embedded-cli.mjs runs as Node and must not import electron');
   // main.mjs starts the entry for the profile and for the installer, never dsh's own file.
   if (!/\{ EMBEDDED_ENTRY \} from '\.\/embedded-cli\.mjs'/u.test(main)) problems.push("main.mjs must import EMBEDDED_ENTRY from './embedded-cli.mjs'");
   if (!/spawn\(process\.execPath, \[EMBEDDED_ENTRY, /u.test(main)) problems.push('the shell profile must be started through EMBEDDED_ENTRY');
   if (!/embeddedExec\(\{ command: process\.execPath, entry: EMBEDDED_ENTRY, env \}\)/u.test(main)) problems.push('the installer executor must start EMBEDDED_ENTRY');
   if (/\[DSH_ENTRY,/u.test(main)) problems.push('dsh entry must not be started directly: it would look for pnpm on PATH');
+  // The embedded runtime is loaded from inside the archive; both readers look for it there.
+  if (!/dshEntry: join\(resources, \.\.\.APP_ARCHIVE_PARTS, \.\.\.DSH_ENTRY_PARTS\)/u.test(cli)) problems.push('the embedded runtime entry must be looked for inside the archive');
+  if (!/const DSH_ENTRY = join\(process\.resourcesPath, \.\.\.APP_ARCHIVE_PARTS, \.\.\.DSH_ENTRY_PARTS\);/u.test(main)) problems.push('main.mjs must look for the embedded runtime entry inside the archive');
   // The entries' paths are the layout's, never spelled out here.
-  if (!/\{ ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS, primaryRuntimeNodeParts \} from '\.\/layout\.mjs'/u.test(main)) {
+  if (!/\{ APP_ARCHIVE_PARTS, ASSETS_DIR, BIN_DIR, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, STATUS_PAGE_PARTS, TITLE_BAR_PARTS, TRAY_ICON_PARTS, primaryRuntimeNodeParts \} from '\.\/layout\.mjs'/u.test(main)) {
     problems.push('main.mjs must read the resource paths from layout.mjs');
   }
   if (/'pnpm', 'bin'|'node_modules', '@deepseek-ai'|'primary-runtime', 'dependencies'/u.test(`${main}\n${cli}`)) problems.push('resource paths must come from layout.mjs, not be inlined');
+  if (/'app\.asar'/u.test(`${main}\n${cli}`)) problems.push('the archive name must come from layout.mjs, not be inlined');
+  // A runtime loaded from the archive hands the operating system physical paths. That layer is
+  // installed before any of dsh is linked: a builtin's named exports are bound when their
+  // importer is linked, so a later install would leave dsh with the original functions.
+  if (!/install = installPhysicalPaths, load = loadEntry/u.test(cli)) problems.push('the entry must install the physical path layer');
+  if (!/if \(archiveRoot !== null\) install\(\{ archiveRoot \}\);\n\s*const entry = await load\(dshEntry\);/u.test(cli)) problems.push('the physical path layer must be installed before dsh is loaded');
   // The title bar page is a staged resource like the others; its bridge is app code, read from beside main.mjs.
   if (!/titleBarPage: join\(process\.resourcesPath, \.\.\.TITLE_BAR_PARTS\)/u.test(main)) problems.push('main.mjs must read the title bar page path from layout.mjs');
   if (!/titleBarPreload: TITLE_BAR_PRELOAD/u.test(main)) problems.push('main.mjs must hand the shell the title bar bridge');
@@ -161,6 +172,7 @@ test('布局契约：main.mjs 消费 layout.mjs 的导出，不内联资源路�
   assert.doesNotMatch(main, /'brand', 'tray\.png'/u, '托盘图标路径必须来自 layout.mjs，不得内联');
   assert.doesNotMatch(main, /'brand', 'titlebar\.html'/u, '标题栏页面路径必须来自 layout.mjs，不得内联');
   const layout = await readFile(join(PKG_ROOT, 'src', 'layout.mjs'), 'utf8');
+  assert.match(layout, /export const APP_ARCHIVE_PARTS/u);
   assert.match(layout, /export const DSH_ENTRY_PARTS/u);
   assert.match(layout, /export const TRAY_ICON_PARTS/u);
   assert.match(layout, /export const BIN_DIR/u);
@@ -185,7 +197,7 @@ test('入口契约反向：绕过壳的入口、内联路径、入口内引用 e
     [main.replace('entry: EMBEDDED_ENTRY, env', 'entry: DSH_ENTRY, env'), cli, layout, /must start EMBEDDED_ENTRY/],
     [main.replace(', PRIMARY_RUNTIME_PNPM_PARTS', ''), cli, layout, /must read the resource paths from layout\.mjs/],
     [main, cli.replace("import { join } from 'node:path';", "import { join } from 'node:path';\nimport { app } from 'electron';"), layout, /must not import electron/],
-    [main, cli.replace('{ DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts }', '{ DSH_ENTRY_PARTS, primaryRuntimeNodeParts }'), layout, /must read both entries from layout\.mjs/],
+    [main, cli.replace('{ APP_ARCHIVE_PARTS, DSH_ENTRY_PARTS, PRIMARY_RUNTIME_PNPM_PARTS, primaryRuntimeNodeParts }', '{ APP_ARCHIVE_PARTS, DSH_ENTRY_PARTS, primaryRuntimeNodeParts }'), layout, /must read both entries from layout\.mjs/],
     [main, cli.replace('join(resources, ...PRIMARY_RUNTIME_PNPM_PARTS)', "join(resources, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')"), layout, /not be inlined/],
     [main, cli, layout.replace('export const PRIMARY_RUNTIME_PNPM_PARTS', 'export const PACKAGE_MANAGER_PARTS'), /must export PRIMARY_RUNTIME_PNPM_PARTS/],
     [main, cli, layout.replace('export function primaryRuntimeNodeParts', 'export function runtimeNodeParts'), /must export primaryRuntimeNodeParts/],
@@ -193,10 +205,22 @@ test('入口契约反向：绕过壳的入口、内联路径、入口内引用 e
     [main.replace('titleBarPage: join(process.resourcesPath, ...TITLE_BAR_PARTS)', "titleBarPage: join(process.resourcesPath, 'brand', 'titlebar.html')"), cli, layout, /must read the title bar page path/],
     [main.replace('titleBarPreload: TITLE_BAR_PRELOAD', 'titleBarPreload: PRELOAD'), cli, layout, /must hand the shell the title bar bridge/],
     [main.replace("existsSync(TITLE_BAR_PRELOAD)) fail('TITLE_BAR_MISSING'", "existsSync(TITLE_BAR_PRELOAD)) fail('OTHER'), false && fail('TITLE_BAR_MISSING'"), cli, layout, /must check the title bar bridge/],
+    [main, cli.replace('join(resources, ...APP_ARCHIVE_PARTS, ...DSH_ENTRY_PARTS)', 'join(resources, ...DSH_ENTRY_PARTS)'), layout, /looked for inside the archive/],
+    [main.replace('join(process.resourcesPath, ...APP_ARCHIVE_PARTS, ...DSH_ENTRY_PARTS)', 'join(process.resourcesPath, ...DSH_ENTRY_PARTS)'), cli, layout, /must look for the embedded runtime entry inside the archive/],
+    [main.replace('{ APP_ARCHIVE_PARTS, ASSETS_DIR,', '{ ASSETS_DIR,'), cli, layout, /must read the resource paths from layout\.mjs/],
+    [main, cli, layout.replace('export const APP_ARCHIVE_PARTS', 'export const ARCHIVE_PARTS'), /must export APP_ARCHIVE_PARTS/],
+    [main.replace('join(process.resourcesPath, ...APP_ARCHIVE_PARTS, ...DSH_ENTRY_PARTS)', "join(process.resourcesPath, 'app.asar', ...DSH_ENTRY_PARTS)"), cli, layout, /not be inlined/],
+    [main, cli.replace('install = installPhysicalPaths, load = loadEntry', 'load = loadEntry'), layout, /must install the physical path layer/],
+    [
+      main,
+      cli.replace('if (archiveRoot !== null) install({ archiveRoot });\n  const entry = await load(dshEntry);', 'const entry = await load(dshEntry);\n  if (archiveRoot !== null) install({ archiveRoot });'),
+      layout,
+      /before dsh is loaded/,
+    ],
   ];
   for (const [variantMain, variantCli, variantLayout, pattern] of variants) {
     const problems = entryProblems(variantMain, variantCli, variantLayout);
-    assert.ok(problems.length > 0, 'a mutated source must produce at least one problem');
+    assert.ok(problems.length > 0, `a mutated source must produce at least one problem (expected ${pattern}): got ${JSON.stringify(problems)}`);
     assert.match(problems.join('\n'), pattern);
   }
 });

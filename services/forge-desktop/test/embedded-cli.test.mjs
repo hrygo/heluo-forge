@@ -102,6 +102,25 @@ test('反向：dsh 入口加载失败或不提供命令行入口时拒绝；dsh 
   assert.deepEqual(runs, []);
 });
 
+test('a runtime loaded from inside the archive installs the physical path layer first, keyed to that archive', async () => {
+  const runtime = {
+    nodeEntry: '/apps/Resources/primary-runtime/dependencies/node/bin/node',
+    pnpmEntry: '/apps/Resources/primary-runtime/dependencies/pnpm/bin/pnpm.mjs',
+  };
+  const events = [];
+  const record = {
+    install: (input) => { events.push(['install', input]); },
+    load: async () => { events.push(['load']); return { runCli() {} }; },
+  };
+  await runEmbeddedCli({ ...runtime, dshEntry: '/apps/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', ...record });
+  assert.deepEqual(events, [['install', { archiveRoot: '/apps/Resources/app.asar' }], ['load']]);
+
+  // A staged tree outside any archive has nothing to translate: the layer is not installed.
+  events.length = 0;
+  await runEmbeddedCli({ ...runtime, dshEntry: '/apps/Resources/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', ...record });
+  assert.deepEqual(events, [['load']]);
+});
+
 test('importing the entry starts nothing; only the packaged app can run it as a command', async () => {
   // The module was imported by this file: nothing ran, or the test process would have left.
   const source = readFileSync(EMBEDDED_ENTRY, 'utf8');

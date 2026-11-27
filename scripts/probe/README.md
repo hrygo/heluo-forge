@@ -335,7 +335,11 @@ node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources 
 node scripts/probe/run-primary-runtime-probe.mjs --resources <staged>/resources \
   --bundle <heluo-forge-enterprise-*.tgz> --keep --out /tmp/primary-runtime-probe.json
 
-# 以打出来的应用包为准：包内的 dsh 闭包与载荷，应用自己的 Electron 与 app.asar 里的壳入口（目前只认 macOS 的 .app）。
+# 以打出来的应用包为准：dsh 闭包取自应用归档之内、载荷取自归档之外，应用自己的 Electron 与
+# app.asar 里的壳入口（目前只认 macOS 的 .app）。此时另核对归档布局（packed-runtime-facts.mjs）：
+# 物理路径层先于 dsh 链接装好、解包树里的本目标插件库都能经归档路径加载、ripgrep 的两个路径都能运行、
+# node-pty 起一个真实 pty、Office 引擎包解析到归档之外并把一份 docx 真转成 PDF；输入 docx 由载荷
+# 自带的 Python 造出。`--bundle` 经归档内的 dsh 与随包 pnpm 安装企业底座包，即首启安装器的路。
 node scripts/probe/run-primary-runtime-probe.mjs --app <staged 以外打出来的 .app> \
   --bundle <heluo-forge-enterprise-*.tgz>
 ```
