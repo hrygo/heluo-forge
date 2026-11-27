@@ -49,7 +49,7 @@ require_merge_recommendation = true
 # A reference to a larger or completed issue is not a promise to finish it here.
 # The PR description still provides the scope; full ticket bodies are not fetched.
 require_ticket_analysis_review = false
-# Submit anchored findings as inline comments in GitHub COMMENT reviews.
+# The workflow handles automatic and bare review publication with explicit sides.
 inline_key_issues = true
 # Keep one persistent review summary per PR.
 persistent_comment = true
@@ -66,7 +66,7 @@ extra_instructions = """
 
 - 优先报告本次改动可触发的行为回归、数据丢失、权限与凭据问题。每条发现写清文件和变更行、触发条件、可观察后果及最小修正方向。敏感内容只写类型和位置。
 - 按改动选择核查项：插件准入、状态归属与兼容性，工作流依赖固定与最小权限，行为变更的正反向用例，受控文档的元数据与链接。缺少测试时指出具体场景和预期结果。
-- 每条发现的 issue_header 必须以 [P0]、[P1]、[P2] 或 [P3] 加空格开头，例如 [P1] 导入后记录丢失。相关文件使用仓库相对路径，并提供差异中的起止行和能够复现问题的触发条件。
+- 每条发现的 issue_header 以 [P0] 至 [P3] 的等级开头。新增行使用 [P1] [RIGHT] 标题这类格式，start_line 与 end_line 填新文件行号。删除行使用 [P1] [LEFT 12-14] 标题这类格式，从差异片段的旧文件起点按上下文行和删除行计数，将旧文件范围写在 LEFT 后，start_line 与 end_line 均填 0。起止行位于该侧同一差异片段，至少包含一条变更行。侧别或行号无法确认时只写等级和标题，两行号填 0，发现保留在摘要。相关文件使用仓库相对路径。
 - P0 是需要立即处理的广泛服务中断、不可恢复的数据丢失或重大安全影响。P1 是可复现且须在合入前修复的主要流程回归、显著的数据完整性问题或安全边界失效。P2 是范围有限且有可行绕行的缺陷。P3 是局部低影响问题。影响或触发条件缺少证据时，标 P2/P3 或交由人工核实。
 - 同一根因只报一次，按 P0 到 P3 排序。只列有证据且可操作的发现，证据充分的问题为零时输出空列表。人工审查优先文件最多列三个，依据是可见变更中的实际风险。
 

@@ -137,10 +137,12 @@ OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启�
 
 [洛神工作流](.github/workflows/pr-agent.yml)通过 OpenAI Chat Completions 调用 `gpt-6.2-sol`。启用前在仓库 Actions Secrets 配置有该模型及 Chat Completions 调用权限的 OpenAI 项目密钥 `OPENAI_API_KEY`，再设置仓库变量 `PR_AGENT_ENABLED=true`。[OpenAI API 模型与价格](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
 
-同仓非草稿 PR 的有效推送刷新持久摘要和审查评论。审查使用 `medium`，每次请求的上下文预算为 64,000 token（含输出预留）、生成上限为 12,000 token，超长审查最多处理五个分块并显示覆盖缺口。手动摘要接受无参数的 `/describe` 或 `/describe_pr`。自动和手动摘要均使用 `low`，上下文预算为 32,000 token、生成上限为 6,000 token，最多两次模型调用。遇到可重试的提供方错误时，每次请求最多重试一次，超时直接失败。
+同仓非草稿 PR 的有效事件启动只读信号，默认分支上的发布工作流刷新持久摘要和审查评论。工作流从 GitHub API 核对 PR 版本，只检出默认分支发布代码。审查使用 `medium`，每次请求的上下文预算为 64,000 token（含输出预留）、生成上限为 12,000 token，超长审查最多处理五个分块并显示覆盖缺口。手动摘要接受无参数的 `/describe` 或 `/describe_pr`。自动和手动摘要均使用 `low`，上下文预算为 32,000 token、生成上限为 6,000 token，最多两次模型调用。遇到可重试的提供方错误时，每次请求最多重试一次，超时直接失败。
 
 [仓库审查配置](.pr_agent.toml)从默认分支加载，合并后对后续运行生效。审查给出按风险排序的可操作发现和人工审查优先文件，合入建议供维护者参考。评论折叠区展示实际返回的 token 数与调用次数，账单以 OpenAI 项目用量为准。以 2026-11-26 的标准价估算，累计消耗 20,000 个未缓存输入 token 和 2,000 个输出 token（含推理）约为 US$0.06。[OpenAI API 定价](https://developers.openai.com/api/docs/pricing)
 
-维护者可在开放的 PR 直接留言 `/review`。洛神通过 GitHub `COMMENT` 审查发布定位到差异行的发现，无法发布的发现保留在摘要。发现按 P0 到 P3 分级。工作流显式启用原生评论，PR 更新时即可验证评论发布。自动审查和无参数 `/review` 的高优先级候选须在 GitHub 差异的同一侧定位到完整行范围。洛神以一次低推理预算调用独立核对同一发现及其差异。复核确认 P0/P1 时，洛神另提交 GitHub `Request changes`，附证据链接和预设分类。同一组 PR 提交和目标分支提交只发起一次。带参数的手动审查仍发布意见。
+维护者可在开放的 PR 直接留言 `/review`。洛神对自动审查和无参数命令发布 GitHub `COMMENT`，覆盖 P0 至 P3。工作流依据 GitHub 差异校验 `LEFT` 或 `RIGHT` 的完整范围，评论锚定在同侧变更行。未能确认位置的发现留在审查摘要。带参数的手动命令由固定版本 PR-Agent 处理。
 
-洛神在发布后核对请求对应的 PR 和目标分支版本。若发布响应无法确认，洛神按唯一标识查找本次请求后继续核对。发现版本变化时，洛神撤销该过期请求。GitHub 拒绝撤销时，洛神标记请求已过期并留给维护者解除。仍有效的修改请求由维护者确认解除。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)
+模型分级和合入建议供维护者参考。拥有 `write`、`maintain` 或 `admin` 权限的维护者确认 P0/P1 后，可在非草稿 PR 单独留言 `/request-changes P1 <head SHA> <base SHA> <target branch>`，填写 PR 头提交、目标分支最新提交的完整 SHA 和目标分支名。洛神重新核对留言、发起人权限和版本，然后代发 GitHub `Request changes`。该命令无需模型调用。
+
+正式请求发布时带待确认标记，版本核对通过后移除。响应丢失时按发布标识查回请求；复查失败时由后续自动审查或无参数 `/review` 继续核对。发现版本变化时，仅撤销对应的待确认请求。GitHub 拒绝撤销时，洛神标记过期并由维护者解除。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)
