@@ -2225,8 +2225,8 @@ window.__ModuleLoader__.load({
 
       function broadcast(view, pending) {
         let delivered = false;
-        for (const { subscriber, epoch } of pending) {
-          if (!subscribers.has(subscriber)) continue;
+        for (const { subscriber, epoch, revision } of pending) {
+          if (!subscribers.has(subscriber) || (revision !== undefined && subscriber.revisionRef?.current !== revision)) continue;
           const barrier = subscriber.barrierRef?.current;
           if (!barrier || (!barrier.pending && barrier.epoch === epoch)) {
             deliver(subscriber, view);
@@ -2301,7 +2301,9 @@ window.__ModuleLoader__.load({
           return;
         }
         const readGeneration = generation;
-        const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
+        const pending = [...subscribers].map((subscriber) => ({
+          subscriber, epoch: subscriber.barrierRef?.current.epoch, revision: subscriber.revisionRef?.current,
+        }));
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         let release;
         const cancelled = new Promise((resolve) => { release = resolve; });
