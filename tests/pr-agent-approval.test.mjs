@@ -249,6 +249,14 @@ test('honors a dismissal of the exact automated review on a different run', asyn
   assert.equal(state.writes.length, 1);
 });
 
+test('a complete same-version review may restore an approval withdrawn by an ineligible review', async () => {
+  const { state, run } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  assert.equal(await run({ allowApproval: false, runId: '2345' }), 'dismissed-ineligible');
+  assert.equal(await run({ runId: '3456' }), 'approved');
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+});
+
 test('skips when the PR changes between the final base-ref read and final PR read', async () => {
   const { state, run } = fakeGitHub();
   state.beforeGet = (path) => {

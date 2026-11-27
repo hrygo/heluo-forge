@@ -278,7 +278,13 @@ async function validateReview(github, env, scope) {
     const coverage = eligible && await readReviewCoverage(env.PR_AGENT_COVERAGE_PATH);
     if (issues.length || coverage) {
       const files = [];
-      for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
+      try {
+        for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
+      } catch (error) {
+        if (issues.length) throw error;
+        files.length = 0;
+        console.log('::warning::Unable to compare optional approval coverage for this review.');
+      }
       allowApproval = Boolean(coverage) && verifyReviewCoverage(coverage, {
         repository: github.repository, prNumber, head, base, baseRef: ref, review, files,
         changedFileCount: pr.changed_files, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
@@ -304,8 +310,15 @@ async function validateReview(github, env, scope) {
     }
   }
   if (checkApprovals) {
-    const hasApprovalWork = allowApproval || (await listReviews(github, prPath)).some((previous) =>
-      previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
+    let hasApprovalWork = allowApproval;
+    if (!hasApprovalWork) {
+      try {
+        hasApprovalWork = (await listReviews(github, prPath)).some((previous) =>
+          previous?.state === 'APPROVED' && previous.user?.type === 'Bot' && readApprovalReceipt(previous, prNumber));
+      } catch {
+        console.log('::warning::Unable to check for older automatic approvals to reconcile.');
+      }
+    }
     if (hasApprovalWork && await currentRevision()) {
       const revision = {
         prNumber, head, base, baseRef: ref, allowApproval,
@@ -350,7 +363,7 @@ if (scope) {
   else if (action === 'validate') await validateReview(github, env, scope);
   else if (action === 'approve') await approve(github, env, scope);
   else throw new Error('Unknown PR-Agent workflow command');
-} else if (action === 'approve' && env.PR_AGENT_AUTO_APPROVE === 'true' && env.GITHUB_EVENT_NAME === 'push' &&
+} else if (action === 'approve' && env.GITHUB_EVENT_NAME === 'push' &&
     env.GITHUB_REF === 'refs/heads/main' && event.ref === env.GITHUB_REF && event.deleted === false &&
     event.repository?.full_name === github.repository) {
   if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');

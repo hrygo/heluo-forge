@@ -61,6 +61,8 @@ async function withGitHub(run) {
       head: { sha: head, repo: { full_name: repository } }, base: { sha: base, ref: 'main', repo: { full_name: repository } } },
     refs: { main: base },
     refStatus: 200,
+    filesStatus: 200,
+    reviewHistoryStatus: 200,
     approvalProtection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
       require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
     } },
@@ -116,11 +118,13 @@ async function withGitHub(run) {
       response.statusCode = state.compareStatus;
       response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
     } else if (request.method === 'GET' && path === '/pulls/42/files') {
+      response.statusCode = state.filesStatus;
       response.end(JSON.stringify(pageOf(state.files)));
     } else if (request.method === 'GET' && path === '/pulls/42/comments') {
       response.end(JSON.stringify(pageOf(state.inlineComments)));
       if (state.headAfterInlineList) state.pr.head.sha = state.headAfterInlineList;
     } else if (request.method === 'GET' && path === '/pulls/42/reviews') {
+      response.statusCode = state.reviewHistoryStatus;
       response.end(JSON.stringify(pageOf(state.reviews)));
     } else if (request.method === 'GET' && /^\/pulls\/42\/reviews\/\d+$/u.test(path)) {
       const review = state.reviews.find(({ id }) => id === Number(path.split('/').at(-1)));
@@ -304,6 +308,8 @@ test('the approval credential is available only in the trusted, protected approv
   assert.match(workflow, /^  push:\n    branches: \[main\]$/mu);
   assert.match(approvalJob, /^    needs: review$/mu);
   assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
+  assert.match(approvalJob, /vars\.PR_AGENT_APPROVAL_APP_CLIENT_ID != ''/u);
+  assert.match(approvalJob, /github\.event_name == 'push' \|\| \(vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
   assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
   assert.match(approvalJob, /^    environment: luoshen-approval$/mu);
@@ -404,6 +410,19 @@ test('an independently incomplete GitHub diff cannot authorize an approval', asy
   });
 });
 
+test('a clean automatic review stays complete when GitHub fails the optional coverage comparison', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const revision = await capture(mode);
+    state.filesStatus = 503;
+    state.reviewHistoryStatus = 503;
+    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+    assert.deepEqual(reviewWrites(state), []);
+    assert.equal(state.approverRequests, undefined);
+  });
+});
+
 test('the approval entry point uses the dedicated credential for identity and one exact APPROVE only', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv };
@@ -455,7 +474,7 @@ test('a newer P1 review cannot be overridden by rerunning the old approval job',
   });
 });
 
-test('only a trusted main push dismisses an older automatic approval without running a review', async () => {
+test('a trusted main push still dismisses an older automatic approval when new approvals are switched off', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
     const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
@@ -464,7 +483,11 @@ test('only a trusted main push dismisses an older automatic approval without run
     state.reviews.push({ ...automatic, id: 102, user: maintainer });
     state.refs.main = 'c'.repeat(40);
 
-    const push = { ...mode, GITHUB_EVENT_NAME: 'push' };
+    const credentialReads = state.approverRequests.length;
+    await execute('approve', { ...mode, PR_AGENT_AUTO_APPROVE: '', APPROVAL_REVISION: JSON.stringify(eligible) });
+    assert.equal(state.approverRequests.length, credentialReads);
+
+    const push = { ...mode, GITHUB_EVENT_NAME: 'push', PR_AGENT_AUTO_APPROVE: '' };
     await execute('approve', { ...push, GITHUB_REF: 'refs/heads/other', PUSH_EVENT_REF: 'refs/heads/other' });
     assert.equal(automatic.state, 'APPROVED');
 

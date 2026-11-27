@@ -10,6 +10,7 @@ const contentPath = `/contents/${codeOwnersPath}?ref=${revision.base}`;
 const parserPath = `/codeowners/errors?ref=${revision.base}`;
 const codeOwners = '* @maintainer @another-maintainer\n';
 const fileEntry = { path: codeOwnersPath, type: 'file', sha: 'c'.repeat(40) };
+const emptyActorLists = { users: [], teams: [], apps: [] };
 const reviewRules = {
   required_approving_review_count: 1,
   require_code_owner_reviews: true,
@@ -62,6 +63,37 @@ test('requires live protection and the checked base revision’s catch-all of in
   assert.deepEqual(new Set(calls.map(([client, path]) => `${client} ${path}`)), new Set([
     `approver ${protectionPath}`, `github ${directoryPath}`, `github ${contentPath}`, `github ${parserPath}`,
   ]));
+});
+
+test('accepts the documented empty dismissal lists in the protected branch response', async () => {
+  const { github, approver } = githubClients({ protection: {
+    ...protection,
+    required_pull_request_reviews: {
+      ...reviewRules,
+      dismissal_restrictions: { url: 'https://api.github.com/repos/example/repository/dismissal_restrictions', ...emptyActorLists },
+    },
+  } });
+  assert.equal(await hasIndependentApprovalGate(github, approver, revision), true);
+});
+
+test('declines approval under custom or unknown review dismissal restrictions', async (t) => {
+  const cases = [
+    ['restricted to users', { ...emptyActorLists, users: [{ login: 'maintainer' }] }],
+    ['restricted to teams', { ...emptyActorLists, teams: [{ slug: 'maintainers' }] }],
+    ['restricted to apps', { ...emptyActorLists, apps: [{ slug: 'another-app' }] }],
+    ['missing actor lists', { users: [], teams: [] }],
+    ['invalid actor lists', null],
+  ];
+  for (const [name, restrictions] of cases) {
+    await t.test(name, async () => {
+      const { github, approver, calls } = githubClients({ protection: {
+        ...protection,
+        required_pull_request_reviews: { ...reviewRules, dismissal_restrictions: restrictions },
+      } });
+      assert.equal(await hasIndependentApprovalGate(github, approver, revision), false);
+      assert.deepEqual(calls, [['approver', protectionPath]]);
+    });
+  }
 });
 
 test('declines approval when the protected branch or effective native review rule cannot be established', async (t) => {

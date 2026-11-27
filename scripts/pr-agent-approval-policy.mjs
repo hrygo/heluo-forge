@@ -3,14 +3,19 @@ import { isSha } from './pr-agent-github.mjs';
 const codeOwnersPath = '.github/CODEOWNERS';
 const individualOwner = /^@[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/iu;
 
+function hasNoCustomActors(rule) {
+  return rule === undefined || (rule !== null && ['users', 'teams', 'apps'].every((kind) =>
+    Array.isArray(rule[kind]) && rule[kind].length === 0));
+}
+
 function hasRequiredCodeOwner(protection) {
   const reviews = protection?.required_pull_request_reviews;
-  const bypass = reviews?.bypass_pull_request_allowances;
   return protection?.enforce_admins?.enabled === true &&
     reviews?.require_code_owner_reviews === true && reviews.dismiss_stale_reviews === true &&
     Number.isSafeInteger(reviews.required_approving_review_count) && reviews.required_approving_review_count >= 1 &&
-    (bypass === undefined || (bypass !== null && ['users', 'teams', 'apps'].every((kind) =>
-      Array.isArray(bypass[kind]) && bypass[kind].length === 0)));
+    hasNoCustomActors(reviews.bypass_pull_request_allowances) &&
+    // With standard dismissal permissions, the approval App can withdraw its stale approvals.
+    hasNoCustomActors(reviews.dismissal_restrictions);
 }
 
 function assignsEveryPathToIndividuals(file, directory) {
