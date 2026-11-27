@@ -101,15 +101,18 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/pkg/fixtures/test.json',
     'dsh/node_modules/pkg/fixtures',
     'dsh/node_modules/@scope/fixtures/fixtures/test.json',
+    'dsh/node_modules/pkg/node_modules/fixtures/fixtures/test.json',
     'dsh/node_modules/pkg/__fixtures__/mock.json',
   ]) {
     assert.equal(isPackaged(excluded), false, excluded);
   }
   // 第三方包的许可证文件（MIT/Apache 等版权保留义务合规保留，包含 fixtures 等子目录内的许可证）与 @deepseek-ai 作用域下的文档/技能文本必须保留；
-  // 顶层包名或作用域包名恰好为 fixtures 时其入口保留；与排除规则同前缀但非配置的正常源码（如 tsconfig-loader.js、.npmignore-helper.js）不得被误伤。
+  // 顶层与嵌套依赖包名恰好为 fixtures 时其入口保留；与排除规则同前缀但非配置的正常源码（如 tsconfig-loader.js、.npmignore-helper.js）不得被误伤。
   for (const kept of [
     'dsh/node_modules/fixtures/index.js',
     'dsh/node_modules/@scope/fixtures/index.js',
+    'dsh/node_modules/pkg/node_modules/fixtures/index.js',
+    'dsh/node_modules/pkg/node_modules/@scope/fixtures/index.js',
     'dsh/node_modules/tsconfig.json',
     'dsh/node_modules/zod/LICENSE.md',
     'dsh/node_modules/pkg/license.txt',
@@ -171,6 +174,9 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/fixtures/index.js',
       'dsh/node_modules/@scope/fixtures/index.js',
       'dsh/node_modules/@scope/fixtures/fixtures/test.json',
+      'dsh/node_modules/pkg/node_modules/fixtures/index.js',
+      'dsh/node_modules/pkg/node_modules/@scope/fixtures/index.js',
+      'dsh/node_modules/pkg/node_modules/fixtures/fixtures/test.json',
       'dsh/node_modules/tsconfig.json',
       'dsh/node_modules/pkg/fixtures/LICENSE.md',
       'dsh/node_modules/pkg/fixtures/NOTICE.flow',
@@ -250,14 +256,24 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   writeFileSync(insideCert, 'pfx');
   writeFileSync(dotDotSubdirCert, 'pfx');
   writeFileSync(outsideCert, 'pfx');
-  symlinkSync(insideCert, symlinkCert);
 
-  const safeEnv = builderEnv({ certificateFile: outsideCert, target: 'win', inputRoots: [resDir, appDir] }, baseEnv);
+  const safeEnv = builderEnv({ certificateFile: outsideCert, target: 'win', appDir, inputRoots: [resDir, appDir] }, baseEnv);
   assert.equal(safeEnv.WIN_CSC_LINK, resolve(outsideCert));
   assert.throws(() => assertSafeCertificatePath(insideCert, [resDir, appDir]), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => assertSafeCertificatePath(dotDotSubdirCert, [resDir, appDir]), (err) => err.code === 'BAD_ARGUMENT');
-  assert.throws(() => builderEnv({ certificateFile: symlinkCert, target: 'win', inputRoots: [resDir, appDir] }, baseEnv), (err) => err.code === 'BAD_ARGUMENT');
+  // 相对 appDir 解析继承的 WIN_CSC_LINK：指向输入树内时拒绝，指向树外时归一化为绝对路径
+  assert.throws(() => builderEnv({ target: 'win', appDir, inputRoots: [resDir, appDir] }, { ...baseEnv, WIN_CSC_LINK: '../res/nested/inside.pfx' }), (err) => err.code === 'BAD_ARGUMENT');
+  const normalizedInherited = builderEnv({ target: 'win', appDir, inputRoots: [resDir, appDir] }, { ...baseEnv, WIN_CSC_LINK: '../certs/outside.pfx' });
+  assert.equal(normalizedInherited.WIN_CSC_LINK, resolve(outsideCert));
   assert.throws(() => builderEnv({ target: 'win', inputRoots: [resDir, appDir] }, { ...baseEnv, WIN_CSC_LINK: insideCert }), (err) => err.code === 'BAD_ARGUMENT');
+
+  // 符号链接在未开启开发者模式的 Windows 上可能报 EPERM，仅在明确缺少权限时跳过该子断言，不阻塞其余安全校验
+  try {
+    symlinkSync(insideCert, symlinkCert);
+    assert.throws(() => builderEnv({ certificateFile: symlinkCert, target: 'win', appDir, inputRoots: [resDir, appDir] }, baseEnv), (err) => err.code === 'BAD_ARGUMENT');
+  } catch (err) {
+    if (err?.code !== 'EPERM' && err?.code !== 'EACCES') throw err;
+  }
 
   // target win 下禁止 appDir/electron-builder.env 存在（防止任何语法隐式注入签名口令），target mac 不受限制
   const envFile = join(appDir, 'electron-builder.env');

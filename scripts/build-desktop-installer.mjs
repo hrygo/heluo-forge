@@ -223,6 +223,23 @@ function hasExcludedRuntimeExtension(relativePath) {
   return RUNTIME_EXCLUDED_EXTENSIONS.some((extension) => fileName.endsWith(extension));
 }
 
+function extractInnerPackageSegments(segments) {
+  const inner = [];
+  let index = 0;
+  while (index < segments.length) {
+    index += segments[index].startsWith('@') ? 2 : 1;
+    while (index < segments.length) {
+      if (segments[index] === 'node_modules') {
+        index += 1;
+        break;
+      }
+      inner.push(segments[index]);
+      index += 1;
+    }
+  }
+  return inner;
+}
+
 /**
  * Whether a staged file reaches the package. `relativePath` is `/`-separated
  * from the resources root, and the rule matches `runtimeFilter()` identically.
@@ -242,7 +259,7 @@ export function isPackaged(relativePath) {
   if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
     return true;
   }
-  const innerSegments = segments[0].startsWith('@') ? segments.slice(2) : segments.slice(1);
+  const innerSegments = extractInnerPackageSegments(segments);
   if (innerSegments.length === 0) return true;
   if (innerSegments.some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
@@ -253,30 +270,39 @@ export function isPackaged(relativePath) {
   return true;
 }
 
-const THIRD_PARTY_PACKAGE_SCOPES = ['dsh/node_modules/!(@*)', 'dsh/node_modules/@!(deepseek-ai)/*'];
+const THIRD_PARTY_TOP_SCOPES = ['dsh/node_modules/!(@*)', 'dsh/node_modules/@!(deepseek-ai)/*'];
+const THIRD_PARTY_NESTED_SCOPES = THIRD_PARTY_TOP_SCOPES.flatMap((top) => [
+  `${top}/node_modules/!(@*)`,
+  `${top}/node_modules/@*/*`,
+]);
+const THIRD_PARTY_PACKAGE_SCOPES = [...THIRD_PARTY_TOP_SCOPES, ...THIRD_PARTY_NESTED_SCOPES];
+const NO_NM_PREFIXES = ['', '!(node_modules)/', '!(node_modules)/!(node_modules)/', '!(node_modules)/!(node_modules)/!(node_modules)/'];
 
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
  * and lets a later pattern override an earlier one, so license files and each
  * verbatim directory are re-included after the exclusions, not before them.
- * Package scopes skip the full package name (unscoped `pkg` or scoped `@s/pkg`)
- * before matching excluded dirs, docs and configs so a package named e.g.
- * `@scope/fixtures` never has its own runtime entry excluded.
+ * Package scopes skip the full package name at each `node_modules` boundary
+ * (and never cross `node_modules` into nested dependencies) so a package named
+ * e.g. `@scope/fixtures` or `pkg/node_modules/fixtures` never has its own
+ * runtime entry excluded.
  */
 export function runtimeFilter() {
   return [
     '**/*',
     ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`),
     ...THIRD_PARTY_PACKAGE_SCOPES.flatMap((pkgRoot) => [
-      ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
-        `!${pkgRoot}/**/${dir}`,
-        `!${pkgRoot}/**/${dir}/**`,
+      ...NO_NM_PREFIXES.flatMap((sub) => [
+        ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
+          `!${pkgRoot}/${sub}${dir}`,
+          `!${pkgRoot}/${sub}${dir}/**`,
+        ]),
+        `!${pkgRoot}/${sub}*.md`,
+        `!${pkgRoot}/${sub}*.markdown`,
+        `!${pkgRoot}/${sub}CHANGELOG*`,
+        `!${pkgRoot}/${sub}HISTORY*`,
+        ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!${pkgRoot}/${sub}${glob}`),
       ]),
-      `!${pkgRoot}/**/*.md`,
-      `!${pkgRoot}/**/*.markdown`,
-      `!${pkgRoot}/**/CHANGELOG*`,
-      `!${pkgRoot}/**/HISTORY*`,
-      ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!${pkgRoot}/**/${glob}`),
     ]),
     ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
     ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
@@ -490,7 +516,10 @@ export function builderEnv(options = {}, env = process.env) {
       if (WIN_CSC_LINK_ENV_KEYS.has(upper)) {
         const value = next[key];
         if (typeof value === 'string' && value.trim() !== '' && !isUrlLike(value)) {
-          assertSafeCertificatePath(value, inputRoots);
+          const baseDir = options?.appDir ? resolve(options.appDir) : process.cwd();
+          const normalized = isAbsolute(value) ? resolve(value) : resolve(baseDir, value);
+          assertSafeCertificatePath(normalized, inputRoots);
+          next[key] = normalized;
         }
       }
     }
@@ -507,7 +536,7 @@ async function main() {
   verifiedIcons(brandDir);
   const appDir = resolve(options.appDir ?? join(repoRoot, DEFAULT_APP_DIR));
   const inputRoots = [options.resources, appDir, brandDir];
-  const childEnv = builderEnv({ ...options, inputRoots }, process.env);
+  const childEnv = builderEnv({ ...options, appDir, inputRoots }, process.env);
   validateBuilderEnvFile(appDir, { ...options, inputRoots });
   const outputDir = resolve(options.output);
   const version = normalizeVersion(options.version);
