@@ -956,6 +956,45 @@ test('相同期限的两次 HTTP 回执均迟到时停止自动到期补查', as
   assert.equal(reads.length, 3);
 });
 
+test('截止前取样的同期限 SSE 帧保留在途核验', async (t) => {
+  const stream = events();
+  const hostNow = Date.now();
+  const first = { ...ready, sampledAt: hostNow, sampledMonotonicAt: 9600,
+    accessExpiresAt: new Date(hostNow + 1000).toISOString() };
+  const earlierFrame = { ...first, sampledAt: hostNow - 500, sampledMonotonicAt: 10100 };
+  const confirmation = Promise.withResolvers();
+  let reads = 0;
+  let signal;
+  const page = await mountPage((path, init) => {
+    assert.equal(path, '/api/forge-iam/view');
+    if (++reads === 1) return Response.json(first);
+    signal = init.signal;
+    return confirmation.promise;
+  }, { eventSource: stream.EventSource, now: hostNow + 120_000 });
+  t.after(() => { confirmation.resolve(Response.json(first)); page.close(); });
+  page.mount('forge-iam-launcher', { wide: true });
+  await page.settled();
+  const sameStream = stream.streams.at(-1);
+  sameStream.emit(first);
+  assert.match(text(page.render('forge-iam-launcher')), /企业认证有效/);
+
+  page.advanceTime(1200, { advanceWall: false });
+  assert.equal(reads, 2);
+  const originalReadSignal = signal;
+  assert.match(text(page.render('forge-iam-launcher')), /正在核验企业会话/);
+  // Its own projection lasts until 2000 ms, but it was sampled before the
+  // previously adopted deadline at 1000 ms.
+  sameStream.emit(earlierFrame);
+  assert.match(text(page.render('forge-iam-launcher')), /正在核验企业会话/);
+  assert.equal(originalReadSignal.aborted, false);
+  assert.equal(reads, 2);
+
+  confirmation.resolve(Response.json({ ...first, sampledAt: hostNow + 200, sampledMonotonicAt: 10800 }));
+  await page.settled();
+  assert.match(text(page.render('forge-iam-launcher')), /企业认证有效/);
+  assert.equal(reads, 2);
+});
+
 test('长连接在投影截止后采样的同期限 SSE 帧确认有效会话', async (t) => {
   const stream = events();
   const hostNow = Date.now();
