@@ -22,6 +22,7 @@ const revision = { prNumber: 42, head, base, baseRef };
 const pull = '/pulls/42';
 const reviewPath = `${pull}/reviews`;
 const basePath = '/git/ref/heads/main';
+const releasePath = '/git/ref/heads/release';
 const protectionPath = '/branches/main/protection';
 const rulesPath = '/rules/branches/main?per_page=100&page=1';
 const executionPath = '/actions/runs/1234/attempts/1/jobs?per_page=100';
@@ -94,8 +95,8 @@ function fakeGitHub() {
         if (!access) throw Object.assign(new Error('Permission not found'), { status: 404 });
         return structuredClone(access);
       }
-      if (path === basePath) {
-        return { ref: `refs/heads/${baseRef}`, object: { type: 'commit', sha: state.base } };
+      if ([basePath, releasePath].includes(path)) {
+        return { ref: `refs/heads/${path.slice('/git/ref/heads/'.length)}`, object: { type: 'commit', sha: state.base } };
       }
       const page = /^\/pulls\/42\/reviews\?per_page=100&page=(\d+)$/u.exec(path);
       if (page) return structuredClone(state.reviews.slice(100 * (Number(page[1]) - 1), 100 * Number(page[1])));
@@ -657,16 +658,44 @@ test('a rejected current verdict withdraws only active Luoshen approvals', async
 
   assert.equal(await run({ allowApproval: false }), 'dismissed-ineligible');
   assert.deepEqual(state.writes.map(({ path }) => path), [
-    `${reviewPath}/106`, `${reviewPath}/106/dismissals`, `${reviewPath}/107`, `${reviewPath}/107/dismissals`,
+    `${reviewPath}/106`, `${reviewPath}/106/dismissals`, `${reviewPath}/107/dismissals`,
   ]);
+  assert.match(state.writes[2].data.message, /版本已变化/u);
   assert.deepEqual(state.reviews.map(({ state }) => state), [
     'APPROVED', 'APPROVED', 'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED', 'DISMISSED', 'DISMISSED',
   ]);
 
   assert.equal(await run({ allowApproval: false }), 'skipped-ineligible');
-  assert.equal(state.writes.length, 4);
+  assert.equal(state.writes.length, 3);
   assert.equal(await run(), 'skipped-changes-requested');
-  assert.equal(state.writes.length, 4);
+  assert.equal(state.writes.length, 3);
+});
+
+test('a rejection cannot mark or dismiss a restored approval for a different target revision', async () => {
+  const { state, run } = fakeGitHub();
+  state.reviews = [priorApproval({ id: 300 })];
+  state.pr.base.ref = 'release';
+  state.beforeGet = (path) => {
+    if (path === `${reviewPath}/300`) state.pr.base.ref = baseRef;
+  };
+
+  assert.equal(await run({ revision: { ...revision, baseRef: 'release' }, allowApproval: false }), 'skipped-ineligible');
+  assert.equal(state.reviews[0].state, 'APPROVED');
+  assert.deepEqual(state.writes, []);
+});
+
+test('a same-version rejection rereads that revision before writing a pending marker or dismissing', async () => {
+  for (const changeAfterMarker of [false, true]) {
+    const { state, run } = fakeGitHub();
+    state.reviews = [priorApproval({ id: 300 })];
+    state.beforeGet = (path) => {
+      if (path === `${reviewPath}/300` && Boolean(state.writes.length) === changeAfterMarker) state.pr.base.ref = 'release';
+    };
+
+    assert.equal(await run({ allowApproval: false }), 'skipped-ineligible');
+    assert.equal(state.reviews[0].state, 'APPROVED');
+    assert.deepEqual(state.writes.map(({ path }) => path), changeAfterMarker ? [`${reviewPath}/300`] : []);
+  }
 });
 
 test('a later same-version cleanup retries a failed withdrawal recorded on the exact App approval', async () => {
