@@ -8,15 +8,15 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { APP_IDENTITY } from '../scripts/release-delivery.mjs';
 import { afterPack, KEEP_MAC_LPROJ, pruneMacLocales } from '../scripts/lib/desktop-after-pack.mjs';
-import { assertSafeCertificatePath, builderConfig, builderEntry, builderEnv, isPackaged, normalizeVersion, parseArguments, readAppIdentity, resolveTargetArch, runtimeFilter, summarizeResources, validateBuilderEnvFile } from '../scripts/build-desktop-installer.mjs';
+import { THIRD_PARTY_DIR_DEPTH, THIRD_PARTY_NESTING_DEPTH, assertSafeCertificatePath, builderConfig, builderEntry, builderEnv, isPackaged, localCertificatePath, normalizeVersion, parseArguments, readAppIdentity, resolveTargetArch, runtimeFilter, summarizeResources, validateBuilderEnvFile } from '../scripts/build-desktop-installer.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BRAND_DIR = join(REPO_ROOT, 'docs', 'assets', 'branding', 'cyber-long');
@@ -103,6 +103,21 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/@scope/fixtures/fixtures/test.json',
     'dsh/node_modules/pkg/node_modules/fixtures/fixtures/test.json',
     'dsh/node_modules/pkg/__fixtures__/mock.json',
+    // 包内第 4 层及更深的文档与排除目录、第二层嵌套依赖：文件名规则不限深度，目录规则在枚举深度之内逐层生效。
+    'dsh/node_modules/pkg/a/b/c/d/README.md',
+    'dsh/node_modules/pkg/a/b/c/d/e/f/CHANGELOG.rst',
+    'dsh/node_modules/pkg/a/b/c/d/test/x.js',
+    'dsh/node_modules/pkg/a/b/c/d/e/f/g/test/x.js',
+    'dsh/node_modules/pkg/node_modules/a/node_modules/b/test/x.js',
+    'dsh/node_modules/pkg/node_modules/a/node_modules/b/node_modules/c/README.md',
+    'dsh/node_modules/pkg/lib/vendor/node_modules/dep/README.md',
+    `dsh/node_modules/pkg/${'a/'.repeat(THIRD_PARTY_DIR_DEPTH - 1)}test/x.js`,
+    // 文档名不区分大小写，与许可证同名规则一致。
+    'dsh/node_modules/pkg/README.MD',
+    'dsh/node_modules/@scope/pkg/lib/History.rst',
+    'dsh/node_modules/pkg/.md',
+    // `dsh/node_modules` 之外没有再包含规则：与排除类型同后缀的目录连同内容一并裁掉。
+    'brand/x.ts/icon.png',
   ]) {
     assert.equal(isPackaged(excluded), false, excluded);
   }
@@ -127,6 +142,17 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
     'dsh/node_modules/@deepseek-ai/dsh-llm/NOTICE.flow',
     'dsh/node_modules/.package-lock.json',
+    // 同一深层目录里的许可证保留。包根之下更深处才出现的 node_modules 不在枚举的依赖作用域内：其下的目录名不再受目录规则约束（文件名规则仍然生效）。
+    'dsh/node_modules/pkg/a/b/c/d/LICENSE.md',
+    'dsh/node_modules/pkg/a/b/c/d/e/index.js',
+    'dsh/node_modules/pkg/lib/vendor/node_modules/dep/test/x.js',
+    'dsh/node_modules/pkg/node_modules/a/node_modules/b/node_modules/c/lib/index.js',
+    // 枚举边界之外目录规则不再生效：摘要如实计为随包，与过滤器一致。
+    `dsh/node_modules/pkg/${'a/'.repeat(THIRD_PARTY_DIR_DEPTH)}test/x.js`,
+    `dsh/node_modules/pkg/${'node_modules/dep/'.repeat(THIRD_PARTY_NESTING_DEPTH)}test/x.js`,
+    // 许可证再包含排在排除之后，`dsh/node_modules` 与原样目录内同后缀的目录仍可进入。
+    'dsh/node_modules/pkg/x.ts/a.js',
+    'primary-runtime/x.ts/a.js',
     'brand/tray.png',
     'brand/status.html',
     'enterprise-assets/employee-manifest.json',
@@ -139,55 +165,103 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
   assert.equal(isPackaged('pnpm/dist/node_modules/fdir/dist/index.d.mts'), false);
   assert.equal(isPackaged('primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/tests.map'), true);
   assert.equal(isPackaged('primary-runtime-other/lib/index.d.ts'), false);
+});
 
-  // 若本机已安装 app-builder-lib，则直接用真实 createFilter 核对与 isPackaged 逐项一致。
-  const appBuilderPkg = join(REPO_ROOT, 'services', 'forge-desktop', 'node_modules', 'electron-builder', 'node_modules', 'app-builder-lib', 'package.json');
-  const pnpmAppBuilder = join(REPO_ROOT, 'node_modules', '.pnpm', 'app-builder-lib@26.0.12_dmg-builder@26.0.12_electron-builder-squirrel-windows@26.0.12_supports-color@7.2.0', 'node_modules', 'app-builder-lib', 'package.json');
-  const resolvedPkg = existsSync(appBuilderPkg) ? appBuilderPkg : existsSync(pnpmAppBuilder) ? pnpmAppBuilder : null;
-  if (resolvedPkg !== null) {
-    const req = createRequire(resolvedPkg);
-    const { createFilter } = req('./out/util/filter.js');
-    const { Minimatch } = req('minimatch');
-    const realFilter = createFilter('/res', runtimeFilter().map((pattern) => new Minimatch(pattern, { dot: true })));
-    for (const rel of [
-      'dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts',
-      'dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts',
-      'dsh/node_modules/@deepseek-ai/dsh-llm/README.md',
-      'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
-      'dsh/node_modules/openai/README.md',
-      'dsh/node_modules/zod/LICENSE.md',
-      'dsh/node_modules/pkg/license.txt',
-      'dsh/node_modules/pkg/NOTICE',
-      'dsh/node_modules/pkg/test/foo.js',
-      'dsh/node_modules/@scope/pkg/docs/guide.md',
-      'dsh/node_modules/pkg/lib/index.js.flow',
-      'dsh/node_modules/pkg/.flow',
-      'dsh/node_modules/pkg/.eslintrc.json',
-      'dsh/node_modules/pkg/.prettierrc.yml',
-      'dsh/node_modules/pkg/.editorconfig',
-      'dsh/node_modules/pkg/tsconfig.json',
-      'dsh/node_modules/pkg/lib/tsconfig-loader.js',
-      'dsh/node_modules/pkg/.github/workflows/ci.yml',
-      'dsh/node_modules/pkg/.vscode/settings.json',
-      'dsh/node_modules/pkg/fixtures/test.json',
-      'dsh/node_modules/pkg/fixtures',
-      'dsh/node_modules/fixtures/index.js',
-      'dsh/node_modules/@scope/fixtures/index.js',
-      'dsh/node_modules/@scope/fixtures/fixtures/test.json',
-      'dsh/node_modules/pkg/node_modules/fixtures/index.js',
-      'dsh/node_modules/pkg/node_modules/@scope/fixtures/index.js',
-      'dsh/node_modules/pkg/node_modules/fixtures/fixtures/test.json',
-      'dsh/node_modules/tsconfig.json',
-      'dsh/node_modules/pkg/fixtures/LICENSE.md',
-      'dsh/node_modules/pkg/fixtures/NOTICE.flow',
-      'dsh/node_modules/@deepseek-ai/dsh-llm/NOTICE.flow',
-      'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js.flow',
-      'dsh/node_modules/pkg/__fixtures__/mock.json',
-      'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
-      'enterprise-assets/INSTALL.md',
-    ]) {
-      assert.equal(realFilter(`/res/${rel}`, { isDirectory: () => false }), isPackaged(rel), `real filter parity for ${rel}`);
+test('过滤一致性：isPackaged 与打包过滤器对同一路径判定相同，目录被拒后子树不再进入', (t) => {
+  // 取 electron-builder 复制 extraResources 所用的同一条路径（FileMatcher.createFilter），不手工拼 minimatch。
+  let builder;
+  try {
+    const shell = createRequire(join(REPO_ROOT, 'services', 'forge-desktop', 'package.json'));
+    builder = createRequire(createRequire(shell.resolve('electron-builder')).resolve('app-builder-lib'));
+  } catch {
+    t.skip('未安装锁定的开发依赖（pnpm install --frozen-lockfile --ignore-scripts），取不到 app-builder-lib');
+    return;
+  }
+  const { FileMatcher } = builder('./fileMatcher.js');
+  const admit = new FileMatcher('/res', '/dest', (pattern) => pattern, runtimeFilter()).createFilter();
+  // builder-util 的 walk 对目录也调用过滤器，目录被拒后不再进入其子树；文件按自身路径判定。
+  const copied = (rel) => {
+    const segments = rel.split('/');
+    let admitted = true;
+    for (let end = 1; admitted && end <= segments.length; end += 1) {
+      admitted = admit(`/res/${segments.slice(0, end).join('/')}`, { isDirectory: () => end < segments.length });
     }
+    return admitted;
+  };
+  for (const rel of [
+    'dsh/node_modules/@deepseek-ai/dsh/lib/types/bin.d.ts',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/index.d.ts',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/README.md',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/NOTICE.flow',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js.flow',
+    'dsh/node_modules/openai/README.md',
+    'dsh/node_modules/zod/LICENSE.md',
+    'dsh/node_modules/pkg/license.txt',
+    'dsh/node_modules/pkg/NOTICE',
+    'dsh/node_modules/pkg/test/foo.js',
+    'dsh/node_modules/@scope/pkg/docs/guide.md',
+    'dsh/node_modules/pkg/lib/index.js.flow',
+    'dsh/node_modules/pkg/.flow',
+    'dsh/node_modules/pkg/.eslintrc.json',
+    'dsh/node_modules/pkg/.prettierrc.yml',
+    'dsh/node_modules/pkg/.editorconfig',
+    'dsh/node_modules/pkg/tsconfig.json',
+    'dsh/node_modules/pkg/lib/tsconfig-loader.js',
+    'dsh/node_modules/pkg/.github/workflows/ci.yml',
+    'dsh/node_modules/pkg/.vscode/settings.json',
+    'dsh/node_modules/pkg/fixtures/test.json',
+    'dsh/node_modules/pkg/fixtures',
+    'dsh/node_modules/fixtures/index.js',
+    'dsh/node_modules/@scope/fixtures/index.js',
+    'dsh/node_modules/@scope/fixtures/fixtures/test.json',
+    'dsh/node_modules/pkg/node_modules/fixtures/index.js',
+    'dsh/node_modules/pkg/node_modules/@scope/fixtures/index.js',
+    'dsh/node_modules/pkg/node_modules/fixtures/fixtures/test.json',
+    'dsh/node_modules/tsconfig.json',
+    'dsh/node_modules/pkg/fixtures/LICENSE.md',
+    'dsh/node_modules/pkg/fixtures/NOTICE.flow',
+    'dsh/node_modules/pkg/__fixtures__/mock.json',
+    'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
+    'enterprise-assets/INSTALL.md',
+    // 审查指出的漏裁形态：包内深层文档与排除目录、更深一层的嵌套依赖；同目录许可证保留。
+    'dsh/node_modules/pkg/a/b/c/d/README.md',
+    'dsh/node_modules/pkg/a/b/c/d/LICENSE.md',
+    'dsh/node_modules/pkg/a/b/c/d/e/f/CHANGELOG.rst',
+    'dsh/node_modules/pkg/a/b/c/d/test/x.js',
+    'dsh/node_modules/pkg/a/b/c/d/e/f/g/test/x.js',
+    'dsh/node_modules/pkg/node_modules/a/node_modules/b/test/x.js',
+    'dsh/node_modules/pkg/node_modules/a/node_modules/b/node_modules/c/README.md',
+    'dsh/node_modules/pkg/lib/vendor/node_modules/dep/README.md',
+    'dsh/node_modules/pkg/lib/vendor/node_modules/dep/test/x.js',
+    // 目录规则的枚举边界：界内排除，界外摘要如实计为随包。
+    `dsh/node_modules/pkg/${'a/'.repeat(THIRD_PARTY_DIR_DEPTH)}test/x.js`,
+    `dsh/node_modules/pkg/${'a/'.repeat(THIRD_PARTY_DIR_DEPTH - 1)}test/x.js`,
+    `dsh/node_modules/pkg/${'node_modules/dep/'.repeat(THIRD_PARTY_NESTING_DEPTH)}test/x.js`,
+    `dsh/node_modules/pkg/${'node_modules/dep/'.repeat(THIRD_PARTY_NESTING_DEPTH - 1)}test/x.js`,
+    // 同后缀目录：`dsh/node_modules` 与原样目录内因排在后面的再包含规则仍可进入，之外整棵裁掉。
+    'brand/x.ts/icon.png',
+    'primary-runtime/x.ts/a.js',
+    'dsh/node_modules/pkg/x.ts/a.js',
+  ]) {
+    assert.equal(copied(rel), isPackaged(rel), `filter parity for ${rel}`);
+  }
+
+  // 确定性生成语料：包名位、任意深度的嵌套 node_modules、排除目录名与各类文件名随机组合，逐个按文件路径核对。
+  const heads = ['pkg', '@scope/pkg', '@scope/fixtures', '@deepseek-ai/dsh', '@deepseek-ai/dsh-llm', 'fixtures', 'test', 'docs', '.pnpm/dep@1.0.0'];
+  const inner = ['lib', 'src', 'a', 'test', 'tests', '__tests__', 'docs', 'example', 'examples', 'fixtures', '__fixtures__', '.github', 'x.ts', 'NOTICE', 'node_modules'];
+  const names = ['index.js', 'package.json', 'README.md', 'README.MD', 'notes.Markdown', 'CHANGELOG', 'History.rst', 'LICENSE', 'License.md', 'NOTICE.flow', 'COPYING', 'index.d.ts', 'x.TS', 'index.js.map', 'types.cts', 'decl.mts', 'debug.pdb', '.flow', '.md', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig-loader.js', '.eslintrc.json', '.eslintrc', '.prettierrc', '.babelrc.js', '.editorconfig', '.npmignore', '.flowconfig', 'test', 'fixtures'];
+  let state = 20261127;
+  const draw = (pool) => pool[(state = (Math.imul(state, 1664525) + 1013904223) >>> 0) % pool.length];
+  for (let sample = 0; sample < 1500; sample += 1) {
+    const segments = ['dsh', 'node_modules', ...draw(heads).split('/')];
+    for (let step = state % 12; step > 0; step -= 1) {
+      segments.push(draw(inner));
+      if (segments.at(-1) === 'node_modules') segments.push(...draw(heads).split('/'));
+    }
+    segments.push(draw(names));
+    const rel = segments.join('/');
+    assert.equal(admit(`/res/${rel}`, { isDirectory: () => false }), isPackaged(rel), `filter parity for ${rel}`);
   }
 });
 
@@ -266,6 +340,34 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   const normalizedInherited = builderEnv({ target: 'win', appDir, inputRoots: [resDir, appDir] }, { ...baseEnv, WIN_CSC_LINK: '../certs/outside.pfx' });
   assert.equal(normalizedInherited.WIN_CSC_LINK, resolve(outsideCert));
   assert.throws(() => builderEnv({ target: 'win', inputRoots: [resDir, appDir] }, { ...baseEnv, WIN_CSC_LINK: insideCert }), (err) => err.code === 'BAD_ARGUMENT');
+
+  // WIN_CSC_LINK 的取值按 app-builder-lib importCertificate 的分类处理，两者读的是同一个文件：
+  // https:// 与内联 base64（data: 前缀、超过 2048 字符、以 = 结尾）不是文件，原样传递；
+  // file://（去掉协议前缀）、~/（展开到 home）与裸相对路径（以 appDir 为基准）都是文件，一律校验并归一化为绝对路径。
+  // 此前 file:// 被当成 URL 跳过校验，可把输入树内的私钥交给构建子进程；内联 base64 被当成相对路径改写，签名构建必然失败。
+  const win = { target: 'win', appDir, inputRoots: [resDir, appDir] };
+  const classify = (value) => localCertificatePath(value, appDir);
+  assert.equal(classify('https://corp.example/code-sign.pfx'), null);
+  assert.equal(classify('data:application/x-pkcs12;base64,c3ludGhldGlj'), null);
+  assert.equal(classify('synthetic-inline-certificate=='), null);
+  assert.equal(classify('A'.repeat(2049)), null);
+  assert.equal(classify(insideCert), resolve(insideCert));
+  assert.equal(classify('../res/nested/inside.pfx'), resolve(insideCert));
+  assert.equal(classify(`file://${insideCert}`), resolve(insideCert));
+  assert.equal(classify('file://../res/nested/inside.pfx'), resolve(insideCert));
+  assert.equal(classify('~/certs/outside.pfx'), join(homedir(), 'certs', 'outside.pfx'));
+
+  for (const link of [`file://${insideCert}`, 'file://../res/nested/inside.pfx', `~/${relative(homedir(), insideCert)}`]) {
+    for (const key of ['WIN_CSC_LINK', 'CSC_LINK']) {
+      assert.throws(() => builderEnv(win, { ...baseEnv, [key]: link }), (err) => err.code === 'BAD_ARGUMENT', `${key}=${link}`);
+    }
+  }
+  assert.equal(builderEnv(win, { ...baseEnv, WIN_CSC_LINK: `file://${outsideCert}` }).WIN_CSC_LINK, resolve(outsideCert));
+  assert.equal(builderEnv(win, { ...baseEnv, WIN_CSC_LINK: 'file://../certs/outside.pfx' }).WIN_CSC_LINK, resolve(outsideCert));
+  assert.equal(builderEnv(win, { ...baseEnv, WIN_CSC_LINK: '~/certs/outside.pfx' }).WIN_CSC_LINK, join(homedir(), 'certs', 'outside.pfx'));
+  for (const inline of ['https://corp.example/code-sign.pfx', 'data:application/x-pkcs12;base64,c3ludGhldGlj', 'synthetic-inline-certificate==', 'A'.repeat(2049)]) {
+    assert.equal(builderEnv(win, { ...baseEnv, WIN_CSC_LINK: inline }).WIN_CSC_LINK, inline);
+  }
 
   // 符号链接在未开启开发者模式的 Windows 上可能报 EPERM，仅在明确缺少权限时跳过该子断言，不阻塞其余安全校验
   try {

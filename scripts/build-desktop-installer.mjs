@@ -16,7 +16,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DSH_ENTRY_PARTS, PRIMARY_RUNTIME_DIR } from '../services/forge-desktop/src/layout.mjs';
@@ -65,31 +66,57 @@ const THIRD_PARTY_EXCLUDED_DIRS = [
   '__fixtures__',
 ];
 const THIRD_PARTY_EXCLUDED_DIR_SET = new Set(THIRD_PARTY_EXCLUDED_DIRS);
-const THIRD_PARTY_EXCLUDED_DOC_EXTS = new Set(['.md', '.markdown']);
-const THIRD_PARTY_EXCLUDED_DOC_PREFIXES = ['CHANGELOG', 'HISTORY'];
-const THIRD_PARTY_EXCLUDED_CONFIG_GLOBS = [
-  '.eslintrc*',
-  '.prettier*',
-  '.editorconfig',
-  '.npmignore',
-  '.flowconfig',
-  '.babelrc*',
-  'tsconfig*.json',
-];
-const THIRD_PARTY_LICENSE_PREFIXES = ['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'];
-const THIRD_PARTY_LICENSE_GLOBS = ['[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*', '[Nn][Oo][Tt][Ii][Cc][Ee]*', '[Cc][Oo][Pp][Yy][Ii][Nn][Gg]*'];
 
 /**
- * Parity rule matching `THIRD_PARTY_EXCLUDED_CONFIG_GLOBS` exactly:
- * - exact filenames: .editorconfig, .npmignore, .flowconfig
- * - prefix matches: .eslintrc*, .prettier*, .babelrc*
- * - typescript config: tsconfig*.json (never non-json like tsconfig-loader.js)
+ * minimatch cannot recurse, so the filter enumerates the directory rule: an
+ * excluded directory is recognised within the first `THIRD_PARTY_DIR_DEPTH`
+ * levels below a package root, for dependencies installed up to
+ * `THIRD_PARTY_NESTING_DEPTH` `node_modules` levels deep. Both sit well above
+ * what an npm closure produces (the staged dsh closure reaches the 4th level
+ * and the 2nd depth at the time of writing), and `isPackaged` reads the same
+ * two numbers, so the build summary never reports an exclusion the filter
+ * does not make.
  */
-export function isExcludedConfigFile(file) {
-  if (file === '.editorconfig' || file === '.npmignore' || file === '.flowconfig') return true;
-  if (file.startsWith('.eslintrc') || file.startsWith('.prettier') || file.startsWith('.babelrc')) return true;
-  if (file.startsWith('tsconfig') && file.endsWith('.json')) return true;
-  return false;
+export const THIRD_PARTY_DIR_DEPTH = 8;
+export const THIRD_PARTY_NESTING_DEPTH = 3;
+
+const foldCase = (word) =>
+  [...word].map((letter) => (letter.toUpperCase() === letter.toLowerCase() ? letter : `[${letter.toUpperCase()}${letter.toLowerCase()}]`)).join('');
+
+/**
+ * File names third-party packages ship but never read at runtime: a prefix, a
+ * suffix, both, or an exact name. Documentation names ignore case (packages
+ * write `History.md` as readily as `HISTORY.md`), as the license names below
+ * do; config names are conventions with a fixed case. `nameGlob` and
+ * `isExcludedName` compile one entry for `runtimeFilter()` and for
+ * `isPackaged`, so the two cannot disagree about what a rule covers.
+ */
+const THIRD_PARTY_EXCLUDED_NAMES = Object.freeze([
+  { prefix: 'CHANGELOG' },
+  { prefix: 'HISTORY' },
+  { suffix: '.md' },
+  { suffix: '.markdown' },
+  { prefix: '.eslintrc', exactCase: true },
+  { prefix: '.prettier', exactCase: true },
+  { prefix: '.babelrc', exactCase: true },
+  { prefix: 'tsconfig', suffix: '.json', exactCase: true },
+  { name: '.editorconfig', exactCase: true },
+  { name: '.npmignore', exactCase: true },
+  { name: '.flowconfig', exactCase: true },
+]);
+const THIRD_PARTY_LICENSE_NAMES = Object.freeze(['LICENSE', 'LICENCE', 'NOTICE', 'COPYING'].map((prefix) => Object.freeze({ prefix })));
+
+function nameGlob({ name, prefix = '', suffix = '', exactCase = false }) {
+  const part = (word) => (exactCase ? word : foldCase(word));
+  if (name !== undefined) return part(name);
+  if (prefix === '') return `*${part(suffix)}`;
+  return `${part(prefix)}*${suffix === '' ? '' : part(suffix)}`;
+}
+
+function isExcludedName({ name, prefix = '', suffix = '', exactCase = false }, fileName) {
+  const target = exactCase ? fileName : fileName.toLowerCase();
+  const part = (word) => (exactCase ? word : word.toLowerCase());
+  return (name === undefined || target === part(name)) && target.startsWith(part(prefix)) && target.endsWith(part(suffix));
 }
 
 /**
@@ -218,93 +245,85 @@ export function readAppIdentity(path) {
   return identity;
 }
 
-function hasExcludedRuntimeExtension(relativePath) {
-  const fileName = relativePath.slice(relativePath.lastIndexOf('/') + 1);
-  return RUNTIME_EXCLUDED_EXTENSIONS.some((extension) => fileName.endsWith(extension));
+function hasExcludedRuntimeExtension(segment) {
+  return RUNTIME_EXCLUDED_EXTENSIONS.some((extension) => segment.endsWith(extension));
 }
 
-function extractInnerPackageSegments(segments) {
-  const inner = [];
+/**
+ * The directory rule as the filter enumerates it (see `THIRD_PARTY_DIR_DEPTH`):
+ * walk down from a package root without crossing `node_modules`; a
+ * `node_modules` directly below the root is the next nesting level, and its
+ * package is walked the same way. The package name is never an excluded
+ * directory, so a dependency named e.g. `@scope/fixtures` keeps its files.
+ */
+function hasExcludedThirdPartyDir(segments) {
   let index = 0;
-  while (index < segments.length) {
-    index += segments[index].startsWith('@') ? 2 : 1;
-    while (index < segments.length) {
-      if (segments[index] === 'node_modules') {
-        index += 1;
-        break;
-      }
-      inner.push(segments[index]);
-      index += 1;
+  for (let level = 0; level < THIRD_PARTY_NESTING_DEPTH; level += 1) {
+    index += segments[index]?.startsWith('@') ? 2 : 1;
+    let depth = 0;
+    while (depth < THIRD_PARTY_DIR_DEPTH && segments[index + depth] !== undefined && segments[index + depth] !== 'node_modules') {
+      if (THIRD_PARTY_EXCLUDED_DIR_SET.has(segments[index + depth])) return true;
+      depth += 1;
     }
+    if (depth !== 0 || segments[index + depth] !== 'node_modules') return false;
+    index += 1;
   }
-  return inner;
+  return false;
 }
 
 /**
  * Whether a staged file reaches the package. `relativePath` is `/`-separated
- * from the resources root, and the rule matches `runtimeFilter()` identically.
+ * from the resources root. This reads the same tables as `runtimeFilter()` and
+ * decides per file, as the copy does under `dsh/node_modules`, where the
+ * trailing license re-includes keep every directory traversable.
  */
 export function isPackaged(relativePath) {
   if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
+  const fileName = relativePath.slice(relativePath.lastIndexOf('/') + 1);
   if (!relativePath.startsWith('dsh/node_modules/')) {
-    if (hasExcludedRuntimeExtension(relativePath)) return false;
-    return true;
+    // Nothing re-includes a directory here, so one named like an excluded file type takes its contents with it.
+    return !relativePath.split('/').some(hasExcludedRuntimeExtension);
   }
+  if (THIRD_PARTY_LICENSE_NAMES.some((rule) => isExcludedName(rule, fileName))) return true;
+  if (hasExcludedRuntimeExtension(fileName)) return false;
+  if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) return true;
   const segments = relativePath.slice('dsh/node_modules/'.length).split('/');
-  const file = segments.at(-1) ?? '';
-  const upperFile = file.toUpperCase();
-  const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
-  if (isLicense) return true;
-  if (hasExcludedRuntimeExtension(relativePath)) return false;
-  if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
-    return true;
-  }
-  const innerSegments = extractInnerPackageSegments(segments);
-  if (innerSegments.length === 0) return true;
-  if (innerSegments.some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
-    return false;
-  }
-  if (THIRD_PARTY_EXCLUDED_DOC_EXTS.has(extname(file).toLowerCase())) return false;
-  if (THIRD_PARTY_EXCLUDED_DOC_PREFIXES.some((prefix) => upperFile.startsWith(prefix))) return false;
-  if (isExcludedConfigFile(file)) return false;
-  return true;
+  if (hasExcludedThirdPartyDir(segments)) return false;
+  // File names are pruned anywhere below a package; the entry directly below `node_modules` is the package name.
+  const belowPackage = segments.length > (segments[0].startsWith('@') ? 2 : 1);
+  return !belowPackage || !THIRD_PARTY_EXCLUDED_NAMES.some((rule) => isExcludedName(rule, fileName));
 }
 
+const EXCLUDED_DIR_GLOB = `@(${THIRD_PARTY_EXCLUDED_DIRS.join('|')})`;
+const INNER_PREFIXES = Array.from({ length: THIRD_PARTY_DIR_DEPTH }, (_, depth) => '!(node_modules)/'.repeat(depth));
 const THIRD_PARTY_TOP_SCOPES = ['dsh/node_modules/!(@*)', 'dsh/node_modules/@!(deepseek-ai)/*'];
-const THIRD_PARTY_NESTED_SCOPES = THIRD_PARTY_TOP_SCOPES.flatMap((top) => [
-  `${top}/node_modules/!(@*)`,
-  `${top}/node_modules/@*/*`,
-]);
-const THIRD_PARTY_PACKAGE_SCOPES = [...THIRD_PARTY_TOP_SCOPES, ...THIRD_PARTY_NESTED_SCOPES];
-const NO_NM_PREFIXES = ['', '!(node_modules)/', '!(node_modules)/!(node_modules)/', '!(node_modules)/!(node_modules)/!(node_modules)/'];
+const THIRD_PARTY_PACKAGE_SCOPES = THIRD_PARTY_TOP_SCOPES.flatMap((top) => {
+  const scopes = [top];
+  let level = [top];
+  for (let depth = 1; depth < THIRD_PARTY_NESTING_DEPTH; depth += 1) {
+    level = level.flatMap((scope) => [`${scope}/node_modules/!(@*)`, `${scope}/node_modules/@*/*`]);
+    scopes.push(...level);
+  }
+  return scopes;
+});
 
 /**
  * The `extraResources` filter. electron-builder applies its patterns in order
  * and lets a later pattern override an earlier one, so license files and each
  * verbatim directory are re-included after the exclusions, not before them.
- * Package scopes skip the full package name at each `node_modules` boundary
- * (and never cross `node_modules` into nested dependencies) so a package named
- * e.g. `@scope/fixtures` or `pkg/node_modules/fixtures` never has its own
- * runtime entry excluded.
+ * File names are pruned anywhere below a package root. Directory names are
+ * matched relative to each enumerated package scope, which skips the package
+ * name at the `node_modules` boundary and never crosses into a nested
+ * dependency, so a package named e.g. `@scope/fixtures` or
+ * `pkg/node_modules/fixtures` never has its own files excluded.
  */
 export function runtimeFilter() {
   return [
     '**/*',
     ...RUNTIME_EXCLUDED_EXTENSIONS.map((extension) => `!**/*${extension}`),
-    ...THIRD_PARTY_PACKAGE_SCOPES.flatMap((pkgRoot) => [
-      ...NO_NM_PREFIXES.flatMap((sub) => [
-        ...THIRD_PARTY_EXCLUDED_DIRS.flatMap((dir) => [
-          `!${pkgRoot}/${sub}${dir}`,
-          `!${pkgRoot}/${sub}${dir}/**`,
-        ]),
-        `!${pkgRoot}/${sub}*.md`,
-        `!${pkgRoot}/${sub}*.markdown`,
-        `!${pkgRoot}/${sub}CHANGELOG*`,
-        `!${pkgRoot}/${sub}HISTORY*`,
-        ...THIRD_PARTY_EXCLUDED_CONFIG_GLOBS.map((glob) => `!${pkgRoot}/${sub}${glob}`),
-      ]),
-    ]),
-    ...THIRD_PARTY_LICENSE_GLOBS.map((glob) => `dsh/node_modules/**/${glob}`),
+    ...THIRD_PARTY_PACKAGE_SCOPES.flatMap((scope) => INNER_PREFIXES.map((prefix) => `!${scope}/${prefix}${EXCLUDED_DIR_GLOB}{,/**}`)),
+    ...THIRD_PARTY_TOP_SCOPES.flatMap((scope) => THIRD_PARTY_EXCLUDED_NAMES.map((rule) => `!${scope}/**/${nameGlob(rule)}`)),
+    ...THIRD_PARTY_LICENSE_NAMES.map((rule) => `dsh/node_modules/**/${nameGlob(rule)}`),
     ...VERBATIM_RUNTIME_DIRS.map((directory) => `${directory}**`),
   ];
 }
@@ -441,8 +460,26 @@ function resolveRealPath(targetPath, depth = 0) {
   return abs;
 }
 
-function isUrlLike(value) {
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
+/**
+ * The local file a `WIN_CSC_LINK` / `CSC_LINK` value names, or null when the
+ * value is not a file. This mirrors how app-builder-lib 26.0.12
+ * `importCertificate` reads the value — `https://` is downloaded and inline
+ * base64 (a `data:` URL, more than 2048 characters or a trailing `=`) is
+ * decoded, everything else is a path resolved against the builder's working
+ * directory — so the path checked against the packaged input trees is exactly
+ * the file the builder opens. `file://` therefore names a file like any other
+ * path, and is checked like one.
+ */
+export function localCertificatePath(value, baseDir, home = homedir()) {
+  const link = value.trim();
+  let file;
+  if ((link.length > 3 && link[1] === ':') || link.startsWith('/') || link.startsWith('.')) file = link;
+  else if (link.startsWith('file://')) file = link.slice('file://'.length);
+  else if (link.startsWith('~/')) file = join(home, link.slice('~/'.length));
+  else if (link.startsWith('https://')) return null;
+  else if (/data:.*;base64,/.test(link) || link.length > 2048 || link.endsWith('=')) return null;
+  else file = link;
+  return resolve(baseDir, file);
 }
 
 /**
@@ -484,9 +521,13 @@ export function validateBuilderEnvFile(appDir, options = {}) {
  * passed to signtool.exe via `/p` command-line arguments. When
  * --certificate-file is given, the path to a passwordless PFX is passed via
  * WIN_CSC_LINK after verifying it does not reside inside any packaged input
- * tree. For target `win`, any non-empty WIN_CSC_KEY_PASSWORD or
- * CSC_KEY_PASSWORD (case-insensitive, matching Windows environment semantics)
- * is rejected (fail-closed) so no password can reach child process arguments.
+ * tree; an inherited WIN_CSC_LINK / CSC_LINK is read the way the builder reads
+ * it, and every form that names a local file (a plain path, `file://`, `~/`)
+ * is verified the same way and handed over as an absolute path, while download
+ * links and inline base64 certificates pass through untouched. For target
+ * `win`, any non-empty WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD
+ * (case-insensitive, matching Windows environment semantics) is rejected
+ * (fail-closed) so no password can reach child process arguments.
  * Non-Windows targets (such as `mac`) keep their existing signing environment.
  */
 export function builderEnv(options = {}, env = process.env) {
@@ -515,11 +556,13 @@ export function builderEnv(options = {}, env = process.env) {
       }
       if (WIN_CSC_LINK_ENV_KEYS.has(upper)) {
         const value = next[key];
-        if (typeof value === 'string' && value.trim() !== '' && !isUrlLike(value)) {
+        if (typeof value === 'string' && value.trim() !== '') {
           const baseDir = options?.appDir ? resolve(options.appDir) : process.cwd();
-          const normalized = isAbsolute(value) ? resolve(value) : resolve(baseDir, value);
-          assertSafeCertificatePath(normalized, inputRoots);
-          next[key] = normalized;
+          const local = localCertificatePath(value, baseDir);
+          if (local !== null) {
+            assertSafeCertificatePath(local, inputRoots);
+            next[key] = local;
+          }
         }
       }
     }
