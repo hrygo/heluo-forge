@@ -161,11 +161,11 @@ GitHub 正式审查绑定 PR 头提交。洛神批准记录包含所核对的目
 4. 核对 `main` 满足上述人审门禁。在隔离分支设置相同的人工审批要求，用 App 安装令牌为以该分支为目标的测试 PR 提交唯一一票正式批准，确认 GitHub 的 `reviewDecision` 为 `REVIEW_REQUIRED`。
 
    - 暂时关闭隔离分支的代码所有者审批。查询该分支实际生效的经典保护和规则集（含继承规则），确认审批门禁只剩一票普通必需审批。经典保护的必需批准数为一，代码所有者与最后推送者相关审批要求均关闭，生效规则集无额外审批要求。[经典分支保护](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-pull-request-reviews-before-merging) · [生效分支规则](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch)
-   - 保持 PR 版本和隔离规则一致。仅有 App 批准时，`reviewDecision` 须为 `REVIEW_REQUIRED`。由另一名具备仓库写权限的真人协作者批准后，确认该字段转为 `APPROVED`。[GitHub 必需审批](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)
+   - 在隔离分支规则变更生效后、已有 App 批准被清理作业撤回前，记录 `reviewDecision` 和 `mergeStateStatus`。仅有 App 批准时，两项须分别为 `REVIEW_REQUIRED` 和 `BLOCKED`。保持同一 PR 版本和隔离规则，由另一名具备仓库写权限的真人协作者批准，确认 `reviewDecision` 转为 `APPROVED`。[GitHub 必需审批](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)
    - 测试结束后撤回测试批准并恢复隔离分支规则。两种计票结果均符合预期后设置 `PR_AGENT_AUTO_APPROVE=true`。
 
 5. 仅用于验收的同仓非草稿测试 PR 使用一条小型、无风险的改动，头提交说明带 `[skip ci]`，避免改投时额外触发自动审查。将 PR 改投 `main` 并留言 `/review`，检查 App 对当前头提交的审查为 `APPROVED`，且 GitHub 仍要求真人审批。将 PR 改回隔离分支，以隔离分支的保护规则事件触发清理，检查该条批准为 `DISMISSED`，然后关闭测试 PR。[GitHub 跳过工作流说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs)
 
-验收还需检查维护者有效的修改请求会阻止洛神批准。核验代码所有者写权限变化时，记录权限变更生效至清理完成期间的 GitHub 合入判定。本仓库 2026-11-27 实测覆盖 App 批准、仅有 App 批准时的隔离分支计票和改投后撤回。真人批准对照待实测。[验收记录](https://github.com/hrygo/heluo-forge/pull/514)
+验收还需检查维护者有效的修改请求会阻止洛神批准。核验代码所有者写权限变化时，记录权限变更生效至清理完成期间的 GitHub 合入判定。本仓库 2026-11-27 实测覆盖 App 批准、仅有 App 批准时的隔离分支计票和改投后撤回。真人批准对照待实测。[验收记录](https://github.com/hrygo/heluo-forge/pull/514) · [规则变更计票](https://github.com/hrygo/heluo-forge/pull/510#discussion_r4716637543)
 
 删除 `PR_AGENT_AUTO_APPROVE` 后，后续运行停止新增批准。保留 App 配置可让推送、经典分支保护变更和定时任务继续清理已有批准。
