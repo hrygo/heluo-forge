@@ -13,17 +13,18 @@ const reviewFindingLimit = 4; // PR_REVIEWER__NUM_MAX_FINDINGS in the workflow.
 const diffMediaType = 'application/vnd.github.diff';
 const diffResponseTypes = new Set([diffMediaType, 'application/vnd.github.v3.diff']);
 
-function githubClient(env, token = env.GH_TOKEN) {
+function githubClient(env, token = env.GH_TOKEN, scopeSignal) {
   const repository = env.GITHUB_REPOSITORY;
   const api = `${env.GITHUB_API_URL}/repos/${repository}`;
   const usersApi = `${env.GITHUB_API_URL}/users`;
   async function request(method, path, body, label, { base = api, accept = 'application/vnd.github+json' } = {}) {
+    const requestTimeout = AbortSignal.timeout(15_000);
     const response = await fetch(base + path, {
       method,
       headers: { Accept: accept, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: 'error',
-      signal: AbortSignal.timeout(15000),
+      signal: scopeSignal ? AbortSignal.any([scopeSignal, requestTimeout]) : requestTimeout,
     });
     if (!response.ok) {
       const error = new Error(`${label ?? `${method} ${path} failed`} (HTTP ${response.status})`);
@@ -41,6 +42,7 @@ function githubClient(env, token = env.GH_TOKEN) {
   }
   return {
     api, repository, serverUrl: env.GITHUB_SERVER_URL,
+    withSignal: (signal) => githubClient(env, token, signal),
     get: (path, label) => request('GET', path, undefined, label),
     getDiff: (path) => request('GET', path, undefined, 'Cannot read raw PR diff', { accept: diffMediaType }),
     getAccount: (login) => request('GET', `/${encodeURIComponent(login)}`, undefined,
