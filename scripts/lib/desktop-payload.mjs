@@ -164,10 +164,11 @@ const NATIVE_SUFFIX = /\.(?:node|dll|exe|dylib|so)$/u;
 const VERSIONED_SHARED_OBJECT = /\/[^/]*\.so\.\d[^/]*$/u;
 /**
  * Programs without an extension, by where they are: node-pty's helper, the
- * ripgrep of its package, and the launcher the `open` package runs itself where
- * the system has none.
+ * ripgrep of its package, the Linux landlock sandbox helper of
+ * `@deepseek-ai/node-addon-system-*`, and the launcher the `open` package runs
+ * itself where the system has none.
  */
-const EXTENSIONLESS_PROGRAM = /(?:^|\/)(?:spawn-helper|@vscode\/ripgrep[^/]*\/bin\/rg|open\/xdg-open)$/u;
+const EXTENSIONLESS_PROGRAM = /(?:^|\/)(?:spawn-helper|@vscode\/ripgrep[^/]*\/bin\/rg|@deepseek-ai\/node-addon-system[^/]*\/bin\/landlock-run|open\/xdg-open)$/u;
 /**
  * Trees a native process reads by their path, each inside a package under
  * `@deepseek-ai/`: the Office engine of the target, and the Computer Use helper
@@ -220,6 +221,7 @@ export const ASAR_UNPACK = Object.freeze([
   '**/*.so.[0-9]*',
   '**/spawn-helper',
   '**/@vscode/ripgrep*/bin/rg',
+  '**/@deepseek-ai/node-addon-system*/bin/landlock-run',
   '**/open/xdg-open',
   ...UNPACKED_TREE_GLOBS.map((glob) => `**/node_modules/@deepseek-ai/${glob}/**/*`),
 ]);
