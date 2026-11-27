@@ -156,7 +156,7 @@ async function approvalVerificationFailed(github, review) {
   return step?.status !== 'completed' || step.conclusion !== 'success';
 }
 
-async function recordPendingDismissal(github, approver, pull, review) {
+async function recordPendingDismissal(github, approver, pull, review, canRecord) {
   if (hasPendingDismissal(review)) return review;
   const url = `${pull}/reviews/${review.id}`;
   const receiptStart = review.body.lastIndexOf('\n') + 1;
@@ -167,6 +167,7 @@ async function recordPendingDismissal(github, approver, pull, review) {
     throw new Error(`Could not verify automatic approval ${review.id} before recording withdrawal`);
   }
   if (current.state === 'DISMISSED') return current;
+  if (canRecord && !await canRecord()) return;
   try {
     const updated = await approver.put(url, { body });
     if (matchesStoredApproval(updated, review, body)) return updated;
@@ -306,6 +307,10 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const staleReason = async (receipt) => {
     if (!await isCurrent(github, repository, pull, prNumber, receipt, { allowDraft: true })) return staleDismissal;
   };
+  const reviewedRevisionIsCurrent = () => isCurrent(github, repository, pull, prNumber, revision, { allowDraft: true });
+  const ineligibleReason = async () => {
+    if (await reviewedRevisionIsCurrent()) return ineligibleDismissal;
+  };
   const liveProtectionReason = async () => {
     if (!await hasLiveApprovalProtection(approver)) return protectionDismissal;
   };
@@ -324,7 +329,7 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
   const preserveWithdrawal = async (cause) => {
     if (allowApproval || baseRef !== 'main') throw cause;
     try {
-      if (await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: true })) {
+      if (await reviewedRevisionIsCurrent()) {
         const decision = withdrawalBody(revision);
         const record = await approver.post(`${pull}/reviews`, { event: 'COMMENT', commit_id: head, body: decision });
         if (record?.state !== 'COMMENTED' || !matchesReview(record, owner, head, decision)) {
@@ -344,10 +349,19 @@ export async function publishApproval({ github, approver, revision, appSlug, hum
     const receipt = readActiveApproval(review, owner, prNumber);
     if (!receipt) continue;
     const pending = hasPendingDismissal(review) || hasLaterWithdrawal(previousReviews, review, receipt);
-    if (allowApproval && !pending && matchesRevision(receipt, revision)) continue;
-    const reviewToDismiss = allowApproval ? review :
-      await recordPendingDismissal(github, approver, pull, review).catch(preserveWithdrawal);
-    const reason = pending || !allowApproval ? ineligibleDismissal : () => staleReason(receipt);
+    let reviewToDismiss = review;
+    let reason = ineligibleDismissal;
+    if (!pending) {
+      if (!matchesRevision(receipt, revision)) {
+        reason = () => staleReason(receipt);
+      } else {
+        if (allowApproval) continue;
+        reviewToDismiss = await recordPendingDismissal(github, approver, pull, review, reviewedRevisionIsCurrent)
+          .catch(preserveWithdrawal);
+        if (!reviewToDismiss) continue;
+        reason = ineligibleReason;
+      }
+    }
     if (await dismissApproval(github, approver, pull, reviewToDismiss, reason)) withdrawn.add(review.id);
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';
