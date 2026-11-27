@@ -1215,6 +1215,51 @@ for (const holdEarlyRead of [false, true]) {
   });
 }
 
+test('共享读取失败后迟到的待核验目录保留当前视图和 SSE', async (t) => {
+  const stream = events();
+  const now = Date.now();
+  const first = { ...ready, sampledAt: now, sampledMonotonicAt: 9600, accessExpiresAt: new Date(now + 120_000).toISOString() };
+  const lateDirectory = { ...first, accessExpiresAt: new Date(now + 1000).toISOString() };
+  const expired = { ...lateDirectory, state: 'expired', signedIn: false, renewal: 'unavailable',
+    sampledAt: now + 2000, sampledMonotonicAt: 11600 };
+  const directory = Promise.withResolvers();
+  let waking = false;
+  let reads = 0;
+  let directoryReads = 0;
+  const page = await mountPage((path) => {
+    if (path === '/api/forge-iam/models') {
+      if (!waking) return Response.json({});
+      directoryReads++;
+      return directory.promise;
+    }
+    assert.equal(path, '/api/forge-iam/view');
+    if (!waking) return Response.json(first);
+    reads++;
+    return Response.json({}, { status: 503 });
+  }, { eventSource: stream.EventSource, now });
+  t.after(() => { directory.resolve(Response.json({ view: lateDirectory })); page.close(); });
+  page.mount('forge-iam');
+  await page.settled();
+  const source = stream.streams.at(-1);
+  source.emit(first);
+  assert.match(text(page.render('forge-iam')), /已登录企业账号/);
+
+  waking = true;
+  page.focus();
+  await page.settled();
+  assert.equal(reads, 1);
+  assert.equal(directoryReads, 1);
+  page.advanceTime(2000);
+  directory.resolve(Response.json({ view: lateDirectory }));
+  await page.settled();
+  assert.match(text(page.render('forge-iam')), /已登录企业账号/);
+  assert.equal(source.closed, false);
+  assert.equal(reads, 1);
+
+  source.emit(expired);
+  assert.match(text(page.render('forge-iam')), /会话已过期/);
+});
+
 test('到期前的旧目录快照保留第二次在途核验', async (t) => {
   const stream = events();
   const now = Date.now();
