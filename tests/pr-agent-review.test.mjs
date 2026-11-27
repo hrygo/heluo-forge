@@ -149,6 +149,7 @@ async function withGitHub(run) {
     GITHUB_REPOSITORY: repository,
     GITHUB_OUTPUT: join(directory, 'output'),
     GITHUB_EVENT_PATH: eventPath,
+    REVIEW_EVIDENCE_PATH: join(directory, 'review.jsonl'),
     GITHUB_EVENT_NAME: 'workflow_run',
     GITHUB_REF: 'refs/heads/main',
     GITHUB_RUN_ATTEMPT: '1',
@@ -243,8 +244,19 @@ function cleanReview(overrides = {}) {
   });
 }
 
-async function approvalRevision(env, revision, review) {
+async function approvalRevision(env, revision, review, evidence = {}) {
   await writeFile(env.GITHUB_OUTPUT, '');
+  if (evidence === null) {
+    await rm(env.REVIEW_EVIDENCE_PATH, { force: true });
+  } else {
+    await writeFile(env.REVIEW_EVIDENCE_PATH, JSON.stringify({
+      type: 'review',
+      pr: { provider: 'github', number: 42, repo: repository, head_sha: revision.head },
+      payload: JSON.parse(review),
+      markdown: 'Review from this run',
+      ...evidence,
+    }) + '\n');
+  }
   await submit(env, revision, review);
   const output = await readFile(env.GITHUB_OUTPUT, 'utf8');
   const line = output.split('\n').find((item) => item.startsWith('approval_revision='));
@@ -264,6 +276,10 @@ test('the approval credential is available only in the trusted, protected approv
   assert.doesNotMatch(approvalJob, /docker:|OPENAI|download-artifact/u);
   assert.equal((workflow.match(/secrets\.PR_AGENT_APPROVAL_TOKEN/gu) ?? []).length, 1);
   assert.match(approvalJob, /PR_AGENT_APPROVAL_TOKEN: \$\{\{ secrets\.PR_AGENT_APPROVAL_TOKEN \}\}/u);
+  assert.match(stepDefinition('Run PR-Agent'), /PUSH_OUTPUTS__CHANNELS: '\["file"\]'/u);
+  assert.match(stepDefinition('Run PR-Agent'), /PUSH_OUTPUTS__FILE_PATH: \/github\/workspace\/\.pr-agent-review-/u);
+  assert.match(stepDefinition('Validate PR-Agent review'), /REVIEW_EVIDENCE_PATH: [^\n]+-initial\.jsonl/u);
+  assert.match(stepDefinition('Validate refreshed PR-Agent review'), /REVIEW_EVIDENCE_PATH: [^\n]+-retry\.jsonl/u);
 });
 
 test('a complete automatic or bare review with zero findings or P3 only emits an approval for that revision', async () => {
@@ -307,17 +323,17 @@ test('only a fresh complete review can emit an approval, independently of commen
     const manual = await commentEvent(mode, '/review');
     const revision = await capture(manual);
     for (const footer of ['⚠️ **Review coverage:** Some patches were clipped', 'ℹ️ **Chunked review:** Merged findings']) {
-      state.comments[1] = freshComment('pr-agent:review:full');
-      state.comments[1].body += '\n\n' + footer;
-      assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+      assert.equal(await approvalRevision(manual, revision, cleanReview(), { markdown: footer }), undefined);
     }
-    state.comments[1] = freshComment('pr-agent:review:full');
-    state.comments[1].updated_at = '2026-01-01T00:00:00Z';
-    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
-    state.comments[1] = freshComment('pr-agent:review:full');
-    state.comments[1].user.login = 'other-person';
-    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
-    state.comments[1] = freshComment('pr-agent:review:full');
+    // A refreshed public comment cannot substitute for this invocation's missing or mismatched file output.
+    for (const evidence of [
+      null,
+      { payload: JSON.parse(prioritizedReview('P1')) },
+      { pr: { provider: 'github', number: 42, repo: repository, head_sha: 'c'.repeat(40) } },
+      { pr: { provider: 'github', number: 43, repo: repository, head_sha: head } },
+    ]) {
+      assert.equal(await approvalRevision(manual, revision, cleanReview(), evidence), undefined);
+    }
     assert.equal(await approvalRevision({ ...manual, PR_AGENT_AUTO_APPROVE: '' }, revision, cleanReview()), undefined);
     const configuredReview = await commentEvent(mode, '/review --pr_reviewer.num_max_findings=1');
     assert.equal(await approvalRevision(configuredReview, revision, cleanReview()), undefined);

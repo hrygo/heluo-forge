@@ -147,6 +147,8 @@ OCR 和洛神由 `OCR_ENABLED`、`PR_AGENT_ENABLED` 分别控制。同时开启�
 
 启用自动批准须在仓库建立 `luoshen-approval` Actions 环境，并将部署分支限定为 `main`。以 `hrygo` 创建用途限定为本仓库、仅授予 `Pull requests: Read and write` 的 fine-grained PAT，存入该环境的 Secret `PR_AGENT_APPROVAL_TOKEN`。随后设置仓库变量 `PR_AGENT_AUTO_APPROVE=true`，删除该变量可关闭自动批准。GitHub 禁止 PR 作者以自身身份批准该 PR。[环境保护规则](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#deployment-branches-and-tags) · [GitHub 所需审查规则](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)
 
+批准资格以同一次模型审查写入当前 runner 的判定和覆盖信息为依据。GitHub 正式审查绑定 PR 头提交，目标分支版本用于发布核验和后续过期清理。目标分支推进时，由分支保护规则判断批准是否过期。GitHub 可保留审查差异保持一致的批准。[GitHub 分支保护规则](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-pull-request-reviews-before-merging)
+
 拥有 `write`、`maintain` 或 `admin` 权限的维护者确认 P0/P1 后，可在非草稿 PR 单独留言 `/request-changes P1 <head SHA> <base SHA> <target branch>`，填写 PR 头提交、目标分支最新提交的完整 SHA 和目标分支名。洛神重新核对留言、发起人权限和版本，然后代发 GitHub `Request changes`。该命令无需模型调用。
 
 正式请求发布时带待确认标记，版本核对通过后移除。响应丢失时按发布标识查回请求；复查失败时由后续自动审查或无参数 `/review` 继续核对。发现版本变化时，仅撤销对应的待确认请求。GitHub 拒绝撤销时，洛神标记过期并由维护者解除。[PR-Agent 审查配置](https://github.com/The-PR-Agent/pr-agent/blob/v0.50.0/docs/docs/tools/review.md)

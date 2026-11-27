@@ -152,6 +152,11 @@ jobs:
           PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"
           PR_REVIEWER__NUM_MAX_FINDINGS: "4"
           PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"
+          # Keep the rendered review and its structured result together on this runner.
+          PUSH_OUTPUTS__ENABLE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
+          PUSH_OUTPUTS__CHANNELS: '["file"]'
+          PUSH_OUTPUTS__TOOLS: '["review"]'
+          PUSH_OUTPUTS__FILE_PATH: /github/workspace/.pr-agent-review-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.retry_revision.outputs.head != '' && 'retry' || 'initial' }}.jsonl
 
       - name: Validate PR-Agent review
         id: validation
@@ -160,6 +165,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_TITLE: ${{ github.event.issue.title }}
           REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
+          REVIEW_EVIDENCE_PATH: .pr-agent-review-${{ github.run_id }}-${{ github.run_attempt }}-initial.jsonl
           REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
@@ -195,6 +201,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_RESULT: ${{ steps.pr_agent_retry.outputs.review }}
+          REVIEW_EVIDENCE_PATH: .pr-agent-review-${{ github.run_id }}-${{ github.run_attempt }}-retry.jsonl
           REVIEWED_HEAD: ${{ steps.retry_revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.retry_revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.retry_revision.outputs.base_ref }}

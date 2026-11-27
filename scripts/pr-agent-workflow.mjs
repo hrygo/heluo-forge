@@ -1,4 +1,5 @@
 import { appendFile, readFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { publishApproval, readApprovalReceipt } from './pr-agent-approval.mjs';
 import { buildReviewComments, getReviewCommentMarker, hasCompleteReviewPatches } from './pr-agent-review-comments.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
@@ -106,6 +107,19 @@ function reviewCanBeApproved(review) {
     const heading = /^\[P3\][ \t]+([^\r\n]+)$/u.exec(issue.issue_header.trim());
     return heading && !/\[P[0-9]+\]/iu.test(heading[1]);
   });
+}
+
+async function hasCompleteReviewEvidence(path, github, prNumber, head, review) {
+  try {
+    // A single file-sink record from the corresponding Docker invocation.
+    const { type, payload, markdown, pr } = JSON.parse(await readFile(path, 'utf8'));
+    return type === 'review' && pr?.provider === 'github' && pr.repo === github.repository &&
+      (pr.number === prNumber || pr.number === String(prNumber)) && pr.head_sha === head &&
+      isDeepStrictEqual(payload, review) && typeof markdown === 'string' && Boolean(markdown.trim()) &&
+      !/\*\*(?:Review coverage|Chunked review):\*\*/u.test(markdown);
+  } catch {
+    return false;
+  }
 }
 
 async function alreadyReviewed(github, env, scope, base, ref) {
@@ -260,32 +274,26 @@ async function validateReview(github, env, scope) {
     Boolean(env.PR_AGENT_APPROVER_LOGIN) && validId(pr.user?.id) && typeof pr.user?.login === 'string' &&
     pr.user.login !== env.PR_AGENT_APPROVER_LOGIN;
   const eligible = checkApprovals && validId(pr.changed_files) && reviewCanBeApproved(review);
-  let completeReview = false;
-  if (automatic || eligible) {
+  if (automatic) {
     const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
-    const markers = new Set(automatic ? [summaryMarker, reviewMarker] : [reviewMarker]);
+    const markers = new Set([summaryMarker, reviewMarker]);
     const earliest = Math.floor(started / 1000) * 1000;
-    let reviewComment;
     for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
       if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
           !(Date.parse(comment.updated_at) >= earliest)) continue;
-      if (comment.body.includes(reviewMarker)) reviewComment = comment.body;
       for (const marker of markers) if (comment.body.includes(marker)) markers.delete(marker);
       if (!markers.size) break;
     }
-    if (automatic && markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
-    if (automatic && !await currentRevision()) return;
-    // The pinned runner appends these footers outside the model result. Its
-    // merged findings can be capped even when all chunks were processed.
-    completeReview = Boolean(reviewComment) && !/\*\*(?:Review coverage|Chunked review):\*\*/u.test(reviewComment);
+    if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
+    if (!await currentRevision()) return;
   }
 
   // Options on a manual review are handled by the pinned upstream runner.
   let allowApproval = false;
   if (nativeReview) {
     const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
-    const verifyPatches = eligible && completeReview;
+    const verifyPatches = eligible && await hasCompleteReviewEvidence(env.REVIEW_EVIDENCE_PATH, github, prNumber, head, review);
     if (issues.length || verifyPatches) {
       const files = [];
       for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);

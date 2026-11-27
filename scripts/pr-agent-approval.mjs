@@ -1,3 +1,4 @@
+import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
 import { isBranch, isCurrent, isSha, listReviews, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
@@ -21,10 +22,29 @@ function matchesRevision(receipt, revision) {
     receipt.base === revision.base && receipt.baseRef === revision.baseRef;
 }
 
-function ownerDecision(reviews, owner, excludedId) {
+async function hasBlockingChangeRequest(github, reviews, owner, excludedId) {
+  const latestByReviewer = new Map();
   // GitHub returns reviews in chronological order. Comments and dismissed reviews do not decide.
-  return reviews.findLast((review) => review?.id !== excludedId && sameUser(review?.user, owner) &&
-    ['APPROVED', 'CHANGES_REQUESTED'].includes(review.state));
+  for (const review of reviews) {
+    if (!validId(review?.id) || review.id === excludedId) continue;
+    const { state, user } = review;
+    if (state === 'CHANGES_REQUESTED' && user?.id === 41898282 &&
+        user.login === 'github-actions[bot]' && user.type === 'Bot' && readChangeRequestReceipt(review)) return true;
+    if (['APPROVED', 'CHANGES_REQUESTED'].includes(state) && sameUser(user, user)) latestByReviewer.set(user.id, review);
+  }
+
+  for (const { state, user } of latestByReviewer.values()) {
+    if (state !== 'CHANGES_REQUESTED') continue;
+    if (sameUser(user, owner)) return true;
+    try {
+      const access = await github.get(`/collaborators/${encodeURIComponent(user.login)}/permission`,
+        'Cannot verify a change request reviewer’s repository permission');
+      if (sameUser(access?.user, user) && ['write', 'maintain', 'admin'].includes(access.permission)) return true;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  }
+  return false;
 }
 
 function matchesApproval(review, owner, head, body) {
@@ -116,14 +136,10 @@ export async function publishApproval({ github, approver, revision, approverLogi
     withdrawn.add(review.id);
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';
-  if (withdrawn.size) {
-    reviews = await listReviews(github, pull);
-    if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
-  }
+  if (withdrawn.size) reviews = await listReviews(github, pull);
 
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
-  const prior = ownerDecision(remaining, owner);
-  if (prior?.state === 'CHANGES_REQUESTED') return 'skipped-changes-requested';
+  if (await hasBlockingChangeRequest(github, remaining, owner)) return 'skipped-changes-requested';
   const alreadyReviewed = remaining.some((review) => {
     if (!sameUser(review?.user, owner) || review.commit_id !== head) return false;
     if (review.state === 'APPROVED') return true;
@@ -132,15 +148,16 @@ export async function publishApproval({ github, approver, revision, approverLogi
   });
   if (alreadyReviewed) return 'skipped-existing';
 
+  if (!await isCurrent(github, repository, pull, prNumber, revision)) return 'skipped-stale';
   const approval = await postApproval(github, approver, pull, reviews, owner, head, body);
   if (approval.state === 'DISMISSED') return 'skipped-existing';
 
   // The review REST API binds the head commit only. Check the base and PR again after the write.
   let current;
-  let latest;
+  let blocked;
   try {
+    blocked = await hasBlockingChangeRequest(github, await listReviews(github, pull), owner, approval.id);
     current = await isCurrent(github, repository, pull, prNumber, revision);
-    if (current) latest = ownerDecision(await listReviews(github, pull), owner, approval.id);
   } catch (cause) {
     try {
       await dismissApproval(github, approver, pull, approval, '洛神未能核对发布后的状态，撤销本次自动审批。');
@@ -153,7 +170,7 @@ export async function publishApproval({ github, approver, revision, approverLogi
     await dismissApproval(github, approver, pull, approval, 'PR 或目标分支版本已变化，洛神自动审批已过期。');
     return 'dismissed-stale';
   }
-  if (latest?.state === 'CHANGES_REQUESTED') {
+  if (blocked) {
     await dismissApproval(github, approver, pull, approval, '维护者已请求修改，撤销本次洛神自动审批。');
     return 'dismissed-changes-requested';
   }
