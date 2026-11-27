@@ -35,7 +35,10 @@ async function withGitHub(run) {
     requests: [],
     postStatus: 200,
     confirmationStatus: 200,
-    confirmation: { candidate: 1, priority: 'P1', line: 2, quote: '  return 0;', trigger: 'Default call', impact: 'Incorrect totals' },
+    confirmation: {
+      candidate: 1, matches_claim: true, priority: 'P1', line: 2,
+      quote: '  return 0;', trigger: 'Default call', impact: 'Incorrect totals',
+    },
     dismissStatus: 200,
     files: [{ filename: 'src/example.js', status: 'modified', patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
     reviews: [],
@@ -45,6 +48,7 @@ async function withGitHub(run) {
     jobs: {},
     logs: {},
     headAfterPost: undefined,
+    headDuringPostCheck: undefined,
     baseAfterPost: undefined,
     headAfterReviewList: undefined,
     baseAfterReviewList: undefined,
@@ -68,6 +72,10 @@ async function withGitHub(run) {
       const ref = decodeURIComponent(path.slice('/repos/corp/example/git/ref/heads/'.length));
       response.statusCode = state.refStatus === 200 && !(ref in state.refs) ? 404 : state.refStatus;
       response.end(JSON.stringify(state.refResponse ?? { ref: `refs/heads/${ref}`, object: { type: 'commit', sha: state.refs[ref] } }));
+      if (state.headDuringPostCheck && state.reviews.some((review) => review.user.login === 'github-actions[bot]')) {
+        state.pr.head.sha = state.headDuringPostCheck;
+        state.headDuringPostCheck = undefined;
+      }
     } else if (request.method === 'GET' && /^\/repos\/corp\/example\/compare\/[a-f0-9]{40}\.\.\.[a-f0-9]{40}$/u.test(path)) {
       response.statusCode = state.compareStatus;
       response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
@@ -907,6 +915,7 @@ test('P0 on pull_request and P1 on manual /review each request changes for the r
       const reviewEnv = priority === 'P0' ? env : await commentEvent(env, '/review');
       const revision = await capture(reviewEnv);
       state.confirmation.priority = priority;
+      state.confirmation.trigger = 'Default call\n<details>@someone</details>';
       await submit(reviewEnv, revision, prioritizedReview(priority));
       const [request, ...otherWrites] = reviewWrites(state);
       assert.equal(otherWrites.length, 0);
@@ -916,7 +925,9 @@ test('P0 on pull_request and P1 on manual /review each request changes for the r
       assert.equal(request.body.commit_id, revision.head);
       assert.ok(request.body.body.includes(`**${priority}**`));
       assert.match(request.body.body, /https:\/\/github\.com\/corp\/example\/pull\/42\/files#diff-[a-f0-9]{64}R2/u);
-      assert.doesNotMatch(request.body.body, /The default call now returns/u);
+      assert.ok(request.body.body.includes('<code>Default call &lt;details&gt;&#64;someone&lt;/details&gt;</code>'));
+      assert.ok(request.body.body.includes('<code>Incorrect totals</code>'));
+      assert.doesNotMatch(request.body.body, /The default call now returns|return 0;/u);
     });
   }
 });
@@ -959,6 +970,7 @@ test('only an independently confirmed P0/P1 with exact diff evidence can request
     const confirmed = state.confirmation;
     for (const verdict of [
       { ...confirmed, priority: 'none' },
+      { ...confirmed, matches_claim: false },
       { ...confirmed, quote: 'missing from the current diff' },
       { ...confirmed, line: 1 },
       { ...confirmed, candidate: 3 },
@@ -968,12 +980,15 @@ test('only an independently confirmed P0/P1 with exact diff evidence can request
     }
     assert.deepEqual(reviewWrites(state), []);
     const calls = state.requests.filter(({ url }) => url === '/test/openai/chat/completions');
-    assert.equal(calls.length, 4);
+    assert.equal(calls.length, 5);
     assert.equal(calls[0].body.reasoning_effort, 'low');
     assert.equal(calls[0].body.response_format.type, 'json_schema');
     const input = calls[0].body.messages.find(({ role }) => role === 'user').content;
-    assert.doesNotMatch(input, /Example pull request|Count regression|The default call now returns/u);
-    assert.match(input, /return 0/u);
+    const [candidate] = JSON.parse(input);
+    assert.match(candidate.claim, /Count regression[\s\S]+The default call now returns/u);
+    assert.doesNotMatch(candidate.claim, /\[P1\]/u);
+    assert.doesNotMatch(input, /Example pull request/u);
+    assert.match(candidate.diff, /return 0/u);
   });
 });
 
@@ -1055,7 +1070,7 @@ test('a rejected change request surfaces an error without attempting a second wr
 });
 
 test('a head or base advance after submission dismisses only the request from that run', async () => {
-  for (const update of ['headAfterPost', 'baseAfterPost']) {
+  for (const update of ['headAfterPost', 'baseAfterPost', 'headDuringPostCheck']) {
     await withGitHub(async ({ state, env }) => {
       const revision = await capture(env);
       const prior = { id: 100, state: 'CHANGES_REQUESTED', user: { login: 'maintainer' }, commit_id: head };
