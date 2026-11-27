@@ -15,6 +15,9 @@ const signalWorkflow = await readFile(new URL('../.github/workflows/pr-agent-sig
 const head = 'a'.repeat(40);
 const base = 'b'.repeat(40);
 const longCommentText = '中'.repeat(44_000);
+const examplePatch = '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;';
+const exampleDiff = 'diff --git a/src/example.js b/src/example.js\nindex e652251..1843a8d 100644\n' +
+  '--- a/src/example.js\n+++ b/src/example.js\n' + examplePatch + '\n';
 
 test('the automatic trigger has read-only permissions and the publisher uses the default-branch workflow', async () => {
   assert.match(workflow, /^  workflow_run:\n    workflows: \[pr-agent-signal\]\n    types: \[completed\]$/mu);
@@ -63,6 +66,10 @@ async function withGitHub(run) {
     refs: { main: base },
     refStatus: 200,
     filesStatus: 200,
+    diffStatus: 200,
+    diffType: 'application/vnd.github.diff; charset=utf-8',
+    diff: exampleDiff,
+    diffReads: 0,
     reviewHistoryStatus: 200,
     transientReviewHistoryFailures: 0,
     approvalProtection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
@@ -72,8 +79,7 @@ async function withGitHub(run) {
     requests: [],
     postStatus: 200,
     permission: 'write',
-    files: [{ filename: 'src/example.js', status: 'modified', additions: 1, deletions: 1,
-      patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
+    files: [{ filename: 'src/example.js', status: 'modified', additions: 1, deletions: 1, patch: examplePatch }],
     reviews: [],
     inlineComments: [],
     comments: [freshComment('pr-agent:describe:persistent'), freshComment('pr-agent:review:full')],
@@ -112,7 +118,15 @@ async function withGitHub(run) {
       const target = url.searchParams.get('base');
       response.end(JSON.stringify(pageOf(!target || state.pr.base.ref === target ? [state.pr] : [])));
     } else if (request.method === 'GET' && path === '/pulls/42') {
-      response.end(JSON.stringify(state.pr));
+      if (request.headers.accept === 'application/vnd.github.diff') {
+        state.diffReads++;
+        response.statusCode = state.diffStatus;
+        response.setHeader('content-type', state.diffType);
+        response.end(state.diff);
+        if (state.baseAfterDiff) state.refs.main = state.baseAfterDiff;
+      } else {
+        response.end(JSON.stringify(state.pr));
+      }
     } else if (request.method === 'GET' && path.startsWith('/git/ref/heads/')) {
       const ref = decodeURIComponent(path.slice('/git/ref/heads/'.length));
       response.statusCode = state.refStatus === 200 && !(ref in state.refs) ? 404 : state.refStatus;
@@ -226,6 +240,11 @@ async function execute(action, env) {
     await writeFile(env.GITHUB_EVENT_PATH, JSON.stringify({
       ref: env.PUSH_EVENT_REF ?? 'refs/heads/main', deleted: false, repository: { full_name: repository },
     }));
+  } else if (env.GITHUB_EVENT_NAME === 'branch_protection_rule') {
+    await writeFile(env.GITHUB_EVENT_PATH, JSON.stringify({
+      action: env.PROTECTION_EVENT_ACTION ?? 'edited',
+      repository: { full_name: env.PROTECTION_EVENT_REPO ?? repository },
+    }));
   }
   return runFile(process.execPath, [script, action], { env });
 }
@@ -310,10 +329,11 @@ async function approvalRevision(env, revision, review, evidence = {}) {
 test('the approval credential is available only in the trusted, protected approval job', () => {
   const approvalJob = workflow.split('\n  approve:\n')[1] ?? '';
   assert.match(workflow, /^  push:\n    branches: \[main\]$/mu);
+  assert.match(workflow, /^  branch_protection_rule:\n    types: \[created, edited, deleted\]$/mu);
   assert.match(approvalJob, /^    needs: review$/mu);
   assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
   assert.match(approvalJob, /vars\.PR_AGENT_APPROVAL_APP_CLIENT_ID != ''/u);
-  assert.match(approvalJob, /github\.event_name == 'push' \|\| \(needs\.review\.result == 'success'/u);
+  assert.match(approvalJob, /github\.event_name == 'push' \|\| github\.event_name == 'branch_protection_rule' \|\|\s+\(needs\.review\.result == 'success'/u);
   assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true' \|\| fromJSON\(needs\.review\.outputs\.approval_revision\)\.allowApproval == false/u);
   assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
@@ -412,6 +432,54 @@ test('an independently incomplete GitHub diff cannot authorize an approval', asy
       state.files = files;
       assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
     }
+    assert.equal(state.diffReads, 0);
+  });
+});
+
+test('matching review text requires evidence that the file mode was unchanged', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const revision = await capture(mode);
+    state.diff = exampleDiff.replace('index e652251..1843a8d 100644', 'old mode 100644\nnew mode 100755\nindex e652251..1843a8d');
+    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+    assert.equal(state.diffReads, 1);
+    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+
+    state.diff = exampleDiff;
+    assert.equal((await approvalRevision(mode, revision, cleanReview()))?.allowApproval, true);
+    assert.equal(state.diffReads, 2);
+  });
+});
+
+test('unavailable file-mode evidence preserves the native COMMENT and review key', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const revision = await capture(mode);
+    const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
+    state.diffStatus = 503;
+    assert.equal(await approvalRevision(mode, revision, cleanReview({ key_issues_to_review: [issue] })), undefined);
+    assert.equal(state.diffReads, 1);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+
+    state.diffStatus = 206;
+    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+    state.diffStatus = 200;
+    state.diffType = 'application/json';
+    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+    assert.equal(state.diffReads, 3);
+    assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+  });
+});
+
+test('a target branch change while obtaining file-mode evidence causes a retry', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_ALLOW_RETRY: 'true' };
+    const revision = await capture(mode);
+    state.baseAfterDiff = 'c'.repeat(40);
+    assert.equal(await approvalRevision(mode, revision, cleanReview()), undefined);
+    assert.equal(state.diffReads, 1);
+    assert.equal(await readFile(mode.GITHUB_OUTPUT, 'utf8'), 'retry=true\n');
   });
 });
 
@@ -475,6 +543,7 @@ test('the approval entry point uses the dedicated credential for identity and on
       { method: 'GET', url: '/installation/repositories?per_page=2' },
       { method: 'GET', url: '/repos/corp/example/branches/main/protection' },
       { method: 'POST', url: '/repos/corp/example/pulls/42/reviews' },
+      { method: 'GET', url: '/repos/corp/example/branches/main/protection' },
     ]);
     const [write] = reviewWrites(state);
     assert.equal(write.body.event, 'APPROVE');
@@ -549,6 +618,31 @@ test('a trusted main push clears a retargeted PR’s Luoshen approval with new a
     state.refs.release = base;
 
     const { stdout } = await execute('approve', { ...mode, GITHUB_EVENT_NAME: 'push', PR_AGENT_AUTO_APPROVE: '' });
+    assert.match(stdout, /Dismissed 1 stale Luoshen approval/u);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'DISMISS']);
+  });
+});
+
+test('only trusted branch protection changes reconcile approvals without running a review', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+    state.refs.main = 'c'.repeat(40);
+
+    const protectionChange = { ...mode, GITHUB_EVENT_NAME: 'branch_protection_rule', PR_AGENT_AUTO_APPROVE: '' };
+    const before = state.requests.length;
+    for (const override of [{ GITHUB_REF: 'refs/heads/other' }, { PROTECTION_EVENT_REPO: 'other/example' },
+      { PROTECTION_EVENT_ACTION: 'unknown' }]) {
+      await execute('approve', { ...protectionChange, ...override });
+    }
+    await execute('capture', protectionChange);
+    await execute('validate', protectionChange);
+    assert.equal(state.requests.length, before);
+
+    const { stdout } = await execute('approve', protectionChange);
     assert.match(stdout, /Dismissed 1 stale Luoshen approval/u);
     assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
     assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE', 'DISMISS']);

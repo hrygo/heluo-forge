@@ -37,13 +37,17 @@ function assignsEveryPathToIndividuals(file, directory) {
   return pattern === '*' && owners.length > 0 && owners.every((owner) => individualOwner.test(owner));
 }
 
-export async function hasIndependentApprovalGate(github, approver, revision) {
-  if (revision?.baseRef !== 'main' || !isSha(revision.base)) return false;
-
+export async function hasLiveApprovalProtection(approver) {
   try {
-    const protection = await approver.get('/branches/main/protection', 'Read native approval protection');
-    if (!hasRequiredCodeOwner(protection)) return false;
+    return hasRequiredCodeOwner(await approver.get('/branches/main/protection', 'Read native approval protection'));
+  } catch {
+    return false;
+  }
+}
 
+export async function hasIndependentApprovalGate(github, approver, revision) {
+  if (revision?.baseRef !== 'main' || !isSha(revision.base) || !await hasLiveApprovalProtection(approver)) return false;
+  try {
     const query = `?ref=${revision.base}`;
     const [directory, file, parser] = await Promise.all([
       github.get(`/contents/.github${query}`, 'Read CODEOWNERS directory'),
