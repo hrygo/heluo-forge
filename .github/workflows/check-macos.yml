@@ -1,10 +1,9 @@
 name: macOS compatibility checks
 
 on:
+  workflow_call:
   push:
     branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -12,64 +11,21 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# Runner allocation and execution timeouts stay outside repository checks.
+# Baseline and merge-queue runs have their own workflow so a queued
+# Apple Silicon runner cannot hold the repository checks concurrency group.
 jobs:
-  changes:
-    name: classify macOS changes (ubuntu-x64)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      run_platforms: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
-    steps:
-      - name: Run all platforms for non-PR events
-        id: full
-        if: github.event_name != 'pull_request'
-        run: echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
-      - name: Checkout complete history for the change comparison
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-          show-progress: false
-      - name: Set up Node.js
-        if: github.event_name == 'pull_request'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
-      - name: Classify changed paths
-        id: classify
-        if: github.event_name == 'pull_request'
-        run: node scripts/ci-classify-changes.mjs
-      - name: Validate platform decision
-        env:
-          RUN_PLATFORMS: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
-        run: |
-          case "$RUN_PLATFORMS" in
-            true|false) ;;
-            *) echo 'Invalid platform decision.' >&2; exit 1 ;;
-          esac
-
   document-macos-15:
     name: SQLite and IAM (darwin-arm64, macos-15)
-    needs: changes
-    if: &run_platforms ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_platforms != 'false') }}
     runs-on: macos-15
     continue-on-error: true
     timeout-minutes: 2
     env:
       FORGE_CI_PLATFORM: darwin
       FORGE_CI_ARCH: arm64
-    defaults: &bash_defaults
+    defaults:
       run:
         shell: bash
-    steps: &macos_steps
+    steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,16 +70,3 @@ jobs:
             PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-credentials-keychain
           fi
           node scripts/probe/installed-credential-smoke.mjs "$PACKAGE"
-
-  document-macos-15-intel:
-    name: SQLite and IAM (darwin-x64, macos-15-intel)
-    needs: changes
-    if: *run_platforms
-    runs-on: macos-15-intel
-    continue-on-error: true
-    timeout-minutes: 4
-    env:
-      FORGE_CI_PLATFORM: darwin
-      FORGE_CI_ARCH: x64
-    defaults: *bash_defaults
-    steps: *macos_steps

@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.11.0 |
+| 版本 | V0.12.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-26 |
+| 最后更新 | 2026-11-27 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：仓库结构、`package.json`、`pnpm-workspace.yaml`、检查脚本、测试与 GitHub Actions 工作流；工具链版本以 `.node-version` 和 `package.json` 为准。托管平台的实际执行结果以对应工作流记录为准。
@@ -91,7 +91,7 @@
 
 ## 6. 检查与 CI
 
-- 本地先按固定工具链执行 `pnpm install --frozen-lockfile --ignore-scripts`；`pnpm check` 再跑 `scripts/link-workspace.mjs` 在根 `node_modules/@heluo` 下建包名链接（离线、幂等，只建 `pnpm install` 本来会建的那层目录链接，不联网也不执行脚本）；再执行技能管理器生成物/类型检查，并串行执行文档检查、仓库检查、包体 tarball 闭包检查、DSH 版本检查与 `node --test`；`test:unit` 当前也是全量 Node 测试发现，不能按命名误解为仅工程单元测试。
+- 本地先按固定工具链执行 `pnpm install --frozen-lockfile --ignore-scripts`。`pnpm check` 串行执行 `check:static` 与 `test:unit`。前者链接 workspace，校验技能管理器生成物与类型、文档、仓库结构、包体 tarball 闭包和 DSH 版本。后者使用 Node 自动发现工程、包与集成测试。
 - 需要链接的原因：根工程未声明各成员运行时依赖，而包内测试按裸包名 import 同仓兄弟包（如 `@heluo/forge-policy`），没有链接即 `ERR_MODULE_NOT_FOUND`。该步只补解析路径，不替代 `pnpm install`：本地装过依赖时已有同指向链接，脚本计为 kept 且不重写；被占位时只报告、不覆盖。
 - 需要缩小范围定位时使用[贡献指南的按模块命令](../../CONTRIBUTING.md#7-检查命令)；全量检查已覆盖的有效结果无需重复执行。真实仓库归档检查与 DSH/企业实机操作不进入离线 CI。
 - `check:docs` 校验正文元数据、编号唯一性、无正文保留记录、链接与锚点、表格列数、禁写修订记录与询问函问题序列；派生目录与检查共用正文扫描。
@@ -100,16 +100,16 @@
 - `check:repo` 校验必需文件、根目录入口面（未登记的一级文件与目录，含未提交的未忽略文件）、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径，以及包体闭包（清单/入口/workspace 依赖/补丁层/locale）。
 - `check:tarballs` 校验真实 tarball 内容与模式位。Windows 源码可执行入口校验解释器声明，组合构建对清单声明的嵌套 bin 写入执行位后重新读取最终归档审计；POSIX 源码与最终归档的执行位校验保留。
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。清单仅在 `engines.dsh` 值及与基线精确一致的顶层 DSH 开发依赖值中允许版本字面量，按 JSON 字段和原文位置识别，不依赖缩进或换行；运行时、可选、peer 依赖及嵌套同名字段不获开发期豁免。生成的 `pnpm-lock.yaml` 由冻结安装核验。
-- CI 的 `repository checks` 工作流使用 `.github/workflows/check.yml` 的 `verify (ubuntu-x64)` 作业执行 `node --run check`，是全量离线检查与全部用例的唯一执行点；默认 `contents: read`、`issues: read` 与 `pull-requests: read`，PR 正文须引用本仓库已有 Issue（`Closes #编号` 或 `Part of #编号`），正文编辑时重新检查。常规检查不使用 `pull_request_target`。该作业在检出 PR 代码前拒绝 head 仓库不是本仓库的 fork PR：审查、重签与强制重放收敛在仓库内分支，fork 分支不在分支保护与提交钩子的约束范围内；判定只作用于 `pull_request`，`main` 推送、合并队列与手动运行不受影响。与分类同理，该判定在工作流内执行且工作流定义取自 PR 合并提交，不构成防止恶意 PR 修改工作流的安全边界；不可绕过的是基线加载的 `sensitive-attestation` 与 CODEOWNERS 评审。触发与依赖固定策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
-- `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增白名单内的隔离路径——即 `docs/` 中普通 Markdown、根 `README.md` / `CONTRIBUTING.md` / `SECURITY.md`、`.agents/skills/`、`deploy/`、`services/forge-desktop/` 及桌面打包/运行时暂存/图标派生相关脚本与用例（不触及 `packages/`、`scripts/sensitive-scan/`、企业包构建链路、`.github/workflows/`、`.node-version` 与 `package.json`）——时允许跳过平台作业；`verify (ubuntu-x64)` 仍全量运行。新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
-- 平台作业运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。`repository checks` 的必需平台检查为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、`SQLite and IAM (win32-x64, windows-2022)` 和 `SQLite and IAM (win32-arm64, windows-11-arm)`。
-- 独立的 `macOS compatibility checks` 工作流使用 `.github/workflows/check-macos.yml` 执行 `SQLite and IAM (darwin-arm64, macos-15)` 和 `SQLite and IAM (darwin-x64, macos-15-intel)`。两项均为可选检查，继续执行相同的平台测试，并分别使用 2 分钟和 4 分钟的执行超时。runner 排队取消和作业执行超时保留在该工作流的记录中。
+- `repository checks` 使用 `contents: read`。两个 Ubuntu 作业与变更分类并行启动，分片 2 执行 `check:static`，两个分片按 `--test-shard` 运行完整 Node 测试集。`verify (ubuntu-x64)` 汇总分类和两个分片结果，分类失败、输出无效或分片未成功均阻断合入。两个分片在检出前拒绝来自其他仓库的 PR。该判定从 PR 合并提交加载，可信基线门禁由 `sensitive-attestation` 与 CODEOWNERS 评审提供。触发与依赖固定策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
+- `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增白名单内的隔离路径——即 `docs/` 中普通 Markdown、根 `README.md` / `CONTRIBUTING.md` / `SECURITY.md`、`.agents/skills/`、`deploy/`、`services/forge-desktop/` 及桌面打包/运行时暂存/图标派生相关脚本与用例（不触及 `packages/`、`scripts/sensitive-scan/`、企业包构建链路、`.github/workflows/`、`.node-version` 与 `package.json`）——时允许跳过平台作业；`verify (ubuntu-x64)` 仍全量运行。新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行均执行基线平台检查。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
+- 平台作业运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。必需平台上下文为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、`SQLite and IAM (win32-x64, windows-2025)` 和 `SQLite and IAM (win32-arm64, windows-11-arm)`。Windows x64 的凭据测试和安装冒烟、IAM 测试分别在两个 Windows Server 2025 runner 上执行，两个结果都成功后汇总作业才通过。Windows ARM64 覆盖凭据、IAM、企业装配相关包、共用脚本与清单等输入。仅改动已隔离路径或其余扩展的普通非清单文件时允许跳过，分类不确定时执行。
+- `macOS compatibility checks` 在 `macos-15` 验证 Apple Silicon，执行超时 2 分钟。PR 复用仓库检查的完整 Git 差异分类，便携的纯文档、技能及部署资料变更可跳过，无法确证差异时执行。`main` 推送、合并队列及手动触发时独立运行，可选作业不占用仓库检查的并发组。
 - Linux 和 macOS 作业构建、核验并离线安装企业组合包；Windows 作业打包并离线安装凭据独立包。安装冒烟使用临时 SQLite 存储和合成值，不代表 Windows 已安装企业组合包。凭据使用值级加密 SQLite 和文件 keyring，不使用系统钥匙串或原生 addon；文件权限与隔离边界见[凭据包说明](../../packages/forge-credentials-keychain/README.md)。
-- `SQLite and IAM (linux-x64, ubuntu-26.04)` 与 `SQLite and IAM (win32-x64, windows-2025)` 非必需作业执行相同的 SQLite 和 IAM 平台检查，用于观察后续镜像兼容性；结果不替代目标系统验收。
-- `sensitive scan and IAM callback (win32-x64)` 在 Windows Server 2022 的非必需作业中以同一次 `node --test` 运行敏感扫描、补丁层及 IAM 回调端口测试；POSIX 分支已由 `verify (ubuntu-x64)` 覆盖。路径测试覆盖 `icase` pathspec、反斜杠归一化及补丁层包名识别；卷不提供不同的 8.3 短别名时，真实别名用例跳过，运行时应检查该项是通过还是跳过。回调测试检查平台 socket 行为。
-- `pull_request_target` 的窄例外是 `.github/workflows/sensitive-attestation.yml`：从 PR 基线加载受信任的 Issue 校验和验签脚本及单一团队公钥，checkout 基线、只 fetch PR 的 Git 对象并校验事件 head，不 checkout、不执行 PR 代码，不读取 secrets，权限为 `contents: read`、`issues: read`、`pull-requests: read`。正文编辑时重新读取并校验当前 PR，Issue 不存在、引用 PR 或 API 失败时拒绝；普通 PR 工作流中的校验仅供提前反馈。工作流始终验签，基线缺少或无效公钥时失败；新门禁合入目标基线后生效，并须实测正反例。该上下文名保持不变：`pull_request_target` 工作流由基线加载，改名要先合并再同步切换必需检查，不能一步完成。团队 v2 签名绑定实际扫描的 HEAD tree，远端要求唯一父提交 tree 与签名基线一致并拒绝 v1；基线 tree 改变的 rebase 和普通 amend 须重新扫描签名。旧 `sensitive:scan` / `sensitive:install` 是不同规则格式和路径的 legacy v1，不能满足 v2。Git 仓库内容正常推送，私钥、真实规则与扫描结果不上远端；签名不证明规则有效，也不能防止扫描竞态或恶意持钥人伪造声明。共享 Git common dir 安装、引导与限制见[敏感扫描说明](../../scripts/sensitive-scan/README.md)；工作流合入、远端实测及分支保护配置均须分别取证。
+- Ubuntu 26.04 的前瞻检查由手动运行触发。
+- `sensitive scan and IAM callback (win32-x64)` 在 Windows Server 2025 同一次 `node --test` 中运行敏感扫描、补丁层及 IAM 回调端口测试。路径测试覆盖 `icase` pathspec、反斜杠归一化和补丁层包名识别。真实 8.3 短名用例依赖卷提供独立短别名。回调测试检查平台 socket 行为。
+- `pull_request_target` 的窄例外是 `.github/workflows/sensitive-attestation.yml`：从 PR 基线加载受信任的 Issue 校验和验签脚本及单一团队公钥，checkout 基线、只 fetch PR 的 Git 对象并校验事件 head，不 checkout、不执行 PR 代码，不读取 secrets，权限为 `contents: read`、`issues: read`、`pull-requests: read`。正文编辑时重新读取并校验当前 PR，Issue 不存在、引用 PR 或 API 失败时拒绝。工作流始终验签，基线缺少或无效公钥时失败；新门禁合入目标基线后生效，并须实测正反例。该上下文名保持不变：`pull_request_target` 工作流由基线加载，改名要先合并再同步切换必需检查，不能一步完成。团队 v2 签名绑定实际扫描的 HEAD tree，远端要求唯一父提交 tree 与签名基线一致并拒绝 v1；基线 tree 改变的 rebase 和普通 amend 须重新扫描签名。旧 `sensitive:scan` / `sensitive:install` 是不同规则格式和路径的 legacy v1，不能满足 v2。Git 仓库内容正常推送，私钥、真实规则与扫描结果不上远端；签名不证明规则有效，也不能防止扫描竞态或恶意持钥人伪造声明。共享 Git common dir 安装、引导与限制见[敏感扫描说明](../../scripts/sensitive-scan/README.md)；工作流合入、远端实测及分支保护配置均须分别取证。
 - `contents: write` 的窄例外是 `.github/workflows/release-bundle.yml`（统一构建，[CORP-DSH-PLAN-026](../plans/2026-11-19-desktop-bundle-packaging.md) §4.0）。检查器只在该工作流同时满足以下条件时放行：触发仅推 `v*` tag 与手动触发；顶层 `permissions` 仅 `contents: write` 一项，且不得声明作业级 `permissions`；每个 `actions/checkout` 写 `persist-credentials: false`，令牌只经环境变量 `GH_TOKEN` 提供给上传步骤。`secrets` 引用只允许环境变量映射形式，即 `env:` 之下整行为 `NAME: ${{ secrets.NAME }}`，键名限定为[统一构建配置清单](../../scripts/lib/release-config.mjs)与 `GITHUB_TOKEN`；展开进脚本、`run:` 块内形似映射的文本、`with:` 输入、清单之外的键，以及其他任何工作流出现 `contents: write`，均使 `check:repo` 失败。企业配置存为 `release-bundle` 环境的 Environment Secrets，不存仓库级 Secrets：只有进入该环境的作业能读取，进入须审批。必需评审人与部署分支限制属于仓库设置，检查器不校验，以远端实测为准。
-- `verify` 执行离线检查；平台作业不配置 npm 包缓存或使用系统钥匙串，离线安装使用 runner 工作区内的独立前缀，冒烟存储位于系统临时目录并使用合成数据。托管 runner 的结果不等于 Windows 10、UOS、银河麒麟、目标 DSH/Electron、Windows NTFS ACL 或企业 IAM 的实测；这些环境及企业联调分别取证。CI 不接触企业系统、不注入生产密钥、不自动发布。
+- Ubuntu 分片执行全量离线检查；平台作业不配置 npm 包缓存或使用系统钥匙串，离线安装使用 runner 工作区内的独立前缀，冒烟存储位于系统临时目录并使用合成数据。托管 runner 的结果不等于 Windows 10、UOS、银河麒麟、目标 DSH/Electron、Windows NTFS ACL 或企业 IAM 的实测；这些环境及企业联调分别取证。CI 不接触企业系统、不注入生产密钥、不自动发布。
 
 ## 7. 版本与发布
 

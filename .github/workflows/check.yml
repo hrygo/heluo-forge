@@ -11,8 +11,6 @@ on:
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -28,11 +26,16 @@ jobs:
     timeout-minutes: 5
     outputs:
       run_platforms: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
+      run_windows_arm64: ${{ steps.classify.outputs.run_windows_arm64 || steps.full.outputs.run_windows_arm64 }}
+      run_macos: ${{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}
     steps:
       - name: Run all platforms for non-PR events
         id: full
         if: github.event_name != 'pull_request'
-        run: echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
+        run: |
+          echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
+          echo 'run_windows_arm64=true' >> "$GITHUB_OUTPUT"
+          echo 'run_macos=true' >> "$GITHUB_OUTPUT"
       - name: Checkout complete history for the change comparison
         if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,12 +61,28 @@ jobs:
             true|false) ;;
             *) echo 'Invalid platform decision.' >&2; exit 1 ;;
           esac
+      - name: Validate Windows ARM64 decision
+        env:
+          RUN_WINDOWS_ARM64: ${{ steps.classify.outputs.run_windows_arm64 || steps.full.outputs.run_windows_arm64 }}
+          RUN_PLATFORMS: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
+        run: |
+          case "$RUN_PLATFORMS:$RUN_WINDOWS_ARM64" in
+            false:false|true:false|true:true) ;;
+            *) echo 'Invalid Windows ARM64 decision.' >&2; exit 1 ;;
+          esac
+      - name: Validate macOS decision
+        env:
+          RUN_MACOS: ${{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}
+        run: |
+          case "$RUN_MACOS" in
+            true|false) ;;
+            *) echo 'Invalid macOS decision.' >&2; exit 1 ;;
+          esac
 
   verify:
     name: verify (ubuntu-x64)
-    needs: changes
-    # A failed classification must fail this required check, not turn it into
-    # a successful skipped job. Cancellation must still stop the workflow.
+    needs: [changes, verify-shards]
+    # Run even if either prerequisite failed, so branch protection sees a failure.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -80,6 +99,20 @@ jobs:
             echo 'Change classification failed or produced an invalid result.' >&2
             exit 1
           fi
+      - name: Require all verification shards
+        env:
+          SHARDS_RESULT: ${{ needs.verify-shards.result }}
+        run: test "$SHARDS_RESULT" = success
+
+  verify-shards:
+    name: verify workload (ubuntu-x64, shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
       # Pull requests are reviewed, re-signed and force-replayed on branches inside
       # this repository: branch protection, the signing hooks and the repair steps in
       # CONTRIBUTING.md all assume a writer with repository access. A head from another
@@ -110,13 +143,15 @@ jobs:
       # Build verification for the migrated TypeScript plugin uses locked development dependencies.
       - name: Install locked workspace development dependencies
         run: npm exec --yes --package=pnpm@11.28.5 -- pnpm install --frozen-lockfile --ignore-scripts
-      - name: Check PR issue reference
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/check-pr-issue.mjs
-      - name: Check documents, repository and tests
-        run: node --run check
+      - name: Link workspace packages
+        if: matrix.shard == 1
+        run: node scripts/link-workspace.mjs
+      # Keep the static checks with the shorter test shard.
+      - name: Check documents, repository and build
+        if: matrix.shard == 2
+        run: node --run check:static
+      - name: Run unit and integration tests
+        run: node --run test:unit -- --test-shard=${{ matrix.shard }}/2
 
   # Fixed jobs preserve each platform check name when a job is skipped. A job
   # condition on the whole matrix is evaluated before the matrix is expanded.
@@ -154,8 +189,10 @@ jobs:
           { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
           "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
       - name: Test credential storage
+        if: env.FORGE_CI_SUITE != 'iam'
         run: node --test packages/forge-credentials-keychain/test/*.test.mjs
       - name: Test IAM read paths and CLI bridge
+        if: env.FORGE_CI_SUITE != 'credentials'
         run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs packages/forge-iam/test/bridge-real-provider.test.mjs packages/forge-iam/test/cli-reader.test.mjs packages/forge-iam/test/gateway-save-confirmation.test.mjs packages/forge-iam/test/gateway-sqlite-regression.test.mjs packages/forge-iam/test/session-read-lock-recovery.test.mjs packages/forge-iam/test/pending-binding-sqlite.test.mjs packages/forge-iam/test/session-renewal-log.test.mjs packages/forge-iam/test/renewal-resume.test.mjs packages/forge-iam/test/client-auth-refresh.test.mjs packages/forge-iam/test/callback-port.test.mjs packages/forge-iam/test/signout-sqlite-crash.test.mjs packages/forge-iam/test/userinfo.test.mjs
       # The release closure requires POSIX mode bits on bin entry points, which a
       # Windows checkout cannot carry; Windows packs the credentials package
@@ -171,13 +208,14 @@ jobs:
             --manifest node_modules/.forge-ci/bundle/bundle-manifest.json --json > node_modules/.forge-ci/verify.json
           node -e "const v=require('./node_modules/.forge-ci/verify.json'); if(v.ok!==true){console.error(v.errors.join('\n')); process.exit(1)} console.log('artifact:', v.files, 'files,', v.bytes, 'bytes,', v.sha256)"
       - name: Pack the credentials package
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && env.FORGE_CI_SUITE != 'iam'
         run: |
           set -euo pipefail
           mkdir -p node_modules/.forge-ci/bundle
           rm -f node_modules/.forge-ci/bundle/*.tgz
           node --input-type=module -e "import { execNpm } from './scripts/lib/bundle-rules.mjs'; execNpm(['pack', './packages/forge-credentials-keychain', '--ignore-scripts', '--pack-destination', 'node_modules/.forge-ci/bundle'], { stdio: 'inherit' });"
       - name: Install and test the artifact offline
+        if: env.FORGE_CI_SUITE != 'iam'
         run: |
           set -euo pipefail
           rm -rf node_modules/.forge-ci/install
@@ -203,21 +241,48 @@ jobs:
     steps: *native_steps
 
   native-win32-x64:
-    name: SQLite and IAM (win32-x64, windows-2022)
+    name: SQLite and IAM (win32-x64, windows-2025)
+    needs: [changes, native-win32-x64-credentials, native-win32-x64-iam]
+    if: *run_platforms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require both Windows test jobs
+        env:
+          CREDENTIALS_RESULT: ${{ needs.native-win32-x64-credentials.result }}
+          IAM_RESULT: ${{ needs.native-win32-x64-iam.result }}
+        run: test "$CREDENTIALS_RESULT" = success && test "$IAM_RESULT" = success
+
+  native-win32-x64-credentials:
+    name: SQLite credentials (win32-x64, windows-2025)
     needs: changes
     if: *run_platforms
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 15
     env:
       FORGE_CI_PLATFORM: win32
       FORGE_CI_ARCH: x64
+      FORGE_CI_SUITE: credentials
+    defaults: *bash_defaults
+    steps: *native_steps
+
+  native-win32-x64-iam:
+    name: IAM (win32-x64, windows-2025)
+    needs: changes
+    if: *run_platforms
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      FORGE_CI_PLATFORM: win32
+      FORGE_CI_ARCH: x64
+      FORGE_CI_SUITE: iam
     defaults: *bash_defaults
     steps: *native_steps
 
   native-win32-arm64:
     name: SQLite and IAM (win32-arm64, windows-11-arm)
     needs: changes
-    if: *run_platforms
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_windows_arm64 != 'false') }}
     runs-on: windows-11-arm
     timeout-minutes: 15
     env:
@@ -226,27 +291,21 @@ jobs:
     defaults: *bash_defaults
     steps: *native_steps
 
+  macos:
+    name: macOS compatibility checks
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_macos != 'false') }}
+    uses: ./.github/workflows/check-macos.yml
+
   # Forward-compatibility jobs are not required checks.
   native-linux-x64-next:
     name: SQLite and IAM (linux-x64, ubuntu-26.04)
     needs: changes
-    if: *run_platforms
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       FORGE_CI_PLATFORM: linux
-      FORGE_CI_ARCH: x64
-    defaults: *bash_defaults
-    steps: *native_steps
-
-  native-win32-x64-next:
-    name: SQLite and IAM (win32-x64, windows-2025)
-    needs: changes
-    if: *run_platforms
-    runs-on: windows-2025
-    timeout-minutes: 15
-    env:
-      FORGE_CI_PLATFORM: win32
       FORGE_CI_ARCH: x64
     defaults: *bash_defaults
     steps: *native_steps
@@ -258,7 +317,7 @@ jobs:
     name: sensitive scan and IAM callback (win32-x64)
     needs: changes
     if: *run_platforms
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 10
     defaults:
       run:

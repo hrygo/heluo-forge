@@ -91,6 +91,61 @@ function stageIndexFile(repo, path, oid) {
     'update-index', '--add', '--cacheinfo', `100644,${oid},${path}`);
 }
 
+test('keeps Windows ARM64 for its runtime inputs while unrelated extension files run the primary platforms', (t) => {
+  const repo = fixture(t);
+  repo.write('packages/forge-experts/src/service.mjs', 'export {};\n');
+  const unrelated = repo.commit();
+  const optional = classify(repo, repo.base, unrelated);
+  assert.equal(optional.run_platforms, true);
+  assert.equal(optional.run_windows_arm64, false);
+
+  repo.write('packages/forge-credentials-keychain/src/store.mjs', 'export {};\n');
+  assert.equal(classify(repo, repo.base, repo.commit()).run_windows_arm64, true);
+});
+
+test('keeps Windows ARM64 for shared inputs, unknown changes and non-PR events', async (t) => {
+  for (const path of ['packages/forge-experts/package.json', 'pnpm-lock.yaml', 'scripts/link-workspace.mjs', 'src/app.js']) {
+    await t.test(path, (child) => {
+      const repo = fixture(child);
+      repo.write(path);
+      assert.equal(classify(repo, repo.base, repo.commit()).run_windows_arm64, true);
+    });
+  }
+  assert.equal(classifyChanges({ eventName: 'push' }).run_windows_arm64, true);
+  assert.equal(classifyChanges({ eventName: 'pull_request' }).run_windows_arm64, true);
+});
+
+test('Windows ARM64 skips portable docs and keeps incompatible unrelated paths', (t) => {
+  const repo = fixture(t);
+  repo.write('docs/guide.md', '# revised\n');
+  const docs = repo.commit();
+  assert.equal(classify(repo, repo.base, docs).run_windows_arm64, false);
+
+  const oid = repo.git('rev-parse', `${repo.base}:docs/guide.md`);
+  stageIndexFile(repo, 'packages/forge-experts/CON.txt', oid);
+  assert.equal(classify(repo, repo.base, repo.commitStaged()).run_windows_arm64, true);
+});
+
+test('macOS classification uses the full diff, including platform changes after 300 documentation paths', (t) => {
+  const repo = fixture(t);
+  for (let index = 0; index < 301; index += 1) repo.write(`docs/guide-${index}.md`);
+  const docs = repo.commit();
+  assert.equal(classify(repo, repo.base, docs).run_macos, false);
+
+  repo.write('packages/forge-credentials-keychain/src/store.mjs', 'export {};\n');
+  assert.equal(classify(repo, repo.base, repo.commit()).run_macos, true);
+});
+
+test('macOS runs for desktop-only changes and when the PR diff cannot be confirmed', (t) => {
+  const repo = fixture(t);
+  repo.write('services/forge-desktop/src/app.mjs', 'export {};\n');
+  const result = classify(repo, repo.base, repo.commit());
+  assert.equal(result.run_platforms, false);
+  assert.equal(result.run_macos, true);
+  assert.equal(classifyChanges({ eventName: 'pull_request' }).run_macos, true);
+  assert.equal(classifyChanges({ eventName: 'push' }).run_macos, true);
+});
+
 test('new portable documentation paths skip platforms', async (t) => {
   for (const path of ['docs/new.md', 'docs/新设计/说明.md']) {
     await t.test(JSON.stringify(path), (child) => {
@@ -601,7 +656,7 @@ test('CLI appends its boolean output and reports a reason', (t) => {
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(outputPath, 'utf8'), 'already=present\nrun_platforms=false\n');
+  assert.equal(readFileSync(outputPath, 'utf8'), 'already=present\nrun_platforms=false\nrun_windows_arm64=false\nrun_macos=false\n');
   assert.match(result.stdout, /documentation-only changes/u);
 });
 
@@ -619,7 +674,7 @@ test('CLI runs all platforms when GITHUB_SHA is missing or mismatched', async (t
       else env.GITHUB_SHA = githubSha;
       const result = spawnSync(process.execPath, [script], { cwd: repo.root, env, encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(readFileSync(outputPath, 'utf8'), 'run_platforms=true\n');
+      assert.equal(readFileSync(outputPath, 'utf8'), 'run_platforms=true\nrun_windows_arm64=true\nrun_macos=true\n');
     });
   }
 });
@@ -631,7 +686,7 @@ test('CLI runs all platforms for push without requiring an event payload', (t) =
   delete env.GITHUB_EVENT_PATH;
   const result = spawnSync(process.execPath, [script], { cwd: repo.root, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(outputPath, 'utf8'), 'run_platforms=true\n');
+  assert.equal(readFileSync(outputPath, 'utf8'), 'run_platforms=true\nrun_windows_arm64=true\nrun_macos=true\n');
   assert.match(result.stdout, /full platform checks/u);
 });
 
@@ -648,7 +703,7 @@ test('CLI falls back to full checks for missing or invalid event JSON', async (t
         encoding: 'utf8',
       });
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(readFileSync(outputPath, 'utf8'), 'run_platforms=true\n');
+      assert.equal(readFileSync(outputPath, 'utf8'), 'run_platforms=true\nrun_windows_arm64=true\nrun_macos=true\n');
     });
   }
 });

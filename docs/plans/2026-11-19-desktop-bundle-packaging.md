@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-026 |
 | 文档名称 | 桌面端成套打包工作计划（Electron 分发矩阵） |
-| 版本 | V0.8.11 |
+| 版本 | V0.8.12 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-26 |
+| 最后更新 | 2026-11-27 |
 | 确认人 | 项目负责人 |
 | 确认日期 | 2026-11-23 |
 | 确认事项 | 确认本计划为实施依据；代码与脚本先于 P0 探针实施，验证后置 |
@@ -28,12 +28,12 @@
 
 ## 1. 目标与范围
 
-将「自建 Electron 壳 + 内嵌官方锁定版 dsh 运行时，企业插件与企业配置经首启装载」落地为 Windows x64、macOS 双架构与银河麒麟双架构的全平台桌面安装包，全部以河洛苍螭品牌呈现企业交付体验，并保持现行安全边界。
+将「自建 Electron 壳 + 内嵌官方锁定版 dsh 运行时，企业插件与企业配置经首启装载」落地为 Windows x64、macOS arm64 与银河麒麟双架构的全平台桌面安装包，全部以河洛苍螭品牌呈现企业交付体验，并保持现行安全边界。
 
 | 分发目标 | 包形态 | 内容 | 状态 |
 |---|---|---|---|
 | Windows x64 | 自建壳 NSIS 安装包（§4.3） | 自有代码 Electron 壳（本体完整河洛品牌：名称「河洛 Forge 企业版」+ 苍螭主标识）内嵌锁定版 dsh 运行时、预编译原生依赖与内置运行时（Python 与 Office 库、Node、pnpm），加载本机 `dsh --profile heluo-desktop`（仅绑定 `127.0.0.1` 的固定端口 30810）；企业插件与配置由随包企业资产在首启时装载；GitHub Actions 构建 | CI 草稿已接入；VM 与实机未验收 |
-| macOS arm64 / x64 | 自建壳 dmg / zip | 同一壳工程的 macOS 双架构产物与首开引导（Gatekeeper 未签名首开路径按实测记录）；GitHub Actions 构建 | `arm64` CI 草稿已接入；`x64` 与实机未验收 |
+| macOS arm64 | 自建壳 dmg / zip | Apple Silicon 安装包与首开引导（Gatekeeper 未签名首开路径按实测记录）；GitHub Actions 构建 | CI 草稿已接入，目标机验收待完成 |
 | 银河麒麟 aarch64 / x86_64 | 自建壳 deb | 同一壳工程的麒麟双架构产物（deb 元数据、内部软件源双路径）；GitHub Actions 构建 | 脚本支持 `--arch`；CI 与实机未验收 |
 
 品牌定制采用两个层级（壳本体在全平台均为自有产物）：
@@ -103,7 +103,7 @@
 | 8 | 麒麟 V10 SP1 上 Electron 可行性：glibc 版本、chromium sandbox 在加固内核的行为、arm64 与 x86_64 双架构最小应用探针；**Electron 44.7.0 兼容性已在 `0.2.2-rc.5` 复核（2026-11-26）：`@deepseek-ai/dsh@0.2.2-rc.5` 依赖的 `node-addon-require-builtin-darwin-arm64@0.1.10` 白名单含 `{43.0.0, 44.0.0, 44.7.0, 44.11.5, 45.0.0-alpha.6}`（承接 2026-11-19 `0.2.1-rc.3` 探针），壳继续精确钉 `44.7.0`** | 自建桌面壳的可行性前提；macOS 开发构建已实测该机制，麒麟目标机表现仍待本探针；预设预案：降级旧线仍 BLOCKED 时恢复 web 形态 deb 兜底，届时重申 | P0 |
 | 9 | 内置运行时在 `web` profile 下的接入方式：Office 技能资源与 Python 解释器路径的配置入口、agent 侧 `node` / `pnpm` 的提供机制 | 决定 Office 技能与工作区依赖能力能否在不改编上游的前提下提供；无配置入口时相应能力移出范围并上报。**已收敛（2026-11-26 mac 本机，DSH 0.2.2-rc.5）**：有配置入口——上游 `web` profile 的补丁层已有 `workspace-dependencies` 与 `skill-office` 两行，只对名为 `desktop` 的 profile 打开，企业底座按 id 覆盖后对 `web` profile 生效；agent 侧的 node 与 pnpm 由 `load_workspace_dependencies` 返回绝对路径，不改 PATH。证据见[验证记录](<../design/verification/desktop-primary-runtime.md>) | P0 |
 | 10 | Electron 44.7.0 自承载 Node 下 `node:sqlite` 与凭据存储（值级加密、0600 密钥文件）的可用性 | **macOS 本机已实测（2026-11-25）：`credentials.sqlite` 可写且密钥入库成功**；Windows / Linux 实机仍待验证，不可用则方案重新设计 | P0 |
-| 11 | 自承载运行随包内嵌的 dsh 在 Windows 与 Linux 的可行性；dsh 运行时原生依赖（`node-pty` 等）在五个目标（win x64、mac arm64 / x64、linux arm64 / x86_64）的预编译 | 某平台不可行则该平台回退路线 B | P0 |
+| 11 | 自承载运行随包内嵌的 dsh 在 Windows 与 Linux 的可行性；dsh 运行时原生依赖（`node-pty` 等）在四个目标（win x64、mac arm64、linux arm64 / x86_64）的预编译 | 某平台不可行则该平台回退路线 B | P0 |
 | 12 | 终端 CLI 与壳并发使用同一 `web` profile 的安全性（会话持久化、插件写锁、凭据库） | 不安全则壳改用独立 profile。已裁定：壳改用独占 profile `heluo-desktop`（2026-11-26，§4.3 实施记录），探针不再需要 | P0 |
 | 13 | 壳内认证闭环：dsh web 的 launch URL 获取方式、IAM 经系统浏览器登录后壳内会话的恢复 | **2026-11-26 离线包核验 `@deepseek-ai/dsh@0.2.2-rc.5` 与 `@deepseek-ai/dsh-web-app@0.2.2-rc.5` 确认**：`runCli({ packageManager })`、`--host`/`--port`/`--no-open` 与 stdout `dsh web: <带进程令牌的认证地址>` 均已保持；真实企业网络下 IAM 登录与会话恢复待联调 | P0 |
 
@@ -116,7 +116,7 @@
 | P0 | 前置验证与决策取证（许可、品牌 token、内置运行时接入、凭据存储、自承载与并发、壳内认证、麒麟 Electron） | G0 | 2 周 |
 | P1 | 统一构建流水线 + 品牌定制 + 壳工程设计先行与准入 | GB | 3–4 周 |
 | P2 | 壳工程核心实现（含首启企业配置、内置运行时、托盘与后台驻留）+ Windows x64 打包 | G2 | 6–8 周 |
-| P3 | macOS 双架构打包 | G3 | 1 周 |
+| P3 | macOS arm64 打包 | G3 | 1 周 |
 | P4 | 麒麟双架构适配与打包 | G4 | 3 周（deb、内置运行时与原生依赖的 linux 双架构产物、glibc / 沙箱实测） |
 | P5 | 治理与文档闭环 | G5 | 1 周 |
 
@@ -125,7 +125,7 @@
 员工包由一条工作流从源码直接构建，作为资产挂在公开仓的**草稿 Release** 上并保持草稿：不上传 workflow artifact，不发布 Release，构建产物不公开。草稿 Release 仅仓库写权限协作者可见可下载；公开仓的 workflow artifact 与已发布 Release 对任何登录 GitHub 的人可见，不用于承载产物。
 
 1. **触发**：推 `v*` tag 触发构建工作流，或在该 tag 上手动触发；tag 版本号对齐员工包版本（一个 tag = 一套制品基线），与 [.dsh-version](<../../.dsh-version>) 锁定版的对应关系、源提交与摘要清单位置写入草稿 Release 说明。
-2. **CI 矩阵**：windows runner 构建 Windows x64 壳 NSIS 安装包与 win x64 内置运行时（消费仓内已校验的品牌 `.ico`）；macos runner 构建 macOS arm64 / x64 壳 dmg / zip 与 mac 双架构内置运行时（消费仓内已校验的品牌 `.icns`）；ubuntu arm64 / x86_64 runner 构建麒麟壳 deb、预编译原生依赖与 linux 双架构内置运行时。
+2. **CI 矩阵**：windows runner 构建 Windows x64 壳 NSIS 安装包与 win x64 内置运行时（消费仓内已校验的品牌 `.ico`）；macos runner 构建 macOS arm64 壳 dmg / zip 与 arm64 内置运行时（消费仓内已校验的品牌 `.icns`）；ubuntu arm64 / x86_64 runner 构建麒麟壳 deb、预编译原生依赖与 linux 双架构内置运行时。
 3. **统一构建**：构建企业插件包 → 注入企业配置 → 组装员工包（中性安装包 + 企业资产目录 + `INSTALL.md` + `SHA256SUMS`），附员工包 SHA-256 摘要清单，作为资产挂到触发 tag 对应的草稿 Release（桌面安装包自身的独立 `.sha256` 校验文件及草稿说明摘要暂不调整，留待后续统一包校验体系补齐）；多 job 矩阵由一个前置 job 创建草稿、其余 job 只上传，不经 workflow artifact 在 job 间传递；内嵌的 dsh 运行时制品与随包 pnpm 经 `runtime-lock.json` 摘要比对后方可编排进安装包。P1 完成构建、注入与企业资产，P2–P4 依次接入各平台中性安装包。
 4. **配置注入**：插件不读环境变量，`.env` 只是输入格式。工作流把 `release-bundle` 环境的 Environment Secrets 中的配置键以环境变量映射交给构建脚本，构建脚本按映射表（见配置清单）转成插件配置字段，写入 patch 层中对应插件条目的 `config:`，与插件包一起构成企业资产；配置值只存在于构建进程内存，不落临时文件。签发方由 Discovery 文档提供，不注入 issuer。客户端密钥不进 patch 层：它随企业资产交付，由安装器在首启时写入本机凭据库并删除明文副本，记录名为 `clientSecretRef` 的值。配置值不写入构建日志、错误体与清单。
 5. **插件加载**：企业组合包 `@heluo/forge-enterprise` 为默认安装单元，研发扩展包 `@heluo/forge-engineering` 按需加入企业资产（其补丁层不含 IAM 行，以中性 tgz 原样随包）。壳首启时委托员工包内的安装器（`init-enterprise-plugin.mjs`）完成：校验员工包完整性、安装企业插件包（`dsh plugin --profile heluo-desktop add <tgz>`，经自承载 Node 运行）并核对制品证据、把客户端密钥写入本机凭据库后删除明文副本。企业配置随私版 tgz 内的 `dsh.bundle.patch` 由宿主随包装载；壳是否还需向 `heluo-desktop` profile 写入 `cordis.patch.yml` 与企业 npm 源 / 索引 preset，待 P0 第 6 项结论后确定，在此之前不写入。任一步失败不进入工作区；已完成的首启按员工包清单摘要记录，同一员工包不再重复初始化。
@@ -181,7 +181,7 @@
 5. **麒麟 Electron 可行性探针**：银河麒麟 V10 SP1（aarch64 与 x86_64，实机或虚拟机；双架构环境已具备、可调度）运行最小 Electron 应用（精确钉 44.7.0，指纹白名单见 §3 #8），核验 glibc、chromium sandbox 与加固内核行为；结论决定麒麟双架构适配（P4）能否立项实施。
 6. **内置运行时接入探针**：在 `web` profile 下实测 Office 技能资源与 Python 解释器路径的配置入口、agent 侧 `node` / `pnpm` 的提供机制；无配置入口的能力移出范围并上报。2026-11-26 结论（mac 本机）：有配置入口，能力不移出范围；可复跑的探针是 `scripts/probe/run-primary-runtime-probe.mjs`，实施记录见 §4.2 同日条目。
 7. **凭据存储探针**：在 Electron 自承载 Node 下实测 `node:sqlite` 与凭据的写入、读取和刷新（值级加密、0600 密钥文件）；macOS 本机已证实可写与入库，Windows / Linux 实机仍待验证，不可用则方案重新设计。
-8. **Windows / Linux 自承载探针**：实测自承载运行随包内嵌的 dsh 与 `dsh --profile heluo-desktop`（固定端口 30810）在 Windows 10 与 Linux 的可行性，以及运行时原生依赖在五个目标的预编译（macOS 本机已实测自承载）；某平台不可行则该平台回退路线 B。
+8. **Windows / Linux 自承载探针**：实测自承载运行随包内嵌的 dsh 与 `dsh --profile heluo-desktop`（固定端口 30810）在 Windows 10 与 Linux 的可行性，以及运行时原生依赖在四个目标的预编译（macOS 本机已实测自承载）；某平台不可行则该平台回退路线 B。
 9. **`web` profile 并发探针**：终端 CLI 与壳同时使用同一 `web` profile（会话读写、插件安装、登录刷新），核验持久化、写锁与凭据库行为；不安全则壳改用独立 profile。2026-11-26：壳已按上游 profile 归属规则改用独占 profile `heluo-desktop` 与固定端口，本探针的前提不再成立，不再执行；同一会话被壳与终端 `dsh web` 同时打开的行为列为新的待验事项（§6）。
 10. **壳内认证闭环探针**：实测 dsh web 启动时 launch URL 的获取方式（`0.2.2-rc.5` 输出格式与 `--no-open`/`--host` 参数已离线核验，macOS 本机已实测 launch URL 加载），以及真实企业网络下 IAM 经系统浏览器登录后壳内会话的恢复。
 
@@ -241,13 +241,13 @@
 
 **G2 出口判据**：离线 VM 端到端通过（含首启企业配置、内置运行时、托盘与后台驻留、品牌核验）+ NSIS 构建链结论 + 参数表；企业真实终端另按 #123 验收。
 
-### 4.4 P3 macOS 双架构打包（G3）
+### 4.4 P3 macOS arm64 打包（G3）
 
-1. **双架构产物**：同一壳工程经 Release 流水线 macos runner 产出 arm64 / x64 dmg 与 zip（中性制品）；`INSTALL.md` 首开引导附 Gatekeeper 未签名警告绕过图文。
-2. **双架构取证**：Apple Silicon 本机与 Intel（远程或虚拟机）分别安装取证；首启企业配置、插件挂载、品牌外观与升级收敛同 G2 判据；核验 Dock 启动下的登录 shell 环境读取。
+1. **Apple Silicon 产物**：同一壳工程经 Release 流水线 macos runner 产出 arm64 dmg 与 zip（中性制品）；`INSTALL.md` 首开引导附 Gatekeeper 未签名警告绕过图文。
+2. **目标机取证**：在 Apple Silicon 本机安装取证；首启企业配置、插件挂载、品牌外观与升级收敛同 G2 判据；核验 Dock 启动下的登录 shell 环境读取。
 3. **未签名功能边界核验**：自有壳不签名不公证，核验 TCC 依赖能力（麦克风等）的实际可用性，结论写入交付边界；凭据边界不变——不使用系统钥匙串，保持 SQLite 值级 AES-256-GCM 与 0600 密钥文件（S9 / N2）。
 
-**G3 出口判据**：双架构安装、插件挂载与品牌外观证据齐备；Gatekeeper 首开表现与未签名功能边界已记录（不公证）。
+**G3 出口判据**：Apple Silicon 安装、插件挂载与品牌外观证据齐备；Gatekeeper 首开表现与未签名功能边界已记录（不公证）。
 
 ### 4.5 P4 麒麟双架构适配与打包（G4）
 
@@ -278,7 +278,7 @@
 |---|---|---|---|
 | 品牌定制（跨包） | forge-brand 含正反向测试 + 外层资产过 manifest 校验 | 外层材料品牌呈现一致 | 应用内品牌外观生效且缺失可回退，三平台壳本体完整品牌；安全入口未被隐藏 |
 | Windows x64 | 壳工程正反向测试 + NSIS 构建链结论 + 内嵌制品摘要校验 | 离线 VM 静默安装与卸载 / 升级 / 回退通过 + 静默参数文档 | 首启企业配置 + 企业插件实际挂载 + 壳与应用内品牌生效 + 托盘与后台驻留 + 内置运行时可用 + 企业登录可用（IAM 联调另计） |
-| macOS 双架构 | dmg / zip 构建可重复 + 摘要校验 | 双架构安装取证 + Gatekeeper 首开记录 | 首启企业配置 + 插件挂载 + 壳与应用内品牌生效 + 内置运行时可用 + S9 凭据边界不变 + 未签名功能边界记录 |
+| macOS arm64 | dmg / zip 构建可重复 + 摘要校验 | Apple Silicon 安装取证 + Gatekeeper 首开记录 | 首启企业配置 + 插件挂载 + 壳与应用内品牌生效 + 内置运行时可用 + S9 凭据边界不变 + 未签名功能边界记录 |
 | 麒麟双架构 | 壳工程含正反向测试 + GitHub Actions 构建可重复 + Electron 兼容探针通过 | 实机 deb 安装 + 自启动 | 首启企业配置 + 仅回环 + 插件挂载 + 壳与应用内品牌生效 + 内置运行时可用 + 沙箱链准入 + 凭据隔离 |
 
 ## 6. 待核验事项

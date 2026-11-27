@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.9.4 |
+| 版本 | V0.9.5 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-26 |
+| 最后更新 | 2026-11-27 |
 | 门禁 | 轻量集成方案待用户确认；问答式交付打包与员工启动器已本地验证；企业接口与目标平台待实测 |
 | 交付门禁 | 启动器自动准备宿主/web profile；已配置的 IAM Discovery 可由制作器校验；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；异版本先卸载再安装的编排已由离线用例覆盖、`dsh plugin remove` 已在 0.2.1-rc.5 上取证，企业私版 tgz 的升级路径未端到端实测；企业 IAM/宿主目标平台待实测 |
 
@@ -35,7 +35,7 @@ GitHub Actions 使用公开源码生成包含目标平台组件的公版 DSH 插
 | 企业 IAM | 目标企业部署显式使用 `authMode=confidential`，预注册授权码与刷新权限，两个 grant 共用 IAM 登记的客户端认证方法，授权码使用 PKCE S256。私版只携带对交付对象可见的非秘密认证元数据 |
 | 个人 Key | 员工首次登录后录入，不进入企业配置或私版；与 issuer / 网关地址绑定的增强另由 [issue #226](<https://github.com/hrygo/heluo-forge/issues/226>) 跟踪 |
 | 制包机与 Skill | 本地制作在 macOS 执行；制作端与员工端既有研发 Skill 按 Agent Skills 标准整理 |
-| 目标平台 | Windows x64 / ARM64、麒麟 x86_64 / ARM64、macOS Intel / Apple；目标环境验收由 [issue #123](<https://github.com/hrygo/heluo-forge/issues/123>) 跟踪，未运行不能宣称交付通过 |
+| 目标平台 | Windows x64 / ARM64、麒麟 x86_64 / ARM64、Apple Silicon macOS（见[需求基线](<../requirements/requirements-baseline.md#21-一期范围>) S9）；目标环境验收由 [issue #123](<https://github.com/hrygo/heluo-forge/issues/123>) 跟踪 |
 
 麒麟采用 Web 形态，Windows ARM64 允许 Web 形态。原样内部分发官方宿主取决于对应发行物及第三方组件的许可、可获取性和企业策略；通过官方渠道取得宿主不代表所有目标架构均已有官方预编译发行物。员工终端与制包机职责不同，企业服务仍须可达。
 
@@ -118,7 +118,7 @@ miniceM 对比并选择以下两条候选：
 |---|---|---|
 | 员工操作步数 | 解压企业材料 → 运行启动器（host 与插件同包）→ 重启登录；未含 Node.js 安装步骤 | 安装 Node.js LTS（如缺）→ 运行启动器（缺宿主时 npm 自动安装、缺 profile 时自动创建）→ 重启登录；macOS web 已实测，Desktop 未实测 |
 | 管理员/受限角色 | 需管理员分发宿主、运行依赖与更新，受限角色依赖受管预置 | 员工可自助安装插件；受限角色是否允许 `dsh plugin` 与 npm 安装须实测，不放宽 `plugin_manager` |
-| 平台宿主与运行依赖 | 每个目标需准备并核验宿主、Node/Electron 依赖与架构；六目标当前仅 macOS arm64 有本地证据 | 宿主由官方渠道按平台提供；npm 自动安装需要可用的官方 registry 或企业镜像，麒麟/Windows 离线场景未实测 |
+| 平台宿主与运行依赖 | 每个目标需准备并核验宿主、Node/Electron 依赖与架构；macOS arm64 已有本地证据 | 宿主由官方渠道按平台提供；npm 自动安装需要可用的官方 registry 或企业镜像，麒麟/Windows 离线场景未实测 |
 | 离线依赖 | 可在内网分发完整材料，但宿主与依赖需随包校验 | 终端无公网时需要企业镜像或预置宿主；启动器未内置离线宿主包，离线路径未实测 |
 | 更新与回退 | 需同时管理宿主与插件版本；回退由企业包控制 | 宿主更新由官方渠道负责；插件升级与回退都由启动器按本次交付版本收敛（异版本先卸载再安装，同版本零写入）；记录存在却读不出版本、或同版本核对不出一制品时 fail closed、不自动卸载。pnpm 因 profile 的 `node_modules` 由另一个 store 链接而拒绝包操作（`ERR_PNPM_UNEXPECTED_STORE`）时同样 fail closed：报 `PROFILE_STORE_MISMATCH`，给出该 profile 与其记录的 store，启动器不自动清空。清空 `node_modules` 后重试的修复只对声明拥有该 profile 的调用方开放（`--reinstall-on-store-mismatch`，企业版桌面壳的首启使用）；企业版桌面壳另把其 pnpm 解析出的 store 以 `--pnpm-store` 交给安装器，安装器据此在首个包操作之前先比对、先处理（已授权先清空、未授权提前停），反应式修复保留为漏报回落 |
 | 用户数据保留 | 取决于安装位置；当前启动器不改 profile 数据，未做保留测试 | 当前启动器不改用户 profile/数据，未做保留测试；卸载与恢复按 #123 |
@@ -132,7 +132,7 @@ miniceM 对比并选择以下两条候选：
 
 调研记录应包括实际用户操作步数、管理员与受限角色路径、各平台宿主和运行依赖、安装与更新、数据保留、许可、系统信任及实现和运维成本；比较结果列出实现人日、后续维护投入及其估算依据，不以未经测量的数值作承诺。无法核实的能力保持待验证；路线选择与实现结果在 [issue #222](<https://github.com/hrygo/heluo-forge/issues/222>) 记录。
 
-锁定版 [DSH Desktop 打包文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/packaging/README.md>)列出 macOS arm64 / x64 与 Windows x64 构建目标，未将 Linux 列为 Desktop 目标；Windows ARM64、麒麟 Web 和 macOS Intel 的具体宿主输入及兼容性须按目标版本核验，不以该文档代替目标设备实测。
+锁定版 [DSH Desktop 打包文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/packaging/README.md>)列出 macOS arm64 / x64 与 Windows x64 构建目标，未将 Linux 列为 Desktop 目标。各目标的宿主输入与兼容性按锁定版和目标设备实测确认。
 
 上游可执行载荷签名、企业插件摘要与外层交付材料完整性是不同事实。无需新增企业签名并不证明 Gatekeeper、SmartScreen 或离线信任必然通过；目标环境实际表现归 [#123](<https://github.com/hrygo/heluo-forge/issues/123>) 记录。不得未经授权将企业私版或配置上传外部公证服务。
 
@@ -186,7 +186,7 @@ public / none 是兼容默认值，仅适用于已验证授权码换票与刷新
 | 制品一致性 | 仅约定配置 / 清单发生变化，平台组件字节、模式与依赖闭包保持，私版摘要从最终文件计算 |
 | 宿主集成 | miniceM 对候选作记录并选定简便方式；本地可重复检查插件实际安装挂载、权限、失败提示和数据保留，不重新签名或公证 |
 | 身份与存储 | 本地核验私版仅含非秘密配置、密钥独立预置、双 grant 认证、S256、issuer、回调与凭据门禁。企业 IAM 和网关另做目标环境联调 |
-| 目标环境 | Windows x64 / ARM64、麒麟 x86_64 / ARM64、macOS Intel / Apple 的安装、升级、回退及安全检查由 [#123](<https://github.com/hrygo/heluo-forge/issues/123>) 独立验收；缺环境标 BLOCKED，未运行标 NOT RUN |
+| 目标环境 | §1 所列目标的安装、升级、回退及安全检查由 [#123](<https://github.com/hrygo/heluo-forge/issues/123>) 独立验收；缺环境标 BLOCKED，未运行标 NOT RUN |
 | 网关地址绑定 | 由 [#226](<https://github.com/hrygo/heluo-forge/issues/226>) 独立设计、实现和验收，不作为本方案实施 issue 的关闭条件 |
 
 公版构建、私版制作和员工初始化具备本地验证基础；公开 Release、目标终端及真实企业联调须分别核验，验证状态以[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)为准。

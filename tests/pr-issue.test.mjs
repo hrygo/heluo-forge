@@ -18,14 +18,13 @@ test('rejects missing, placeholder, commented, code and unrelated references', a
   await assert.rejects(validateIssueReference('Closes #12', async () => { throw new Error('API unavailable'); }));
 });
 
-test('workflow rechecks edited descriptions in the existing required job', async () => {
+test('repository checks retain edited events for base changes and use read-only checkout permissions', async () => {
   const { readFile } = await import('node:fs/promises');
   const workflow = await readFile(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8');
   assert.match(workflow, /pull_request:\n\s+types: \[opened, synchronize, reopened, edited\]/u);
-  assert.match(workflow, /issues: read/u);
-  assert.match(workflow, /pull-requests: read/u);
+  assert.match(workflow, /^permissions:\n  contents: read\n\n/mu);
   assert.match(workflow, /merge_group:\n\s+types: \[checks_requested\]/u);
-  assert.match(workflow, /verify:[\s\S]*?if: github\.event_name == 'pull_request'[\s\S]*?node scripts\/check-pr-issue\.mjs/u);
+  assert.doesNotMatch(workflow, /node scripts\/check-pr-issue\.mjs/u);
 });
 
 test('fetches current PR body with read-only API for fork and Dependabot events', async () => {
