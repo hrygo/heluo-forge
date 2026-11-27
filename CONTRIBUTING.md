@@ -158,9 +158,14 @@ GitHub 正式审查绑定 PR 头提交。洛神批准记录包含所核对的目
 1. 注册洛神专用的私有 GitHub App，关闭 webhook。仓库权限授予 `Pull requests: Read and write` 和 `Administration: Read-only`。安装时选择 `Only select repositories` 并仅添加本仓库。[注册 GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app) · [安装 GitHub App](https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app)
 2. 创建 `luoshen-approval` Actions 环境。在 `Selected branches and tags` 下只添加名称为 `main`、类型为 `Branch` 的规则。将 App 私钥存入该环境的 Secret `PR_AGENT_APPROVAL_APP_PRIVATE_KEY`。[环境保护规则](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#deployment-branches-and-tags)
 3. 在仓库 Actions Variables 中将 App 的 Client ID 写入 `PR_AGENT_APPROVAL_APP_CLIENT_ID`，将 slug 写入 `PR_AGENT_APPROVAL_EXPECTED_APP_SLUG`，省略 `[bot]` 后缀。`PR_AGENT_HUMAN_CODEOWNERS` 填写维护者确认用于人工审查的全部代码所有者登录名，各名称不带 `@`，以逗号分隔。工作流签发短期安装令牌，核对实际 App slug 后执行批准或清理，作业结束时撤销令牌。[GitHub App 安装认证](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
-4. 核对 `main` 满足上述人审门禁。在隔离分支设置相同的人工审批要求，并用 App 安装令牌为以该分支为目标的测试 PR 提交唯一一票正式批准。确认 GitHub 的 `reviewDecision` 为 `REVIEW_REQUIRED`。暂时关闭隔离分支的代码所有者审批并保留一票必需审批，核对撤回前的计票仍要求真人批准。恢复隔离规则并撤回测试批准后，设置 `PR_AGENT_AUTO_APPROVE=true`。
+4. 核对 `main` 满足上述人审门禁。在隔离分支设置相同的人工审批要求，用 App 安装令牌为以该分支为目标的测试 PR 提交唯一一票正式批准，确认 GitHub 的 `reviewDecision` 为 `REVIEW_REQUIRED`。
+
+   - 暂时关闭隔离分支的代码所有者审批。查询该分支实际生效的经典保护和规则集（含继承规则），确认审批门禁只剩一票普通必需审批。经典保护的必需批准数为一，代码所有者与最后推送者相关审批要求均关闭，生效规则集无额外审批要求。[经典分支保护](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-pull-request-reviews-before-merging) · [生效分支规则](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch)
+   - 保持 PR 版本和隔离规则一致。仅有 App 批准时，`reviewDecision` 须为 `REVIEW_REQUIRED`。由另一名具备仓库写权限的真人协作者批准后，确认该字段转为 `APPROVED`。[GitHub 必需审批](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)
+   - 测试结束后撤回测试批准并恢复隔离分支规则。两种计票结果均符合预期后设置 `PR_AGENT_AUTO_APPROVE=true`。
+
 5. 仅用于验收的同仓非草稿测试 PR 使用一条小型、无风险的改动，头提交说明带 `[skip ci]`，避免改投时额外触发自动审查。将 PR 改投 `main` 并留言 `/review`，检查 App 对当前头提交的审查为 `APPROVED`，且 GitHub 仍要求真人审批。将 PR 改回隔离分支，以隔离分支的保护规则事件触发清理，检查该条批准为 `DISMISSED`，然后关闭测试 PR。[GitHub 跳过工作流说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs)
 
-验收还需检查维护者有效的修改请求会阻止洛神批准。核验代码所有者写权限变化时，记录权限变更生效至清理完成期间的 GitHub 合入判定。本仓库的 App 批准、隔离分支计票和改投后撤回已于 2026-11-27 实测。[验收记录](https://github.com/hrygo/heluo-forge/pull/514)
+验收还需检查维护者有效的修改请求会阻止洛神批准。核验代码所有者写权限变化时，记录权限变更生效至清理完成期间的 GitHub 合入判定。本仓库 2026-11-27 实测覆盖 App 批准、仅有 App 批准时的隔离分支计票和改投后撤回。真人批准对照待实测。[验收记录](https://github.com/hrygo/heluo-forge/pull/514)
 
 删除 `PR_AGENT_AUTO_APPROVE` 后，后续运行停止新增批准。保留 App 配置可让推送、经典分支保护变更和定时任务继续清理已有批准。
