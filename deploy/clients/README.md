@@ -26,12 +26,12 @@ Web 端建议使用支持 `AbortSignal.any()` 的新版 Chrome 或 Chromium；Ch
 
 ## Windows NSIS 静默安装与升级参数
 
-Windows 安装包基于 electron-builder NSIS（`oneClick: true`、`perMachine: false`、`deleteAppDataOnUninstall: false`）：
+Windows 安装包基于 electron-builder NSIS（`oneClick: false`、`allowToChangeInstallationDirectory: true`、`perMachine: false`、`deleteAppDataOnUninstall: false`）：
 
 | 参数 | 作用 | 说明 |
 |---|---|---|
 | `/S` | 静默安装 / 静默卸载 | 无界面完成安装或卸载；需在 Windows VM 实测确认 |
-| `/D=<绝对路径>` | 指定安装目录 | NSIS 标准约定：必须放在命令行最后、不加引号、且仅作用于用户级可写目录 |
+| `/D=<绝对路径>` | 指定安装目录 | 图形向导支持交互选择安装目录；静默安装遵循 NSIS 标准约定，`/D=` 必须放在命令行最后且不加引号 |
 | 升级 / 回退语义 | 异版本先卸载再安装 | 安装目录随版本更新，`%APPDATA%` 与 `$DSH_HOME` 下的 `first-run.json`、日志及凭据库保留（`deleteAppDataOnUninstall: false`） |
 
 > 注：企业无统一 MDM，本节仅面向自助安装与本地排障参考，不随包分发批量推送脚本；上述静默参数待离线 Win10 x64 虚拟机实测取证。

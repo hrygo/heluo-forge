@@ -331,7 +331,8 @@ export function builderConfig({ identity, version, resourcesDir, iconsDir, appDi
       guid: identity.upgradeGuid,
       artifactName: `${identity.executableName}-\${version}-setup-\${arch}.\${ext}`,
       uninstallDisplayName: `${identity.displayName} \${version}`,
-      oneClick: true,
+      oneClick: false,
+      allowToChangeInstallationDirectory: true,
       perMachine: false,
       // Upgrades converge by uninstalling differing versions and reinstalling;
       // keeping user app data ensures profile markers, logs and local state
