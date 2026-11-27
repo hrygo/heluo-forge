@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
-const full = (reason) => ({ run_platforms: true, reason });
+const full = (reason) => ({ run_platforms: true, run_windows_arm64: true, reason });
 const isObjectId = (value) => typeof value === 'string'
   && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value)
   && !/^0+$/u.test(value);
@@ -132,6 +132,9 @@ const ISOLATED_NON_PLATFORM_PREFIXES = [
   'services/forge-desktop/',
 ];
 
+// Windows ARM64 runs the credential/IAM subset and uses enterprise patch fixtures.
+const WINDOWS_ARM64_PACKAGES = new Set(['forge-brand', 'forge-credentials-keychain', 'forge-enterprise', 'forge-iam', 'forge-policy']);
+
 const ISOLATED_NON_PLATFORM_FILES = new Set([
   'scripts/build-desktop-installer.mjs',
   'scripts/derive-brand-icons.mjs',
@@ -163,11 +166,17 @@ function isIsolatedNonPlatformPath(path) {
     || ISOLATED_NON_PLATFORM_FILES.has(path);
 }
 
-function isApprovedNonPlatformChange({ path, status, oldMode, newMode }, tree) {
-  if (!isIsolatedNonPlatformPath(path) || !isPortablePath(path)) return false;
+function isPortableRegularChange({ path, status, oldMode, newMode }, tree) {
+  if (!isPortablePath(path)) return false;
   if (status === 'A') return newMode === '100644' && tree !== null && !collidesWithTree(tree, path);
   if (status === 'D') return oldMode === '100644';
   return oldMode === '100644' && newMode === '100644';
+}
+
+function canSkipWindowsArm64({ path }) {
+  if (isIsolatedNonPlatformPath(path)) return true;
+  const extension = /^packages\/(forge-[a-z0-9-]+)\//u.exec(path)?.[1];
+  return extension !== undefined && !WINDOWS_ARM64_PACKAGES.has(extension) && !path.endsWith('/package.json');
 }
 
 export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd(), gitRunner = runGit } = {}) {
@@ -229,13 +238,17 @@ export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd
     const tree = changes.some(({ status }) => status === 'A')
       ? createTreeIndex(nulFields(gitRunner(['ls-tree', '-r', '-z', '--name-only', '--full-tree', checkout], cwd)))
       : null;
-    if (!changes.every((entry) => isApprovedNonPlatformChange(entry, tree))) {
+    if (!changes.every((entry) => isPortableRegularChange(entry, tree))) {
       return full('non-isolated or unsafe change');
     }
-    if (changes.every((entry) => isApprovedDocPath(entry.path))) {
-      return { run_platforms: false, reason: 'documentation-only changes' };
+    if (!changes.every(({ path }) => isIsolatedNonPlatformPath(path))) {
+      return { ...full('non-isolated or unsafe change'), run_windows_arm64: !changes.every(canSkipWindowsArm64) };
     }
-    return { run_platforms: false, reason: 'isolated non-platform changes' };
+    return {
+      run_platforms: false,
+      run_windows_arm64: false,
+      reason: changes.every(({ path }) => isApprovedDocPath(path)) ? 'documentation-only changes' : 'isolated non-platform changes',
+    };
   } catch {
     return full('Git comparison unavailable or invalid');
   }
@@ -255,7 +268,7 @@ function main() {
   }
   const result = classifyChanges({ eventName: process.env.GITHUB_EVENT_NAME, event, githubSha: process.env.GITHUB_SHA });
   try {
-    appendFileSync(process.env.GITHUB_OUTPUT, `run_platforms=${result.run_platforms}\n`, 'utf8');
+    appendFileSync(process.env.GITHUB_OUTPUT, `run_platforms=${result.run_platforms}\nrun_windows_arm64=${result.run_windows_arm64}\n`, 'utf8');
   } catch {
     console.error('cannot write GITHUB_OUTPUT');
     process.exitCode = 1;
