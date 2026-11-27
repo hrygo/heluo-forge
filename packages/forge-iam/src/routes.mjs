@@ -8,10 +8,13 @@ const REQUEST_VALUE = '1';
 const API_PREFIX = '/api/forge-iam';
 const MAX_BODY_BYTES = 8 * 1024;
 
-
+function clientView(view) {
+  return Number.isFinite(view?.sampledAt) ? { ...view, sampledAt: view.sampledAt } : view;
+}
 
 function sendJson(res, status, body) {
-  const payload = JSON.stringify(body);
+  const response = Number.isFinite(body?.view?.sampledAt) ? { ...body, view: clientView(body.view) } : clientView(body);
+  const payload = JSON.stringify(response);
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('cache-control', 'no-store');
@@ -448,7 +451,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         try {
           for await (const view of service.watch(controller.signal)) {
             if (controller.signal.aborted) break;
-            res.write(`data: ${JSON.stringify(view)}\n\n`);
+            res.write(`data: ${JSON.stringify(clientView(view))}\n\n`);
           }
         } catch {
           // A dropped connection ends the stream; the client reconnects.

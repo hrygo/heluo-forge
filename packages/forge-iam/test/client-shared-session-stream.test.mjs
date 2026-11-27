@@ -982,6 +982,61 @@ for (const retrySucceeds of [true, false]) {
   });
 }
 
+for (const holdEarlyRead of [false, true]) {
+  test(`按 Host 剩余期限复核有效会话${holdEarlyRead ? '且迟到快照不延长期限' : '且无需唤醒或 SSE'}`, async (t) => {
+    const stream = events();
+    const hostStart = Date.now();
+    const duration = 4000;
+    const readyView = { ...ready, sampledAt: hostStart, accessExpiresAt: new Date(hostStart + duration).toISOString() };
+    const early = Promise.withResolvers();
+    const confirmation = Promise.withResolvers();
+    let hostNow = hostStart;
+    let reads = 0;
+    let waking = false;
+    const page = await mountPage(async (path) => {
+      if (path === '/api/forge-iam/models') return Response.json({});
+      assert.equal(path, '/api/forge-iam/view');
+      reads++;
+      if (hostNow >= hostStart + duration) return confirmation.promise;
+      if (waking) return early.promise;
+      return Response.json(readyView);
+    }, { eventSource: stream.EventSource, now: hostStart + 120_000 });
+    t.after(() => {
+      early.resolve(Response.json(readyView));
+      confirmation.resolve(Response.json({ ...readyView, state: 'expired', signedIn: false, renewal: 'unavailable' }));
+      page.close();
+    });
+    page.mount('forge-iam');
+    page.mount('forge-iam-launcher', { wide: true });
+    await page.settled();
+    stream.streams.at(-1).emit(readyView);
+    assert.match(text(page.render('forge-iam-launcher')), /企业认证有效/);
+    const before = reads;
+
+    if (holdEarlyRead) {
+      waking = true;
+      page.focus();
+      assert.equal(reads, before + 1);
+    }
+    hostNow += duration - 1;
+    page.advanceTime(duration - 1, { advanceWall: false });
+    assert.match(text(page.render('forge-iam-launcher')), /企业认证有效/);
+    hostNow++;
+    page.advanceTime(1, { advanceWall: false });
+    assert.match(text(page.render('forge-iam-launcher')), /正在核验企业会话/);
+
+    if (holdEarlyRead) {
+      early.resolve(Response.json(readyView));
+      await page.settled();
+      assert.match(text(page.render('forge-iam-launcher')), /正在核验企业会话/);
+    }
+    assert.equal(reads, before + (holdEarlyRead ? 2 : 1));
+    confirmation.resolve(Response.json({ ...readyView, sampledAt: hostNow, state: 'expired', signedIn: false, renewal: 'unavailable' }));
+    await page.settled();
+    for (const id of ['forge-iam', 'forge-iam-launcher']) assert.match(text(page.render(id)), /会话已过期/);
+  });
+}
+
 test('目录修订过滤到期核验结果后会再次读取 Host', async (t) => {
   const stream = events();
   const now = Date.now();

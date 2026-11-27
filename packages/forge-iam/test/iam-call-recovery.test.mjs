@@ -26,7 +26,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
 function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false,
-  manual = [], failMovedAdapter = false, iamOverride, sendModelRequest, beforeModelFetch } = {}) {
+  manual = [], failMovedAdapter = false, iamOverride, sendModelRequest, beforeModelFetch, onModelFetchError } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -135,6 +135,9 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
                 beforeModelFetch?.();
                 const response = await streamOptions.fetch(`${model.baseUrl}/chat/completions`, {
                   method: 'POST', headers: streamOptions.headers, signal: streamOptions.signal,
+                }).catch(cause => {
+                  onModelFetchError?.();
+                  throw cause;
                 });
                 if (!response.ok) {
                   yield { type: 'finish', reason: { kind: 'error', failure: { code: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED' } } };
@@ -758,14 +761,27 @@ for (const [scenario, holdGrantRead, refreshAvailable, guarded] of [
   });
 }
 
-for (const [name, priorPost] of [
-  ['a verified connection failure leaves the retry eligible for dispatch renewal', false],
-  ['a verified connection failure after an image rejection preserves the earlier dispatch', true],
+for (const [name, expireAt, priorPost, changeKey] of [
+  ['a verified connection failure leaves the retry eligible for dispatch renewal', 'retry', false],
+  ['a verified connection failure can renew after access expires during retry backoff', 'backoff', false],
+  ['a verified connection failure can renew when access expires as the SDK receives the failure', 'failure', false],
+  ['a verified connection failure after an image rejection preserves the earlier dispatch', 'retry', true],
+  ['access expiry during retry backoff cannot renew after the logical call already sent a POST', 'backoff', true],
+  ['an expired connection retry cannot use a gateway key changed during renewal', 'backoff', false, true],
 ]) {
   test(name, { timeout: 6000 }, async t => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     const accessOffsetMs = 240_000;
-    const f = await sessionFixture(t, { accessOffsetMs });
+    const renewalStarted = Promise.withResolvers();
+    const releaseRenewal = Promise.withResolvers();
+    t.after(() => releaseRenewal.resolve());
+    const f = await sessionFixture(t, {
+      accessOffsetMs,
+      beforeJwks: changeKey ? () => {
+        renewalStarted.resolve();
+        return releaseRenewal.promise;
+      } : undefined,
+    });
     await f.service.saveModelSelection({ models: { [options.model]: {} }, defaultModelId: options.model });
     const endpoint = `${GATEWAY}/chat/completions`;
     const fetch = globalThis.fetch;
@@ -773,6 +789,11 @@ for (const [name, priorPost] of [
     const retryAttempt = priorPost ? 3 : 2;
     let attempts = 0;
     let transportCalls = 0;
+    let observedRetry = false;
+    const expireAccess = () => {
+      t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
+      f.advance(accessOffsetMs + 1, { notify: false });
+    };
     t.mock.method(globalThis, 'fetch', async (url, init) => {
       if (url !== endpoint) return fetch(url, init);
       if (++transportCalls === retryAttempt - 1) {
@@ -786,21 +807,40 @@ for (const [name, priorPost] of [
     const { adapter, guard, runtime } = fixture({
       iamOverride: f.service, native: true,
       beforeModelFetch() {
-        if (++attempts !== retryAttempt) return;
-        t.mock.timers.setTime(Date.parse(f.grant.accessExpiresAt) + 1);
-        f.advance(accessOffsetMs + 1, { notify: false });
+        if (++attempts === retryAttempt && expireAt === 'retry') expireAccess();
+      },
+      onModelFetchError() {
+        if (expireAt === 'failure' && transportCalls === retryAttempt - 1) expireAccess();
+      },
+      diagnoseFailure({ transport }) {
+        if (transport?.phase !== 'before-send' || !transport.retrying) return;
+        observedRetry = true;
+        if (expireAt === 'backoff') expireAccess();
       },
     });
     t.after(() => runtime.dispose());
     await runtime.ready;
     const request = priorPost ? { ...options, messages: [{ role: 'user', content: [{ type: 'image' }] }] } : options;
     const prepared = await adapter.prepareCall(request.provider, request.model);
-    const finish = finishOf(await chunks(guard(request, next => prepared.stream(next))));
+    const call = chunks(guard(request, next => prepared.stream(next)));
+    if (changeKey) {
+      await renewalStarted.promise;
+      await f.service.saveGatewayCredential({ key: 'another-synthetic-key' });
+      releaseRenewal.resolve();
+    }
+    const finish = finishOf(await call);
 
-    assert.equal(attempts, retryAttempt, 'the known unsent failure must reach the SDK retry');
+    assert.equal(observedRetry, true, 'the first connection failure must be confirmed before the retry');
+    if (changeKey) {
+      assert.equal(finish.failure?.code, 'IAM_MODEL_CONTEXT_CHANGED');
+      assert.equal(attempts, 1, 'the context change must be refused before the SDK retry');
+      assert.deepEqual(posts, []);
+      return;
+    }
     assert.deepEqual({ kind: finish.kind, code: finish.failure?.code, refreshes: f.oidc.counts.refresh, transportCalls }, priorPost
       ? { kind: 'error', code: 'IAM_LOGIN_REQUIRED', refreshes: 0, transportCalls: 2 }
       : { kind: 'stop', code: undefined, refreshes: 1, transportCalls: 2 });
+    assert.equal(attempts, priorPost && expireAt === 'backoff' ? retryAttempt - 1 : retryAttempt);
     const { grant: complete } = await f.store.read();
     assert.equal(complete.sessionInstanceId, f.grant.sessionInstanceId);
     assert.equal(complete.accessToken === f.grant.accessToken, priorPost);

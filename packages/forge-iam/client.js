@@ -1641,6 +1641,7 @@ window.__ModuleLoader__.load({
     const SESSION_VERIFYING_NOTICE = '正在核验企业会话';
     const SESSION_RENEWING_NOTICE = '企业会话待续期';
     const confirmedSessionViews = new WeakSet();
+    const projectedSessionDeadlines = new WeakMap();
 
     // §4.1 会话状态派生
     // view.state 只在这里读一次：其余代码用布尔量判断，新增状态时只改这里。
@@ -1674,10 +1675,17 @@ window.__ModuleLoader__.load({
       return Number.isFinite(parsed) ? parsed : null;
     }
 
+    function sessionMonotonicNow() {
+      return typeof performance === 'undefined' ? Date.now() : performance.now();
+    }
+
     function presentSession(view) {
       const ui = deriveSessionUi(view);
+      const projectedAt = projectedSessionDeadlines.get(view);
       const deadline = sessionDeadline(view, ui);
-      const verifying = deadline !== null && deadline <= Date.now() && !confirmedSessionViews.has(view);
+      const verifying = projectedAt === undefined
+        ? deadline !== null && deadline <= Date.now() && !confirmedSessionViews.has(view)
+        : projectedAt <= sessionMonotonicNow();
       return { ...ui, verifying, ready: ui.ready && !verifying };
     }
 
@@ -2162,6 +2170,14 @@ window.__ModuleLoader__.load({
     const SESSION_POLL_INTERVAL_MS = 2000;
     const MAX_DEADLINE_READ_ATTEMPTS = 2;
 
+    function sessionClock() {
+      return { wall: Date.now(), monotonic: sessionMonotonicNow() };
+    }
+
+    function timeUntilSessionDeadline(deadline, clock) {
+      return deadline.projectedAt === undefined ? deadline.at - clock.wall : deadline.projectedAt - clock.monotonic;
+    }
+
     function advanceViewEpoch(barrierRef) {
       barrierRef.current.epoch += 1;
       barrierRef.current.restartStream?.();
@@ -2181,7 +2197,7 @@ window.__ModuleLoader__.load({
       let deadlineTimer = null;
       let deadlineRetryTimer = null;
 
-      function trackDeadline(subscriber, view, sampledAfter = -Infinity) {
+      function trackDeadline(subscriber, view, sampledAfter) {
         const ui = deriveSessionUi(view);
         const at = sessionDeadline(view, ui);
         if (at === null) { subscriber.deadline = null; return; }
@@ -2189,25 +2205,35 @@ window.__ModuleLoader__.load({
         const epoch = subscriber.barrierRef?.current.epoch;
         const same = previous?.at === at && previous.epoch === epoch
           && previous.state === ui.state && previous.view.principal === view.principal;
-        // Only a request or stream opened after this cutoff can confirm that
-        // the browser crossed it before the Host did. Keep that confirmation
-        // for subsequent snapshots of the same session state and cutoff.
-        if (at <= sampledAfter || (same && confirmedSessionViews.has(previous.view))) confirmedSessionViews.add(view);
+        const postDeadlineSample = same && previous.reached && sampledAfter
+          && timeUntilSessionDeadline(previous, sampledAfter) <= 0;
+        const remaining = Number.isSafeInteger(view.sampledAt) && view.sampledAt >= 0 ? at - view.sampledAt : 0;
+        let projectedAt = remaining > 0 ? sessionMonotonicNow() + remaining : undefined;
+        // Same-cutoff data may have been buffered. Only a new observation
+        // started after the previous cutoff may grant more presentation time.
+        if (same && !postDeadlineSample) {
+          if (previous.reached) projectedAt = previous.projectedAt;
+          else if (previous.projectedAt !== undefined) projectedAt = Math.min(previous.projectedAt, projectedAt ?? Infinity);
+        }
+        if (projectedAt !== undefined) projectedSessionDeadlines.set(view, projectedAt);
+        else if (at <= sampledAfter?.wall || (same && confirmedSessionViews.has(previous.view))) confirmedSessionViews.add(view);
+        const reached = same && previous.reached && !(postDeadlineSample && projectedAt !== undefined);
         subscriber.deadline = {
-          at, epoch, view, state: ui.state, reached: same && previous.reached,
-          attempts: same ? previous.attempts : 0,
+          at, projectedAt, epoch, view, state: ui.state, reached,
+          attempts: reached ? previous.attempts : 0,
         };
       }
 
-      function needsDeadlineConfirmation(deadline, at) {
-        return deadline?.reached && deadline.at <= at && !confirmedSessionViews.has(deadline.view);
+      function needsDeadlineConfirmation(deadline, clock) {
+        return deadline?.reached && timeUntilSessionDeadline(deadline, clock) <= 0
+          && (deadline.projectedAt !== undefined || !confirmedSessionViews.has(deadline.view));
       }
 
       function nextDeadlineAttempts() {
-        const at = Date.now();
+        const clock = sessionClock();
         let attempts = Infinity;
         for (const { deadline } of subscribers) {
-          if (needsDeadlineConfirmation(deadline, at)) attempts = Math.min(attempts, deadline.attempts);
+          if (needsDeadlineConfirmation(deadline, clock)) attempts = Math.min(attempts, deadline.attempts);
         }
         return attempts;
       }
@@ -2235,13 +2261,14 @@ window.__ModuleLoader__.load({
       function scheduleDeadline() {
         clearTimeout(deadlineTimer);
         deadlineTimer = null;
-        const at = Date.now();
+        const clock = sessionClock();
         let next = Infinity;
         for (const subscriber of subscribers) {
           const deadline = subscriber.deadline;
-          if (!deadline || deadline.reached || confirmedSessionViews.has(deadline.view)) continue;
-          if (deadline.at > at) {
-            next = Math.min(next, deadline.at);
+          if (!deadline || deadline.reached || (deadline.projectedAt === undefined && confirmedSessionViews.has(deadline.view))) continue;
+          const remaining = timeUntilSessionDeadline(deadline, clock);
+          if (remaining > 0) {
+            next = Math.min(next, remaining);
             continue;
           }
           deadline.reached = true;
@@ -2251,7 +2278,7 @@ window.__ModuleLoader__.load({
           deadlineTimer = setTimeout(() => {
             scheduleDeadline();
             flushDeadlineRead();
-          }, Math.min(next - at, 2_147_483_647));
+          }, Math.min(next, 2_147_483_647));
         }
       }
 
@@ -2288,8 +2315,10 @@ window.__ModuleLoader__.load({
 
       function deliver(subscriber, view, sampledAfter) {
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
-        trackDeadline(subscriber, view, sampledAfter);
-        subscriber.updateRef.current(view);
+        // A consumer may already have an earlier cutoff for the same session.
+        const snapshot = Number.isFinite(view?.sampledAt) ? { ...view } : view;
+        trackDeadline(subscriber, snapshot, sampledAfter);
+        subscriber.updateRef.current(snapshot);
       }
 
       function closeStream() {
@@ -2308,7 +2337,7 @@ window.__ModuleLoader__.load({
       function openStream() {
         if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return false;
         try {
-          const openedAt = Date.now();
+          const openedAt = sessionClock();
           const opened = new window.EventSource('/api/forge-iam/events');
           stream = opened;
           streamReady = false;
@@ -2359,7 +2388,7 @@ window.__ModuleLoader__.load({
           return;
         }
         const readGeneration = generation;
-        const startedAt = Date.now();
+        const startedAt = sessionClock();
         const pending = [...subscribers].map((subscriber) => ({
           subscriber, epoch: subscriber.barrierRef?.current.epoch, revision: subscriber.revisionRef?.current,
         }));
