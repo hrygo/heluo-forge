@@ -71,6 +71,7 @@ async function withGitHub(run) {
     diffType: 'application/vnd.github.diff; charset=utf-8',
     diff: exampleDiff,
     diffReads: 0,
+    codeOwners: owners,
     reviewHistoryStatus: 200,
     transientReviewHistoryFailures: 0,
     disconnectReviewHistory: false,
@@ -114,7 +115,7 @@ async function withGitHub(run) {
       response.end(JSON.stringify([{ path: ownerFile, type: 'file', sha: ownerBlob }]));
     } else if (request.method === 'GET' && path === '/contents/.github/CODEOWNERS') {
       response.end(JSON.stringify({ path: ownerFile, type: 'file', sha: ownerBlob, encoding: 'base64',
-        size: owners.length, content: owners.toString('base64') }));
+        size: state.codeOwners.length, content: state.codeOwners.toString('base64') }));
     } else if (request.method === 'GET' && path === '/codeowners/errors') {
       response.end(JSON.stringify({ errors: [] }));
     } else if (request.method === 'GET' && path === '/pulls' && url.searchParams.get('state') === 'open') {
@@ -475,6 +476,19 @@ test('GitHub versioned diff responses can authorize an otherwise complete approv
 test('an unlisted code owner blocks automatic approval while keeping the official COMMENT', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token', PR_AGENT_HUMAN_CODEOWNERS: 'another-owner' };
+    const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
+    const candidate = await approvalRevision(mode, await capture(mode), cleanReview({ key_issues_to_review: [issue] }));
+    assert.equal(candidate?.allowApproval, true);
+    const { stdout } = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(candidate) });
+    assert.match(stdout, /skipped-protection/u);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+  });
+});
+
+test('code owners limited to unrelated paths cannot authorize an APPROVE', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    state.codeOwners = Buffer.from('/docs/ @maintainer\n');
     const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
     const candidate = await approvalRevision(mode, await capture(mode), cleanReview({ key_issues_to_review: [issue] }));
     assert.equal(candidate?.allowApproval, true);

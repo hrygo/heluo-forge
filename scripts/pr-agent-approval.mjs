@@ -145,7 +145,7 @@ async function dismissApproval(github, approver, pull, review, message) {
   }
 }
 
-async function readReviewHistory(github, pull) {
+async function readReviewHistory(github, pull, signal) {
   // Retry history reads in the same workflow attempt, including recovery after a lost write response.
   for (const delayMs of [1000, 4000, 12000]) {
     try {
@@ -153,13 +153,13 @@ async function readReviewHistory(github, pull) {
     } catch (error) {
       const networkFailure = error instanceof TypeError && transientHistoryCodes.has(error.cause?.code);
       if (!networkFailure && error.name !== 'TimeoutError' && !(error.status >= 500 && error.status < 600)) throw error;
-      await delay(delayMs);
+      await delay(delayMs, undefined, { signal });
     }
   }
   return listReviews(github, pull);
 }
 
-export async function reconcileMainApprovals({ github, approver, appSlug, humanOwners }) {
+export async function reconcileMainApprovals({ github, approver, appSlug, humanOwners, pullTimeoutMs = 10_000 }) {
   const owner = await readApprovalBot(github, approver, appSlug);
   let dismissed = 0;
   const errors = [];
@@ -169,17 +169,20 @@ export async function reconcileMainApprovals({ github, approver, appSlug, humanO
     if (!validId(prNumber)) throw new Error('Invalid open pull request');
     const pull = `/pulls/${prNumber}`;
     try {
-      const reviews = await readReviewHistory(github, pull);
+      const signal = AbortSignal.timeout(pullTimeoutMs);
+      const scopedGitHub = github.withSignal(signal);
+      const scopedApprover = approver.withSignal(signal);
+      const reviews = await readReviewHistory(scopedGitHub, pull, signal);
       for (const review of reviews) {
         const receipt = readActiveApproval(review, owner, prNumber);
         if (!receipt) continue;
-        const current = await isCurrent(github, github.repository, pull, prNumber, receipt, { allowDraft: true });
+        const current = await isCurrent(scopedGitHub, github.repository, pull, prNumber, receipt, { allowDraft: true });
         let reason;
         if (!current) reason = staleDismissal;
-        else if (!await hasIndependentApprovalGate(github, approver, receipt, humanOwners)) reason = protectionDismissal;
-        else if (await hasBlockingChangeRequest(github, reviews)) reason = changeRequestDismissal;
+        else if (!await hasIndependentApprovalGate(scopedGitHub, scopedApprover, receipt, humanOwners)) reason = protectionDismissal;
+        else if (await hasBlockingChangeRequest(scopedGitHub, reviews)) reason = changeRequestDismissal;
         if (!reason) continue;
-        await dismissApproval(github, approver, pull, review, reason);
+        await dismissApproval(scopedGitHub, scopedApprover, pull, review, reason);
         dismissed++;
       }
     } catch (cause) {

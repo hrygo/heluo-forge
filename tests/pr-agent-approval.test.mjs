@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { publishApproval, readApprovalReceipt, reconcileMainApprovals } from '../scripts/pr-agent-approval.mjs';
 
@@ -54,9 +55,12 @@ function fakeGitHub() {
       state.calls.push(botProfile);
       return structuredClone(state.account);
     },
-    async get(path) {
+    withSignal(signal) {
+      return { ...this, get: (path, label) => this.get(path, label, signal) };
+    },
+    async get(path, _label, signal) {
       state.calls.push(path);
-      const injected = state.beforeGet?.(path);
+      const injected = state.beforeGet?.(path, signal);
       if (injected !== undefined) return injected;
       if (path === pull) return structuredClone(state.pr);
       if (path === '/pulls?state=open&per_page=100&page=1') return [{ number: 42 }];
@@ -87,6 +91,7 @@ function fakeGitHub() {
     },
   };
   const approver = {
+    withSignal() { return this; },
     async get(path) {
       assert.equal(path, '/branches/main/protection');
       state.calls.push(path);
@@ -125,7 +130,7 @@ function fakeGitHub() {
     },
   };
   const run = (options = {}) => publishApproval({ github, approver, revision, appSlug, humanOwners: owner.login, runId: '1234', ...options });
-  const reconcile = () => reconcileMainApprovals({ github, approver, appSlug, humanOwners: owner.login });
+  const reconcile = (options = {}) => reconcileMainApprovals({ github, approver, appSlug, humanOwners: owner.login, ...options });
   return { state, run, reconcile };
 }
 
@@ -601,6 +606,29 @@ test('one unavailable review history does not prevent cleanup for other open PRs
     return true;
   });
   assert.equal(state.reviews[0].state, 'DISMISSED');
+});
+
+test('each unreachable PR has its own cleanup deadline so a subsequent stale approval is still withdrawn', async () => {
+  const { state, reconcile } = fakeGitHub();
+  state.base = otherSha;
+  state.reviews = [priorApproval({ id: 101 }), priorApproval({ id: 102, author: owner })];
+  const deadlines = new Set();
+  state.beforeGet = (path, signal) => {
+    if (path === '/pulls?state=open&per_page=100&page=1') return [39, 40, 41, 42].map((number) => ({ number }));
+    if (!/^\/pulls\/(?:39|40|41)\/reviews\?/u.test(path)) return;
+    assert.ok(signal instanceof AbortSignal);
+    deadlines.add(signal);
+    return delay(30_000, [], { signal });
+  };
+
+  await assert.rejects(reconcile({ pullTimeoutMs: 20 }), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors.map(({ cause }) => cause.name), ['AbortError', 'AbortError', 'AbortError']);
+    return true;
+  });
+  assert.equal(deadlines.size, 3);
+  assert.equal([...deadlines].every(({ aborted }) => aborted), true);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
 });
 
 test('an automated approval of the same head on an older base is withdrawn and replaced after checking the current revision', async () => {
