@@ -185,6 +185,74 @@ test('a failure that ends the application is recorded with its code and the shel
   assert.equal(failureRecord({ at: 'not a date', code: 'X', message: 'm' }).startsWith('=== not a date 应用未能启动 ==='), true);
 });
 
+/** A web profile that exited while starting, as the runtime reports it. */
+const SERVICE = Object.freeze({
+  phase: 'failed',
+  origin: null,
+  failure: { code: 'EXITED_BEFORE_READY', message: 'the web profile exited (code 1)' },
+  exit: { code: 1, signal: null },
+  output: {
+    stdout: '',
+    stderr: 'dsh: startup failed: 1 required plugins did not activate\n\nFailed plugins (1):\n  web-runtime (required)\n',
+  },
+});
+
+test('the record of a service that failed carries how it ended and the end of what it printed', () => {
+  assert.equal(
+    failureRecord({ at: AT, code: 'EXITED_BEFORE_READY', message: SERVICE.failure.message, service: SERVICE }),
+    [
+      '=== 2026-11-25T12:00:00.000Z 应用未能启动 ===',
+      '错误码：EXITED_BEFORE_READY',
+      '说明：the web profile exited (code 1)',
+      '退出码：1',
+      '本机服务标准错误（尾部）：',
+      '  dsh: startup failed: 1 required plugins did not activate',
+      '  Failed plugins (1):',
+      '  web-runtime (required)',
+    ].join('\n'),
+  );
+  // A process that was killed has no code: the signal is said instead. A stream that printed nothing has no section.
+  const killed = { ...SERVICE, exit: { code: null, signal: 'SIGKILL' }, output: { stdout: 'dsh web: booting\n', stderr: '' } };
+  assert.equal(
+    failureRecord({ at: AT, code: 'START_TIMEOUT', message: 'm', service: killed }),
+    '=== 2026-11-25T12:00:00.000Z 应用未能启动 ===\n错误码：START_TIMEOUT\n说明：m\n退出信号：SIGKILL\n本机服务标准输出（尾部）：\n  dsh web: booting',
+  );
+  // A start that timed out has not seen the process end: nothing is said about how it ended.
+  const pending = { ...SERVICE, exit: null, output: { stdout: '', stderr: 'still loading\n' } };
+  assert.equal(
+    failureRecord({ at: AT, code: 'START_TIMEOUT', message: 'm', service: pending }),
+    '=== 2026-11-25T12:00:00.000Z 应用未能启动 ===\n错误码：START_TIMEOUT\n说明：m\n本机服务标准错误（尾部）：\n  still loading',
+  );
+  // Nothing printed and nothing ended: the record is the one written without a service.
+  const silent = { ...SERVICE, exit: null, output: { stdout: '', stderr: '' } };
+  assert.equal(failureRecord({ at: AT, code: 'SPAWN_FAILED', message: 'm', service: silent }), '=== 2026-11-25T12:00:00.000Z 应用未能启动 ===\n错误码：SPAWN_FAILED\n说明：m');
+});
+
+test('反向：进日志的服务输出有界，日志这一道口上再抹一次地址参数', () => {
+  // The bounds are the contract: the last sixty lines, eight KiB to a stream, six hundred characters to a line.
+  const stdout = `${Array.from({ length: 100 }, (_, index) => `line ${index}`).join('\n')}\n`;
+  // Thirty lines past the length of a line: together they are past the bytes of a stream.
+  const stderr = `${Array.from({ length: 30 }, () => 'e'.repeat(700)).join('\n')}\nstandalone token=synthetic-token-value\nhttp://127.0.0.1:43210/?token=synthetic-token-value\n`;
+  const entry = failureRecord({ at: AT, code: 'START_TIMEOUT', message: 'm', service: { ...SERVICE, exit: null, output: { stdout, stderr } } });
+  const [head, rest] = entry.split('本机服务标准错误（尾部）：\n');
+  const [errText, outText] = rest.split('本机服务标准输出（尾部）：\n');
+  assert.equal(head, '=== 2026-11-25T12:00:00.000Z 应用未能启动 ===\n错误码：START_TIMEOUT\n说明：m\n');
+  // What was dropped is said, then the end of it. A line cut to six hundred characters ends in an ellipsis, so it
+  // is 602 bytes: eight KiB hold thirteen of them plus the standalone token line (20 bytes) and the last line (29 bytes).
+  const errLines = errText.replace(/\n$/u, '').split('\n');
+  assert.equal(errLines[0], '  …（更早的输出已省略）');
+  assert.equal(errLines.at(-2), '  standalone token=…');
+  assert.equal(errLines.at(-1), '  http://127.0.0.1:43210/?…');
+  assert.ok(errLines.slice(1, -2).every((line) => line === `  ${'e'.repeat(599)}…`));
+  assert.equal(errLines.length, 16);
+  const outLines = outText.split('\n');
+  assert.equal(outLines[0], '  …（更早的输出已省略）');
+  assert.equal(outLines[1], '  line 40');
+  assert.equal(outLines.at(-1), '  line 99');
+  assert.equal(outLines.length, 61);
+  assert.equal(entry.includes('synthetic-token-value'), false, 'the query of an address never reaches the log, whatever handed it over');
+});
+
 test('the log is created where it is needed, readable by its owner only, and appended to', { skip: !POSIX }, (t) => {
   const root = temp(t);
   const log = diagnosticLogPath(join(root, 'userData'));

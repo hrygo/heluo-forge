@@ -292,6 +292,54 @@ function webProfile() {
 }
 
 /**
+ * A web profile that does not come up: each stream prints what it is given,
+ * then stays open and silent until the process leaves. A killed process is
+ * gone at once, and its pipes with it.
+ */
+function stuckProfile({ stdout = [], stderr = [] } = {}) {
+  const kills = [];
+  let settleExit;
+  const stream = (lines) => {
+    const queue = [...lines];
+    const waiters = [];
+    let ended = false;
+    return {
+      end: () => {
+        ended = true;
+        for (const settle of waiters.splice(0)) settle({ value: undefined, done: true });
+      },
+      [Symbol.asyncIterator]: () => ({
+        next: () => (queue.length > 0
+          ? Promise.resolve({ value: queue.shift(), done: false })
+          : ended ? Promise.resolve({ value: undefined, done: true }) : new Promise((settle) => waiters.push(settle))),
+      }),
+    };
+  };
+  const output = stream(stdout);
+  const errors = stream(stderr);
+  const leave = (info) => {
+    output.end();
+    errors.end();
+    settleExit(info);
+  };
+  return {
+    kills,
+    handle: {
+      kill: (signal) => {
+        kills.push(signal);
+        if (signal === 'SIGKILL') leave({ code: null, signal: 'SIGKILL' });
+      },
+      exited: new Promise((resolve) => {
+        settleExit = resolve;
+      }),
+      output,
+      errors,
+    },
+    exit: (info = { code: 0, signal: null }) => leave(info),
+  };
+}
+
+/**
  * The installer modules the tests stand in for. The shell hands the first run
  * the module the package ships, so a stub that is a bare entry is wrapped the
  * way the released installers look to the capability probe: an entry plus the
@@ -300,7 +348,7 @@ function webProfile() {
 const asInstallerModule = (runInit) => ({ runInit, PNPM_FROM_HOST_LINE: '工具：pnpm 由宿主提供', REINSTALL_LINE: '修复：清空后重试' });
 
 /** A whole shell world: package, marker, installer, web profile and the Electron stand-in. */
-function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller, diagnosticLog, now, pnpmStore } = {}) {
+function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath, version, spawnProfile, assets, candidates, preflight, failureStopWaitMs, loadInstaller, diagnosticLog, now, pnpmStore, runtimeOptions } = {}) {
   const fx = fakeElectron(electron);
   const root = temp(t);
   // `assets` reuses a package that already exists (typically one a first run consumed).
@@ -329,7 +377,7 @@ function world(t, { electron = {}, installer, bindHost = '127.0.0.1', markerPath
       processes.push(process);
       return process.handle;
     }),
-    runtimeOptions: { startTimeoutMs: 60_000, stopGraceMs: 5_000 },
+    runtimeOptions: { startTimeoutMs: 60_000, stopGraceMs: 5_000, ...runtimeOptions },
     trayIcon: '/apps/tray.png',
     statusPage: '/brand/status.html',
     titleBarPage: '/brand/titlebar.html',
@@ -616,6 +664,75 @@ test('a retry appends to the same log; a log that cannot be written is not a fai
   const silent = world(t, { installer: stoppedInstaller, diagnosticLog: join(blocked, 'logs', 'first-run.log') });
   assert.deepEqual(await silent.shell.outcome, { started: false, code: 'FIRST_RUN_FAILED', retryable: true });
   assert.equal(silent.windows[0].page.webContents.fileLoads.at(-1).query.reason, 'init: 读取 IAM Discovery 失败（fetch failed）：https://idp.corp.example/x');
+});
+
+test('a service that does not come up is written to the log with what it printed, as a start that failed', async (t) => {
+  const root = temp(t);
+  const at = new Date('2026-11-26T13:19:19.190Z');
+  // The deadline is short here; the wait for the killed process's output ends with its pipes.
+  const stuck = stuckProfile({ stderr: ['dsh: warning: 1 entry did not activate\n', `web-app (web-runtime): Error: could not reach ${LAUNCH}\n`] });
+  const timedOut = world(t, { diagnosticLog: join(root, 'timeout.log'), now: () => at, runtimeOptions: { startTimeoutMs: 30 }, spawnProfile: () => stuck.handle });
+  assert.deepEqual(await timedOut.shell.outcome, { started: false, code: 'START_TIMEOUT', retryable: true });
+  assert.deepEqual(stuck.kills, ['SIGKILL']);
+  const entry = readFileSync(join(root, 'timeout.log'), 'utf8');
+  // The setup that completed is still recorded. The start that failed after it is its own entry,
+  // with what the service printed: the log alone carries it, never the page.
+  assert.match(entry, /^=== 2026-11-26T13:19:19\.190Z 企业配置初始化：完成 ===\n安装器结论：installed（退出码 0）\n/u);
+  assert.equal(
+    entry.slice(entry.indexOf('\n=== ', 1) + 1),
+    [
+      '=== 2026-11-26T13:19:19.190Z 应用未能启动 ===',
+      '错误码：START_TIMEOUT',
+      '说明：the web profile did not announce its address within 30 ms',
+      // The shell killed it, and says so.
+      '退出信号：SIGKILL',
+      '本机服务标准错误（尾部）：',
+      '  dsh: warning: 1 entry did not activate',
+      '  web-app (web-runtime): Error: could not reach http://127.0.0.1:43210/?…',
+      '',
+    ].join('\n'),
+  );
+  assert.equal(entry.includes(TOKEN), false);
+  assert.equal(entry.includes('企业配置初始化：失败'), false, 'the setup did not fail: the start after it did');
+  assert.deepEqual(
+    { ...timedOut.windows[0].page.webContents.fileLoads.at(-1).query },
+    { state: 'failed', code: 'START_TIMEOUT', remedy: guidanceFor('START_TIMEOUT'), log: join(root, 'timeout.log') },
+  );
+  assert.equal(timedOut.messages.length, 0, 'no dialog: the app stays for a retry');
+  assert.equal(timedOut.log.includes('quit'), false);
+
+  // A process that exits before it is ready: how it ended is recorded with what it wrote.
+  const profile = stuckProfile({ stderr: ['dsh: startup failed: 1 required plugins did not activate\n'] });
+  const exited = world(t, { diagnosticLog: join(root, 'exit.log'), now: () => at, spawnProfile: () => profile.handle });
+  profile.exit({ code: 1, signal: null });
+  assert.deepEqual(await exited.shell.outcome, { started: false, code: 'EXITED_BEFORE_READY', retryable: true });
+  assert.match(
+    readFileSync(join(root, 'exit.log'), 'utf8'),
+    /^=== 2026-11-26T13:19:19\.190Z 企业配置初始化：完成 ===\n.*\n=== 2026-11-26T13:19:19\.190Z 应用未能启动 ===\n错误码：EXITED_BEFORE_READY\n说明：the web profile exited \(code 1\)\n退出码：1\n本机服务标准错误（尾部）：\n  dsh: startup failed: 1 required plugins did not activate\n$/su,
+  );
+});
+
+test('a service whose page cannot be loaded is reported with what it printed', async (t) => {
+  const root = temp(t);
+  const log = join(root, 'report.log');
+  const profile = stuckProfile({ stdout: [`dsh web: ${LAUNCH}\n`], stderr: ['Error: the frontend dist is gone\n'] });
+  const fx = world(t, { electron: { loadFails: true }, failureStopWaitMs: 10, diagnosticLog: log, spawnProfile: () => profile.handle });
+  assert.equal((await fx.shell.outcome).started, true);
+  // Resolves once the failure is reported and the app has left.
+  await new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => { clearInterval(timer); reject(new Error('the failure was never reported')); }, 5_000);
+    const timer = setInterval(() => {
+      if (fx.log.at(-1) !== 'quit') return;
+      clearInterval(timer);
+      clearTimeout(deadline);
+      resolve();
+    }, 5);
+  });
+  // A service that is up has not ended and has no failure of its own: only what it printed is added,
+  // and the address it announced is repeated without its token.
+  const entry = readFileSync(log, 'utf8');
+  assert.match(entry, /=== [^\n]+ 应用未能启动 ===\n错误码：EXITED\n说明：\n本机服务标准错误（尾部）：\n  Error: the frontend dist is gone\n本机服务标准输出（尾部）：\n  dsh web: http:\/\/127\.0\.0\.1:43210\/?\?…\n$/u); // the address, its query replaced
+  assert.equal(entry.includes(TOKEN), false);
 });
 
 test('a refused employee package and a failure that ends the application are written to the log too', async (t) => {

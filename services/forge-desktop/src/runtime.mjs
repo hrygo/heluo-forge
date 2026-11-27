@@ -1,5 +1,5 @@
 import { ShellError } from './errors.mjs';
-import { addressInUse, findLaunchUrl } from './launch-url.mjs';
+import { addressInUse, findLaunchUrl, repeatable } from './launch-url.mjs';
 
 /**
  * The web profile's process as the runtime needs to see it:
@@ -14,19 +14,37 @@ import { addressInUse, findLaunchUrl } from './launch-url.mjs';
 
 const OUTPUT_TAIL = 64 * 1024;
 
+const tail = (text) => (text.length > OUTPUT_TAIL ? text.slice(-OUTPUT_TAIL) : text);
+
+/** The end of one stream: a string that is replaced whole, never appended to in place. */
+const tailBox = () => {
+  let text = '';
+  return {
+    assign: (next) => {
+      text = next;
+    },
+    current: () => text,
+  };
+};
+
 /**
  * Owns the lifecycle of the web profile's process: one phase at a time, every
- * transition observable, and nothing reported that has not happened.
+ * transition observable, and nothing reported that has not happened. The end
+ * of what the process printed is kept, because a start that failed is
+ * explained by it.
  *
  * @param {{ spawn: () => ProcessHandle, findLaunchUrl?: Function, startTimeoutMs?: number,
- *   stopGraceMs?: number, setTimer?: Function, clearTimer?: Function, onEvent?: Function }} input
- *   Everything but `spawn` is an injection point for tests.
+ *   stopGraceMs?: number, outputGraceMs?: number, setTimer?: Function, clearTimer?: Function, onEvent?: Function }} input
+ *   Everything but `spawn` is an injection point for tests. `outputGraceMs`
+ *   bounds how long the verdict of a failed start waits for the rest of the
+ *   process's output.
  */
 export function createRuntime({
   spawn,
   findLaunchUrl: findUrl = findLaunchUrl,
   startTimeoutMs = 60_000,
   stopGraceMs = 5_000,
+  outputGraceMs = 1_000,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   onEvent = () => {},
@@ -43,6 +61,8 @@ export function createRuntime({
   let forceTimer;
   // The last process the runtime killed whose exit has not been observed yet.
   let retiring = null;
+  // Where the current process's streams keep their end; empty before the first process.
+  let printed = { stdout: tailBox(), stderr: tailBox() };
 
   function enter(next, code) {
     phase = next;
@@ -64,22 +84,52 @@ export function createRuntime({
       return Promise.reject(failWith('SPAWN_FAILED', `the web profile could not be started (${error?.code ?? 'UNKNOWN'})`));
     }
     child = handle;
-    let errors = '';
+    // Where each stream keeps its end: what a start that failed printed is the record of how far it got.
+    const out = tailBox();
+    const err = tailBox();
+    printed = { stdout: out, stderr: err };
     let settled = false;
     let resolveStart;
     let rejectStart;
     let timer;
 
-    const failStart = (code, message) => {
-      if (settled) return;
+    // The moment the verdict of the start is known: from then on nothing the process prints counts.
+    const decide = () => {
       settled = true;
       clearTimer(timer);
       launch = null;
-      starting = null;
-      cancelStart = null;
-      rejectStart(failWith(code, message));
     };
-    const tail = (text) => (text.length > OUTPUT_TAIL ? text.slice(-OUTPUT_TAIL) : text);
+    const deliver = (code, message) => {
+      cancelStart = null;
+      starting = null;
+      // A stop that came first is not undone by the verdict.
+      rejectStart(phase === 'starting' ? failWith(code, message) : new ShellError(code, message));
+    };
+    const failStart = (code, message) => {
+      if (settled) return;
+      decide();
+      deliver(code, message);
+    };
+    /**
+     * The verdict of a process that is gone or killed: decided now, delivered
+     * once its pipes are read to the end (and, on timeout, its exit is seen) or
+     * `outputGraceMs` has passed. The report it wrote before it left may still
+     * be in them, and the class of the failure is read from that report.
+     */
+    const failAfterOutput = (verdict, { waitExit = false } = {}) => {
+      if (settled) return;
+      decide();
+      let grace;
+      const drained = waitExit ? Promise.all([outputRead, handle.exited.catch(() => {})]) : outputRead;
+      const read = Promise.race([drained, new Promise((resolve) => {
+        grace = setTimer(resolve, outputGraceMs);
+      })]);
+      void read.then(() => {
+        clearTimer(grace);
+        deliver(...verdict());
+      });
+    };
+    const portConflictVerdict = () => (addressInUse(err.current()) ? ['PORT_CONFLICT', 'the web profile could not bind its port'] : null);
     const settleReady = (lines) => {
       let url;
       try {
@@ -103,8 +153,8 @@ export function createRuntime({
       resolveStart({ ...url });
     };
     // Read a stream to its end. Reading continues after readiness on purpose:
-    // a pipe nobody drains would block the web profile on its next line.
-    // `keep` is where a stream that is not scanned keeps its tail.
+    // a pipe nobody drains would block the web profile on its next line. Each
+    // stream keeps its end in `keep`; the scanned one is looked at line by line.
     const watch = async (stream, keep, scan) => {
       // One decoder per stream, in streaming mode: a character split across
       // two chunks is joined, not replaced.
@@ -113,15 +163,37 @@ export function createRuntime({
       // whole line yet. Only whole lines are looked at, so an address cut in
       // two by the pipe is never taken for complete.
       let rest = '';
+      // True while skipping the remainder of an over-limit line whose start was dropped.
+      let dropping = false;
       try {
         for await (const chunk of stream) {
-          const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
-          if (!scan) {
-            keep.assign(tail(`${keep.current()}${text}`));
-            continue;
+          const decoded = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+          let keptChunk = decoded;
+          if (dropping) {
+            const nl = keptChunk.indexOf('\n');
+            if (nl === -1) {
+              keptChunk = '';
+            } else {
+              dropping = false;
+              keptChunk = keptChunk.slice(nl + 1);
+            }
           }
-          if (settled) continue;
-          rest = tail(`${rest}${text}`);
+          if (keptChunk !== '') {
+            const combined = `${keep.current()}${keptChunk}`;
+            if (combined.length <= OUTPUT_TAIL) {
+              keep.assign(combined);
+            } else {
+              const from = combined.indexOf('\n', combined.length - OUTPUT_TAIL);
+              if (from === -1) {
+                dropping = true;
+                keep.assign('');
+              } else {
+                keep.assign(combined.slice(from + 1));
+              }
+            }
+          }
+          if (!scan || settled) continue;
+          rest = tail(`${rest}${decoded}`);
           const cut = rest.lastIndexOf('\n');
           // Each line is looked at once, when it is complete.
           if (cut === -1) continue;
@@ -157,33 +229,26 @@ export function createRuntime({
         finishStop();
         return;
       }
-      const left = `the web profile exited (code ${info.code ?? info.signal ?? 'unknown'})`;
       if (phase === 'starting') {
-        const taken = addressInUse(errors);
-        failStart(taken ? 'PORT_CONFLICT' : 'EXITED_BEFORE_READY', taken ? 'the web profile could not bind its port' : left);
+        failAfterOutput(() => portConflictVerdict() ?? ['EXITED_BEFORE_READY', `the web profile exited (code ${info.code ?? info.signal ?? 'unknown'})`]);
         return;
       }
+      const left = `the web profile exited (code ${info.code ?? info.signal ?? 'unknown'})`;
       if (phase === 'ready') failWith('EXITED', left);
       // Any other phase is `failed` by the deadline or `stopped`: this exit is expected.
     });
 
+    // Both streams are read from here on; `outputRead` settles once both have ended.
+    const outputRead = Promise.all([watch(handle.output, out, true), watch(handle.errors, err, false)]);
     timer = setTimer(() => {
       // Past the deadline the process may not linger and announce later.
       handle.kill('SIGKILL');
       retiring = handle;
-      failStart('START_TIMEOUT', `the web profile did not announce its address within ${startTimeoutMs} ms`);
+      failAfterOutput(
+        () => portConflictVerdict() ?? ['START_TIMEOUT', `the web profile did not announce its address within ${startTimeoutMs} ms`],
+        { waitExit: true },
+      );
     }, startTimeoutMs);
-    void watch(handle.output, null, true);
-    void watch(
-      handle.errors,
-      {
-        assign: (text) => {
-          errors = text;
-        },
-        current: () => errors,
-      },
-      false,
-    );
     return starting;
   }
 
@@ -218,13 +283,18 @@ export function createRuntime({
     return stopping;
   }
 
-  /** The phase and what may be said about it. The launch address itself is not part of it: it carries a token. */
+  /**
+   * The phase and what may be said about it. The launch address itself is not
+   * part of it — it carries a token — and neither is the query of any address
+   * or the value of any token in `output`, the end of what the process printed.
+   */
   function snapshot() {
     return {
       phase,
       origin: phase === 'ready' ? launch.origin : null,
       failure: lastFailure === null ? null : { code: lastFailure.code, message: lastFailure.message },
       exit: lastExit,
+      output: { stdout: repeatable(printed.stdout.current()), stderr: repeatable(printed.stderr.current()) },
     };
   }
 

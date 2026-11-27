@@ -19,3 +19,23 @@ export function findLaunchUrl(text, { toUrl = loopbackUrl } = {}) {
 export function addressInUse(text) {
   return ADDRESS_IN_USE.test(String(text ?? ''));
 }
+
+// An address as the web profile may print it — plain, or with `\/` inside a
+// JSON line — up to and including the `?` or `#` that starts its query or
+// fragment. Scheme matching is case-insensitive because HTTP(S) schemes are.
+const ADDRESS_HEAD = /(\bhttps?:[\\/][^\s"'<>?#]*[?#])[^\s"'<>]*/giu;
+// The process token by its name, wherever it stands: in a query, as a
+// standalone key=value pair, or where the start of its address was cut off.
+const TOKEN_VALUE = /(\btoken=)[^\s"'<>&#\\]*/gu;
+
+/**
+ * What may be kept and repeated of what the web profile printed. Every
+ * address loses its query and fragment, and every `token=` its value: the
+ * launch address carries the process token there, and a sign-in redirect its
+ * code and state. The rest of a line is left as printed. An address is
+ * recognised by its scheme and a token by its name; a value printed with
+ * neither around it is not recognised.
+ */
+export function repeatable(text) {
+  return String(text ?? '').replace(ADDRESS_HEAD, '$1…').replace(TOKEN_VALUE, '$1…');
+}

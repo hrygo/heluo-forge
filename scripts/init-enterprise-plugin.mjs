@@ -651,6 +651,64 @@ export function readEmbeddedClientSecret(dir) {
   return { binding, path, bytes };
 }
 
+/** Discovery 失败原因在结论里的上限：只留一行的要点。 */
+const DISCOVERY_DETAIL_LIMIT = 300;
+
+/** 一行、有界的文本：错误信息里的换行与超长内容不进结论。 */
+function oneBoundedLine(text, limit) {
+  const line = String(text ?? '').replace(/\s+/gu, ' ').trim();
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
+}
+
+/** Discovery 失败的类别，由 fetch 自己的名字与 cause 上的系统、连接或证书错误码决定。 */
+const DISCOVERY_TIMEOUT_NAMES = new Set(['TimeoutError', 'AbortError']);
+const DISCOVERY_KIND_CODES = [
+  ['dns', /^(?:ENOTFOUND|EAI_AGAIN|EAI_FAIL|EAI_NONAME|EAI_NODATA)$/u],
+  ['timeout', /^(?:UND_ERR_(?:CONNECT|HEADERS|BODY)_TIMEOUT|ETIMEDOUT)$/u],
+  ['tls', /^(?:CERT_HAS_EXPIRED|CERT_NOT_YET_VALID|CERT_UNTRUSTED|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT(?:_LOCALLY)?|ERR_TLS_CERT_ALTNAME_INVALID|EPROTO|ERR_SSL_.*|ERR_TLS_.*)$/u],
+  ['connect', /^(?:ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENETDOWN|EHOSTDOWN|EPIPE|UND_ERR_SOCKET)$/u],
+];
+
+/** Discovery 失败的处理办法：按类别说清该查什么；密钥文件的去向对每一类都一样。 */
+const DISCOVERY_REMEDIES = Object.freeze({
+  dns: '主机名没有解析出来：确认这台机器已接入企业内网或 VPN，再重跑本脚本；',
+  connect: '连接被拒绝或不可达：确认 IAM 服务在运行，这台机器到它的网络与端口（含代理）放行，再重跑本脚本；',
+  timeout: `${DISCOVERY_TIMEOUT_MS / 1000} 秒内没有拿到响应：确认到企业 IAM 的网络通畅后重跑本脚本；`,
+  tls: 'TLS 证书校验没有通过：确认 Discovery 地址的证书受这台机器信任，再重跑本脚本；',
+  unknown: '确认这台机器能访问企业 IAM 后重跑本脚本；',
+});
+const DISCOVERY_SECRET_KEPT = '密钥文件仍保留在交付目录，重跑会重新预置。';
+
+const DISCOVERY_SUBERROR_LIMIT = 4;
+
+function classifyDiscoveryCode(code) {
+  for (const [candidate, pattern] of DISCOVERY_KIND_CODES) {
+    if (pattern.test(code)) return candidate;
+  }
+  return 'unknown';
+}
+
+/**
+ * 一次 Discovery 抓取失败的类别与原因。Node 的 fetch 只说 "fetch failed"，真正的原因
+ * （DNS、拒绝连接、超时、证书）挂在 `cause`（及双栈 `AggregateError.errors`）上；这里
+ * 有界提取错误码与文本，其余字段一律不进结论。原因是字符串时照录，不据此归类。
+ */
+function discoveryFailure(error) {
+  const cause = error?.cause;
+  const subErrors = Array.isArray(cause?.errors) ? cause.errors.slice(0, DISCOVERY_SUBERROR_LIMIT) : [];
+  const entries = [cause, ...subErrors].filter((item) => item !== undefined && item !== null);
+  let kind = DISCOVERY_TIMEOUT_NAMES.has(error?.name) ? 'timeout' : 'unknown';
+  const parts = [oneBoundedLine(error?.message, DISCOVERY_DETAIL_LIMIT) || 'UNKNOWN'];
+  for (const entry of entries) {
+    const code = typeof entry?.code === 'string' ? entry.code : '';
+    if (kind === 'unknown' && code !== '') kind = classifyDiscoveryCode(code);
+    const said = oneBoundedLine(typeof entry === 'string' ? entry : entry?.message, DISCOVERY_DETAIL_LIMIT);
+    if (code !== '' && !said.includes(code) && !parts.includes(code)) parts.push(code);
+    if (said !== '' && !parts.includes(said)) parts.push(said);
+  }
+  return { kind, detail: oneBoundedLine(parts.join('；'), DISCOVERY_DETAIL_LIMIT) };
+}
+
 /** 从 Discovery 文档取 issuer，并核对 IAM 登记的 token 端点认证方式。 */
 async function resolveSecretIssuer(binding, fetchImpl) {
   if (typeof binding.discoveryUrl !== 'string' || binding.discoveryUrl === '') {
@@ -660,10 +718,11 @@ async function resolveSecretIssuer(binding, fetchImpl) {
   try {
     response = await fetchImpl(binding.discoveryUrl, { signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS), redirect: 'follow' });
   } catch (error) {
+    const { kind, detail } = discoveryFailure(error);
     throw new InitError(
       'IAM_DISCOVERY_FAILED',
-      `init: 读取 IAM Discovery 失败（${error?.message ?? 'UNKNOWN'}）：${binding.discoveryUrl}`,
-      '确认这台机器能访问企业 IAM 后重跑本脚本；密钥文件仍保留在交付目录，重跑会重新预置。',
+      `init: 读取 IAM Discovery 失败（${detail}）：${binding.discoveryUrl}`,
+      DISCOVERY_REMEDIES[kind] + DISCOVERY_SECRET_KEPT,
     );
   }
   if (!response.ok) {
