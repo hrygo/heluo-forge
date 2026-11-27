@@ -49,6 +49,7 @@ const approvalEnv = {
   PR_AGENT_AUTO_APPROVE: 'true',
   PR_AGENT_APPROVAL_CONFIGURED: 'true',
   PR_AGENT_APPROVAL_APP_SLUG: 'luoshen',
+  PR_AGENT_HUMAN_CODEOWNERS: 'maintainer',
 };
 
 function freshComment(marker) {
@@ -72,6 +73,8 @@ async function withGitHub(run) {
     diffReads: 0,
     reviewHistoryStatus: 200,
     transientReviewHistoryFailures: 0,
+    disconnectReviewHistory: false,
+    inlineCommentsStatus: 200,
     approvalProtection: { enforce_admins: { enabled: true }, required_pull_request_reviews: {
       require_code_owner_reviews: true, dismiss_stale_reviews: true, required_approving_review_count: 1,
     } },
@@ -138,9 +141,15 @@ async function withGitHub(run) {
       response.statusCode = state.filesStatus;
       response.end(JSON.stringify(pageOf(state.files)));
     } else if (request.method === 'GET' && path === '/pulls/42/comments') {
+      response.statusCode = state.inlineCommentsStatus;
       response.end(JSON.stringify(pageOf(state.inlineComments)));
       if (state.headAfterInlineList) state.pr.head.sha = state.headAfterInlineList;
     } else if (request.method === 'GET' && path === '/pulls/42/reviews') {
+      if (state.disconnectReviewHistory) {
+        state.disconnectReviewHistory = false;
+        request.socket.destroy();
+        return;
+      }
       response.statusCode = state.transientReviewHistoryFailures > 0 ? 503 : state.reviewHistoryStatus;
       if (state.transientReviewHistoryFailures > 0) state.transientReviewHistoryFailures--;
       response.end(JSON.stringify(pageOf(state.reviews)));
@@ -345,6 +354,7 @@ test('the approval credential is available only in the trusted, protected approv
   assert.doesNotMatch(workflow, /secrets\.PR_AGENT_APPROVAL_TOKEN/u);
   assert.match(approvalJob, /actions\/create-github-app-token@[a-f0-9]{40}/u);
   assert.match(approvalJob, /permission-pull-requests: write\n\s+permission-administration: read/u);
+  assert.match(approvalJob, /PR_AGENT_HUMAN_CODEOWNERS: \$\{\{ vars\.PR_AGENT_HUMAN_CODEOWNERS \}\}/u);
   assert.match(approvalJob, /PR_AGENT_APPROVAL_TOKEN: \$\{\{ steps\.approval_app\.outputs\.token \}\}/u);
   assert.match(stepDefinition('Run PR-Agent'), /args: \/github\/workspace\/scripts\/pr-agent-coverage\.py/u);
   assert.match(stepDefinition('Run PR-Agent'), /PR_AGENT_COVERAGE_PATH: [^\n]+\.pr-agent-coverage-/u);
@@ -462,6 +472,18 @@ test('GitHub versioned diff responses can authorize an otherwise complete approv
   });
 });
 
+test('an unlisted code owner blocks automatic approval while keeping the official COMMENT', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token', PR_AGENT_HUMAN_CODEOWNERS: 'another-owner' };
+    const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
+    const candidate = await approvalRevision(mode, await capture(mode), cleanReview({ key_issues_to_review: [issue] }));
+    assert.equal(candidate?.allowApproval, true);
+    const { stdout } = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(candidate) });
+    assert.match(stdout, /skipped-protection/u);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+  });
+});
+
 test('unavailable file-mode evidence preserves the native COMMENT and review key', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv };
@@ -508,6 +530,44 @@ test('a clean automatic review stays complete when GitHub fails the optional cov
     assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
     assert.deepEqual(reviewWrites(state), []);
     assert.equal(state.approverRequests, undefined);
+  });
+});
+
+test('inline comment failures preserve a P1 review conclusion and withdraw only the Luoshen approval', async (t) => {
+  for (const endpoint of ['filesStatus', 'inlineCommentsStatus', 'postStatus']) {
+    await t.test(endpoint, () => withGitHub(async ({ state, env }) => {
+      const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+      const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+      await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+      state.reviews.push({ ...state.reviews[0], id: 102, user: maintainer });
+
+      const next = { ...mode, GITHUB_RUN_ID: '12346' };
+      const captured = await capture(next);
+      state[endpoint] = 503;
+      const pending = await approvalRevision(next, captured, prioritizedReview('P1'));
+      assert.equal(pending?.allowApproval, false);
+      assert.match(await readFile(next.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
+
+      const { stdout } = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(pending) });
+      assert.match(stdout, /dismissed-ineligible/u);
+      assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'APPROVED']);
+    }));
+  }
+});
+
+test('a GitHub connection reset reading review history is retried before withdrawal', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    state.reviews.push({ id: 102, user: maintainer, state: 'CHANGES_REQUESTED', commit_id: head, body: 'Please fix this' });
+
+    const next = { ...mode, GITHUB_RUN_ID: '12346' };
+    const fresh = await approvalRevision(next, await capture(next), cleanReview());
+    state.disconnectReviewHistory = true;
+    const { stdout } = await execute('approve', { ...next, APPROVAL_REVISION: JSON.stringify(fresh) });
+    assert.match(stdout, /dismissed-changes-requested/u);
+    assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'CHANGES_REQUESTED']);
   });
 });
 
