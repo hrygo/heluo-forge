@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseReceipt as readChangeRequestReceipt } from './pr-agent-change-request.mjs';
-import { hasIndependentApprovalGate } from './pr-agent-approval-policy.mjs';
+import { hasIndependentApprovalGate, hasLiveApprovalProtection } from './pr-agent-approval-policy.mjs';
 import { isBranch, isCurrent, isSha, listReviews, pages, readPull, sameUser, validId } from './pr-agent-github.mjs';
 
 const approvalPrefix = '<!-- heluo-forge-pr-agent-approval:v1';
@@ -114,7 +114,7 @@ async function postApproval(github, approver, pull, reviews, owner, head, body) 
     // A lost response can follow a committed write. Recover only from the review history.
   }
 
-  const recovered = (await listReviews(github, pull)).filter((review) => newApproval(review) &&
+  const recovered = (await readReviewHistory(github, pull)).filter((review) => newApproval(review) &&
     ['APPROVED', 'DISMISSED'].includes(review.state));
   if (recovered.length === 1) return recovered[0];
   throw new Error('Could not confirm the automatic approval after submitting it to GitHub');
@@ -141,8 +141,8 @@ async function dismissApproval(github, approver, pull, review, message) {
   }
 }
 
-async function readReviewsForReconciliation(github, pull) {
-  // Retry reads in the approval job while the reviewed attempt is still current.
+async function readReviewHistory(github, pull) {
+  // Retry history reads in the same workflow attempt, including recovery after a lost write response.
   for (const delayMs of [1000, 4000, 12000]) {
     try {
       return await listReviews(github, pull);
@@ -164,10 +164,12 @@ export async function reconcileMainApprovals({ github, approver, appSlug }) {
     if (!validId(prNumber)) throw new Error('Invalid open pull request');
     const pull = `/pulls/${prNumber}`;
     try {
-      for (const review of await listReviews(github, pull)) {
+      for (const review of await readReviewHistory(github, pull)) {
         const receipt = readActiveApproval(review, owner, prNumber);
-        if (!receipt || await isCurrent(github, github.repository, pull, prNumber, receipt, { allowDraft: true })) continue;
-        await dismissApproval(github, approver, pull, review, staleDismissal);
+        if (!receipt) continue;
+        const current = await isCurrent(github, github.repository, pull, prNumber, receipt, { allowDraft: true });
+        if (current && await hasIndependentApprovalGate(github, approver, receipt)) continue;
+        await dismissApproval(github, approver, pull, review, current ? protectionDismissal : staleDismissal);
         dismissed++;
       }
     } catch (cause) {
@@ -208,7 +210,7 @@ export async function publishApproval({ github, approver, revision, appSlug, run
     `[查看 GitHub Actions 审查运行](${reviewUrl})`,
     marker,
   ].join('\n\n');
-  const previousReviews = allowApproval ? await listReviews(github, pull) : await readReviewsForReconciliation(github, pull);
+  const previousReviews = await readReviewHistory(github, pull);
   if (!await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: !allowApproval })) return 'skipped-stale';
 
   const withdrawn = new Set();
@@ -221,7 +223,7 @@ export async function publishApproval({ github, approver, revision, appSlug, run
   }
   if (!allowApproval) return withdrawn.size ? 'dismissed-ineligible' : 'skipped-ineligible';
 
-  const reviews = await listReviews(github, pull);
+  const reviews = await readReviewHistory(github, pull);
   const remaining = reviews.filter((review) => !withdrawn.has(review?.id));
   let rejection;
   if (await hasBlockingChangeRequest(github, remaining)) rejection = 'changes-requested';
@@ -244,8 +246,8 @@ export async function publishApproval({ github, approver, revision, appSlug, run
   let current;
   let blocked;
   try {
-    blocked = await hasBlockingChangeRequest(github, await listReviews(github, pull));
-    current = await isCurrent(github, repository, pull, prNumber, revision);
+    blocked = await hasBlockingChangeRequest(github, await readReviewHistory(github, pull));
+    current = await isCurrent(github, repository, pull, prNumber, revision, { allowDraft: true });
   } catch (cause) {
     try {
       await dismissApproval(github, approver, pull, approval, verificationDismissal);
@@ -261,6 +263,10 @@ export async function publishApproval({ github, approver, revision, appSlug, run
   if (blocked) {
     await dismissApproval(github, approver, pull, approval, changeRequestDismissal);
     return 'dismissed-changes-requested';
+  }
+  if (!await hasLiveApprovalProtection(approver)) {
+    await dismissApproval(github, approver, pull, approval, protectionDismissal);
+    return 'dismissed-protection';
   }
   return 'approved';
 }

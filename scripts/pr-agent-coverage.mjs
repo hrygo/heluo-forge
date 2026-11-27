@@ -27,7 +27,8 @@ function matchesInvocation(proof, options) {
 
 function patchMatches(file, manifest) {
   // The pinned renderer omits previous paths and EOF markers from its review prompt.
-  if (file.status === 'renamed' || typeof file.patch !== 'string' || !file.patch.isWellFormed()) return false;
+  if (!['modified', 'added', 'removed'].includes(file.status) ||
+      typeof file.patch !== 'string' || !file.patch.isWellFormed()) return false;
   const { hunks, complete, hasNoNewlineMarker } = parseReviewPatch(file.patch);
   if (!complete || !hunks.length || hasNoNewlineMarker) return false;
   const leftHash = createHash('sha256');
@@ -71,4 +72,62 @@ export function verifyReviewCoverage(proof, options) {
     manifest.delete(file.filename);
   }
   return manifest.size === 0;
+}
+
+const gitPathEscapes = {
+  '\x07': '\\a', '\b': '\\b', '\t': '\\t', '\n': '\\n', '\v': '\\v', '\f': '\\f', '\r': '\\r',
+  '"': '\\"', '\\': '\\\\',
+};
+
+function gitDiffPath(path) {
+  const bytes = Buffer.from(path).toString('latin1');
+  const escaped = bytes.replace(/[\u0000-\u001f"\\\u007f-\u00ff]/gu, (character) =>
+    gitPathEscapes[character] ?? '\\' + character.charCodeAt(0).toString(8).padStart(3, '0'));
+  return bytes === escaped ? path : '"' + escaped + '"';
+}
+
+function comparablePatch(patch) {
+  // GitHub can shorten the optional hunk heading differently in the two representations.
+  return patch.replace(/(^|\n)(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@)(?: [^\n]*)?\r?(?=\n|$)/gu, '$1$2');
+}
+
+function matchesDiffFile(lines, { file, left, right }) {
+  // A modified regular file has its unchanged mode on the index line. Additions and deletions
+  // can introduce or remove a default regular file, whose content is covered from/to /dev/null.
+  const added = file.status === 'added';
+  const removed = file.status === 'removed';
+  if (added && lines.shift() !== 'new file mode 100644') return false;
+  if (removed && lines.shift() !== 'deleted file mode 100644') return false;
+  if (!added && !removed && file.status !== 'modified') return false;
+  const index = /^index ([0-9a-f]{4,40})\.\.([0-9a-f]{4,40})(?: (100644|100755))?$/u.exec(lines.shift());
+  if (!index) return false;
+  const [, oldBlob, newBlob, mode] = index;
+  if (Boolean(mode) !== (file.status === 'modified') || oldBlob === newBlob ||
+      /^0+$/u.test(oldBlob) !== added || /^0+$/u.test(newBlob) !== removed) return false;
+  const from = '--- ' + (added ? '/dev/null' : left);
+  const to = '+++ ' + (removed ? '/dev/null' : right);
+  const fromLine = lines.shift();
+  const toLine = lines.shift();
+  if ((fromLine !== from && fromLine !== from + '\t') || (toLine !== to && toLine !== to + '\t')) return false;
+  return comparablePatch(lines.join('\n')) === comparablePatch(file.patch.replace(/\n$/u, '') + '\n');
+}
+
+// The REST files patches contain only hunks. Bind each raw Git header to the same file and hunks
+// already checked against the review proof, so absent or truncated metadata cannot authorize approval.
+export function verifyReviewFileModes(diff, files) {
+  if (typeof diff !== 'string' || !diff.endsWith('\n')) return false;
+  const sections = diff.split(/(?<=\n)(?=diff --git )/u);
+  if (sections.length !== files.length) return false;
+  const expected = new Map(files.map((file) => {
+    const left = gitDiffPath('a/' + file.filename);
+    const right = gitDiffPath('b/' + file.filename);
+    return ['diff --git ' + left + ' ' + right, { file, left, right }];
+  }));
+  for (const section of sections) {
+    const [header, ...lines] = section.split('\n');
+    const candidate = expected.get(header);
+    if (!candidate || !matchesDiffFile(lines, candidate)) return false;
+    expected.delete(header);
+  }
+  return expected.size === 0;
 }

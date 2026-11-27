@@ -60,11 +60,14 @@ function fakeGitHub() {
       if (injected !== undefined) return injected;
       if (path === pull) return structuredClone(state.pr);
       if (path === '/pulls?state=open&per_page=100&page=1') return [{ number: 42 }];
-      if (path === `/contents/.github?ref=${base}`) return [{ path: ownerFile, type: 'file', sha: ownerBlob }];
-      if (path === `/contents/${ownerFile}?ref=${base}`) return {
-        path: ownerFile, type: 'file', sha: ownerBlob, encoding: 'base64', size: owners.length, content: owners.toString('base64'),
-      };
-      if (path === `/codeowners/errors?ref=${base}`) return { errors: [] };
+      const [route, query] = path.split('?');
+      if ([`ref=${base}`, `ref=${otherSha}`].includes(query)) {
+        if (route === '/contents/.github') return [{ path: ownerFile, type: 'file', sha: ownerBlob }];
+        if (route === `/contents/${ownerFile}`) return {
+          path: ownerFile, type: 'file', sha: ownerBlob, encoding: 'base64', size: owners.length, content: owners.toString('base64'),
+        };
+        if (route === '/codeowners/errors') return { errors: [] };
+      }
       const permission = /^\/collaborators\/([a-zA-Z0-9_-]+)\/permission$/u.exec(path);
       if (permission) {
         const access = state.permissions.get(permission[1]);
@@ -184,6 +187,27 @@ test('an existing App approval is withdrawn when a later review cannot verify th
   assert.equal(await run({ runId: '5678' }), 'approved');
 });
 
+test('a protection change reconciles existing approvals even at the same PR revision', async () => {
+  const { state, reconcile, run } = fakeGitHub();
+  assert.equal(await run(), 'approved');
+  state.reviews.unshift({ ...state.reviews[0], id: 101, user: owner });
+  state.protection.required_pull_request_reviews.require_code_owner_reviews = false;
+
+  assert.equal(await reconcile(), 1);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED', 'DISMISSED']);
+  assert.match(state.writes.at(-1).data.message, /人工审批要求/u);
+  assert.equal(await reconcile(), 0);
+});
+
+test('an approval is withdrawn if the independent protection disappears just after publication', async () => {
+  const { state, run } = fakeGitHub();
+  state.afterPost = () => { state.protection.required_pull_request_reviews.require_code_owner_reviews = false; };
+
+  assert.equal(await run(), 'dismissed-protection');
+  assert.equal(state.reviews[0].state, 'DISMISSED');
+  assert.match(state.writes.at(-1).data.message, /人工审批要求/u);
+});
+
 test('skips self-authored PRs and those with an ineligible or changed revision', async () => {
   const { state, run } = fakeGitHub();
   state.pr.user = { ...approvalBot };
@@ -285,6 +309,17 @@ test('dismisses exactly the accepted automatic review when GitHub confirms a rap
       ['POST', reviewPath], ['PUT', `${reviewPath}/300/dismissals`],
     ]);
   }
+});
+
+test('keeps the accepted approval when only draft status changes during post-publication checks', async () => {
+  const { state, run } = fakeGitHub();
+  state.afterPost = () => { state.pr.draft = true; };
+
+  assert.equal(await run(), 'approved');
+  assert.equal(state.reviews[0].state, 'APPROVED');
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+  state.pr.draft = false;
+  assert.equal(await run(), 'skipped-existing');
 });
 
 test('dismisses the approval when the base branch advances during the final PR read', async () => {
@@ -486,6 +521,22 @@ test('a rejected current verdict withdraws only active Luoshen approvals', async
   assert.equal(state.writes.length, 2);
   assert.equal(await run(), 'skipped-changes-requested');
   assert.equal(state.writes.length, 2);
+});
+
+test('retries transient history before reconciling an existing approval with a human change request', async () => {
+  const { state, run } = fakeGitHub();
+  const human = { id: 101, user: owner, state: 'CHANGES_REQUESTED', commit_id: head, body: 'Fix the issue' };
+  state.reviews = [human, priorApproval({ id: 102 })];
+  let unavailable = true;
+  state.beforeGet = (path) => {
+    if (!unavailable || !path.startsWith(`${reviewPath}?`)) return;
+    unavailable = false;
+    throw Object.assign(new Error('Review history unavailable'), { status: 503 });
+  };
+
+  assert.equal(await run(), 'dismissed-changes-requested');
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['CHANGES_REQUESTED', 'DISMISSED']);
+  assert.deepEqual(state.writes.map(({ method, path }) => [method, path]), [['PUT', `${reviewPath}/102/dismissals`]]);
 });
 
 test('main advancing withdraws the old App approval without another model review', async () => {

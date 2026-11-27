@@ -1,6 +1,6 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { publishApproval, readApprovalReceipt, reconcileMainApprovals } from './pr-agent-approval.mjs';
-import { verifyReviewCoverage } from './pr-agent-coverage.mjs';
+import { verifyReviewCoverage, verifyReviewFileModes } from './pr-agent-coverage.mjs';
 import { buildReviewComments, getReviewCommentMarker } from './pr-agent-review-comments.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
 import { isBranch, isSha, listReviews, pages, targetTip, validId } from './pr-agent-github.mjs';
@@ -10,15 +10,16 @@ const signalPath = '.github/workflows/pr-agent-signal.yml';
 const summaryMarker = '<!-- pr-agent:describe:persistent -->';
 const reviewMarker = '<!-- pr-agent:review:full -->';
 const reviewFindingLimit = 4; // PR_REVIEWER__NUM_MAX_FINDINGS in the workflow.
+const diffMediaType = 'application/vnd.github.diff';
 
 function githubClient(env, token = env.GH_TOKEN) {
   const repository = env.GITHUB_REPOSITORY;
   const api = `${env.GITHUB_API_URL}/repos/${repository}`;
   const usersApi = `${env.GITHUB_API_URL}/users`;
-  async function request(method, path, body, label, base = api) {
+  async function request(method, path, body, label, { base = api, accept = 'application/vnd.github+json' } = {}) {
     const response = await fetch(base + path, {
       method,
-      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Accept: accept, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: 'error',
       signal: AbortSignal.timeout(15000),
@@ -28,15 +29,22 @@ function githubClient(env, token = env.GH_TOKEN) {
       error.status = response.status;
       throw error;
     }
+    if (accept === diffMediaType) {
+      if (response.status !== 200 || response.headers.get('content-type')?.split(';', 1)[0] !== diffMediaType) {
+        throw new Error('Invalid GitHub PR diff response');
+      }
+      return new TextDecoder('utf-8', { fatal: true }).decode(await response.arrayBuffer());
+    }
     return response.json();
   }
   return {
     api, repository, serverUrl: env.GITHUB_SERVER_URL,
     get: (path, label) => request('GET', path, undefined, label),
+    getDiff: (path) => request('GET', path, undefined, 'Cannot read raw PR diff', { accept: diffMediaType }),
     getAccount: (login) => request('GET', `/${encodeURIComponent(login)}`, undefined,
-      'Cannot verify the GitHub approval identity', usersApi),
+      'Cannot verify the GitHub approval identity', { base: usersApi }),
     getInstallationRepositories: () => request('GET', '/installation/repositories?per_page=2', undefined,
-      'Cannot verify the approval App installation scope', env.GITHUB_API_URL),
+      'Cannot verify the approval App installation scope', { base: env.GITHUB_API_URL }),
     post: (path, body) => request('POST', path, body),
     put: (path, body) => request('PUT', path, body),
   };
@@ -287,7 +295,7 @@ async function validateReview(github, env, scope) {
         files.length = 0;
         console.log('::warning::Unable to compare optional approval coverage for this review.');
       }
-      allowApproval = Boolean(coverage) && verifyReviewCoverage(coverage, {
+      const textCovered = Boolean(coverage) && verifyReviewCoverage(coverage, {
         repository: github.repository, prNumber, head, base, baseRef: ref, review, files,
         changedFileCount: pr.changed_files, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
         invocation: env.PR_AGENT_COVERAGE_INVOCATION,
@@ -309,6 +317,13 @@ async function validateReview(github, env, scope) {
           if (posted?.state !== 'COMMENTED' || posted.commit_id !== head) throw new Error('Invalid GitHub COMMENT response');
         }
       }
+      if (textCovered) {
+        try {
+          allowApproval = verifyReviewFileModes(await github.getDiff(prPath), files);
+        } catch {
+          console.log('::warning::Unable to verify file modes for automatic approval.');
+        }
+      }
     }
   }
   if (checkApprovals && (canCreateApproval || !favorable)) {
@@ -322,7 +337,8 @@ async function validateReview(github, env, scope) {
         console.log('::warning::Unable to list older automatic approvals; the approval job will retry reconciliation.');
       }
     }
-    if (hasApprovalWork && await currentRevision()) {
+    if (hasApprovalWork) {
+      if (!await currentRevision()) return;
       const revision = {
         prNumber, head, base, baseRef: ref, allowApproval,
         runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
@@ -367,12 +383,14 @@ if (scope) {
   else if (action === 'validate') await validateReview(github, env, scope);
   else if (action === 'approve') await approve(github, env, scope);
   else throw new Error('Unknown PR-Agent workflow command');
-} else if (action === 'approve' && env.GITHUB_EVENT_NAME === 'push' &&
-    env.GITHUB_REF === 'refs/heads/main' && event.ref === env.GITHUB_REF && event.deleted === false &&
-    event.repository?.full_name === github.repository) {
+} else if (action === 'approve' && env.GITHUB_REF === 'refs/heads/main' &&
+    event.repository?.full_name === github.repository &&
+    ((env.GITHUB_EVENT_NAME === 'push' && event.ref === env.GITHUB_REF && event.deleted === false) ||
+     (env.GITHUB_EVENT_NAME === 'branch_protection_rule' && ['created', 'edited', 'deleted'].includes(event.action)))) {
   if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Missing approval GitHub App installation token');
   const dismissed = await reconcileMainApprovals({
     github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), appSlug: env.PR_AGENT_APPROVAL_APP_SLUG,
   });
-  console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after main changed.`);
+  const change = env.GITHUB_EVENT_NAME === 'push' ? 'main changed' : 'branch protection changed';
+  console.log(`Dismissed ${dismissed} stale Luoshen approval(s) after ${change}.`);
 }

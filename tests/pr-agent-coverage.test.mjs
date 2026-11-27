@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { verifyReviewCoverage } from '../scripts/pr-agent-coverage.mjs';
+import { verifyReviewCoverage, verifyReviewFileModes } from '../scripts/pr-agent-coverage.mjs';
 import { buildReviewComments } from '../scripts/pr-agent-review-comments.mjs';
 
 function digest(rows) {
@@ -16,8 +16,8 @@ const modified = {
   additions: 2,
   deletions: 2,
 };
-const added = { filename: 'added.js', patch: '@@ -0,0 +1,2 @@\n+first\n+second\n', additions: 2, deletions: 0 };
-const removed = { filename: 'removed.js', patch: '@@ -1 +0,0 @@\n-deleted', additions: 0, deletions: 1 };
+const added = { filename: 'added.js', status: 'added', patch: '@@ -0,0 +1,2 @@\n+first\n+second\n', additions: 2, deletions: 0 };
+const removed = { filename: 'removed.js', status: 'removed', patch: '@@ -1 +0,0 @@\n-deleted', additions: 0, deletions: 1 };
 const identity = {
   repository: 'corp-example/project', prNumber: 510, head: 'a'.repeat(40), base: 'b'.repeat(40), baseRef: 'main',
   runId: '12345678', runAttempt: '2', invocation: 'initial',
@@ -39,6 +39,48 @@ const proof = {
     { path: added.filename, left: digest(''), right: digest('1\tfirst\n2\tsecond\n') },
   ],
 };
+
+const leftPath = String.raw`"a/src/\346\226\260 \346\226\207\344\273\266.js"`;
+const rightPath = String.raw`"b/src/\346\226\260 \346\226\207\344\273\266.js"`;
+const modifiedDiff = [
+  `diff --git ${leftPath} ${rightPath}`, 'index e652251..1843a8d 100644',
+  '--- ' + leftPath, '+++ ' + rightPath, modified.patch, '',
+].join('\n');
+const addedDiff = [
+  'diff --git a/added.js b/added.js', 'new file mode 100644', 'index 0000000..1843a8d',
+  '--- /dev/null', '+++ b/added.js', added.patch,
+].join('\n');
+const removedDiff = [
+  'diff --git a/removed.js b/removed.js', 'deleted file mode 100644', 'index e652251..0000000',
+  '--- a/removed.js', '+++ /dev/null', removed.patch, '',
+].join('\n');
+
+test('matches raw Git sections for unchanged regular modes and default-mode additions or removals', () => {
+  assert.equal(verifyReviewFileModes(removedDiff + addedDiff + modifiedDiff, input.files), true);
+  assert.equal(verifyReviewFileModes(modifiedDiff.replace('100644', '100755'), [modified]), true);
+});
+
+test('allows GitHub to shorten hunk context labels while matching their coordinates and rows', () => {
+  const diff = modifiedDiff.replace('@@ function f()', '@@ function');
+  assert.equal(verifyReviewFileModes(diff, [modified]), true);
+  assert.equal(verifyReviewFileModes(diff.replace('@@ -10 +10 @@', '@@ -11 +11 @@'), [modified]), false);
+});
+
+test('requires a complete and corresponding raw Git section with explicit regular-file mode evidence', () => {
+  const diff = modifiedDiff + addedDiff + removedDiff;
+  for (const raw of [
+    undefined, '', 'preamble\n' + diff, modifiedDiff + addedDiff, modifiedDiff + modifiedDiff + removedDiff,
+    diff.slice(0, -1), diff.replace('+first', '+wrong'), diff.replace('+++ b/added.js', '+++ b/wrong.js'),
+    diff.replace('index e652251..1843a8d 100644', 'old mode 100644\nnew mode 100755\nindex e652251..1843a8d'),
+    diff.replace('index e652251..1843a8d 100644', 'index e652251..1843a8d'),
+    diff.replace('index e652251..1843a8d 100644', 'index e652251..1843a8d 120000'),
+    diff.replace('new file mode 100644', 'new file mode 100755'),
+    diff.replace('deleted file mode 100644', 'deleted file mode 100755'),
+    diff.replace('index 0000000..1843a8d', 'index e652251..1843a8d'),
+  ]) {
+    assert.equal(verifyReviewFileModes(raw, input.files), false, raw);
+  }
+});
 
 function verifiesPatch(patch, additions, deletions, left, right) {
   const files = [{ ...modified, patch, additions, deletions }];
