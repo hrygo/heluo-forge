@@ -2305,9 +2305,16 @@ window.__ModuleLoader__.load({
       }
 
       function noteView(subscriber, view, { retireStream = false } = {}) {
-        if (!subscribers.has(subscriber)) return;
-        if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
+        if (!subscribers.has(subscriber)) return false;
+        const previous = subscriber.deadline;
         trackDeadline(subscriber, view);
+        // A directory reply that still needs verification cannot replace the
+        // current view or invalidate a shared read that could settle it.
+        if (retireStream && inFlight && presentSession(view).verifying) {
+          subscriber.deadline = previous;
+          return false;
+        }
+        if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
         if (retireStream) {
           // Invalidate old reads even while the page is polling without SSE.
           inFlight?.cancel();
@@ -2315,6 +2322,7 @@ window.__ModuleLoader__.load({
         }
         scheduleDeadline();
         flushDeadlineRead();
+        return true;
       }
 
       function revalidate() {
@@ -2377,6 +2385,7 @@ window.__ModuleLoader__.load({
             try { view = JSON.parse(event.data); } catch { return; }
             if (!view || typeof view !== 'object' || Array.isArray(view) || deriveSessionUi(view).state === null) return;
             const arrivedAt = sessionMonotonicNow();
+            let sampledAfter = openedAt;
             const hasMonotonicSample = Number.isFinite(view.sampledMonotonicAt) && view.sampledMonotonicAt >= 0;
             const tick = hasMonotonicSample ? view.sampledMonotonicAt : view.sampledAt;
             if (Number.isFinite(tick) && tick >= 0) {
@@ -2389,6 +2398,7 @@ window.__ModuleLoader__.load({
                 // replacement opened after a fresh read can anchor again.
                 const consistent = hasMonotonicSample === firstSample.monotonic && elapsed >= 0 && from <= arrivedAt;
                 projectedSessionDeadlines.set(view, consistent ? projectedAt : arrivedAt);
+                if (consistent) sampledAfter = { wall: openedAt.wall, monotonic: from };
               }
             }
             // A buffered timed frame cannot settle newer verification.
@@ -2403,7 +2413,7 @@ window.__ModuleLoader__.load({
             // Once admitted, this frame belongs to every current subscriber,
             // even if one callback synchronously replaces the physical stream.
             const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
-            broadcast(view, pending, openedAt);
+            broadcast(view, pending, sampledAfter);
             const needsFreshSource = interruptedDeadlineRead && Number.isFinite(nextDeadlineAttempts());
             if (needsFreshSource && isCurrent()) {
               // This frame won the view but may have been sampled before the
@@ -4268,7 +4278,7 @@ window.__ModuleLoader__.load({
           void getJson('/api/forge-iam/models')
             .then((result) => {
               if (result?.ok && result.body?.view && isCurrentEpoch(epoch) && viewRevision.current === revision) {
-                noteSessionView(result.body.view, { retireStream: true });
+                if (!noteSessionView(result.body.view, { retireStream: true })) return;
                 form.observeView(result.body.view);
                 setState((current) => ({ ...current, view: result.body.view }));
               }
