@@ -1772,6 +1772,18 @@ test('IAM Discovery 连不上时原因带上底层错误，处理办法按失败
   assert.ok(long.message.length < 500, `the reason is ${long.message.length} characters long`);
   assert.match(long.message, /^init: 读取 IAM Discovery 失败（fetch failed；SOMETHING_ELSE；first line x+…）：/u);
   assert.equal(long.next, `确认这台机器能访问企业 IAM 后重跑本脚本；${KEPT}`);
+
+  // 双栈连接尝试都失败时，Node 可将各次失败放进 AggregateError.errors 且外层 message 为空。
+  const dualStack = await stopped(async () => {
+    const v4 = Object.assign(new Error('connect ECONNREFUSED 192.0.2.10:80'), { code: 'ECONNREFUSED', syscall: 'connect', headers: { Authorization: 'synthetic-dual-secret' } });
+    const v6 = Object.assign(new Error('connect EHOSTUNREACH [2001:db8::1]:80'), { code: 'EHOSTUNREACH', syscall: 'connect' });
+    throw new TypeError('fetch failed', { cause: new AggregateError([v4, v6], '') });
+  });
+  assert.equal(dualStack.code, 'IAM_DISCOVERY_FAILED');
+  assert.match(dualStack.message, /ECONNREFUSED/u);
+  assert.match(dualStack.message, /EHOSTUNREACH/u);
+  assert.equal(dualStack.message.includes('synthetic-dual-secret'), false);
+  assert.equal(dualStack.next, `连接被拒绝或不可达：确认 IAM 服务在运行，这台机器到它的网络与端口（含代理）放行，再重跑本脚本；${KEPT}`);
 });
 
 test('反向：拿不到原因的 Discovery 失败，结论与原先一样；原因是字符串时照录', async (t) => {

@@ -16,15 +16,6 @@ const OUTPUT_TAIL = 64 * 1024;
 
 const tail = (text) => (text.length > OUTPUT_TAIL ? text.slice(-OUTPUT_TAIL) : text);
 
-// The end of a stream, starting at a whole line: no address is cut in two where the kept part begins.
-const keptEnd = (text) => {
-  if (text.length <= OUTPUT_TAIL) return text;
-  const from = text.indexOf('\n', text.length - OUTPUT_TAIL);
-  // A single line longer than the tail has no safe start left: drop it so a cut
-  // URL cannot leave its query or fragment parameters exposed without a scheme.
-  return from === -1 ? '' : text.slice(from + 1);
-};
-
 /** The end of one stream: a string that is replaced whole, never appended to in place. */
 const tailBox = () => {
   let text = '';
@@ -172,12 +163,37 @@ export function createRuntime({
       // whole line yet. Only whole lines are looked at, so an address cut in
       // two by the pipe is never taken for complete.
       let rest = '';
+      // True while skipping the remainder of an over-limit line whose start was dropped.
+      let dropping = false;
       try {
         for await (const chunk of stream) {
-          const text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
-          keep.assign(keptEnd(`${keep.current()}${text}`));
+          const decoded = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+          let keptChunk = decoded;
+          if (dropping) {
+            const nl = keptChunk.indexOf('\n');
+            if (nl === -1) {
+              keptChunk = '';
+            } else {
+              dropping = false;
+              keptChunk = keptChunk.slice(nl + 1);
+            }
+          }
+          if (keptChunk !== '') {
+            const combined = `${keep.current()}${keptChunk}`;
+            if (combined.length <= OUTPUT_TAIL) {
+              keep.assign(combined);
+            } else {
+              const from = combined.indexOf('\n', combined.length - OUTPUT_TAIL);
+              if (from === -1) {
+                dropping = true;
+                keep.assign('');
+              } else {
+                keep.assign(combined.slice(from + 1));
+              }
+            }
+          }
           if (!scan || settled) continue;
-          rest = tail(`${rest}${text}`);
+          rest = tail(`${rest}${decoded}`);
           const cut = rest.lastIndexOf('\n');
           // Each line is looked at once, when it is complete.
           if (cut === -1) continue;

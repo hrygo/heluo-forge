@@ -238,7 +238,8 @@ test('the snapshot keeps the end of both streams, bounded, with the query of eve
       + `  cut at its start: 43210/?token=${TOKEN}\n`
       // A standalone token= key-value pair is redacted without needing ? or & before it.
       + `  standalone token=${TOKEN} and next=1\n`
-      + '  fragment https://idp.corp.example/cb#session=1\n',
+      + '  fragment https://idp.corp.example/cb#session=1\n'
+      + '  uppercase HTTPS://idp.corp.example/cb?code=upper-case-code#session=upper-case-session\n',
   );
   await flush();
   const { output } = runtime.snapshot();
@@ -250,19 +251,28 @@ test('the snapshot keeps the end of both streams, bounded, with the query of eve
       + '  issuer http://iam.corp.example/esc-sso/oidc/.well-known/openid-configuration has no query\n'
       + '  cut at its start: 43210/?token=…\n'
       + '  standalone token=… and next=1\n'
-      + '  fragment https://idp.corp.example/cb#…\n',
+      + '  fragment https://idp.corp.example/cb#…\n'
+      + '  uppercase HTTPS://idp.corp.example/cb?…\n',
   );
   assert.equal(JSON.stringify(runtime.snapshot()).includes(TOKEN), false);
+  assert.equal(JSON.stringify(runtime.snapshot()).includes('upper-case-code'), false);
+  assert.equal(JSON.stringify(runtime.snapshot()).includes('upper-case-session'), false);
+  const uppercaseLog = failureRecord({ at: new Date('2026-11-27T00:00:00Z'), code: 'START_TIMEOUT', message: 'm', service: runtime.snapshot() });
+  assert.equal(uppercaseLog.includes('upper-case-code'), false);
+  assert.equal(uppercaseLog.includes('upper-case-session'), false);
 
-  // An over-limit line without a newline has its start cut off and is dropped whole so callback credentials cannot leak.
-  fake.complain(`https://idp.corp.example/cb?${'p'.repeat(70 * 1024)}&code=callback-secret-code#session=callback-secret-session`);
+  // An over-limit line arriving across chunks drops its continuation up to the next newline, then keeps the next whole line.
+  fake.complain(`https://idp.corp.example/cb?${'p'.repeat(70 * 1024)}`);
   await flush();
-  assert.equal(runtime.snapshot().output.stderr, '');
-  assert.equal(JSON.stringify(runtime.snapshot()).includes('callback-secret-code'), false);
-  assert.equal(JSON.stringify(runtime.snapshot()).includes('callback-secret-session'), false);
-  const logEntry = failureRecord({ at: new Date('2026-11-27T00:00:00Z'), code: 'START_TIMEOUT', message: 'm', service: runtime.snapshot() });
-  assert.equal(logEntry.includes('callback-secret-code'), false);
-  assert.equal(logEntry.includes('callback-secret-session'), false);
+  fake.complain('&code=chunked-secret-code#session=chunked-secret-session\nnext whole line\n');
+  await flush();
+  assert.equal(runtime.snapshot().output.stderr, 'next whole line\n');
+  assert.equal(JSON.stringify(runtime.snapshot()).includes('chunked-secret-code'), false);
+  assert.equal(JSON.stringify(runtime.snapshot()).includes('chunked-secret-session'), false);
+  const chunkedLog = failureRecord({ at: new Date('2026-11-27T00:00:00Z'), code: 'START_TIMEOUT', message: 'm', service: runtime.snapshot() });
+  assert.match(chunkedLog, /next whole line/u);
+  assert.equal(chunkedLog.includes('chunked-secret-code'), false);
+  assert.equal(chunkedLog.includes('chunked-secret-session'), false);
 
   // Each stream keeps its end, and no more than the tail: what failed is at the end.
   for (let index = 0; index < 1500; index += 1) {

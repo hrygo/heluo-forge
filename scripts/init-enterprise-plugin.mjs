@@ -679,29 +679,33 @@ const DISCOVERY_REMEDIES = Object.freeze({
 });
 const DISCOVERY_SECRET_KEPT = '密钥文件仍保留在交付目录，重跑会重新预置。';
 
+const DISCOVERY_SUBERROR_LIMIT = 4;
+
+function classifyDiscoveryCode(code) {
+  for (const [candidate, pattern] of DISCOVERY_KIND_CODES) {
+    if (pattern.test(code)) return candidate;
+  }
+  return 'unknown';
+}
+
 /**
  * 一次 Discovery 抓取失败的类别与原因。Node 的 fetch 只说 "fetch failed"，真正的原因
- * （DNS、拒绝连接、超时、证书）挂在 `cause` 上；这里取它的错误码与文本，cause 上其余
- * 字段一律不进结论。原因是字符串时照录，不据此归类。
+ * （DNS、拒绝连接、超时、证书）挂在 `cause`（及双栈 `AggregateError.errors`）上；这里
+ * 有界提取错误码与文本，其余字段一律不进结论。原因是字符串时照录，不据此归类。
  */
 function discoveryFailure(error) {
   const cause = error?.cause;
-  const code = typeof cause?.code === 'string' ? cause.code : '';
-  let kind = 'unknown';
-  if (DISCOVERY_TIMEOUT_NAMES.has(error?.name)) {
-    kind = 'timeout';
-  } else {
-    for (const [candidate, pattern] of DISCOVERY_KIND_CODES) {
-      if (pattern.test(code)) {
-        kind = candidate;
-        break;
-      }
-    }
-  }
+  const subErrors = Array.isArray(cause?.errors) ? cause.errors.slice(0, DISCOVERY_SUBERROR_LIMIT) : [];
+  const entries = [cause, ...subErrors].filter((item) => item !== undefined && item !== null);
+  let kind = DISCOVERY_TIMEOUT_NAMES.has(error?.name) ? 'timeout' : 'unknown';
   const parts = [oneBoundedLine(error?.message, DISCOVERY_DETAIL_LIMIT) || 'UNKNOWN'];
-  const said = oneBoundedLine(typeof cause === 'string' ? cause : cause?.message, DISCOVERY_DETAIL_LIMIT);
-  if (code !== '' && !said.includes(code)) parts.push(code);
-  if (said !== '') parts.push(said);
+  for (const entry of entries) {
+    const code = typeof entry?.code === 'string' ? entry.code : '';
+    if (kind === 'unknown' && code !== '') kind = classifyDiscoveryCode(code);
+    const said = oneBoundedLine(typeof entry === 'string' ? entry : entry?.message, DISCOVERY_DETAIL_LIMIT);
+    if (code !== '' && !said.includes(code) && !parts.includes(code)) parts.push(code);
+    if (said !== '' && !parts.includes(said)) parts.push(said);
+  }
   return { kind, detail: oneBoundedLine(parts.join('；'), DISCOVERY_DETAIL_LIMIT) };
 }
 

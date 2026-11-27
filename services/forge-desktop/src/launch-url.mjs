@@ -22,8 +22,8 @@ export function addressInUse(text) {
 
 // An address as the web profile may print it — plain, or with `\/` inside a
 // JSON line — up to and including the `?` or `#` that starts its query or
-// fragment.
-const ADDRESS_HEAD = /(\bhttps?:[\\/][^\s"'<>?#]*[?#])[^\s"'<>]*/gu;
+// fragment. Scheme matching is case-insensitive because HTTP(S) schemes are.
+const ADDRESS_HEAD = /(\bhttps?:[\\/][^\s"'<>?#]*[?#])[^\s"'<>]*/giu;
 // The process token by its name, wherever it stands: in a query, as a
 // standalone key=value pair, or where the start of its address was cut off.
 const TOKEN_VALUE = /(\btoken=)[^\s"'<>&#\\]*/gu;
