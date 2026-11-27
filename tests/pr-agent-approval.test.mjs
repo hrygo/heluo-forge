@@ -755,6 +755,30 @@ test('a temporary revision read failure after listing reviews does not drop a wi
   assert.deepEqual(state.writes.map(({ path }) => path), [`${reviewPath}/300`, `${reviewPath}/300/dismissals`]);
 });
 
+test('withdrawal recovers from a failure on the first PR read and records it if retry is exhausted', async () => {
+  for (const firstFailures of [1, 2]) {
+    const { state, run, reconcile } = fakeGitHub();
+    state.reviews = [priorApproval({ id: 101, author: owner }), priorApproval({ id: 300 })];
+    let failedReads = 0;
+    state.beforeGet = (path) => {
+      if (path === pull && failedReads < firstFailures) {
+        failedReads++;
+        throw Object.assign(new Error('Initial PR read unavailable'), { status: 503 });
+      }
+    };
+
+    if (firstFailures === 1) {
+      assert.equal(await run({ allowApproval: false }), 'dismissed-ineligible');
+    } else {
+      await assert.rejects(run({ allowApproval: false }), /initial PR read unavailable/iu);
+      assert.equal(state.reviews.at(-1).state, 'COMMENTED');
+      assert.equal(await reconcile(), 1);
+    }
+    assert.equal(state.reviews[0].state, 'APPROVED');
+    assert.equal(state.reviews[1].state, 'DISMISSED');
+  }
+});
+
 test('a later same-version cleanup retries a failed withdrawal recorded on the exact App approval', async () => {
   const { state, run, reconcile } = fakeGitHub();
   assert.equal(await run(), 'approved');
@@ -1061,6 +1085,25 @@ test('an active bot changes request needs the official author and a valid Luoshe
     { ...verified, id: 107, body: 'Unrelated bot review' },
   ];
   assert.equal(await allowed.run(), 'approved');
+});
+
+test('legacy Luoshen change requests remain effective until they are dismissed', async () => {
+  const legacy = {
+    id: 101, user: { id: 41898282, login: 'github-actions[bot]', type: 'Bot' },
+    state: 'CHANGES_REQUESTED', commit_id: head,
+    body: `Maintainer requested changes\n\n<!-- heluo-forge-pr-agent-priority-rc:v1 ${head} ${base} -->`,
+  };
+  const { state, run, reconcile } = fakeGitHub();
+  const dismissed = { ...legacy, state: 'DISMISSED' };
+  state.reviews.push(legacy);
+  assert.equal(await run(), 'skipped-changes-requested');
+  assert.deepEqual(state.writes, []);
+
+  state.reviews[0] = dismissed;
+  assert.equal(await run(), 'approved');
+  state.reviews.push({ ...legacy, id: 102 });
+  assert.equal(await reconcile(), 1);
+  assert.deepEqual(state.reviews.map(({ state }) => state), ['DISMISSED', 'DISMISSED', 'CHANGES_REQUESTED']);
 });
 
 test('an unavailable collaborator permission read prevents a verified approval', async () => {

@@ -10,6 +10,7 @@ const receiptPattern = new RegExp(
   `^${receiptPrefix} (pending|confirmed|stale) (${publicationPattern}) (P[01]) (${shaPattern}) (${shaPattern}) ([A-Za-z0-9_-]+) ([1-9][0-9]*) -->$`,
   'u',
 );
+const legacyReceiptPattern = new RegExp(`<!-- heluo-forge-pr-agent-priority-rc:v1 (${shaPattern}) (${shaPattern}) -->$`, 'u');
 const pendingBanner = '**本次修改请求的 PR 版本尚待确认。**';
 const staleBanner = '**此修改请求已过期。请仓库维护者解除此 GitHub 修改请求。**';
 
@@ -63,6 +64,17 @@ export function parseReceipt(review) {
       (state === 'pending' && !body.startsWith(`${pendingBanner}\n\n`)) ||
       (state === 'stale' && !body.startsWith(`${staleBanner}\n\n`))) return;
   return { state, publication, priority, head, base, baseRef, commentId };
+}
+
+function parseLegacyReceipt(review) {
+  if (!isBotReview(review)) return;
+  const match = legacyReceiptPattern.exec(review.body.trimEnd());
+  if (match && review.commit_id === match[1]) return { head: match[1], base: match[2] };
+}
+
+export function isActiveLuoshenChangeRequest(review) {
+  return review?.state === 'CHANGES_REQUESTED' && review.user?.id === 41898282 && review.user.type === 'Bot' &&
+    Boolean(parseReceipt(review) || parseLegacyReceipt(review));
 }
 
 function renderReceipt(receipt, state) {
@@ -150,10 +162,11 @@ export async function handleChangeRequests({ github, prNumber, command, event })
   const { priority, head, base, baseRef } = command;
   const revision = { head, base, baseRef };
   if (!await isCurrent(github, repository, pull, number, revision, { observed: pr })) return { status: 'rejected' };
-  const legacy = `<!-- heluo-forge-pr-agent-priority-rc:v1 ${head} ${base} -->`;
   const commentId = event.comment.id;
-  if (reviews.some((review) => isBotReview(review) && review.commit_id === head &&
-      review.body.trimEnd().endsWith(legacy)) ||
+  if (reviews.some((review) => {
+    const legacy = parseLegacyReceipt(review);
+    return legacy?.head === head && legacy.base === base;
+  }) ||
       receipts.some(({ receipt }) => receipt.commentId === commentId ||
         (receipt.state !== 'stale' && receipt.head === head && receipt.base === base && receipt.baseRef === revision.baseRef))) {
     return { status: 'duplicate' };

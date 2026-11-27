@@ -62,6 +62,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       approval_revision: ${{ steps.retry_validation.outputs.approval_revision || steps.validation.outputs.approval_revision }}
+      publication_failed: ${{ (steps.validation.outputs.retry == 'true' && steps.retry_validation.outputs.publication_failed) || (steps.validation.outputs.retry != 'true' && steps.validation.outputs.publication_failed) || '' }}
     env:
       PR_AGENT_AUTO_APPROVE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
       PR_AGENT_APPROVAL_CONFIGURED: ${{ vars.PR_AGENT_APPROVAL_APP_CLIENT_ID != '' }}
@@ -222,16 +223,25 @@ jobs:
         if: ${{ github.event_name == 'workflow_run' && (steps.retry_validation.outputs.review_key != '' || (steps.validation.outputs.retry != 'true' && steps.validation.outputs.review_key != '')) }}
         run: echo 'Automatic review completed for the captured revision.'
 
+      - name: Report incomplete review publication
+        if: ${{ !cancelled() && ((steps.validation.outputs.retry == 'true' && steps.retry_validation.outputs.publication_failed == 'true') || (steps.validation.outputs.retry != 'true' && steps.validation.outputs.publication_failed == 'true')) }}
+        run: |
+          echo '::error::洛神未能确认审查意见已完整发布。'
+          exit 1
+
   approve:
     name: 洛神自动批准 (ubuntu-x64)
     needs: review
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' && vars.PR_AGENT_APPROVAL_APP_CLIENT_ID != '' &&
       (github.event_name == 'push' || github.event_name == 'branch_protection_rule' || github.event_name == 'schedule' ||
-       (needs.review.result == 'success' && needs.review.outputs.approval_revision != '' &&
-       (fromJSON(needs.review.outputs.approval_revision).allowApproval == false ||
-        (vars.PR_AGENT_AUTO_APPROVE == 'true' &&
-         fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))))
+       (needs.review.outputs.approval_revision != '' &&
+        ((fromJSON(needs.review.outputs.approval_revision).allowApproval == false &&
+          (needs.review.result == 'success' ||
+           (needs.review.result == 'failure' && needs.review.outputs.publication_failed == 'true'))) ||
+         (needs.review.result == 'success' && needs.review.outputs.publication_failed != 'true' &&
+          vars.PR_AGENT_AUTO_APPROVE == 'true' &&
+          fromJSON(needs.review.outputs.approval_revision).runAttempt == github.run_attempt))))
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     environment: luoshen-approval
