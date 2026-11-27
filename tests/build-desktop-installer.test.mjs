@@ -116,6 +116,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js',
     'dsh/node_modules/@deepseek-ai/dsh-llm/README.md',
     'dsh/node_modules/@deepseek-ai/dsh-llm/docs/prompt.md',
+    'dsh/node_modules/@deepseek-ai/dsh-llm/NOTICE.flow',
     'dsh/node_modules/.package-lock.json',
     'brand/tray.png',
     'brand/status.html',
@@ -161,6 +162,8 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/fixtures/test.json',
       'dsh/node_modules/pkg/fixtures/LICENSE.md',
       'dsh/node_modules/pkg/fixtures/NOTICE.flow',
+      'dsh/node_modules/@deepseek-ai/dsh-llm/NOTICE.flow',
+      'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js.flow',
       'dsh/node_modules/pkg/__fixtures__/mock.json',
       'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
       'enterprise-assets/INSTALL.md',
@@ -196,15 +199,19 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   assert.equal(untouchedEnv.WIN_CSC_LINK, undefined);
   assert.equal(untouchedEnv.PATH, '/bin');
 
-  const signedEnv = builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'win' }, { ...baseEnv, WIN_CSC_KEY_PASSWORD: 'secret-password' });
+  const signedEnv = builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'win' }, baseEnv);
   assert.equal(signedEnv.WIN_CSC_LINK, resolve('certs/code-sign.pfx'));
-  assert.equal(signedEnv.WIN_CSC_KEY_PASSWORD, 'secret-password');
+  assert.equal(signedEnv.WIN_CSC_KEY_PASSWORD, undefined);
+  assert.equal(signedEnv.CSC_KEY_PASSWORD, undefined);
 
   // 省略参数时保留环境变量已有 WIN_CSC_LINK
   const existingEnv = builderEnv({}, { ...baseEnv, WIN_CSC_LINK: '/existing/cert.pfx' });
   assert.equal(existingEnv.WIN_CSC_LINK, '/existing/cert.pfx');
 
-  // 显式传入空白证书参数必须直接报错拒绝，防止静默回退
+  // 显式传入空白证书参数或非空口令环境变量必须直接报错拒绝，且报错中绝不回显合成口令
+  const syntheticPwd = 'synthetic-secret-password-999';
+  assert.throws(() => builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'win' }, { ...baseEnv, WIN_CSC_KEY_PASSWORD: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
+  assert.throws(() => builderEnv({}, { ...baseEnv, CSC_KEY_PASSWORD: syntheticPwd }), (err) => err.code === 'BAD_ARGUMENT' && !err.message.includes(syntheticPwd));
   assert.throws(() => builderEnv({ certificateFile: '', target: 'win' }), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => builderEnv({ certificateFile: '   ', target: 'win' }), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'mac' }), (err) => err.code === 'BAD_ARGUMENT');

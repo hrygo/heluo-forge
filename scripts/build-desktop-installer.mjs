@@ -224,7 +224,7 @@ export function readAppIdentity(path) {
  */
 export function isPackaged(relativePath) {
   if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
-  if (!relativePath.startsWith('dsh/node_modules/') || relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
+  if (!relativePath.startsWith('dsh/node_modules/')) {
     if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
     return true;
   }
@@ -234,6 +234,9 @@ export function isPackaged(relativePath) {
   const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
   if (isLicense) return true;
   if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
+  if (relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
+    return true;
+  }
   if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
@@ -384,18 +387,20 @@ export function builderEntry(builderDir, exists = existsSync, read = readFileSyn
  * Environment variables for the electron-builder subprocess.
  *
  * Code signing credentials must never travel via CLI arguments or get written
- * to disk in builder-config.json. When --certificate-file is given, the path is
- * passed to electron-builder via WIN_CSC_LINK in the child environment. The
- * certificate password travels strictly via WIN_CSC_KEY_PASSWORD in process.env,
- * which is inherited in memory and never serialized into the config.
- *
- * Note: When signing with a password-protected PFX on Windows, electron-builder's
- * underlying call to signtool.exe may still pass the password in signtool's
- * command-line arguments. For zero-process-parameter signing, use the Windows
- * certificate store or hardware token.
+ * to disk in builder-config.json, nor may a certificate password be passed to
+ * signtool.exe via `/p` command-line arguments. When --certificate-file is
+ * given, the path to a passwordless PFX is passed via WIN_CSC_LINK. Any
+ * non-empty WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD in the environment is
+ * rejected (fail-closed) so no password can reach child process arguments.
  */
 export function builderEnv(options = {}, env = process.env) {
   const next = { ...env };
+  for (const key of ['WIN_CSC_KEY_PASSWORD', 'CSC_KEY_PASSWORD']) {
+    if (typeof next[key] === 'string' && next[key].trim() !== '') {
+      fail('BAD_ARGUMENT', `${key} is not supported: use a passwordless PFX or Windows certificate store`);
+    }
+    delete next[key];
+  }
   if (options?.certificateFile !== undefined) {
     if (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '') {
       fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
