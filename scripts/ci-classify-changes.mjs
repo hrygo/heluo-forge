@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
-const full = (reason) => ({ run_platforms: true, run_windows_arm64: true, reason });
+const full = (reason) => ({ run_platforms: true, run_windows_arm64: true, run_macos: true, reason });
 const isObjectId = (value) => typeof value === 'string'
   && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value)
   && !/^0+$/u.test(value);
@@ -126,10 +126,9 @@ function collidesWithTree(index, path) {
 
 const APPROVED_ROOT_DOCS = new Set(['README.md', 'CONTRIBUTING.md', 'SECURITY.md']);
 
-const ISOLATED_NON_PLATFORM_PREFIXES = [
+const NON_PLATFORM_ASSET_PREFIXES = [
   '.agents/skills/',
   'deploy/',
-  'services/forge-desktop/',
 ];
 
 // Windows ARM64 runs the credential/IAM subset and uses enterprise patch fixtures.
@@ -160,9 +159,14 @@ function isApprovedDocPath(path) {
   return APPROVED_ROOT_DOCS.has(path) || (path.startsWith('docs/') && path.endsWith('.md'));
 }
 
-function isIsolatedNonPlatformPath(path) {
+function isNonPlatformAsset(path) {
   return isApprovedDocPath(path)
-    || ISOLATED_NON_PLATFORM_PREFIXES.some((prefix) => path.startsWith(prefix))
+    || NON_PLATFORM_ASSET_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function isIsolatedNonPlatformPath(path) {
+  return isNonPlatformAsset(path)
+    || path.startsWith('services/forge-desktop/')
     || ISOLATED_NON_PLATFORM_FILES.has(path);
 }
 
@@ -247,6 +251,7 @@ export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd
     return {
       run_platforms: false,
       run_windows_arm64: false,
+      run_macos: !changes.every(({ path }) => isNonPlatformAsset(path)),
       reason: changes.every(({ path }) => isApprovedDocPath(path)) ? 'documentation-only changes' : 'isolated non-platform changes',
     };
   } catch {
@@ -268,7 +273,7 @@ function main() {
   }
   const result = classifyChanges({ eventName: process.env.GITHUB_EVENT_NAME, event, githubSha: process.env.GITHUB_SHA });
   try {
-    appendFileSync(process.env.GITHUB_OUTPUT, `run_platforms=${result.run_platforms}\nrun_windows_arm64=${result.run_windows_arm64}\n`, 'utf8');
+    appendFileSync(process.env.GITHUB_OUTPUT, `run_platforms=${result.run_platforms}\nrun_windows_arm64=${result.run_windows_arm64}\nrun_macos=${result.run_macos}\n`, 'utf8');
   } catch {
     console.error('cannot write GITHUB_OUTPUT');
     process.exitCode = 1;

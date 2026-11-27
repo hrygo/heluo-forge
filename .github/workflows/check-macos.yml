@@ -1,34 +1,13 @@
 name: macOS compatibility checks
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - '.github/workflows/check-macos.yml'
-      - '.node-version'
-      - '.dsh-version'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - 'packages/**'
-      - 'scripts/**'
-      - 'services/forge-desktop/**'
-      - 'tests/**'
-  merge_group:
-    types: [checks_requested]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# Runner allocation and execution timeouts stay outside repository checks.
+# Required checks do not depend on the Apple Silicon runner.
 jobs:
   document-macos-15:
     name: SQLite and IAM (darwin-arm64, macos-15)

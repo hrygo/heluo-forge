@@ -37,6 +37,7 @@ const iamReadTestPaths = [
   'packages/forge-iam/test/read-paths-matrix.test.mjs',
   'packages/forge-iam/test/cli-session.test.mjs',
   'packages/forge-iam/test/bridge-real-provider.test.mjs',
+  'packages/forge-iam/test/cli-reader.test.mjs',
   'packages/forge-iam/test/gateway-save-confirmation.test.mjs',
   'packages/forge-iam/test/gateway-sqlite-regression.test.mjs',
   'packages/forge-iam/test/session-read-lock-recovery.test.mjs',
@@ -333,14 +334,17 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
   const errors = [];
   const jobs = jobsOf(source);
   const events = /^on:[ \t]*\n([\s\S]*?)(?=^[^\s#]|$(?![\s\S]))/mu.exec(source)?.[1] ?? '';
-  for (const event of ['push', 'pull_request', 'merge_group', 'workflow_dispatch']) {
+  const requiredEvents = optionalMacOS ? ['workflow_call', 'workflow_dispatch'] : ['push', 'pull_request', 'merge_group', 'workflow_dispatch'];
+  for (const event of requiredEvents) {
     if (!new RegExp(`^  ${event}:`, 'mu').test(events)) errors.push(`trigger: missing ${event}`);
   }
-  if (!/^  merge_group:[\s\S]*?^    types:\s*\[[^\]]*\bchecks_requested\b/mu.test(events)) {
+  if (!optionalMacOS && !/^  merge_group:[\s\S]*?^    types:\s*\[[^\]]*\bchecks_requested\b/mu.test(events)) {
     errors.push('trigger: merge_group must request checks');
   }
-  if (!optionalMacOS && /^\s+paths(?:-ignore)?:/mu.test(events)) errors.push('trigger: workflow must not use path filters');
-  if (optionalMacOS && !/^    paths:\n      - /mu.test(events)) errors.push('trigger: optional macOS requires PR path filters');
+  if (/^\s+paths(?:-ignore)?:/mu.test(events)) errors.push('trigger: workflow must not use path filters');
+  if (optionalMacOS && /^  (?:pull_request|push|merge_group):/mu.test(events)) {
+    errors.push('trigger: automatic macOS runs must come through the shared classifier');
+  }
 
   const changes = jobs.get('changes');
   if (optionalMacOS) {
@@ -427,8 +431,8 @@ export function workflowProblems(source, { optionalMacOS = false } = {}) {
     const testStep = shardSteps.find((step) => stepField(step, 'run') === 'node --run test:unit -- --test-shard=$' + '{{ matrix.shard }}/2');
     if (!shards || dependencies(shards).length !== 0 || field(shards, 'if') !== undefined
       || field(shards, 'continue-on-error') !== undefined || field(shards, 'runs-on') !== 'ubuntu-24.04'
-      || !/^ {8}shard: \[1, 2\]$/mu.test(shards) || !staticCheck || stepField(staticCheck, 'if') !== 'matrix.shard == 1'
-      || stepField(staticCheck, 'continue-on-error') !== undefined || !link || stepField(link, 'if') !== 'matrix.shard == 2'
+      || !/^ {8}shard: \[1, 2\]$/mu.test(shards) || !staticCheck || stepField(staticCheck, 'if') !== 'matrix.shard == 2'
+      || stepField(staticCheck, 'continue-on-error') !== undefined || !link || stepField(link, 'if') !== 'matrix.shard == 1'
       || !testStep || !unconditionalStep(testStep) || shardSteps.indexOf(testStep) <= Math.max(shardSteps.indexOf(staticCheck), shardSteps.indexOf(link))) {
       errors.push('verify: full check must run in two independent shards');
     }
@@ -571,6 +575,27 @@ test('repository checks do not depend on macOS runner availability', () => {
   }
 });
 
+test('macOS shares the complete PR diff and remains independent of required jobs', () => {
+  const jobs = jobsOf(workflow);
+  const caller = jobs.get('macos');
+  assert.equal(field(caller, 'uses'), './.github/workflows/check-macos.yml');
+  assert.deepEqual(dependencies(caller), ['changes']);
+  assert.equal(field(caller, 'if'), '$' + "{{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_macos != 'false') }}");
+  const classification = jobs.get('changes');
+  const output = '$' + '{{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}';
+  assert.ok(classification.includes('      run_macos: ' + output));
+  assert.match(classification, /echo 'run_macos=true' >> "\$GITHUB_OUTPUT"/u);
+  const guard = stepBlocks(stepsOf(workflow, classification)).find((step) => step.includes('name: Validate macOS decision'));
+  assert.ok(guard && unconditionalStep(guard));
+  assert.ok(guard.includes('RUN_MACOS: ' + output));
+  assert.match(guard, /case "\$RUN_MACOS" in\n\s+true\|false\) ;;\n\s+\*\)[^\n]+exit 1 ;;/u);
+  assert.match(macosWorkflow, /^  workflow_call:$/mu);
+  assert.doesNotMatch(macosWorkflow, /^  pull_request:|^\s+paths(?:-ignore)?:/mu);
+  assert.ok([...jobs.values()].every((job) => !dependencies(job).includes('macos')));
+  const withPathFilter = macosWorkflow.replace('  workflow_call:', '  pull_request:\n    paths:\n      - packages/**');
+  assert.match(workflowProblems(withPathFilter, { optionalMacOS: true }).join('\n'), /trigger: workflow must not use path filters/u);
+});
+
 test('primary workloads start independently and use the selected platform images', () => {
   const jobs = jobsOf(workflow);
   assert.ok(jobs.has('verify-shards'));
@@ -676,6 +701,9 @@ const executionMutations = [
   ['CLI session test removed',
     workflow.replace(' packages/forge-iam/test/cli-session.test.mjs', ''),
     /native-linux-x64: IAM read paths and CLI tests must run unconditionally/u],
+  ['CLI credential reader test removed',
+    workflow.replace(' packages/forge-iam/test/cli-reader.test.mjs', ''),
+    /native-win32-arm64: IAM read paths and CLI tests must run unconditionally/u],
   ['gateway save confirmation test removed',
     workflow.replace(' packages/forge-iam/test/gateway-save-confirmation.test.mjs', ''),
     /native-linux-x64: IAM read paths and CLI tests must run unconditionally/u],

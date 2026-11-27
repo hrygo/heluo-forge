@@ -27,6 +27,7 @@ jobs:
     outputs:
       run_platforms: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
       run_windows_arm64: ${{ steps.classify.outputs.run_windows_arm64 || steps.full.outputs.run_windows_arm64 }}
+      run_macos: ${{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}
     steps:
       - name: Run all platforms for non-PR events
         id: full
@@ -34,6 +35,7 @@ jobs:
         run: |
           echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
           echo 'run_windows_arm64=true' >> "$GITHUB_OUTPUT"
+          echo 'run_macos=true' >> "$GITHUB_OUTPUT"
       - name: Checkout complete history for the change comparison
         if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,6 +69,14 @@ jobs:
           case "$RUN_PLATFORMS:$RUN_WINDOWS_ARM64" in
             false:false|true:false|true:true) ;;
             *) echo 'Invalid Windows ARM64 decision.' >&2; exit 1 ;;
+          esac
+      - name: Validate macOS decision
+        env:
+          RUN_MACOS: ${{ steps.classify.outputs.run_macos || steps.full.outputs.run_macos }}
+        run: |
+          case "$RUN_MACOS" in
+            true|false) ;;
+            *) echo 'Invalid macOS decision.' >&2; exit 1 ;;
           esac
 
   verify:
@@ -133,12 +143,13 @@ jobs:
       # Build verification for the migrated TypeScript plugin uses locked development dependencies.
       - name: Install locked workspace development dependencies
         run: npm exec --yes --package=pnpm@11.28.5 -- pnpm install --frozen-lockfile --ignore-scripts
-      - name: Check documents, repository and build
-        if: matrix.shard == 1
-        run: node --run check:static
       - name: Link workspace packages
-        if: matrix.shard == 2
+        if: matrix.shard == 1
         run: node scripts/link-workspace.mjs
+      # Keep the static checks with the shorter test shard.
+      - name: Check documents, repository and build
+        if: matrix.shard == 2
+        run: node --run check:static
       - name: Run unit and integration tests
         run: node --run test:unit -- --test-shard=${{ matrix.shard }}/2
 
@@ -279,6 +290,12 @@ jobs:
       FORGE_CI_ARCH: arm64
     defaults: *bash_defaults
     steps: *native_steps
+
+  macos:
+    name: macOS compatibility checks
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_macos != 'false') }}
+    uses: ./.github/workflows/check-macos.yml
 
   # Forward-compatibility jobs are not required checks.
   native-linux-x64-next:
