@@ -115,11 +115,13 @@ test('view and first watch frame project expiry even before any timer or notific
 });
 
 test('Host publishes natural access expiry to existing watchers while idle', async (t) => {
+  const timerLimit = 2_147_483_647;
+  let monotonic = 0;
   const { service, oidc, clock } = await serviceWith(t, (now) => ({
     accessToken: 'synthetic-access',
-    accessExpiresAt: new Date(now + 60_000).toISOString(),
+    accessExpiresAt: new Date(now + timerLimit + 1_000).toISOString(),
     refreshExpiresAt: new Date(now - 1).toISOString(),
-  }));
+  }), { monotonic: () => monotonic });
   t.mock.timers.enable({ apis: ['setTimeout'] });
   assert.equal((await service.hydrate()).state, 'ready');
   const controller = new AbortController();
@@ -128,9 +130,20 @@ test('Host publishes natural access expiry to existing watchers while idle', asy
   let expired;
   const received = watch.next().then(({ value }) => { expired = value; });
   try {
-    clock.wall += 60_000;
-    t.mock.timers.tick(60_000);
-    await new Promise(setImmediate);
+    const advance = async (ms) => {
+      clock.wall += ms;
+      monotonic += ms;
+      t.mock.timers.tick(ms);
+      await new Promise(setImmediate);
+    };
+    // The first timer is capped. Its next wake can also be early after wall
+    // time goes backward, and must not announce expiry before the cutoff.
+    await advance(timerLimit);
+    assert.equal(expired, undefined);
+    clock.wall -= 500;
+    await advance(1_000);
+    assert.equal(expired, undefined);
+    await advance(500);
     assert.equal(expired?.state, 'expired');
     assert.equal(expired.renewal, 'unavailable');
     assert.equal(oidc.counts.refresh, 0);
@@ -220,6 +233,54 @@ test('Host publishes a renewal cutoff crossed while building an expired view', a
     t.mock.timers.tick(60_000);
     await new Promise(setImmediate);
     assert.equal(republished, false);
+  } finally {
+    controller.abort();
+    await received;
+    await watch.return();
+  }
+});
+
+test('Host advances the renewal cutoff timer after a forward wall-clock jump', async (t) => {
+  let monotonic = 0;
+  const { service, oidc, clock } = await serviceWith(t, (now) => ({
+    accessToken: 'synthetic-access',
+    accessExpiresAt: new Date(now - 30_000).toISOString(),
+    refreshExpiresAt: new Date(now + 20_000).toISOString(),
+  }), { monotonic: () => monotonic });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const initial = await service.hydrate();
+  const cutoff = Date.parse(initial.refreshExpiresAt);
+  const controller = new AbortController();
+  const watch = service.watch(controller.signal);
+  let received;
+  try {
+    assert.equal((await watch.next()).value.renewal, 'available');
+    // Wall time advances while the timer clock stays at the original sample.
+    clock.wall = cutoff - 500;
+    service.notifyView();
+    const published = (await watch.next()).value;
+    assert.equal(published.renewal, 'available');
+    assert.equal(published.sampledAt, cutoff - 500);
+
+    let terminal;
+    received = watch.next().then(({ value }) => { terminal = value; });
+    clock.wall += 499;
+    monotonic += 499;
+    t.mock.timers.tick(499);
+    await new Promise(setImmediate);
+    assert.equal(terminal, undefined);
+
+    clock.wall += 1;
+    monotonic += 1;
+    t.mock.timers.tick(1);
+    await new Promise(setImmediate);
+    assert.equal(terminal?.renewal, 'unavailable');
+    assert.equal(terminal.state, 'expired');
+    assert.equal(terminal.sampledAt, cutoff);
+    assert.equal(published.sampledMonotonicAt, 0);
+    assert.equal(Object.hasOwn({ ...published }, 'sampledMonotonicAt'), false);
+    assert.equal(terminal.sampledMonotonicAt, 500);
+    assert.equal(oidc.counts.refresh, 0);
   } finally {
     controller.abort();
     await received;

@@ -25,6 +25,7 @@ export function createServiceState(env) {
     options,
     configured,
     now,
+    monotonic,
     logRenewal,
     getGatewaySummary,
     getMetadataIssuer,
@@ -84,23 +85,25 @@ export function createServiceState(env) {
       cancelExpiry();
       return;
     }
-    // A deadline visible in the published view may pass before this call.
-    // Re-arm an overdue timer immediately even if the deadline is unchanged.
-    const remaining = deadline - now();
-    if (expiry?.deadline === deadline && remaining > 0) return;
+    // A forward wall-clock jump can shorten the wait for the same deadline.
+    // Keep an existing wake only if it is already early enough.
+    const delay = Math.max(1, Math.min(deadline - now(), 2_147_483_647));
+    const wakeAt = monotonic() + delay;
+    if (expiry?.deadline === deadline && expiry.wakeAt <= wakeAt) return;
     cancelExpiry();
     const timer = setTimeout(() => {
       if (expiry?.timer !== timer) return;
       expiry = null;
       if (now() >= deadline) notify();
       else scheduleExpiry(sampledAt);
-    }, Math.max(0, Math.min(remaining, 2_147_483_647)));
+    }, delay);
     timer.unref?.();
-    expiry = { deadline, timer };
+    expiry = { deadline, wakeAt, timer };
   }
 
   function view() {
     recheckExclusive();
+    const monotonicAt = monotonic();
     const at = now();
     const current = currentState(at);
     const summary = lastGrant ? summarizeGrant(lastGrant) : {};
@@ -134,7 +137,10 @@ export function createServiceState(env) {
     });
     // Sampling time accompanies the browser transport. Internal equality and
     // observer projections continue to compare the account state itself.
-    return Object.defineProperty(snapshot, 'sampledAt', { value: at });
+    return Object.defineProperties(snapshot, {
+      sampledAt: { value: at },
+      sampledMonotonicAt: { value: monotonicAt },
+    });
   }
 
   function notify() {

@@ -637,8 +637,9 @@ test('the bridge fails closed when no capability is available', async () => {
 
 test('the events route streams the same non-sensitive projection as the view', async () => {
   const sampledAt = Date.now();
-  const current = Object.defineProperty({ state: 'ready', signedIn: true, principal: { issuer: 'https://iam.corp.example', subject: 'E1001' } },
-    'sampledAt', { value: sampledAt });
+  const sampledMonotonicAt = 4125.5;
+  const current = Object.defineProperties({ state: 'ready', signedIn: true, principal: { issuer: 'https://iam.corp.example', subject: 'E1001' } },
+    { sampledAt: { value: sampledAt }, sampledMonotonicAt: { value: sampledMonotonicAt } });
   const handler = routes(service({
     getView: () => current,
     refreshGatewayModels: async () => ({}),
@@ -664,6 +665,7 @@ test('the events route streams the same non-sensitive projection as the view', a
   const frames = res.body.split('\n\n').filter(Boolean).map((frame) => JSON.parse(frame.replace(/^data: /u, '')));
   assert.deepEqual(frames.map((frame) => frame.state), ['signed-out', 'ready']);
   assert.equal(frames[1].sampledAt, sampledAt);
+  assert.equal(frames[1].sampledMonotonicAt, sampledMonotonicAt);
   assert.deepEqual((await call(handler, 'GET', '/api/forge-iam/view')).json(), frames[1]);
   assert.deepEqual((await call(handler, 'GET', '/api/forge-iam/models')).json().view, frames[1]);
   assert.doesNotMatch(res.body, /token|eyJ/iu);

@@ -138,6 +138,7 @@ test('service-state: 不可恢复或网关未就绪时 modelAccess.manualTruncat
     },
     configured: true,
     now: () => Date.now(),
+    monotonic: () => 0,
     getGatewaySummary: () => ({ state: 'unconfigured', matchesAccount: false }),
     getMetadataIssuer: () => 'https://iam.corp.example',
     scheduleReconcile: () => {},
