@@ -50,7 +50,7 @@ function isBotReview(review) {
     ['CHANGES_REQUESTED', 'DISMISSED'].includes(review.state);
 }
 
-function parseReceipt(review) {
+export function parseReceipt(review) {
   if (!isBotReview(review)) return;
   const body = review.body.trimEnd();
   const match = receiptPattern.exec(body.split('\n').at(-1));

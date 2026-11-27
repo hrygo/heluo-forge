@@ -28,6 +28,7 @@ function fakeGitHub() {
     },
     base,
     account: { ...owner },
+    permissions: new Map(),
     reviews: [],
     calls: [],
     writes: [],
@@ -40,6 +41,12 @@ function fakeGitHub() {
       const injected = state.beforeGet?.(path);
       if (injected !== undefined) return injected;
       if (path === pull) return structuredClone(state.pr);
+      const permission = /^\/collaborators\/([a-zA-Z0-9_-]+)\/permission$/u.exec(path);
+      if (permission) {
+        const access = state.permissions.get(permission[1]);
+        if (!access) throw Object.assign(new Error('Permission not found'), { status: 404 });
+        return structuredClone(access);
+      }
       if (path === basePath) {
         return { ref: `refs/heads/${baseRef}`, object: { type: 'commit', sha: state.base } };
       }
@@ -380,4 +387,94 @@ test('only parses a canonical receipt bound to the PR and the reviewed commit', 
     { ...approved, body: approved.body.replace(Buffer.from(baseRef).toString('base64url'), '_w') },
     priorApproval({ id: 102, target: '../invalid' }),
   ]) assert.equal(readApprovalReceipt(review, revision.prNumber), undefined);
+});
+
+test('a maintainer’s latest active changes request blocks approval across heads', async () => {
+  const { state, run } = fakeGitHub();
+  const maintainer = { id: 109, login: 'second-maintainer', type: 'User' };
+  const changeRequest = { id: 101, user: maintainer, state: 'CHANGES_REQUESTED', commit_id: otherSha };
+  state.permissions.set(maintainer.login, { user: maintainer, permission: 'write' });
+  state.reviews = [
+    changeRequest,
+    { ...changeRequest, id: 102, state: 'COMMENTED' },
+    { ...changeRequest, id: 103, state: 'DISMISSED' },
+    { ...changeRequest, id: 104, user: contributor, state: 'APPROVED' },
+  ];
+
+  assert.equal(await run(), 'skipped-changes-requested');
+  assert.deepEqual(state.writes, []);
+
+  state.reviews.push({ ...changeRequest, id: 105, state: 'APPROVED', commit_id: head });
+  assert.equal(await run(), 'approved');
+  assert.deepEqual(state.writes.map(({ method }) => method), ['POST']);
+});
+
+test('review state or claimed association without matching collaborator access cannot block approval', async () => {
+  for (const permission of ['read', 'none', 'absent', 'other-user']) {
+    const { state, run } = fakeGitHub();
+    state.reviews = [{ id: 101, user: contributor, state: 'CHANGES_REQUESTED', commit_id: head, author_association: 'OWNER' }];
+    if (permission === 'other-user') state.permissions.set(contributor.login, { user: owner, permission: 'admin' });
+    else if (permission !== 'absent') state.permissions.set(contributor.login, { user: contributor, permission });
+
+    assert.equal(await run(), 'approved');
+  }
+});
+
+test('a maintainer changes request during publication withdraws only the new automated review', async () => {
+  const { state, run } = fakeGitHub();
+  const maintainer = { id: 109, login: 'second-maintainer', type: 'User' };
+  state.permissions.set(maintainer.login, { user: maintainer, permission: 'maintain' });
+  state.afterPost = () => state.reviews.push({ id: 101, user: maintainer, state: 'CHANGES_REQUESTED', commit_id: head });
+
+  assert.equal(await run(), 'dismissed-changes-requested');
+  assert.equal(state.reviews.find(({ id }) => id === 101).state, 'CHANGES_REQUESTED');
+  assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+});
+
+test('an active bot changes request needs the official author and a valid Luoshen receipt', async () => {
+  const bot = { id: 41898282, login: 'github-actions[bot]', type: 'Bot' };
+  const receipt = `<!-- heluo-forge-pr-agent-request-changes:v2 confirmed d2573e09-a94d-4d00-a98a-29cc5f821ef2 P1 ${otherSha} ${base} ${Buffer.from(baseRef).toString('base64url')} 25 -->`;
+  const verified = { id: 101, user: bot, state: 'CHANGES_REQUESTED', commit_id: otherSha, body: `审查指令\n\n${receipt}` };
+  const stale = { ...verified, body: [
+    '**此修改请求已过期。请仓库维护者解除此 GitHub 修改请求。**',
+    verified.body.replace('v2 confirmed', 'v2 stale'),
+  ].join('\n\n') };
+  for (const review of [verified, stale]) {
+    const blocked = fakeGitHub();
+    blocked.state.reviews = [review];
+    assert.equal(await blocked.run(), 'skipped-changes-requested');
+    assert.deepEqual(blocked.state.writes, []);
+  }
+
+  const raced = fakeGitHub();
+  raced.state.afterPost = () => raced.state.reviews.push(verified);
+  assert.equal(await raced.run(), 'dismissed-changes-requested');
+  assert.deepEqual(raced.state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
+
+  const allowed = fakeGitHub();
+  allowed.state.reviews = [
+    { ...verified, id: 102, state: 'DISMISSED' },
+    { ...verified, id: 103, commit_id: head },
+    { ...verified, id: 104, user: { ...bot, id: 105 } },
+    { ...verified, id: 106, user: { ...bot, type: 'User' } },
+    { ...verified, id: 107, body: 'Unrelated bot review' },
+  ];
+  assert.equal(await allowed.run(), 'approved');
+});
+
+test('an unavailable collaborator permission read prevents a verified approval', async () => {
+  const changesRequested = { id: 101, user: contributor, state: 'CHANGES_REQUESTED', commit_id: head };
+  for (const duringPost of [false, true]) {
+    const { state, run } = fakeGitHub();
+    state.beforeGet = (path) => {
+      if (path === `/collaborators/${contributor.login}/permission`) {
+        throw Object.assign(new Error('Permission unavailable'), { status: 403 });
+      }
+    };
+    if (duringPost) state.afterPost = () => state.reviews.push(changesRequested);
+    else state.reviews.push(changesRequested);
+
+    await assert.rejects(run(), duringPost ? /approval was dismissed/u : /Permission unavailable/u);
+    assert.deepEqual(state.writes.map(({ method }) => method), duringPost ? ['POST', 'PUT'] : []);
+  }
 });
