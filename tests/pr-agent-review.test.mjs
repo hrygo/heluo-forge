@@ -49,6 +49,7 @@ async function withGitHub(run) {
     logs: {},
     headAfterPost: undefined,
     headDuringPostCheck: undefined,
+    retargetDuringPostCheck: undefined,
     baseAfterPost: undefined,
     headAfterReviewList: undefined,
     baseAfterReviewList: undefined,
@@ -70,6 +71,11 @@ async function withGitHub(run) {
       response.end(JSON.stringify(state.pr));
     } else if (request.method === 'GET' && path.startsWith('/repos/corp/example/git/ref/heads/')) {
       const ref = decodeURIComponent(path.slice('/repos/corp/example/git/ref/heads/'.length));
+      if (state.retargetDuringPostCheck && state.reviews.some((review) => review.user.login === 'github-actions[bot]')) {
+        state.pr.base.ref = state.retargetDuringPostCheck;
+        delete state.refs[ref];
+        state.retargetDuringPostCheck = undefined;
+      }
       response.statusCode = state.refStatus === 200 && !(ref in state.refs) ? 404 : state.refStatus;
       response.end(JSON.stringify(state.refResponse ?? { ref: `refs/heads/${ref}`, object: { type: 'commit', sha: state.refs[ref] } }));
       if (state.headDuringPostCheck && state.reviews.some((review) => review.user.login === 'github-actions[bot]')) {
@@ -995,7 +1001,11 @@ test('only an independently confirmed P0/P1 with exact diff evidence can request
 test('legacy high-risk findings can be confirmed before the priority settings arrive on the default branch', async () => {
   await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
-    const legacy = { ...JSON.parse(prioritizedReview('P1', { issue_header: 'Count regression' })), risk_level: 'high' };
+    const legacy = {
+      ...JSON.parse(prioritizedReview('P1', { issue_header: 'Count regression\n' })),
+      merge_recommendation: 'changes_required\n',
+      risk_level: 'high\n',
+    };
     await submit(env, revision, JSON.stringify(legacy));
     assert.equal(reviewWrites(state).length, 1);
   });
@@ -1070,12 +1080,12 @@ test('a rejected change request surfaces an error without attempting a second wr
 });
 
 test('a head or base advance after submission dismisses only the request from that run', async () => {
-  for (const update of ['headAfterPost', 'baseAfterPost', 'headDuringPostCheck']) {
+  for (const update of ['headAfterPost', 'baseAfterPost', 'headDuringPostCheck', 'retargetDuringPostCheck']) {
     await withGitHub(async ({ state, env }) => {
       const revision = await capture(env);
       const prior = { id: 100, state: 'CHANGES_REQUESTED', user: { login: 'maintainer' }, commit_id: head };
       state.reviews.push(prior);
-      state[update] = 'c'.repeat(40);
+      state[update] = update === 'retargetDuringPostCheck' ? 'release' : 'c'.repeat(40);
       await submit({ ...env, PR_AGENT_ALLOW_RETRY: 'true' }, revision, prioritizedReview('P1'));
       assert.equal(prior.state, 'CHANGES_REQUESTED');
       const created = state.reviews.at(-1);

@@ -322,18 +322,22 @@ jobs:
           }
           async function verifyRevision({ afterSubmission = false } = {}) {
             const pr = await verifyHead(afterSubmission);
-            const baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(REVIEWED_BASE_REF)}`, {
-              headers,
-              signal: AbortSignal.timeout(15000),
-            });
+            let baseResponse;
+            try {
+              baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(REVIEWED_BASE_REF)}`, {
+                headers,
+                signal: AbortSignal.timeout(15000),
+              });
+            } finally {
+              // A retarget can remove the old ref before this read completes.
+              if (afterSubmission) await verifyHead(true);
+            }
             if (!baseResponse.ok) throw new Error(`Cannot verify target branch (HTTP ${baseResponse.status})`);
             const reference = await baseResponse.json();
             if (reference.ref !== `refs/heads/${REVIEWED_BASE_REF}` || reference.object?.type !== 'commit' ||
                 typeof reference.object?.sha !== 'string' || !/^[a-f0-9]{40}$/.test(reference.object.sha)) {
               throw new Error('Invalid target branch revision');
             }
-            // A head push or retarget can land while the target ref is being read.
-            if (afterSubmission) await verifyHead(true);
             if (reference.object.sha !== REVIEWED_BASE) {
               if (!afterSubmission && PR_AGENT_ALLOW_RETRY === 'true') {
                 await appendFile(GITHUB_OUTPUT, 'retry=true\n');
@@ -389,7 +393,8 @@ jobs:
           }
           // A manual command with arguments can override the severity rubric.
           if (EVENT_NAME === 'issue_comment' && !/^\s*\/review\s*$/iu.test(commentBody)) process.exit(0);
-          const legacyHighRisk = review.merge_recommendation.trim() === 'changes_required' && review.risk_level === 'high';
+          const legacyHighRisk = review.merge_recommendation.trim() === 'changes_required' &&
+            typeof review.risk_level === 'string' && review.risk_level.trim() === 'high';
           const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
           const candidates = issues.filter((issue) => {
             if (typeof issue?.issue_header !== 'string' || typeof issue.relevant_file !== 'string' ||
