@@ -2219,10 +2219,10 @@ window.__ModuleLoader__.load({
       let deadlineTimer = null;
       let deadlineRetryTimer = null;
 
-      function trackDeadline(subscriber, view, sampledAfter, initialProjection = projectedSessionDeadlines.get(view)) {
+      function calculateDeadline(subscriber, view, sampledAfter, initialProjection = projectedSessionDeadlines.get(view)) {
         const ui = deriveSessionUi(view);
         const at = sessionDeadline(view, ui);
-        if (at === null) { subscriber.deadline = null; return; }
+        if (at === null) return null;
         const previous = subscriber.deadline;
         const epoch = subscriber.barrierRef?.current.epoch;
         const same = previous?.at === at && previous.epoch === epoch
@@ -2236,14 +2236,27 @@ window.__ModuleLoader__.load({
           if (previous.reached) projectedAt = previous.projectedAt;
           else if (previous.projectedAt !== undefined) projectedAt = Math.min(previous.projectedAt, projectedAt ?? Infinity);
         }
-        if (projectedAt !== undefined) projectedSessionDeadlines.set(view, projectedAt);
-        else if (at <= sampledAfter?.wall || (same && confirmedSessionViews.has(previous.view))) confirmedSessionViews.add(view);
+        const confirmed = projectedAt === undefined
+          && (at <= sampledAfter?.wall || (same && confirmedSessionViews.has(previous.view)));
         const renewedProjection = postDeadlineSample && projectedAt !== undefined && projectedAt > sessionMonotonicNow();
         const reached = same && previous.reached && !renewedProjection;
-        subscriber.deadline = {
-          at, projectedAt, epoch, view, state: ui.state, reached,
+        return {
+          at, projectedAt, epoch, view, state: ui.state, reached, confirmed,
           attempts: reached ? previous.attempts : 0,
         };
+      }
+
+      function adoptDeadline(subscriber, deadline) {
+        subscriber.deadline = deadline;
+        if (!deadline) return;
+        const { view, projectedAt, confirmed } = deadline;
+        if (projectedAt !== undefined) projectedSessionDeadlines.set(view, projectedAt);
+        else projectedSessionDeadlines.delete(view);
+        if (confirmed) confirmedSessionViews.add(view);
+      }
+
+      function deadlineNeedsVerification(deadline, clock) {
+        return deadline && !deadline.confirmed && timeUntilSessionDeadline(deadline, clock) <= 0;
       }
 
       function needsDeadlineConfirmation(deadline, clock) {
@@ -2306,14 +2319,11 @@ window.__ModuleLoader__.load({
 
       function noteView(subscriber, view, { retireStream = false } = {}) {
         if (!subscribers.has(subscriber)) return false;
-        const previous = subscriber.deadline;
-        trackDeadline(subscriber, view);
+        const deadline = calculateDeadline(subscriber, view);
         // A directory reply that needs verification cannot replace the
         // current view, the stream, or a shared read that could settle it.
-        if (retireStream && presentSession(view).verifying) {
-          subscriber.deadline = previous;
-          return false;
-        }
+        if (retireStream && deadlineNeedsVerification(deadline, sessionClock())) return false;
+        adoptDeadline(subscriber, deadline);
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
         if (retireStream) {
           // Invalidate old reads even while the page is polling without SSE.
@@ -2352,7 +2362,7 @@ window.__ModuleLoader__.load({
         if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
         // A consumer may already have an earlier cutoff for the same session.
         const snapshot = Number.isFinite(view?.sampledAt) ? { ...view } : view;
-        trackDeadline(subscriber, snapshot, sampledAfter, projectedSessionDeadlines.get(view));
+        adoptDeadline(subscriber, calculateDeadline(subscriber, snapshot, sampledAfter, projectedSessionDeadlines.get(view)));
         subscriber.updateRef.current(snapshot);
       }
 
@@ -2384,7 +2394,8 @@ window.__ModuleLoader__.load({
             let view;
             try { view = JSON.parse(event.data); } catch { return; }
             if (!view || typeof view !== 'object' || Array.isArray(view) || deriveSessionUi(view).state === null) return;
-            const arrivedAt = sessionMonotonicNow();
+            const arrival = sessionClock();
+            const arrivedAt = arrival.monotonic;
             let sampledAfter = openedAt;
             const hasMonotonicSample = Number.isFinite(view.sampledMonotonicAt) && view.sampledMonotonicAt >= 0;
             const tick = hasMonotonicSample ? view.sampledMonotonicAt : view.sampledAt;
@@ -2401,10 +2412,15 @@ window.__ModuleLoader__.load({
                 if (consistent) sampledAfter = { wall: openedAt.wall, monotonic: from };
               }
             }
-            // A buffered timed frame cannot settle newer verification.
-            // Leave the read and its subscriber revisions eligible to apply.
+            const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
             const projectedAt = projectedSessionDeadlines.get(view);
-            if (inFlight && projectedAt !== undefined && projectedAt <= arrivedAt) return;
+            if (inFlight && projectedAt !== undefined) {
+              // Include each subscriber's existing cutoff before retiring
+              // the read. A pre-cutoff sample may still leave it verifying.
+              const stillVerifying = ({ subscriber }) => !subscriber.barrierRef?.current.pending
+                && deadlineNeedsVerification(calculateDeadline(subscriber, view, sampledAfter, projectedAt), arrival);
+              if (projectedAt <= arrivedAt || pending.some(stillVerifying)) return;
+            }
             streamReady = true;
             stopPolling();
             // A read started before this frame cannot replace it when late.
@@ -2412,7 +2428,6 @@ window.__ModuleLoader__.load({
             inFlight?.cancel();
             // Once admitted, this frame belongs to every current subscriber,
             // even if one callback synchronously replaces the physical stream.
-            const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
             broadcast(view, pending, sampledAfter);
             const needsFreshSource = interruptedDeadlineRead && Number.isFinite(nextDeadlineAttempts());
             if (needsFreshSource && isCurrent()) {
