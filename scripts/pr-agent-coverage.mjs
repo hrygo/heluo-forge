@@ -25,12 +25,12 @@ function matchesInvocation(proof, options) {
     recommendations.has(review.merge_recommendation.trim()) && isDeepStrictEqual(proof.review, review);
 }
 
-function patchMatches(file, manifest) {
+function changedRowFingerprint(file) {
   // The pinned renderer omits previous paths and EOF markers from its review prompt.
   if (!['modified', 'added', 'removed'].includes(file.status) ||
-      typeof file.patch !== 'string' || !file.patch.isWellFormed()) return false;
+      typeof file.patch !== 'string' || !file.patch.isWellFormed()) return;
   const { hunks, complete, hasNoNewlineMarker } = parseReviewPatch(file.patch);
-  if (!complete || !hunks.length || hasNoNewlineMarker) return false;
+  if (!complete || !hunks.length || hasNoNewlineMarker) return;
   const leftHash = createHash('sha256');
   const rightHash = createHash('sha256');
   let deletions = 0;
@@ -38,13 +38,13 @@ function patchMatches(file, manifest) {
   let previousLeftEnd = 1;
   let previousRightEnd = 1;
   for (const { LEFT: left, RIGHT: right } of hunks) {
-    if (!left.lines.length && !right.lines.length) return false;
+    if (!left.lines.length && !right.lines.length) return;
     // A zero-length range names the previous line. Shift it to the insertion/deletion position.
     const leftOffset = left.start === left.end ? 1 : 0;
     const rightOffset = right.start === right.end ? 1 : 0;
     const leftGap = left.start + leftOffset - previousLeftEnd;
     const rightGap = right.start + rightOffset - previousRightEnd;
-    if (leftGap < 0 || leftGap !== rightGap) return false;
+    if (leftGap < 0 || leftGap !== rightGap) return;
     previousLeftEnd = left.end + leftOffset;
     previousRightEnd = right.end + rightOffset;
     deletions += left.lines.length;
@@ -52,8 +52,12 @@ function patchMatches(file, manifest) {
     for (const { number, text } of left.lines) leftHash.update(`${number}\t${text}\n`);
     for (const { number, text } of right.lines) rightHash.update(`${number}\t${text}\n`);
   }
-  return deletions === file.deletions && additions === file.additions &&
-    leftHash.digest('hex') === manifest.left && rightHash.digest('hex') === manifest.right;
+  if (deletions !== file.deletions || additions !== file.additions) return;
+  return { left: leftHash.digest('hex'), right: rightHash.digest('hex') };
+}
+
+function matchesChangedRows(left, right) {
+  return Boolean(left && right && left.left === right.left && left.right === right.right);
 }
 
 export function verifyReviewCoverage(proof, options) {
@@ -68,7 +72,7 @@ export function verifyReviewCoverage(proof, options) {
     manifest.set(entry.path, entry);
   }
   for (const file of files) {
-    if (!isObject(file) || !manifest.has(file.filename) || !patchMatches(file, manifest.get(file.filename))) return false;
+    if (!isObject(file) || !matchesChangedRows(changedRowFingerprint(file), manifest.get(file.filename))) return false;
     manifest.delete(file.filename);
   }
   return manifest.size === 0;
@@ -84,11 +88,6 @@ function gitDiffPath(path) {
   const escaped = bytes.replace(/[\u0000-\u001f"\\\u007f-\u00ff]/gu, (character) =>
     gitPathEscapes[character] ?? '\\' + character.charCodeAt(0).toString(8).padStart(3, '0'));
   return bytes === escaped ? path : '"' + escaped + '"';
-}
-
-function comparablePatch(patch) {
-  // GitHub can shorten the optional hunk heading differently in the two representations.
-  return patch.replace(/(^|\n)(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@)(?: [^\n]*)?\r?(?=\n|$)/gu, '$1$2');
 }
 
 function matchesDiffFile(lines, { file, left, right }) {
@@ -109,11 +108,12 @@ function matchesDiffFile(lines, { file, left, right }) {
   const fromLine = lines.shift();
   const toLine = lines.shift();
   if ((fromLine !== from && fromLine !== from + '\t') || (toLine !== to && toLine !== to + '\t')) return false;
-  return comparablePatch(lines.join('\n')) === comparablePatch(file.patch.replace(/\n$/u, '') + '\n');
+  // The two GitHub endpoints can give the same changes different context and hunk boundaries.
+  return matchesChangedRows(changedRowFingerprint({ ...file, patch: lines.join('\n') }), changedRowFingerprint(file));
 }
 
-// The REST files patches contain only hunks. Bind each raw Git header to the same file and hunks
-// already checked against the review proof, so absent or truncated metadata cannot authorize approval.
+// Bind each raw Git header to the same file and changed rows already checked against the review proof.
+// Absent or truncated metadata cannot authorize approval.
 export function verifyReviewFileModes(diff, files) {
   if (typeof diff !== 'string' || !diff.endsWith('\n')) return false;
   const sections = diff.split(/(?<=\n)(?=diff --git )/u);

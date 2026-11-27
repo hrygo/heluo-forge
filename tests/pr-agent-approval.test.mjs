@@ -349,10 +349,10 @@ test('an uncertain approval write is reconciled by exact review identity without
   assert.equal(failed.state.writes.length, 1);
 });
 
-test('a later run checks an accepted approval when both the write response and first history read were lost', async () => {
+test('cleanup withdraws an already accepted approval after a lost write response and history outage', async () => {
   const maintainer = { id: 109, login: 'second-maintainer', type: 'User' };
   for (const reviewer of [owner, maintainer]) {
-    const { state, run } = fakeGitHub();
+    const { state, run, reconcile } = fakeGitHub();
     state.permissions.set(maintainer.login, { user: maintainer, permission: 'write' });
     state.afterPost = () => {
       state.reviews.unshift({ id: 101, user: reviewer, state: 'CHANGES_REQUESTED', commit_id: head });
@@ -367,8 +367,10 @@ test('a later run checks an accepted approval when both the write response and f
     state.afterPost = undefined;
     state.beforeGet = undefined;
 
-    assert.equal(await run({ runId: '5678' }), 'dismissed-changes-requested');
+    assert.equal(await reconcile(), 1);
     assert.deepEqual(state.reviews.map(({ state }) => state), ['CHANGES_REQUESTED', 'DISMISSED']);
+    assert.equal(await reconcile(), 0);
+    assert.equal(await run({ runId: '5678' }), 'skipped-changes-requested');
     assert.deepEqual(state.writes.map(({ path }) => path), [reviewPath, `${reviewPath}/300/dismissals`]);
   }
 });

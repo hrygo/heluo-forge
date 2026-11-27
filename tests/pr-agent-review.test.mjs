@@ -451,6 +451,17 @@ test('matching review text requires evidence that the file mode was unchanged', 
   });
 });
 
+test('GitHub versioned diff responses can authorize an otherwise complete approval', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    state.diffType = 'application/vnd.github.v3.diff; charset=utf-8';
+    const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
+    assert.equal(eligible?.allowApproval, true);
+    await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(eligible) });
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['APPROVE']);
+  });
+});
+
 test('unavailable file-mode evidence preserves the native COMMENT and review key', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv };

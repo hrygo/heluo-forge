@@ -66,6 +66,16 @@ test('allows GitHub to shorten hunk context labels while matching their coordina
   assert.equal(verifyReviewFileModes(diff.replace('@@ -10 +10 @@', '@@ -11 +11 @@'), [modified]), false);
 });
 
+test('accepts different GitHub hunk grouping only when the exact changed rows match', () => {
+  const file = { ...modified, patch: '@@ -1,4 +1,4 @@\n-old\n+new\n context\n context\n-before\n+after' };
+  const header = modifiedDiff.split('\n').slice(0, 4).join('\n');
+  const diff = `${header}\n@@ -1 +1 @@\n-old\n+new\n@@ -4 +4 @@\n-before\n+after\n`;
+  assert.equal(verifyReviewFileModes(diff, [file]), true);
+  assert.equal(verifyReviewFileModes(diff.replace('@@ -4 +4 @@', '@@ -5 +5 @@'), [file]), false);
+  assert.equal(verifyReviewFileModes(diff.replace('+after', '+different'), [file]), false);
+  assert.equal(verifyReviewFileModes(diff.slice(0, diff.lastIndexOf('@@ -4')), [file]), false);
+});
+
 test('requires a complete and corresponding raw Git section with explicit regular-file mode evidence', () => {
   const diff = modifiedDiff + addedDiff + removedDiff;
   for (const raw of [

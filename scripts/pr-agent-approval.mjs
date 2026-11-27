@@ -164,12 +164,17 @@ export async function reconcileMainApprovals({ github, approver, appSlug }) {
     if (!validId(prNumber)) throw new Error('Invalid open pull request');
     const pull = `/pulls/${prNumber}`;
     try {
-      for (const review of await readReviewHistory(github, pull)) {
+      const reviews = await readReviewHistory(github, pull);
+      for (const review of reviews) {
         const receipt = readActiveApproval(review, owner, prNumber);
         if (!receipt) continue;
         const current = await isCurrent(github, github.repository, pull, prNumber, receipt, { allowDraft: true });
-        if (current && await hasIndependentApprovalGate(github, approver, receipt)) continue;
-        await dismissApproval(github, approver, pull, review, current ? protectionDismissal : staleDismissal);
+        let reason;
+        if (!current) reason = staleDismissal;
+        else if (!await hasIndependentApprovalGate(github, approver, receipt)) reason = protectionDismissal;
+        else if (await hasBlockingChangeRequest(github, reviews)) reason = changeRequestDismissal;
+        if (!reason) continue;
+        await dismissApproval(github, approver, pull, review, reason);
         dismissed++;
       }
     } catch (cause) {
