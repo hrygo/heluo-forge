@@ -655,8 +655,11 @@ test('automatic reviews and authorized review or RC comments share a queue', () 
       sender: { type }, comment: { body, author_association: association } },
   });
   assert.equal(comment('  /review'), automatic(42));
+  assert.equal(comment('/"ReVIEW"'), automatic(42));
+  assert.equal(comment('/"review" -i'), automatic(42));
   assert.equal(comment('/request-changes P1 ' + head + ' ' + base + ' main'), automatic(42));
   assert.notEqual(automatic(43), automatic(42));
+  assert.notEqual(comment('已更新'), automatic(42));
   assert.notEqual(comment('/review', 'CONTRIBUTOR'), automatic(42));
   assert.notEqual(comment('/review', 'MEMBER', 'Bot'), automatic(42));
 });

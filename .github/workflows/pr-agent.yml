@@ -23,9 +23,9 @@ on:
   issue_comment:
     types: [created]
 
-# Serialize publication and recovery for each PR.
+# Serialize publication and recovery for each PR, including quoted commands.
 concurrency:
-  group: pr-agent-${{ github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type != 'User' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || (!contains(github.event.comment.body, '/review') && !contains(github.event.comment.body, '/request-changes'))) && 'other-comment' || 'review' }}
+  group: pr-agent-${{ github.event.workflow_run.pull_requests[0].number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type != 'User' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/')) && 'other-comment' || 'review' }}
   queue: max
 
 permissions:
