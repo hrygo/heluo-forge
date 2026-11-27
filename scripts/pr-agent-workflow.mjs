@@ -1,19 +1,24 @@
 import { appendFile, readFile } from 'node:fs/promises';
-import { buildReviewComments, getReviewCommentMarker } from './pr-agent-review-comments.mjs';
+import { publishApproval, readApprovalReceipt } from './pr-agent-approval.mjs';
+import { buildReviewComments, getReviewCommentMarker, hasCompleteReviewPatches } from './pr-agent-review-comments.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
+import { isBranch, isSha, listReviews, validId } from './pr-agent-github.mjs';
 
-const sha = /^[a-f0-9]{40}$/u;
 const allowedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 const signalPath = '.github/workflows/pr-agent-signal.yml';
+const summaryMarker = '<!-- pr-agent:describe:persistent -->';
+const reviewMarker = '<!-- pr-agent:review:full -->';
+const reviewFindingLimit = 4; // PR_REVIEWER__NUM_MAX_FINDINGS in the workflow.
 
-function githubClient(env) {
+function githubClient(env, token = env.GH_TOKEN) {
   const repository = env.GITHUB_REPOSITORY;
   const api = `${env.GITHUB_API_URL}/repos/${repository}`;
-  async function request(method, path, body, label) {
-    const response = await fetch(api + path, {
+  async function request(method, path, body, label, base = api) {
+    const response = await fetch(base + path, {
       method,
-      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${env.GH_TOKEN}`, 'Content-Type': 'application/json' },
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: 'error',
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) {
@@ -26,6 +31,7 @@ function githubClient(env) {
   return {
     api, repository, serverUrl: env.GITHUB_SERVER_URL,
     get: (path, label) => request('GET', path, undefined, label),
+    getUser: () => request('GET', '/user', undefined, 'Cannot verify the GitHub approval identity', env.GITHUB_API_URL),
     post: (path, body) => request('POST', path, body),
     put: (path, body) => request('PUT', path, body),
   };
@@ -38,7 +44,7 @@ function eventScope(event, eventName, github) {
     if (event.action !== 'completed' || run?.path !== signalPath || !Number.isSafeInteger(run.id) || run.id < 1 ||
         run.event !== 'pull_request' ||
         run.repository?.full_name !== github.repository || run.head_repository?.full_name !== github.repository ||
-        run.conclusion !== 'success' || !sha.test(run.head_sha ?? '') || run.pull_requests?.length !== 1) return undefined;
+        run.conclusion !== 'success' || !isSha(run.head_sha) || run.pull_requests?.length !== 1) return undefined;
     const pr = run.pull_requests[0];
     if (!Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `${github.api}/pulls/${pr.number}`) return undefined;
     return { prNumber: pr.number, head: run.head_sha, signalId: run.id, automatic: true };
@@ -64,7 +70,7 @@ async function* pages(github, path, label) {
 async function targetTip(github, ref, label) {
   const reference = await github.get(`/git/ref/heads/${encodeURIComponent(ref)}`, label);
   if (reference.ref !== `refs/heads/${ref}` || reference.object?.type !== 'commit' ||
-      !sha.test(reference.object.sha ?? '')) throw new Error('Invalid target branch revision');
+      !isSha(reference.object.sha)) throw new Error('Invalid target branch revision');
   return reference.object.sha;
 }
 
@@ -81,6 +87,25 @@ function manualCommand(body) {
     name: word.replace(/["\\]/gu, '').replace(/^\/+/u, '').toLowerCase(),
     args: trimmed.slice(word.length).trim(),
   };
+}
+
+function usesNativeReview(scope) {
+  const { name, args } = manualCommand(scope.body ?? '');
+  return scope.automatic || (name === 'review' && !args);
+}
+
+function reviewCanBeApproved(review) {
+  const issues = review.key_issues_to_review;
+  if (review.merge_recommendation.trim() !== 'no_concerns_found' ||
+      typeof review.security_concerns !== 'string' || review.security_concerns.trim() !== 'No' ||
+      !Array.isArray(issues) || issues.length >= reviewFindingLimit) return false;
+  return issues.every((issue) => {
+    if (typeof issue?.issue_header !== 'string' || typeof issue.issue_content !== 'string' || !issue.issue_content.trim()) {
+      return false;
+    }
+    const heading = /^\[P3\][ \t]+([^\r\n]+)$/u.exec(issue.issue_header.trim());
+    return heading && !/\[P[0-9]+\]/iu.test(heading[1]);
+  });
 }
 
 async function alreadyReviewed(github, env, scope, base, ref) {
@@ -137,7 +162,7 @@ async function capture(github, env, scope, event) {
   }
   const head = pr.head?.sha;
   const baseRef = pr.base?.ref;
-  if (!sha.test(head ?? '') || typeof baseRef !== 'string' || !baseRef || /[\u0000-\u0020\u007f]/u.test(baseRef) ||
+  if (!isSha(head) || !isBranch(baseRef) ||
       pr.base?.repo?.full_name !== github.repository) throw new Error('Invalid PR revision');
   if ((env.EXPECTED_HEAD && head !== env.EXPECTED_HEAD) || (env.EXPECTED_BASE_REF && baseRef !== env.EXPECTED_BASE_REF)) {
     throw new Error('PR revision changed before retry');
@@ -174,7 +199,7 @@ async function validateReview(github, env, scope) {
     }
     return;
   }
-  if (!sha.test(head ?? '') || !sha.test(base ?? '') || !ref || /[\u0000-\u0020\u007f]/u.test(ref)) {
+  if (!isSha(head) || !isSha(base) || !isBranch(ref)) {
     throw new Error('Invalid reviewed PR revision');
   }
 
@@ -230,27 +255,41 @@ async function validateReview(github, env, scope) {
     throw new Error('PR-Agent did not produce structured review output');
   }
 
-  if (automatic) {
+  const nativeReview = usesNativeReview(scope);
+  const checkApprovals = nativeReview && env.PR_AGENT_AUTO_APPROVE === 'true' && !pr.draft &&
+    Boolean(env.PR_AGENT_APPROVER_LOGIN) && validId(pr.user?.id) && typeof pr.user?.login === 'string' &&
+    pr.user.login !== env.PR_AGENT_APPROVER_LOGIN;
+  const eligible = checkApprovals && validId(pr.changed_files) && reviewCanBeApproved(review);
+  let completeReview = false;
+  if (automatic || eligible) {
     const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
-    const markers = new Set(['<!-- pr-agent:describe:persistent -->', '<!-- pr-agent:review:full -->']);
+    const markers = new Set(automatic ? [summaryMarker, reviewMarker] : [reviewMarker]);
     const earliest = Math.floor(started / 1000) * 1000;
+    let reviewComment;
     for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
       if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
           !(Date.parse(comment.updated_at) >= earliest)) continue;
+      if (comment.body.includes(reviewMarker)) reviewComment = comment.body;
       for (const marker of markers) if (comment.body.includes(marker)) markers.delete(marker);
       if (!markers.size) break;
     }
-    if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
-    if (!await currentRevision()) return;
+    if (automatic && markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
+    if (automatic && !await currentRevision()) return;
+    // The pinned runner appends these footers outside the model result. Its
+    // merged findings can be capped even when all chunks were processed.
+    completeReview = Boolean(reviewComment) && !/\*\*(?:Review coverage|Chunked review):\*\*/u.test(reviewComment);
   }
 
   // Options on a manual review are handled by the pinned upstream runner.
-  if (automatic || (request.name === 'review' && !request.args)) {
+  let allowApproval = false;
+  if (nativeReview) {
     const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
-    if (issues.length) {
+    const verifyPatches = eligible && completeReview;
+    if (issues.length || verifyPatches) {
       const files = [];
       for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
+      allowApproval = verifyPatches && hasCompleteReviewPatches(files, pr.changed_files);
       const comments = buildReviewComments({ issues, files, head });
       if (comments.length) {
         const seen = new Set();
@@ -270,7 +309,33 @@ async function validateReview(github, env, scope) {
       }
     }
   }
+  if (checkApprovals) {
+    const hasApprovalWork = allowApproval || (await listReviews(github, prPath)).some((previous) =>
+      previous?.state === 'APPROVED' && previous.user?.login === env.PR_AGENT_APPROVER_LOGIN &&
+      readApprovalReceipt(previous, prNumber));
+    if (hasApprovalWork && await currentRevision()) {
+      const revision = { prNumber, head, base, baseRef: ref, allowApproval };
+      await appendFile(env.GITHUB_OUTPUT, `approval_revision=${JSON.stringify(revision)}\n`);
+    }
+  }
   if (automatic) await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
+}
+
+async function approve(github, env, scope) {
+  if (env.PR_AGENT_AUTO_APPROVE !== 'true' || env.GITHUB_REF !== 'refs/heads/main' || !usesNativeReview(scope)) return;
+  const revision = JSON.parse(env.APPROVAL_REVISION);
+  if (revision?.prNumber !== scope.prNumber || (scope.automatic && revision.head !== scope.head) ||
+      !isSha(revision.head) || !isSha(revision.base) || !isBranch(revision.baseRef) ||
+      typeof revision.allowApproval !== 'boolean') {
+    throw new Error('Invalid PR revision for approval');
+  }
+  if (!env.PR_AGENT_APPROVAL_TOKEN) throw new Error('Configure PR_AGENT_APPROVAL_TOKEN in the luoshen-approval environment.');
+  const status = await publishApproval({
+    github, approver: githubClient(env, env.PR_AGENT_APPROVAL_TOKEN), revision,
+    approverLogin: env.PR_AGENT_APPROVER_LOGIN, runId: env.GITHUB_RUN_ID,
+    allowApproval: revision.allowApproval,
+  });
+  console.log(`GitHub approval for PR #${scope.prNumber}: ${status}`);
 }
 
 const env = process.env;
@@ -281,5 +346,6 @@ if (scope) {
   const action = process.argv[2];
   if (action === 'capture') await capture(github, env, scope, event);
   else if (action === 'validate') await validateReview(github, env, scope);
+  else if (action === 'approve') await approve(github, env, scope);
   else throw new Error('Unknown PR-Agent workflow command');
 }

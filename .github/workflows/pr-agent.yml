@@ -34,6 +34,9 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  PR_AGENT_APPROVER_LOGIN: hrygo
+
 jobs:
   review:
     name: 洛神 (ubuntu-x64)
@@ -52,7 +55,10 @@ jobs:
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      approval_revision: ${{ steps.retry_validation.outputs.approval_revision || steps.validation.outputs.approval_revision }}
     env:
+      PR_AGENT_AUTO_APPROVE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
       # Native OpenAI endpoint with the runner's API key preflight.
       # Mirror the model and budget so runs also work with older base settings.
       # v0.50.0's bundled model table predates GPT-6.2.
@@ -144,6 +150,7 @@ jobs:
           PR_REVIEWER__FINAL_UPDATE_MESSAGE: "false"
           PR_REVIEWER__ENABLE_LARGE_PR_CHUNKING: "true"
           PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"
+          PR_REVIEWER__NUM_MAX_FINDINGS: "4"
           PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"
 
       - name: Validate PR-Agent review
@@ -197,3 +204,35 @@ jobs:
       - name: Confirm completed automatic review ${{ steps.retry_validation.outputs.review_key || steps.validation.outputs.review_key }}
         if: ${{ github.event_name == 'workflow_run' && (steps.retry_validation.outputs.review_key != '' || (steps.validation.outputs.retry != 'true' && steps.validation.outputs.review_key != '')) }}
         run: echo 'Automatic review completed for the captured revision.'
+
+  approve:
+    name: 洛神自动批准 (ubuntu-x64)
+    needs: review
+    if: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' && github.ref == 'refs/heads/main' && needs.review.outputs.approval_revision != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    environment: luoshen-approval
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted approval code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Approve the reviewed PR revision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_AGENT_AUTO_APPROVE: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' }}
+          PR_AGENT_APPROVAL_TOKEN: ${{ secrets.PR_AGENT_APPROVAL_TOKEN }}
+          APPROVAL_REVISION: ${{ needs.review.outputs.approval_revision }}
+        run: node scripts/pr-agent-workflow.mjs approve

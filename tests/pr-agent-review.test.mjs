@@ -34,6 +34,11 @@ function stepDefinition(name) {
 const script = fileURLToPath(new URL('../scripts/pr-agent-workflow.mjs', import.meta.url));
 const repository = 'corp/example';
 const maintainer = { id: 774, login: 'maintainer', type: 'User' };
+const approver = { id: 789, login: 'reviewer', type: 'User' };
+const approvalEnv = {
+  PR_AGENT_AUTO_APPROVE: 'true',
+  PR_AGENT_APPROVER_LOGIN: approver.login,
+};
 
 function freshComment(marker) {
   return { user: { login: 'github-actions[bot]' }, updated_at: new Date(Date.now() + 1000).toISOString(),
@@ -45,6 +50,7 @@ async function withGitHub(run) {
   const eventPath = join(directory, 'event.json');
   const state = {
     pr: { number: 42, state: 'open', draft: false, title: 'Example pull request', changed_files: 1,
+      user: { id: 775, login: 'contributor', type: 'User' },
       head: { sha: head, repo: { full_name: repository } }, base: { sha: base, ref: 'main', repo: { full_name: repository } } },
     refs: { main: base },
     refStatus: 200,
@@ -52,7 +58,8 @@ async function withGitHub(run) {
     requests: [],
     postStatus: 200,
     permission: 'write',
-    files: [{ filename: 'src/example.js', status: 'modified', patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
+    files: [{ filename: 'src/example.js', status: 'modified', additions: 1, deletions: 1,
+      patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;\n+  return 0;' }],
     reviews: [],
     inlineComments: [],
     comments: [freshComment('pr-agent:describe:persistent'), freshComment('pr-agent:review:full')],
@@ -66,12 +73,17 @@ async function withGitHub(run) {
     const rawBody = Buffer.concat(chunks).toString();
     const body = rawBody ? JSON.parse(rawBody) : undefined;
     state.requests.push({ method: request.method, url: request.url, body });
+    if (request.headers.authorization === 'Bearer approval-test-token') {
+      (state.approverRequests ??= []).push({ method: request.method, url: request.url });
+    }
     response.setHeader('content-type', 'application/json');
     const url = new URL(request.url, 'http://localhost');
     const path = url.pathname.replace(/^\/repos\/corp\/example/u, '');
     const page = Number(url.searchParams.get('page') ?? '1');
     const pageOf = (items) => items.slice((page - 1) * 100, page * 100);
-    if (request.method === 'GET' && path === '/pulls/42') {
+    if (request.method === 'GET' && path === '/user') {
+      response.end(JSON.stringify(approver));
+    } else if (request.method === 'GET' && path === '/pulls/42') {
       response.end(JSON.stringify(state.pr));
     } else if (request.method === 'GET' && path.startsWith('/git/ref/heads/')) {
       const ref = decodeURIComponent(path.slice('/git/ref/heads/'.length));
@@ -107,8 +119,11 @@ async function withGitHub(run) {
     } else if (request.method === 'POST' && path === '/pulls/42/reviews') {
       response.statusCode = state.postStatus;
       const review = {
-        id: 101 + state.reviews.length, state: body.event === 'COMMENT' ? 'COMMENTED' : 'CHANGES_REQUESTED',
-        commit_id: body.commit_id, user: { login: 'github-actions[bot]' }, body: body.body,
+        id: 101 + state.reviews.length,
+        state: { APPROVE: 'APPROVED', COMMENT: 'COMMENTED', REQUEST_CHANGES: 'CHANGES_REQUESTED' }[body.event],
+        commit_id: body.commit_id,
+        user: body.event === 'APPROVE' ? approver : { login: 'github-actions[bot]' },
+        body: body.body,
       };
       if (state.postStatus < 300) {
         state.reviews.push(review);
@@ -135,6 +150,7 @@ async function withGitHub(run) {
     GITHUB_OUTPUT: join(directory, 'output'),
     GITHUB_EVENT_PATH: eventPath,
     GITHUB_EVENT_NAME: 'workflow_run',
+    GITHUB_REF: 'refs/heads/main',
     GITHUB_RUN_ATTEMPT: '1',
     GH_TOKEN: 'test-token',
     GITHUB_RUN_ID: '12345',
@@ -217,6 +233,161 @@ function prioritizedReview(priority, issue = {}) {
 function reviewWrites(state) {
   return state.requests.filter(({ method, url }) => method !== 'GET' && url.startsWith('/repos/corp/example/pulls/42/reviews'));
 }
+
+function cleanReview(overrides = {}) {
+  return JSON.stringify({
+    merge_recommendation: 'no_concerns_found',
+    security_concerns: 'No\n',
+    key_issues_to_review: [],
+    ...overrides,
+  });
+}
+
+async function approvalRevision(env, revision, review) {
+  await writeFile(env.GITHUB_OUTPUT, '');
+  await submit(env, revision, review);
+  const output = await readFile(env.GITHUB_OUTPUT, 'utf8');
+  const line = output.split('\n').find((item) => item.startsWith('approval_revision='));
+  return line ? JSON.parse(line.slice('approval_revision='.length)) : undefined;
+}
+
+test('the approval credential is available only in the trusted, protected approval job', () => {
+  const approvalJob = workflow.split('\n  approve:\n')[1] ?? '';
+  assert.match(workflow, /^ {2}PR_AGENT_APPROVER_LOGIN: hrygo$/mu);
+  assert.match(approvalJob, /^    needs: review$/mu);
+  assert.match(approvalJob, /vars\.PR_AGENT_AUTO_APPROVE == 'true'/u);
+  assert.match(approvalJob, /github\.ref == 'refs\/heads\/main'/u);
+  assert.match(approvalJob, /needs\.review\.outputs\.approval_revision != ''/u);
+  assert.match(approvalJob, /^    environment: luoshen-approval$/mu);
+  assert.match(approvalJob, /^    permissions:\n      contents: read\n      pull-requests: read$/mu);
+  assert.match(approvalJob, /ref: \$\{\{ github\.sha \}\}\n\s+persist-credentials: false/u);
+  assert.doesNotMatch(approvalJob, /docker:|OPENAI|download-artifact/u);
+  assert.equal((workflow.match(/secrets\.PR_AGENT_APPROVAL_TOKEN/gu) ?? []).length, 1);
+  assert.match(approvalJob, /PR_AGENT_APPROVAL_TOKEN: \$\{\{ secrets\.PR_AGENT_APPROVAL_TOKEN \}\}/u);
+});
+
+test('a complete automatic or bare review with zero findings or P3 only emits an approval for that revision', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const automatic = { ...env, ...approvalEnv };
+    const expected = { prNumber: 42, head, base, baseRef: 'main', allowApproval: true };
+    assert.deepEqual(await approvalRevision(automatic, await capture(automatic), cleanReview()), expected);
+    const manual = await commentEvent(automatic, '/review');
+    const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
+    assert.deepEqual(await approvalRevision(manual, await capture(manual),
+      cleanReview({ key_issues_to_review: [issue] })), expected);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.equal(state.approverRequests, undefined);
+  });
+});
+
+test('a severe, ambiguous, or capped finding list does not emit an approval', async () => {
+  await withGitHub(async ({ env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const revision = await capture(mode);
+    const finding = (priority) => JSON.parse(prioritizedReview(priority)).key_issues_to_review[0];
+    for (const overrides of [
+      ...['P0', 'P1', 'P2', 'P4'].map((priority) => ({ key_issues_to_review: [finding(priority)] })),
+      { key_issues_to_review: undefined },
+      { key_issues_to_review: 'No issues' },
+      { key_issues_to_review: [null] },
+      { key_issues_to_review: [{ ...finding('P3'), issue_header: '[P3] [P1] Ambiguous priority' }] },
+      { key_issues_to_review: Array.from({ length: 4 }, () => finding('P3')) },
+      { merge_recommendation: 'needs_review' },
+      { security_concerns: 'A concern needs verification' },
+      { security_concerns: undefined },
+    ]) {
+      assert.equal(await approvalRevision(mode, revision, cleanReview(overrides)), undefined, JSON.stringify(overrides));
+    }
+  });
+});
+
+test('only a fresh complete review can emit an approval, independently of comment publication', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const manual = await commentEvent(mode, '/review');
+    const revision = await capture(manual);
+    for (const footer of ['⚠️ **Review coverage:** Some patches were clipped', 'ℹ️ **Chunked review:** Merged findings']) {
+      state.comments[1] = freshComment('pr-agent:review:full');
+      state.comments[1].body += '\n\n' + footer;
+      assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+    }
+    state.comments[1] = freshComment('pr-agent:review:full');
+    state.comments[1].updated_at = '2026-01-01T00:00:00Z';
+    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+    state.comments[1] = freshComment('pr-agent:review:full');
+    state.comments[1].user.login = 'other-person';
+    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+    state.comments[1] = freshComment('pr-agent:review:full');
+    assert.equal(await approvalRevision({ ...manual, PR_AGENT_AUTO_APPROVE: '' }, revision, cleanReview()), undefined);
+    const configuredReview = await commentEvent(mode, '/review --pr_reviewer.num_max_findings=1');
+    assert.equal(await approvalRevision(configuredReview, revision, cleanReview()), undefined);
+    await commentEvent(mode, '/review');
+    state.pr.draft = true;
+    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+    state.pr.draft = false;
+    state.pr.user = approver;
+    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+  });
+});
+
+test('an independently incomplete GitHub diff cannot authorize an approval', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const manual = await commentEvent({ ...env, ...approvalEnv }, '/review');
+    const revision = await capture(manual);
+    const [original] = state.files;
+    for (const files of [
+      [],
+      [{ ...original, patch: undefined }],
+      [{ ...original, patch: '@@ -1,2 +1,2 @@\n function count() {\n-  return 1;' }],
+      [{ ...original, additions: 2 }],
+    ]) {
+      state.files = files;
+      assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+    }
+  });
+});
+
+test('the approval entry point uses the dedicated credential for identity and one exact APPROVE only', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv };
+    const revision = await capture(mode);
+    const eligible = await approvalRevision(mode, revision, cleanReview());
+    await execute('approve', {
+      ...mode,
+      PR_AGENT_APPROVAL_TOKEN: 'approval-test-token',
+      APPROVAL_REVISION: JSON.stringify(eligible),
+    });
+    assert.deepEqual(state.approverRequests, [
+      { method: 'GET', url: '/user' },
+      { method: 'POST', url: '/repos/corp/example/pulls/42/reviews' },
+    ]);
+    const [write] = reviewWrites(state);
+    assert.equal(write.body.event, 'APPROVE');
+    assert.equal(write.body.commit_id, head);
+    assert.deepEqual(await approvalRevision(mode, revision, prioritizedReview('P2')), {
+      prNumber: 42, head, base, baseRef: 'main', allowApproval: false,
+    });
+  });
+});
+
+test('the approval entry point refuses a different event revision or branch before using the credential', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
+    const revision = { prNumber: 42, head, base, baseRef: 'main', allowApproval: true };
+    for (const mismatch of [{ prNumber: 43 }, { head: 'c'.repeat(40) }]) {
+      await assert.rejects(execute('approve', {
+        ...mode, APPROVAL_REVISION: JSON.stringify({ ...revision, ...mismatch }),
+      }), /Invalid PR revision for approval/u);
+    }
+    await execute('approve', {
+      ...mode, GITHUB_REF: 'refs/heads/other', APPROVAL_REVISION: JSON.stringify(revision),
+    });
+    const otherCommand = await commentEvent(mode, '/review -i');
+    await execute('approve', { ...otherCommand, APPROVAL_REVISION: JSON.stringify(revision) });
+    assert.equal(state.approverRequests, undefined);
+    assert.deepEqual(reviewWrites(state), []);
+  });
+});
 
 function recordAutomaticRun(state, { number = 42, sha = head, runId = 12, ranReview = true, baseSha = base, ref = 'main' } = {}) {
   state.runs[runId] = {
