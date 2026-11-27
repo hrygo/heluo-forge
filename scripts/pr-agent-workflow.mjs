@@ -11,6 +11,7 @@ const summaryMarker = '<!-- pr-agent:describe:persistent -->';
 const reviewMarker = '<!-- pr-agent:review:full -->';
 const reviewFindingLimit = 4; // PR_REVIEWER__NUM_MAX_FINDINGS in the workflow.
 const diffMediaType = 'application/vnd.github.diff';
+const diffResponseTypes = new Set([diffMediaType, 'application/vnd.github.v3.diff']);
 
 function githubClient(env, token = env.GH_TOKEN) {
   const repository = env.GITHUB_REPOSITORY;
@@ -30,7 +31,8 @@ function githubClient(env, token = env.GH_TOKEN) {
       throw error;
     }
     if (accept === diffMediaType) {
-      if (response.status !== 200 || response.headers.get('content-type')?.split(';', 1)[0] !== diffMediaType) {
+      const mediaType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+      if (response.status !== 200 || !diffResponseTypes.has(mediaType)) {
         throw new Error('Invalid GitHub PR diff response');
       }
       return new TextDecoder('utf-8', { fatal: true }).decode(await response.arrayBuffer());
