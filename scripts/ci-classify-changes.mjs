@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
-const full = (reason) => ({ run_platforms: true, run_windows_arm64: true, run_macos: true, reason });
+const full = (reason) => ({ run_platforms: true, run_macos: true, reason });
 const isObjectId = (value) => typeof value === 'string'
   && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value)
   && !/^0+$/u.test(value);
@@ -131,9 +131,6 @@ const NON_PLATFORM_ASSET_PREFIXES = [
   'deploy/',
 ];
 
-// Windows ARM64 runs the credential/IAM subset and uses enterprise patch fixtures.
-const WINDOWS_ARM64_PACKAGES = new Set(['forge-brand', 'forge-credentials-keychain', 'forge-enterprise', 'forge-iam', 'forge-policy']);
-
 const ISOLATED_NON_PLATFORM_FILES = new Set([
   'scripts/build-desktop-installer.mjs',
   'scripts/derive-brand-icons.mjs',
@@ -175,12 +172,6 @@ function isPortableRegularChange({ path, status, oldMode, newMode }, tree) {
   if (status === 'A') return newMode === '100644' && tree !== null && !collidesWithTree(tree, path);
   if (status === 'D') return oldMode === '100644';
   return oldMode === '100644' && newMode === '100644';
-}
-
-function canSkipWindowsArm64({ path }) {
-  if (isIsolatedNonPlatformPath(path)) return true;
-  const extension = /^packages\/(forge-[a-z0-9-]+)\//u.exec(path)?.[1];
-  return extension !== undefined && !WINDOWS_ARM64_PACKAGES.has(extension) && !path.endsWith('/package.json');
 }
 
 export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd(), gitRunner = runGit } = {}) {
@@ -246,11 +237,10 @@ export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd
       return full('non-isolated or unsafe change');
     }
     if (!changes.every(({ path }) => isIsolatedNonPlatformPath(path))) {
-      return { ...full('non-isolated or unsafe change'), run_windows_arm64: !changes.every(canSkipWindowsArm64) };
+      return full('non-isolated or unsafe change');
     }
     return {
       run_platforms: false,
-      run_windows_arm64: false,
       run_macos: !changes.every(({ path }) => isNonPlatformAsset(path)),
       reason: changes.every(({ path }) => isApprovedDocPath(path)) ? 'documentation-only changes' : 'isolated non-platform changes',
     };
@@ -273,7 +263,7 @@ function main() {
   }
   const result = classifyChanges({ eventName: process.env.GITHUB_EVENT_NAME, event, githubSha: process.env.GITHUB_SHA });
   try {
-    appendFileSync(process.env.GITHUB_OUTPUT, `run_platforms=${result.run_platforms}\nrun_windows_arm64=${result.run_windows_arm64}\nrun_macos=${result.run_macos}\n`, 'utf8');
+    appendFileSync(process.env.GITHUB_OUTPUT, `run_platforms=${result.run_platforms}\nrun_macos=${result.run_macos}\n`, 'utf8');
   } catch {
     console.error('cannot write GITHUB_OUTPUT');
     process.exitCode = 1;

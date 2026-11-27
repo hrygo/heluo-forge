@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.12.0 |
+| 版本 | V0.12.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -101,8 +101,8 @@
 - `check:tarballs` 校验真实 tarball 内容与模式位。Windows 源码可执行入口校验解释器声明，组合构建对清单声明的嵌套 bin 写入执行位后重新读取最终归档审计；POSIX 源码与最终归档的执行位校验保留。
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。清单仅在 `engines.dsh` 值及与基线精确一致的顶层 DSH 开发依赖值中允许版本字面量，按 JSON 字段和原文位置识别，不依赖缩进或换行；运行时、可选、peer 依赖及嵌套同名字段不获开发期豁免。生成的 `pnpm-lock.yaml` 由冻结安装核验。
 - `repository checks` 使用 `contents: read`。两个 Ubuntu 作业与变更分类并行启动，分片 2 执行 `check:static`，两个分片按 `--test-shard` 运行完整 Node 测试集。`verify (ubuntu-x64)` 汇总分类和两个分片结果，分类失败、输出无效或分片未成功均阻断合入。两个分片在检出前拒绝来自其他仓库的 PR。该判定从 PR 合并提交加载，可信基线门禁由 `sensitive-attestation` 与 CODEOWNERS 评审提供。触发与依赖固定策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
-- `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增白名单内的隔离路径——即 `docs/` 中普通 Markdown、根 `README.md` / `CONTRIBUTING.md` / `SECURITY.md`、`.agents/skills/`、`deploy/`、`services/forge-desktop/` 及桌面打包/运行时暂存/图标派生相关脚本与用例（不触及 `packages/`、`scripts/sensitive-scan/`、企业包构建链路、`.github/workflows/`、`.node-version` 与 `package.json`）——时允许跳过平台作业；`verify (ubuntu-x64)` 仍全量运行。新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行均执行基线平台检查。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
-- 平台作业运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。必需平台上下文为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、`SQLite and IAM (win32-x64, windows-2025)` 和 `SQLite and IAM (win32-arm64, windows-11-arm)`。Windows x64 的凭据测试和安装冒烟、IAM 测试分别在两个 Windows Server 2025 runner 上执行，两个结果都成功后汇总作业才通过。Windows ARM64 覆盖凭据、IAM、企业装配相关包、共用脚本与清单等输入。仅改动已隔离路径或其余扩展的普通非清单文件时允许跳过，分类不确定时执行。
+- `classify changes (ubuntu-x64)` 按检出的 PR 合并提交相对 base 顶点的差异分类：PR 事件检出的是 GitHub 的测试合并提交，其父提交即 base 顶点与 PR head，该差异正是本 PR 相对基线新增的内容，而 base 顶点自身的平台行为已由 `main` 推送触发的全量运行覆盖。仅修改、删除或新增白名单内的隔离路径——即 `docs/` 中普通 Markdown、根 `README.md` / `CONTRIBUTING.md` / `SECURITY.md`、`.agents/skills/`、`deploy/`、`services/forge-desktop/` 及桌面打包/运行时暂存/图标派生相关脚本与用例（不触及 `packages/`、`scripts/sensitive-scan/`、企业包构建链路、`.github/workflows/`、`.node-version` 与 `package.json`）——时允许跳过平台作业；`verify (ubuntu-x64)` 仍全量运行。新增路径须为普通文件，且不与其他路径在大小写或 Unicode 归一化下折叠为重名。非便携路径、折叠重名、分类不能确认、文件类型或模式异常、混合其他路径、检出身份或差异无法确证时全跑；检出为 PR head 而非合并提交时还要求 base 顶点是 head 祖先。分类作业失败或输出无效时 `verify` 失败。`main` 推送、合并队列和手动运行均执行 Linux 与 Windows x64 基线检查。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
+- 平台作业运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。必需平台上下文为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、以及 `SQLite and IAM (win32-x64, windows-2025)`。Windows x64 的凭据测试和安装冒烟、IAM 测试分别在两个 Windows Server 2025 runner 上执行，两个结果都成功后汇总作业才通过。Windows ARM64 在 `main` 推送和手动触发时独立运行，覆盖 SQLite 凭据、IAM 和离线安装冒烟。
 - `macOS compatibility checks` 在 `macos-15` 验证 Apple Silicon，执行超时 2 分钟。PR 复用仓库检查的完整 Git 差异分类，便携的纯文档、技能及部署资料变更可跳过，无法确证差异时执行。`main` 推送、合并队列及手动触发时独立运行，可选作业不占用仓库检查的并发组。
 - Linux 和 macOS 作业构建、核验并离线安装企业组合包；Windows 作业打包并离线安装凭据独立包。安装冒烟使用临时 SQLite 存储和合成值，不代表 Windows 已安装企业组合包。凭据使用值级加密 SQLite 和文件 keyring，不使用系统钥匙串或原生 addon；文件权限与隔离边界见[凭据包说明](../../packages/forge-credentials-keychain/README.md)。
 - Ubuntu 26.04 的前瞻检查由手动运行触发。
