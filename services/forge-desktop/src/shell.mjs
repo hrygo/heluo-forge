@@ -167,15 +167,22 @@ export function startShell(electron, options) {
 
   /**
    * A failure shown on the status page: the code, and with a first run that
-   * stopped, the installer's own code, reason and remedy. The same account,
-   * whole, goes into the log.
+   * stopped, the installer's own code, reason and remedy.
+   *
+   * The log entry is the account of whatever stopped the shell. While the
+   * setup is what stopped it, that is the installer's account; once the
+   * service exists, the service is what failed, and the entry is its record
+   * with what the web profile printed. The page never carries that output:
+   * it names the log.
    *
    * @returns {string} the code shown
    */
   function showFailure(error) {
     const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
     const verdict = code === 'FIRST_RUN_FAILED' ? installerVerdict(error?.details) : null;
-    record(firstRunStopped({ at: now(), code, verdict, error }));
+    record(context.runtime === null
+      ? firstRunStopped({ at: now(), code, verdict, error })
+      : failureRecord({ at: now(), code, message: error?.message, service: context.runtime.snapshot() }));
     showStatus(statusQuery({ state: 'failed', code, verdict, fallback: guidanceFor(code), log: options.diagnosticLog }));
     return code;
   }
@@ -249,7 +256,8 @@ export function startShell(electron, options) {
 
   async function report(error) {
     const code = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
-    record(failureRecord({ at: now(), code, message: error?.message }));
+    // With the service's record when there is one: how it ended and what it printed.
+    record(failureRecord({ at: now(), code, message: error?.message, service: context.runtime?.snapshot() }));
     context.quitting = true;
     // The service was asked to leave already, or it has left. The user is not
     // kept waiting on it: after `failureStopWaitMs` the failure is shown anyway.
