@@ -195,8 +195,13 @@ export function parseArguments(argv) {
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
   }
   options.arch = resolveTargetArch(options.target, options.arch);
-  if (options.certificateFile !== undefined && (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '')) {
-    fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
+  if (options.certificateFile !== undefined) {
+    if (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '') {
+      fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
+    }
+    if (options.target !== 'win') {
+      fail('BAD_ARGUMENT', '--certificate-file is only supported for target win');
+    }
   }
   for (const key of ['identity', 'resources', 'version', 'output']) {
     if (typeof options[key] !== 'string' || options[key].trim() === '') fail('BAD_ARGUMENT', `missing required option for ${key}`);
@@ -219,8 +224,8 @@ export function readAppIdentity(path) {
  */
 export function isPackaged(relativePath) {
   if (VERBATIM_RUNTIME_DIRS.some((directory) => relativePath.startsWith(directory))) return true;
-  if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
   if (!relativePath.startsWith('dsh/node_modules/') || relativePath.startsWith('dsh/node_modules/@deepseek-ai/')) {
+    if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
     return true;
   }
   const segments = relativePath.slice('dsh/node_modules/'.length).split('/');
@@ -228,6 +233,7 @@ export function isPackaged(relativePath) {
   const upperFile = file.toUpperCase();
   const isLicense = THIRD_PARTY_LICENSE_PREFIXES.some((prefix) => upperFile.startsWith(prefix));
   if (isLicense) return true;
+  if (RUNTIME_EXCLUDED_EXTENSIONS.includes(extname(relativePath))) return false;
   if (segments.slice(0, -1).some((segment) => THIRD_PARTY_EXCLUDED_DIR_SET.has(segment))) {
     return false;
   }
@@ -381,13 +387,21 @@ export function builderEntry(builderDir, exists = existsSync, read = readFileSyn
  * to disk in builder-config.json. When --certificate-file is given, the path is
  * passed to electron-builder via WIN_CSC_LINK in the child environment. The
  * certificate password travels strictly via WIN_CSC_KEY_PASSWORD in process.env,
- * which is inherited in memory and never serialized.
+ * which is inherited in memory and never serialized into the config.
+ *
+ * Note: When signing with a password-protected PFX on Windows, electron-builder's
+ * underlying call to signtool.exe may still pass the password in signtool's
+ * command-line arguments. For zero-process-parameter signing, use the Windows
+ * certificate store or hardware token.
  */
 export function builderEnv(options = {}, env = process.env) {
   const next = { ...env };
   if (options?.certificateFile !== undefined) {
     if (typeof options.certificateFile !== 'string' || options.certificateFile.trim() === '') {
       fail('BAD_ARGUMENT', '--certificate-file cannot be empty');
+    }
+    if (options.target !== undefined && options.target !== 'win') {
+      fail('BAD_ARGUMENT', '--certificate-file is only supported for target win');
     }
     next.WIN_CSC_LINK = resolve(options.certificateFile);
   }

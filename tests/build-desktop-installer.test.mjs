@@ -110,6 +110,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
     'dsh/node_modules/pkg/NOTICE',
     'dsh/node_modules/pkg/COPYING',
     'dsh/node_modules/pkg/fixtures/LICENSE.md',
+    'dsh/node_modules/pkg/fixtures/NOTICE.flow',
     'dsh/node_modules/pkg/lib/tsconfig-loader.js',
     'dsh/node_modules/pkg/lib/.npmignore-helper.js',
     'dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js',
@@ -159,6 +160,7 @@ test('安装包内容：运行时不读取的文件类型与第三方文档测�
       'dsh/node_modules/pkg/.vscode/settings.json',
       'dsh/node_modules/pkg/fixtures/test.json',
       'dsh/node_modules/pkg/fixtures/LICENSE.md',
+      'dsh/node_modules/pkg/fixtures/NOTICE.flow',
       'dsh/node_modules/pkg/__fixtures__/mock.json',
       'primary-runtime/dependencies/pnpm/dist/node_modules/fdir/dist/index.d.mts',
       'enterprise-assets/INSTALL.md',
@@ -194,7 +196,7 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   assert.equal(untouchedEnv.WIN_CSC_LINK, undefined);
   assert.equal(untouchedEnv.PATH, '/bin');
 
-  const signedEnv = builderEnv({ certificateFile: 'certs/code-sign.pfx' }, { ...baseEnv, WIN_CSC_KEY_PASSWORD: 'secret-password' });
+  const signedEnv = builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'win' }, { ...baseEnv, WIN_CSC_KEY_PASSWORD: 'secret-password' });
   assert.equal(signedEnv.WIN_CSC_LINK, resolve('certs/code-sign.pfx'));
   assert.equal(signedEnv.WIN_CSC_KEY_PASSWORD, 'secret-password');
 
@@ -203,9 +205,12 @@ test('打包配置：过滤规则、maximum 压缩、关闭差分包、afterPack
   assert.equal(existingEnv.WIN_CSC_LINK, '/existing/cert.pfx');
 
   // 显式传入空白证书参数必须直接报错拒绝，防止静默回退
-  assert.throws(() => builderEnv({ certificateFile: '' }), (err) => err.code === 'BAD_ARGUMENT');
-  assert.throws(() => builderEnv({ certificateFile: '   ' }), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => builderEnv({ certificateFile: '', target: 'win' }), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => builderEnv({ certificateFile: '   ', target: 'win' }), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => builderEnv({ certificateFile: 'certs/code-sign.pfx', target: 'mac' }), (err) => err.code === 'BAD_ARGUMENT');
   assert.throws(() => parseArguments(['--identity', 'id.json', '--resources', 'res', '--version', '1.0.0', '--output', 'out', '--certificate-file', '']), (err) => err.code === 'BAD_ARGUMENT');
+  assert.throws(() => parseArguments(['--identity', 'id.json', '--resources', 'res', '--version', '1.0.0', '--output', 'out', '--certificate-file', 'cert.pfx']), (err) => err.code === 'BAD_ARGUMENT');
+  assert.equal(parseArguments(['--identity', 'id.json', '--resources', 'res', '--version', '1.0.0', '--output', 'out', '--target', 'win', '--certificate-file', 'cert.pfx']).certificateFile, 'cert.pfx');
 });
 
 test('目标与架构矩阵：macOS 只产压缩 dmg，x64 与麒麟 linux arm64/x64 各自对齐并拒绝不支持的组合', (t) => {
@@ -287,10 +292,10 @@ test('图标与品牌 manifest 账本一致；参数解析限定目标', () => {
     configOnly: false,
     json: false,
   });
-  const parsedSigned = parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--certificate-file', 'cert.pfx']);
+  const parsedSigned = parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win', '--certificate-file', 'cert.pfx']);
   assert.equal(parsedSigned.certificateFile, 'cert.pfx');
   // 密码参数必须被拒绝，避免进程参数与配置序列化造成口令落盘泄漏
-  assert.throws(() => parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--certificate-password', 'pwd']), (error) => error.code === 'BAD_ARGUMENT');
+  assert.throws(() => parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win', '--certificate-password', 'pwd']), (error) => error.code === 'BAD_ARGUMENT');
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'win']).arch, 'x64');
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'mac', '--arch', 'x64']).arch, 'x64');
   assert.equal(parseArguments(['--identity', 'i', '--resources', 'r', '--version', 'v', '--output', 'o', '--target', 'linux', '--arch', 'arm64']).arch, 'arm64');
