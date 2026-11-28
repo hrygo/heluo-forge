@@ -104,10 +104,28 @@ function parseFinding(issue) {
   const start = leftStart ? Number(leftStart) : issue.start_line;
   const end = leftEnd ? Number(leftEnd) : issue.end_line;
   if (!Number.isSafeInteger(start) || start <= 0 || !Number.isSafeInteger(end) || end < start) return undefined;
-  return { heading: priority ? `${priority} ${title}` : title, content, side, start, end };
+  return { heading: priority ? `${priority} ${title}` : title, priority: priority?.slice(1, -1), content, side, start, end };
 }
 
-export function buildReviewComments({ issues, files, head, base, deltaFiles }) {
+function isResolvedDuplicate(threads, finding, { path, side, line, head, base, deltaRows }) {
+  const { priority, start, end } = finding;
+  if (!priority) return false;
+  return threads.some((thread) => {
+    if (!thread.resolved || thread.outdated || !thread.lastReply ||
+        !thread.priority || thread.priority > priority || thread.path !== path || thread.side !== side) return false;
+    if (thread.originalHead === head) {
+      return thread.start <= line && line <= thread.end &&
+        (side === 'RIGHT' || (isSha(base) && thread.originalBase === base));
+    }
+    // A nearby delta row can supply an anchor for a reworded older finding.
+    // Compare the reported range with GitHub's current coordinates before using that anchor.
+    return deltaRows && side === 'RIGHT' && isSha(thread.originalHead) &&
+      thread.start <= end && start <= thread.end &&
+      !deltaRows.values().some((row) => thread.start <= row && row <= thread.end);
+  });
+}
+
+export function buildReviewComments({ issues, files, head, base, deltaFiles, threads = [] }) {
   if (!Array.isArray(issues) || !Array.isArray(files) || typeof head !== 'string' || !head) return [];
   const paths = indexChangedPaths(files);
   const delta = deltaFiles && new Map(deltaFiles.map(({ filename, patch }) => [filename,
@@ -122,17 +140,18 @@ export function buildReviewComments({ issues, files, head, base, deltaFiles }) {
     const candidates = matches.filter(({ onlySide }) => !requestedSide || !onlySide || onlySide === requestedSide);
     if (candidates.length !== 1) continue;
     const [{ file, onlySide }] = candidates;
+    const path = file.filename;
     const side = requestedSide ?? onlySide;
-    if (!side || (delta && side !== 'RIGHT')) continue;
+    const deltaRows = delta?.get(path);
+    if (!side || (delta && (side !== 'RIGHT' || !deltaRows))) continue;
 
     if (!parsedPatches.has(file)) parsedPatches.set(file, parseReviewPatch(file.patch).hunks);
     const hunk = parsedPatches.get(file).find(({ [side]: range }) =>
       start >= range.start && end < range.end);
     const line = hunk?.[side].lines.find(({ number }) => number >= start && number <= end &&
-      (!delta || delta.get(file.filename)?.has(number)))?.number;
-    if (line === undefined) continue;
+      (!deltaRows || deltaRows.has(number)))?.number;
+    if (line === undefined || isResolvedDuplicate(threads, finding, { path, side, line, head, base, deltaRows })) continue;
 
-    const path = file.filename;
     const hash = createHash('sha256').update(JSON.stringify([head, path, side, line, heading, content])).digest('hex');
     const marker = `<!-- heluo-forge-pr-agent-comment:v1 ${hash} -->`;
     const baseMarker = side === 'LEFT' && isSha(base) ? `<!-- heluo-forge-pr-agent-comment-base:v1 ${base} -->\n\n` : '';
@@ -140,13 +159,4 @@ export function buildReviewComments({ issues, files, head, base, deltaFiles }) {
     comments.set(marker, { path, line, side, body });
   }
   return [...comments.values()];
-}
-
-export function withoutResolvedDuplicates(comments, threads, head, base) {
-  // LEFT additionally needs the original target revision. Incremental comments
-  // must hit a changed row, so an older thread cannot suppress a new change.
-  return comments.filter(({ path, side, line }) => !threads.some((thread) => thread.resolved && !thread.outdated &&
-    thread.lastReply && thread.originalHead === head && thread.path === path &&
-    (side === 'RIGHT' || (isSha(base) && thread.originalBase === base)) &&
-    thread.side === side && thread.start <= line && line <= thread.end));
 }

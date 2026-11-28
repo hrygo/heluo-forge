@@ -16,6 +16,16 @@ DIFF_LABEL = "The PR code diff:\n======\n"
 REVIEW_END = "\n======\n"
 NEW_HUNK = "__new hunk__"
 OLD_HUNK = "__old hunk__"
+PRIORITY_HEADER = re.compile(r"\[(P[0-3])\][ \t]+([^\r\n]+)")
+PRIORITY_ORDER = {"P0": 0, "P1": 1, None: 2, "P2": 3, "P3": 4}
+HISTORY_STATUS = {"fix_evidence_found": "模型发现修复证据", "still_present": "模型发现问题仍在"}
+SCOPE_ONLY_MARKER = "<!-- heluo-forge-pr-agent-review-scope-only:v1 -->"
+HISTORY_SCHEMA = '''class HistoricalReviewCheck(BaseModel):
+    thread_id: int = Field(description="ID from the captured openBlockers list")
+    status: Literal["fix_evidence_found", "still_present", "insufficient_evidence"]
+    evidence: str = Field(description="Visible evidence from this request's diff, or an empty string if insufficient")
+
+'''
 
 
 def changed_hunk(lines, index, header, left, right):
@@ -272,6 +282,14 @@ def html_text(value):
     return escape(str(value)).replace("@", "&#64;")
 
 
+def review_priority(item):
+    heading = item.get("issue_header") if isinstance(item, dict) else None
+    match = PRIORITY_HEADER.fullmatch(heading.strip()) if isinstance(heading, str) else None
+    if match and not re.search(r"\[P[0-9]+\]", match[2], re.IGNORECASE):
+        return match[1]
+    return None
+
+
 def render_review_findings(render, data, *args, **kwargs):
     review = data.get("review", {})
     issues = review.get("key_issues_to_review")
@@ -279,9 +297,7 @@ def render_review_findings(render, data, *args, **kwargs):
         return render(data, *args, **kwargs)
     core, optional = [], []
     for item in issues:
-        heading = item.get("issue_header") if isinstance(item, dict) else None
-        match = re.fullmatch(r"\[P[23]\][ \t]+([^\r\n]+)", (heading or "").strip()) if isinstance(heading, str) else None
-        if match and not re.search(r"\[P[0-9]+\]", match[1], re.IGNORECASE):
+        if review_priority(item) in {"P2", "P3"}:
             optional.append(item)
         else:
             core.append(item)
@@ -294,14 +310,59 @@ def render_review_findings(render, data, *args, **kwargs):
     return f"{markdown}\n\n<details>\n<summary>可选改进建议</summary>\n<ul>\n" + "\n".join(items) + "\n</ul>\n</details>\n"
 
 
-def review_scope_summary(context):
+def history_results(rechecks, pending):
+    findings = {}
+    unverified = set()
+    for items in rechecks:
+        if not isinstance(items, list):
+            continue
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict) or type(item.get("thread_id")) is not int:
+                continue
+            thread_id = item["thread_id"]
+            if thread_id not in pending:
+                continue
+            status = item.get("status")
+            evidence = item.get("evidence")
+            if thread_id in seen:
+                unverified.add(thread_id)
+            seen.add(thread_id)
+            if status == "insufficient_evidence":
+                continue
+            if not (isinstance(status, str) and status in HISTORY_STATUS and isinstance(evidence, str) and evidence.strip()):
+                unverified.add(thread_id)
+                continue
+            previous = findings.setdefault(thread_id, (status, " ".join(evidence.split())[:400]))
+            if previous[0] != status:
+                unverified.add(thread_id)
+    return {thread_id: finding for thread_id, finding in findings.items() if thread_id not in unverified}
+
+
+def add_history_output_schema(system):
+    review_class = "class Review(BaseModel):"
+    root_class = "class PRReview(BaseModel):"
+    if system.count(review_class) != 1 or system.count(root_class) != 1:
+        raise ValueError("Native reviewer no longer exposes its expected output schema")
+    system = system.replace(review_class, HISTORY_SCHEMA + review_class, 1)
+    field = "    history_recheck: List[HistoricalReviewCheck]\n\n"
+    return system.replace(root_class, field + root_class, 1)
+
+
+def review_scope_summary(context, excluded=(), history=None, *, scope_only=False):
     head = context["head"][:12]
     if context["mode"] == "incremental":
         start = context["previousHead"][:12]
-        scope = f"评审范围为 `{start}..{head}` 的增量与历史问题复核。"
+        if scope_only:
+            scope = f"捕获的增量范围为 `{start}..{head}`。本轮增量文件均被过滤，未启动模型评审。"
+        else:
+            scope = f"评审范围为 `{start}..{head}` 的增量与历史问题复核。"
     else:
         scope = f"评审范围为 `{head}` 的 PR 全量差异。"
     result = [scope]
+    if excluded:
+        paths = ", ".join(f"<code>{html_text(path)}</code>" for path in excluded[:20])
+        result.append(f"本轮未评审 {len(excluded)} 个按文件过滤规则排除的文件。列出 {min(len(excluded), 20)} 个文件。{paths}")
     checks = context["checks"]
     if checks is None:
         result.append(f"CI 检查快照（`{head}`）未能读取。")
@@ -315,11 +376,15 @@ def review_scope_summary(context):
     else:
         pending = open_blockers(context["threads"])
         if pending:
-            result.append(f"捕获时有 {len(pending)} 条未决 P0/P1，待维护者复核。")
+            result.append(f"捕获时有 {len(pending)} 条未决 P0/P1，线程状态由维护者确认。")
             for thread in pending[:20]:
                 line = thread.get("end") or thread.get("originalLine") or "—"
-                link = f"[讨论 {thread['id']}](#discussion_r{thread['id']})"
-                result.append(f"- {thread['priority']} <code>{html_text(thread['path'])}:{line}</code> {link}")
+                thread_id = thread["id"]
+                link = f"[讨论 {thread_id}](#discussion_r{thread_id})"
+                status, evidence = (history or {}).get(thread_id, (None, ""))
+                observation = HISTORY_STATUS.get(status, "待人工复核")
+                details = f"。{html_text(evidence)}" if evidence else ""
+                result.append(f"- {thread['priority']} <code>{html_text(thread['path'])}:{line}</code> {link} · {observation}{details}")
     return "\n\n".join(result)
 
 
@@ -333,12 +398,28 @@ def is_current_revision(provider, context):
     return repo.get_git_ref(f"heads/{context['baseRef']}").object.sha == context["base"]
 
 
+def incremental_review_files(source, patch_type, edit_type):
+    from pr_agent.algo.file_filter import filter_ignored
+    from pr_agent.algo.language_handler import partition_files_by_language_filter
+
+    files = [patch_type(base_file="", head_file="", patch=file["patch"], filename=file["filename"],
+                       edit_type=edit_type.ADDED if file["status"] == "added" else edit_type.MODIFIED,
+                       num_plus_lines=file["additions"], num_minus_lines=file["deletions"],
+                       head_file_is_complete=False) for file in source]
+    included, _ = partition_files_by_language_filter(filter_ignored(files))
+    included_paths = {file.filename for file in included}
+    return included, [file.filename for file in files if file.filename not in included_paths]
+
+
 def run_with_review_context(run, module, context, patch_type, edit_type):
     """Limit the pinned native review to the captured input and scope its publication."""
     reviewer_type = module.PRReviewer
     initialize = reviewer_type.__init__
     prepare = reviewer_type._prepare_pr_review
     prompt_context = review_context_text(context)
+    incremental = context["mode"] == "incremental"
+    pending = {thread["id"] for thread in open_blockers(context["threads"] or [])[:20]} if incremental else set()
+    merge = module.merge_review_chunks
     with ExitStack() as restore:
         def override(target, name, value):
             restore.callback(setattr, target, name, getattr(target, name))
@@ -353,15 +434,15 @@ def run_with_review_context(run, module, context, patch_type, edit_type):
                 raise ValueError("Native reviewer does not match the captured revision")
             reviewer.vars["description"] = str(reviewer.vars.get("description") or "") + "\n\n" + prompt_context
 
-            if context["mode"] == "incremental":
-                files = [patch_type(base_file="", head_file="", patch=file["patch"], filename=file["filename"],
-                                    edit_type=edit_type.ADDED if file["status"] == "added" else edit_type.MODIFIED,
-                                    num_plus_lines=file["additions"], num_minus_lines=file["deletions"],
-                                    head_file_is_complete=False) for file in context["files"]]
+            if incremental:
+                files, excluded = incremental_review_files(context["files"], patch_type, edit_type)
                 override(provider, "get_diff_files", lambda: files)
-                override(provider, "get_filtered_diff_file_names", lambda: [])
+                override(provider, "get_filtered_diff_file_names", lambda: excluded)
                 reviewer.vars["num_pr_files"] = len(files)
                 reviewer.vars["commit_messages_str"] = ""
+                if pending:
+                    prompt = module.get_settings().pr_review_prompt
+                    override(prompt, "system", add_history_output_schema(prompt.system))
 
             publish = provider.publish_persistent_comment_full
 
@@ -369,21 +450,74 @@ def run_with_review_context(run, module, context, patch_type, edit_type):
                 if not is_current_revision(provider, context):
                     return None
                 publish_kwargs.update(require_agent_authorship=True, fallback_on_error=False)
-                body = f"{markdown.rstrip()}\n\n{review_scope_summary(context)}\n\n{context['receipt']}"
+                body = f"{markdown.rstrip()}\n\n{context['receipt']}"
                 return publish(body, *publish_args, **publish_kwargs)
 
             override(provider, "publish_persistent_comment_full", publish_current)
 
+            if incremental and not files:
+                from pr_agent.algo.comment_identity import format_pr_review_header
+
+                async def publish_scope_only():
+                    if module.get_settings().config.publish_output:
+                        header = format_pr_review_header()
+                        summary = review_scope_summary(context, excluded, scope_only=True)
+                        publish_current(f"{header}\n\n{summary}\n\n{SCOPE_ONLY_MARKER}", initial_header=header,
+                                        update_header=True, final_update_message=False,
+                                        identity_marker=module.PRReviewIdentity.REGULAR.value,
+                                        legacy_initial_header=f"{module.PRReviewHeader.REGULAR.value} 🔍")
+
+                override(reviewer, "run", publish_scope_only)
+
+        def merge_scoped(outputs, related_tickets=None, max_findings=None):
+            result = merge(outputs, related_tickets=related_tickets, max_findings=None)
+            review = result.get("review")
+            if not isinstance(review, dict):
+                return result
+            issues = review.get("key_issues_to_review")
+            if isinstance(issues, list):
+                ranked = sorted(issues, key=lambda issue: PRIORITY_ORDER[review_priority(issue)])
+                limit = None
+                if max_findings is not None:
+                    try:
+                        limit = max(0, int(max_findings))
+                    except (TypeError, ValueError):
+                        pass
+                review["key_issues_to_review"] = ranked[:limit]
+            if pending:
+                histories = [output["review"].get("history_recheck") for output in outputs
+                             if isinstance(output, dict) and isinstance(output.get("review"), dict)]
+                observed = history_results(histories, pending)
+                review["history_recheck"] = [{"thread_id": thread_id, "status": status, "evidence": evidence}
+                                             for thread_id, (status, evidence) in observed.items()]
+            return result
+
         def prepare_grouped(reviewer):
             render = module.convert_to_markdown_v2
-            module.convert_to_markdown_v2 = lambda *args, **kwargs: render_review_findings(render, *args, **kwargs)
+            history = None
+            excluded = reviewer.git_provider.get_filtered_diff_file_names() if incremental else []
+
+            def render_scoped(data, *args, **kwargs):
+                nonlocal history
+                review = data.get("review", {})
+                if not isinstance(review, dict) or "history_recheck" not in review:
+                    return render_review_findings(render, data, *args, **kwargs)
+                if pending and not (excluded or reviewer.review_failed_chunk_count or reviewer.remaining_files_list
+                                    or reviewer.partial_files_list):
+                    history = history_results([review["history_recheck"]], pending)
+                display = {key: value for key, value in review.items() if key != "history_recheck"}
+                return render_review_findings(render, {**data, "review": display}, *args, **kwargs)
+
+            module.convert_to_markdown_v2 = render_scoped
             try:
-                return prepare(reviewer)
+                markdown = prepare(reviewer)
             finally:
                 module.convert_to_markdown_v2 = render
+            return f"{markdown.rstrip()}\n\n{review_scope_summary(context, excluded, history)}" if markdown else markdown
 
         override(reviewer_type, "__init__", configure)
         override(reviewer_type, "_prepare_pr_review", prepare_grouped)
+        override(module, "merge_review_chunks", merge_scoped)
         run()
 
 

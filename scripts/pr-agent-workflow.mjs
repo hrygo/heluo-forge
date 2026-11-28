@@ -2,7 +2,7 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { publishApproval, readApprovalReceipt, reconcileMainApprovals, recordWorkflowWithdrawal } from './pr-agent-approval.mjs';
 import { verifyReviewCoverage, verifyReviewFileModes } from './pr-agent-coverage.mjs';
-import { buildReviewComments, getReviewCommentMarker, reviewPriority, withoutResolvedDuplicates } from './pr-agent-review-comments.mjs';
+import { buildReviewComments, getReviewCommentMarker, reviewPriority } from './pr-agent-review-comments.mjs';
 import { baselineKey, captureReviewContext, hasReviewIdentity, openBlockers, readReviewThreads,
   reviewFindingLimit, reviewMarker, reviewReceipt } from './pr-agent-review-context.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
@@ -11,6 +11,7 @@ import { isBranch, isSha, listReviews, pages, targetTip, validId } from './pr-ag
 const allowedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 const signalPath = '.github/workflows/pr-agent-signal.yml';
 const summaryMarker = '<!-- pr-agent:describe:persistent -->';
+const scopeOnlyMarker = '<!-- heluo-forge-pr-agent-review-scope-only:v1 -->';
 const diffMediaType = 'application/vnd.github.diff';
 const diffResponseTypes = new Set([diffMediaType, 'application/vnd.github.v3.diff']);
 
@@ -243,6 +244,25 @@ async function capture(github, env, scope, event) {
   ].join('\n'));
 }
 
+async function hasFreshReviewPublications(github, prNumber, { automatic, started, context, scopeOnly = false }) {
+  const earliest = Math.floor(started / 1000) * 1000;
+  let summaryReady = !automatic;
+  let reviewReady = false;
+  for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
+    if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
+        !(Date.parse(comment.updated_at) >= earliest)) continue;
+    summaryReady ||= comment.body.includes(summaryMarker);
+    if (context && hasReviewIdentity(comment.body)) {
+      const blocks = comment.body.trimEnd().split('\n\n');
+      reviewReady ||= blocks.at(-1) === context.receipt && (blocks.at(-2) === scopeOnlyMarker) === scopeOnly;
+    } else if (!context) {
+      reviewReady ||= comment.body.includes(reviewMarker);
+    }
+    if (summaryReady && reviewReady) return true;
+  }
+  return false;
+}
+
 async function validateReview(github, env, scope) {
   const { prNumber, automatic, body = '' } = scope;
   const { REVIEW_RESULT, REVIEWED_HEAD: head, REVIEWED_BASE: base, REVIEWED_BASE_REF: ref } = env;
@@ -297,8 +317,18 @@ async function validateReview(github, env, scope) {
   }
   const pr = await currentRevision();
   if (!pr) return;
+  const nativeReview = usesNativeReview(scope);
+  const context = nativeReview && env.PR_AGENT_REVIEW_CONTEXT_PATH
+    ? await readContext(env.PR_AGENT_REVIEW_CONTEXT_PATH, contextRevision(github, env, prNumber, head, base, ref))
+    : undefined;
+  const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
   if (!review) {
     if (!expectReview(pr.title ?? env.PR_TITLE)) return;
+    if (context?.mode === 'incremental' && Number.isFinite(started) &&
+        await hasFreshReviewPublications(github, prNumber, { automatic, started, context, scopeOnly: true })) {
+      if (await currentRevision()) console.log('Skipping model review because all delta files were excluded.');
+      return;
+    }
     if (pr.changed_files === 0) {
       const comparison = await github.get(`/compare/${base}...${head}?per_page=1`, 'Cannot verify PR comparison');
       if (comparison.base_commit?.sha !== base || !Array.isArray(comparison.files) ||
@@ -313,10 +343,6 @@ async function validateReview(github, env, scope) {
     throw new Error('PR-Agent did not produce structured review output');
   }
 
-  const nativeReview = usesNativeReview(scope);
-  const context = nativeReview && env.PR_AGENT_REVIEW_CONTEXT_PATH
-    ? await readContext(env.PR_AGENT_REVIEW_CONTEXT_PATH, contextRevision(github, env, prNumber, head, base, ref))
-    : undefined;
   const deltaFiles = context?.mode === 'incremental' ? context.files : undefined;
   const checkApprovals = nativeReview && env.PR_AGENT_APPROVAL_CONFIGURED === 'true' &&
     validId(pr.user?.id) && pr.user.type === 'User';
@@ -356,20 +382,11 @@ async function validateReview(github, env, scope) {
   }
 
   if (automatic || context) {
-    const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
-    const markers = new Set(automatic ? [summaryMarker, reviewMarker] : [reviewMarker]);
-    const earliest = Math.floor(started / 1000) * 1000;
     try {
-      for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
-        if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
-            !(Date.parse(comment.updated_at) >= earliest)) continue;
-        if (comment.body.includes(summaryMarker)) markers.delete(summaryMarker);
-        if (context ? hasReviewIdentity(comment.body) && comment.body.trimEnd().endsWith(`\n${context.receipt}`)
-          : comment.body.includes(reviewMarker)) markers.delete(reviewMarker);
-        if (!markers.size) break;
+      if (!await hasFreshReviewPublications(github, prNumber, { automatic, started, context })) {
+        throw new Error('PR-Agent summary and review were not both refreshed for this run');
       }
-      if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
     } catch (error) {
       if (favorable) throw error;
       const withdrawal = await emitApprovalRevision(false);
@@ -410,8 +427,7 @@ async function validateReview(github, env, scope) {
           : { changedFileCount: pr.changed_files }),
         runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, invocation: env.PR_AGENT_COVERAGE_INVOCATION,
     });
-    const candidates = buildReviewComments({ issues: blockers, files, head, base, deltaFiles });
-    const comments = withoutResolvedDuplicates(candidates, threads ?? [], head, base);
+    const comments = buildReviewComments({ issues: blockers, files, head, base, deltaFiles, threads: threads ?? [] });
     if (comments.length) {
       inlineCommentStatus = await publishReviewComments(github, prPath, head, comments, currentRevision);
       if (inlineCommentStatus === 'revision-changed') return;
@@ -431,7 +447,7 @@ async function validateReview(github, env, scope) {
       (recommendation === 'no_concerns_found' || (recommendation === 'changes_required' && blockers.length > 0)));
   }
   let publicationFailed = inlineCommentStatus === 'incomplete';
-  if (!favorable || (verifiedCoverage && !publicationFailed)) {
+  if (!favorable || (eligible && verifiedCoverage && !publicationFailed)) {
     const status = await emitApprovalRevision(favorable);
     if (status === 'revision-changed') return;
     publicationFailed ||= status === 'withdrawal-unrecorded';
