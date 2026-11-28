@@ -2160,15 +2160,64 @@ test('reruns inspect earlier attempts of the same run before reusing a baseline'
   });
 });
 
+test('a later push checks previous runs whose latest attempt can hide a native review failure', async (t) => {
+  const cases = [
+    { name: 'stale rerun ends successfully after skipping review', status: 'completed', conclusion: 'success', simulateStaleRetry: true },
+    { name: 'a rerun that failed without starting review', status: 'completed', conclusion: 'failure' },
+    { name: 'a queued rerun', status: 'queued', conclusion: null },
+    { name: 'a missing earlier job', status: 'completed', conclusion: 'success', prior: null },
+    { name: 'the earlier job skipped review too', status: 'completed', conclusion: 'success', prior: 'skipped', expected: 'incremental' },
+    { name: 'the earlier failure predates the confirmed summary', status: 'completed', conclusion: 'success', older: true, expected: 'incremental' },
+  ];
+  for (const { name, status, conclusion, simulateStaleRetry, prior = 'failure', older, expected = 'full' } of cases) {
+    await t.test(name, async () => {
+      await withGitHub(async ({ state, env }) => {
+        const { mode } = configureIncrementalReplay(state, env);
+        const failedHead = '8'.repeat(40);
+        if (simulateStaleRetry) {
+          const previous = { ...mode, GITHUB_RUN_ID: '13000', EVENT_HEAD: failedHead,
+            PR_AGENT_REVIEW_CONTEXT_PATH: mode.PR_AGENT_REVIEW_CONTEXT_PATH + '.previous' };
+          state.pr.head.sha = failedHead;
+          state.threadStatus = 503;
+          const first = await capture(previous);
+          assert.equal(JSON.parse(await readFile(first.review_context, 'utf8')).mode, 'full');
+          await assert.rejects(submit(previous, first, cleanReview()), /summary and review were not both refreshed/u);
+          state.pr.head.sha = replayHead;
+          state.threadStatus = 200;
+          assert.deepEqual(await capture({ ...previous, GITHUB_RUN_ATTEMPT: '2' }), {});
+        }
+        const updated = new Date(Date.now() + 60_000).toISOString();
+        state.runs[13000] = { id: 13000, run_attempt: 2, event: 'workflow_run', status, conclusion,
+          display_title: `洛神 · PR #42 ${failedHead}`, updated_at: updated };
+        if (prior) {
+          const completed = new Date(Date.now() + (older ? -30_000 : 30_000)).toISOString();
+          state.attemptJobs['13000/1'] = [{ name: '洛神 (ubuntu-x64)', run_id: 13000, run_attempt: 1,
+            status: 'completed', conclusion: prior, completed_at: completed,
+            steps: prior === 'skipped' ? [] : [{ name: 'Begin native review', conclusion: 'success' }] }];
+        }
+        if (status === 'completed') {
+          state.attemptJobs['13000/2'] = [{ name: '洛神 (ubuntu-x64)', run_id: 13000, run_attempt: 2,
+            status: 'completed', conclusion, completed_at: updated, steps: [] }];
+        }
+        const next = await capture(mode);
+        assert.equal(JSON.parse(await readFile(next.review_context, 'utf8')).mode, expected);
+        assert.ok(state.requests.some(({ url }) => url.includes('/actions/runs/13000/attempts/1/jobs')));
+      });
+    });
+  }
+});
+
 test('an unconfirmed newest review, invalid delta or missing thread state falls back to full review', async (t) => {
   const cases = {
     'latest attempt has no successful marker': (state) => state.comments.push({
       ...persistentReview('c'.repeat(40), replayBase, { runId: '13000' }), updated_at: new Date(Date.now() + 3000).toISOString(),
     }),
     'newer native attempt failed before updating the old summary': (state) => {
-      state.runs[13000] = { id: 13000, run_attempt: 2, event: 'workflow_run', status: 'completed', conclusion: 'failure',
-        display_title: `洛神 · PR #42 ${'d'.repeat(40)}`, updated_at: new Date(Date.now() + 3000).toISOString() };
-      state.attemptJobs['13000/2'] = [{ name: '洛神 (ubuntu-x64)', run_id: 13000, run_attempt: 2, conclusion: 'failure',
+      const completed = new Date(Date.now() + 3000).toISOString();
+      state.runs[13000] = { id: 13000, run_attempt: 1, event: 'workflow_run', status: 'completed', conclusion: 'failure',
+        display_title: `洛神 · PR #42 ${'d'.repeat(40)}`, updated_at: completed };
+      state.attemptJobs['13000/1'] = [{ name: '洛神 (ubuntu-x64)', run_id: 13000, run_attempt: 1, status: 'completed',
+        conclusion: 'failure', completed_at: completed,
         steps: [{ name: 'Begin native review', conclusion: 'success' }] }];
     },
     'rebase or force push': (state) => { state.compareResponse.merge_base_commit.sha = base; },

@@ -46,13 +46,10 @@ async function reviewJob(github, runId, runAttempt) {
   return jobs.find((job) => job?.name === reviewJobName && job.run_id === Number(runId) && job.run_attempt === Number(runAttempt));
 }
 
-function beganNativeReview(job) {
-  return job?.steps?.some((step) => step.name === 'Begin native review' && step.conclusion === 'success');
-}
-
-function failedEarlierAttemptSince(job, updated) {
+function failedReviewAttemptSince(job, updated) {
   if (job?.status !== 'completed' || typeof job.conclusion !== 'string' || !Array.isArray(job.steps)) return true;
-  if (job.conclusion === 'success' || !beganNativeReview(job)) return false;
+  if (job.conclusion === 'success' ||
+      !job.steps.some((step) => step.name === 'Begin native review' && step.conclusion === 'success')) return false;
   const completed = Date.parse(job.completed_at);
   return !Number.isFinite(completed) || completed >= updated;
 }
@@ -63,21 +60,27 @@ async function failedReviewSince(github, revision, previousRunId, previousAttemp
   if (!Array.isArray(runs) || (runs.length === 100 && !runs.some((run) => String(run.id) === previousRunId))) return true;
   const title = new RegExp(`^洛神 · PR #${revision.prNumber}(?: [a-f0-9]{40})?$`, 'u');
   const candidates = runs.filter((run) => validId(run.id) && String(run.id) !== revision.runId &&
-    !(String(run.id) === previousRunId && String(run.run_attempt) === previousAttempt) &&
     ['workflow_run', 'issue_comment'].includes(run.event) && title.test(run.display_title) &&
-    run.status === 'completed' && run.conclusion !== 'success' && Date.parse(run.updated_at) >= updated);
-  // The workflow list exposes only the latest attempt of a run, which is active during capture.
+    Date.parse(run.updated_at) >= updated);
   const runAttempt = Number(revision.runAttempt);
-  const firstEarlierAttempt = previousRunId === revision.runId ? Number(previousAttempt) + 1 : 1;
-  const earlierCount = runAttempt - firstEarlierAttempt;
-  if (!validId(runAttempt) || earlierCount < 0 || candidates.length + earlierCount > 10 ||
+  if (!validId(runAttempt) || (previousRunId === revision.runId && runAttempt <= Number(previousAttempt)) ||
       candidates.some((run) => !validId(run.run_attempt))) return true;
-  const [jobs, earlierJobs] = await Promise.all([
-    Promise.all(candidates.map((run) => reviewJob(github, run.id, run.run_attempt))),
-    Promise.all(Array.from({ length: earlierCount }, (_, index) =>
-      reviewJob(github, revision.runId, firstEarlierAttempt + index))),
-  ]);
-  return jobs.some(beganNativeReview) || earlierJobs.some((job) => failedEarlierAttemptSince(job, updated));
+
+  // The workflow list exposes only the latest attempt. Earlier attempts can still contain failures.
+  const ranges = [
+    { id: revision.runId, last: runAttempt - 1 },
+    ...candidates.map((run) => ({ id: String(run.id),
+      last: run.status === 'completed' && run.conclusion !== 'success' ? run.run_attempt : run.run_attempt - 1 })),
+  ];
+  const attempts = [];
+  for (const { id, last } of ranges) {
+    const first = id === previousRunId ? Number(previousAttempt) + 1 : 1;
+    const count = last - first + 1;
+    if (attempts.length + count > 10) return true;
+    for (let attempt = first; attempt <= last; attempt++) attempts.push({ id, attempt });
+  }
+  const jobs = await Promise.all(attempts.map(({ id, attempt }) => reviewJob(github, id, attempt)));
+  return jobs.some((job) => failedReviewAttemptSince(job, updated));
 }
 
 async function previousReviewedHead(github, revision) {
