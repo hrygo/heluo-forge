@@ -282,6 +282,11 @@ def html_text(value):
     return escape(str(value)).replace("@", "&#64;")
 
 
+def markdown_code_span(value):
+    ticks = "`" * (max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0) + 1)
+    return f"{ticks} {value} {ticks}"
+
+
 def review_priority(item):
     heading = item.get("issue_header") if isinstance(item, dict) else None
     match = PRIORITY_HEADER.fullmatch(heading.strip()) if isinstance(heading, str) else None
@@ -383,7 +388,7 @@ def review_scope_summary(context, excluded=(), history=None, *, scope_only=False
                 link = f"[讨论 {thread_id}](#discussion_r{thread_id})"
                 status, evidence = (history or {}).get(thread_id, (None, ""))
                 observation = HISTORY_STATUS.get(status, "待人工复核")
-                details = f"。{html_text(evidence)}" if evidence else ""
+                details = f"。{markdown_code_span(evidence)}" if evidence else ""
                 result.append(f"- {thread['priority']} <code>{html_text(thread['path'])}:{line}</code> {link} · {observation}{details}")
     return "\n\n".join(result)
 

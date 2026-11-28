@@ -1870,7 +1870,9 @@ function persistentReview(sha, target, run) {
 
 function historicalThread({ path = 'src/example.js', line = 2, sha = head, priority = 'P1', id = 4725035838,
   resolved = true, outdated = false, authorReplied = true } = {}) {
-  const root = { body: `**[${priority}] Existing finding**\n\nEvidence\n\n<!-- heluo-forge-pr-agent-comment:v1 ${digest(path + line)} -->`,
+  const heading = `[${priority}] Existing finding`;
+  const marker = digest(JSON.stringify([sha, path, 'RIGHT', line, heading, 'Evidence']));
+  const root = { body: `**${heading}**\n\nEvidence\n\n<!-- heluo-forge-pr-agent-comment:v1 ${marker} -->`,
     author: { __typename: 'Bot', login: 'github-actions', databaseId: 41898282 }, originalCommit: { oid: sha },
     databaseId: id };
   return { path, line, originalLine: line, startLine: line, diffSide: 'RIGHT', startDiffSide: null,
@@ -1978,15 +1980,33 @@ test('CI snapshot is unavailable when a requested page returns too few runs', as
   });
 });
 
-test('a new wording for an author-answered resolved P1 does not add an inline thread on the same revision', async () => {
+test('a resolved P1 suppresses the same finding but permits different evidence on the same revision', async () => {
   await withGitHub(async ({ state, env }) => {
     const scoped = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
-    state.threads = [historicalThread()];
+    state.threads = [{ ...historicalThread(), startLine: null }];
     const revision = await capture(scoped);
     state.comments.push(persistentReview(head, base));
-    await submit(scoped, revision, prioritizedReview('P1', { issue_header: '[P1] [RIGHT] Reworded old problem' }));
+    const existingFinding = { issue_header: '[P1] [RIGHT] Existing finding', issue_content: 'Evidence' };
+    await submit(scoped, revision, prioritizedReview('P1', existingFinding));
     assert.deepEqual(reviewWrites(state), []);
+    await submit(scoped, revision, prioritizedReview('P1', {
+      ...existingFinding, issue_content: 'The new result handling drops the valid response.',
+    }));
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.comments[0].line), [2]);
     assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^review_key=/mu);
+  });
+});
+
+test('invalid resolved-thread range metadata does not suppress matching evidence', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const scoped = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+    state.threads = [{ ...historicalThread(), startLine: -1 }];
+    const revision = await capture(scoped);
+    state.comments.push(persistentReview(head, base));
+    await submit(scoped, revision, prioritizedReview('P1', {
+      issue_header: '[P1] [RIGHT] Existing finding', issue_content: 'Evidence',
+    }));
+    assert.deepEqual(state.inlineComments.map(({ line }) => line), [2]);
   });
 });
 
@@ -1999,7 +2019,9 @@ test('a resolved lower-priority discussion does not suppress a stronger blocker 
         const manual = await commentEvent(scoped, '/review');
         const revision = await capture(manual);
         state.comments.push(persistentReview(head, base));
-        await submit(manual, revision, prioritizedReview(newPriority));
+        await submit(manual, revision, prioritizedReview(newPriority, {
+          issue_header: `[${newPriority}] [RIGHT] Existing finding`, issue_content: 'Evidence',
+        }));
         assert.deepEqual(reviewWrites(state).map(({ body }) => body.comments[0].line), [2]);
       });
     });
@@ -2055,18 +2077,22 @@ test('the #484 replay selects the last reviewed head and only publishes comments
   });
 });
 
-test('resolved delta positions suppress a reworded range but permit evidence on changed lines', async (t) => {
+test('resolved delta positions suppress matching evidence and preserve independent findings', async (t) => {
   const cases = [
-    { name: 'range overlaps an unchanged resolved line', start: 519, threadLineChanged: false, expected: [] },
+    { name: 'matching evidence overlaps an unchanged resolved line', start: 519, threadLineChanged: false, expected: [] },
+    { name: 'different evidence overlaps the same resolved line', start: 519, threadLineChanged: false,
+      evidence: 'The new result handling drops the valid response.', expected: [520] },
     { name: 'independent evidence is on the next changed line', start: 520, threadLineChanged: false, expected: [520] },
     { name: 'the previously resolved line actually changed', start: 519, threadLineChanged: true, expected: [519] },
   ];
-  for (const { name, start, threadLineChanged, expected } of cases) await t.test(name, async () => {
+  for (const { name, start, threadLineChanged, evidence = 'Evidence', expected } of cases) await t.test(name, async () => {
     await withGitHub(async ({ state, env }) => {
       const { mode, files } = configureIncrementalReplay(state, env);
       const full = { ...fixtureFile(replayResolvedPath, 519), additions: 2, deletions: 2,
         patch: '@@ -519,2 +519,2 @@\n-old row\n-old row\n+first row\n+new row' };
-      files.push(threadLineChanged ? full : fixtureFile(replayResolvedPath, 520));
+      const delta = { ...fixtureFile(replayResolvedPath, 520),
+        patch: '@@ -519,2 +519,2 @@\n first row\n-old row\n+new row' };
+      files.push(threadLineChanged ? full : delta);
       state.files.splice(-1, 1, full);
       state.compareDiff = rawDiff(files);
       state.threads = [historicalThread({ path: replayResolvedPath, line: 519, sha: replayPrevious })];
@@ -2076,7 +2102,7 @@ test('resolved delta positions suppress a reworded range but permit evidence on 
       state.comments.push(persistentReview(replayHead, replayBase));
       await submit(mode, revision, prioritizedReview('P1', {
         relevant_file: replayResolvedPath, start_line: start, end_line: 520,
-        issue_header: '[P1] [RIGHT] New wording on the affected range',
+        issue_header: '[P1] [RIGHT] Existing finding', issue_content: evidence,
       }));
       assert.deepEqual(state.inlineComments.map(({ line }) => line), expected);
     });

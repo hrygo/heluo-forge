@@ -151,8 +151,9 @@ function excerpt(value) {
 
 function readThread(thread, author) {
   const root = thread?.root?.nodes?.[0];
+  const marker = getReviewCommentMarker(root?.body);
   if (root?.author?.__typename !== 'Bot' || root.author.login !== 'github-actions' ||
-      root.author.databaseId !== 41898282 || !getReviewCommentMarker(root.body)) return;
+      root.author.databaseId !== 41898282 || !marker) return;
   if (typeof thread.isResolved !== 'boolean' || typeof thread.isOutdated !== 'boolean' ||
       typeof thread.path !== 'string' || !thread.path || !validId(root.databaseId) ||
       !Array.isArray(thread.recent?.nodes)) throw new Error('Invalid Luoshen review thread');
@@ -163,11 +164,12 @@ function readThread(thread, author) {
   const reply = thread.recent.nodes.findLast((comment) => comment?.databaseId !== root.databaseId &&
     author && comment?.author?.login === author);
   const end = validId(thread.line) ? thread.line : null;
-  const start = validId(thread.startLine) ? thread.startLine : end;
-  const side = ['LEFT', 'RIGHT'].includes(thread.diffSide) && end && start <= end &&
+  const startLine = thread.startLine ?? end;
+  const start = validId(startLine) ? startLine : null;
+  const side = ['LEFT', 'RIGHT'].includes(thread.diffSide) && start && end && start <= end &&
     (start === end || thread.startDiffSide === thread.diffSide) ? thread.diffSide : null;
   return {
-    id: root.databaseId, path: thread.path, side, start, end,
+    id: root.databaseId, path: thread.path, side, start, end, marker,
     originalLine: validId(thread.originalLine) ? thread.originalLine : null,
     originalHead: isSha(root.originalCommit?.oid) ? root.originalCommit.oid : null, originalBase: originalBase ?? null,
     resolved: thread.isResolved, outdated: thread.isOutdated, priority,
