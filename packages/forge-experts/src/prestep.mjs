@@ -356,7 +356,7 @@ export function createPreStepGuard(ports) {
   /**
    * Finalizes a bound turn after main-assistant execution:
    * - If delegation succeeded (`delegatedTaskId`), clears the turn without preserving draft.
-   * - If the tool passed the guard and no receipt or error arrived, acceptance stays unknown.
+   * - If the tool passed the guard and its outcome is missing or unclassified, acceptance stays unknown.
    * - If the model never invoked `forge_experts.delegate`, discards the unused single-use
    *   `selectionToken` (preventing replay), marks `expertParticipated: false, completed: false`,
    *   and returns `preserveDraft: true` with the original draft and an explicit notice (#245/#247).
@@ -396,9 +396,10 @@ export function createPreStepGuard(ports) {
       });
     }
 
-    const isAcceptanceUnknownError = error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN';
-    const missingOutcomeAfterAttempt = !error && (Boolean(expiredAttempted) || turn.delegateAttempted === true);
-    if (isAcceptanceUnknownError || missingOutcomeAfterAttempt) {
+    const errorCode = error instanceof ExpertsError ? error.code : null;
+    const wasAttempted = Boolean(expiredAttempted) || turn.delegateAttempted === true;
+    const outcomeUnclassified = errorCode === null || errorCode === 'EXPERT_INTERNAL_ERROR';
+    if (errorCode === 'EXPERT_ACCEPTANCE_UNKNOWN' || (wasAttempted && outcomeUnclassified)) {
       const unknownOutcome = Object.freeze({
         status: 'acceptance_unknown',
         code: 'EXPERT_ACCEPTANCE_UNKNOWN',
@@ -423,7 +424,7 @@ export function createPreStepGuard(ports) {
     const outcome = error
       ? Object.freeze({
         status: 'failed',
-        code: error instanceof ExpertsError ? error.code : 'EXPERT_INTERNAL_ERROR',
+        code: errorCode ?? 'EXPERT_INTERNAL_ERROR',
         expertParticipated: false,
         completed: false,
         expertId: turn.expertId,

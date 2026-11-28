@@ -2348,7 +2348,7 @@ test('turn-finalized arriving while draftRecoveryListener is temporarily unregis
   }
 });
 
-function mountReviewTaskCard(t, { initialTask, fetchImpl }) {
+function mountReviewTaskCard(t, { initialTask, fetchImpl, withMentions = false }) {
   const state = [];
   const refs = [];
   const effects = [];
@@ -2392,7 +2392,10 @@ function mountReviewTaskCard(t, { initialTask, fetchImpl }) {
     dispose?.();
     restore();
   });
-  exported.apply({ effect(register) { dispose = register(); } });
+  exported.apply({
+    effect(register) { dispose = register(); },
+    inputTriggers: withMentions ? { registerSource: () => () => {} } : undefined,
+  }, { dispatchEnabled: withMentions });
 
   return {
     render(nextTask = initialTask) {
@@ -2406,6 +2409,9 @@ function mountReviewTaskCard(t, { initialTask, fetchImpl }) {
         for (const effect of pendingEffects) effect();
       } while (renderAgain);
       return tree;
+    },
+    emitEvent(payload) {
+      eventSources[0].emit(payload);
     },
     emitReconciled(entry) {
       eventSources[0].emit({ type: 'task-reconciled', ...entry });
@@ -2537,6 +2543,81 @@ for (const [status, code] of [[401, 'EXPERT_AUTH_REVOKED'], [403, 'EXPERT_ORG_FO
     assert.equal(retained.props.value, draft);
     assert.equal(retained.props.readOnly, true);
     assert.equal(delivered, 1);
+  });
+}
+
+for (const [action, status, code] of [
+  ['followups', 401, 'EXPERT_AUTH_REVOKED'],
+  ['cancel', 403, 'EXPERT_ORG_FORBIDDEN'],
+]) {
+  test('PR #484 review: ' + action + ' denial clears cached results and keeps the unsent draft', async (t) => {
+    const card = mountReviewTaskCard(t, {
+      initialTask: {
+        taskId: 'task-a', requestId: 'request-a', status: 'waiting_user', runGeneration: 1,
+        summary: 'Cached summary', result: 'Cached result', rawResult: 'Cached original',
+        sources: [{ authorized: true, title: 'Cached source' }],
+        artifacts: [{ authorized: true, label: 'Cached artifact' }],
+      },
+      async fetchImpl(url) {
+        assert.ok(url.endsWith('/tasks/task-a/' + action), url);
+        return cardJson(status, { error: { code } });
+      },
+    });
+
+    const draft = 'Keep the unsent text';
+    cardElement(card.render(), 'fexp-raw-toggle').props.onClick();
+    cardElement(card.render(), 'fexp-followup-box').children[0].props.onChange({ target: { value: draft } });
+    const before = card.render();
+    assert.equal(cardElement(before, 'fexp-raw-content').children[0], 'Cached original');
+    const button = action === 'followups' ? 'fexp-followup-btn' : 'fexp-task-cancel';
+    await cardElement(before, button).props.onClick();
+
+    const denied = card.render();
+    for (const part of ['fexp-task-summary', 'fexp-task-result', 'fexp-task-sources', 'fexp-task-artifacts', 'fexp-raw-drawer']) {
+      assert.ok(!cardElement(denied, part), part + ' must be removed after denial');
+    }
+    assert.equal(cardElement(denied, 'fexp-followup-box').children[0].props.value, draft);
+  });
+}
+
+for (const withMentions of [false, true]) {
+  test('PR #484 review: scope change hides a mounted card and rejects its in-flight response (' + (withMentions ? 'mentions' : 'recovery only') + ')', async (t) => {
+    const response = Promise.withResolvers();
+    let readbacks = 0;
+    let mutations = 0;
+    const initialTask = { taskId: 'task-a', requestId: 'request-a', status: 'waiting_user', result: 'Old result', rawResult: 'Old original' };
+    const card = mountReviewTaskCard(t, {
+      withMentions,
+      initialTask,
+      async fetchImpl(url) {
+        if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+        if (url.endsWith('/tasks/task-a')) return response.promise;
+        if (url.endsWith('/tasks/task-a/cancel')) mutations += 1;
+        if (url.endsWith('/tasks/task-a/result')) readbacks += 1;
+        return cardJson(200, { result: 'Late result' });
+      },
+    });
+
+    card.render();
+    card.emitEvent({ type: 'ready', scopeEpoch: 4, hostInstanceId: 'host-a' });
+    cardElement(card.render(), 'fexp-raw-toggle').props.onClick();
+    card.emitEvent({ type: 'ready', scopeEpoch: 4, hostInstanceId: 'host-a' });
+    const before = card.render();
+    assert.equal(cardElement(before, 'fexp-raw-content').children[0], 'Old original');
+    const pending = cardElement(before, 'fexp-task-refresh').props.onClick();
+    if (withMentions) {
+      card.emitEvent({ type: 'ready', scopeEpoch: 4, hostInstanceId: 'host-b' });
+    } else {
+      card.emitEvent({ type: 'scope-changed', scopeEpoch: 5 });
+    }
+    const hidden = card.render();
+    assert.ok(!hidden, 'the old scope card must be hidden');
+    response.resolve(cardJson(200, { status: 'completed', runGeneration: 1 }));
+    await pending;
+    await cardElement(before, 'fexp-task-cancel').props.onClick();
+    assert.equal(card.render({ ...initialTask, result: 'Stale parent projection' }), null);
+    assert.equal(readbacks, 0);
+    assert.equal(mutations, 0);
   });
 }
 
