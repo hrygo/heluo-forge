@@ -54,12 +54,42 @@ function failedReviewAttemptSince(job, updated) {
   return !Number.isFinite(completed) || completed >= updated;
 }
 
+async function readReviewRuns(github) {
+  const perPage = 100;
+  const pageLimit = 100;
+  const batchSize = 12;
+  const readPage = (page) => github.get(`/actions/workflows/pr-agent.yml/runs?per_page=${perPage}&page=${page}`,
+    'Cannot read review run history');
+  const first = await readPage(1);
+  const { total_count: total } = first;
+  if (!Number.isSafeInteger(total) || total < 0 || total > pageLimit * perPage) {
+    throw new Error('Invalid or excessive review run count');
+  }
+  const runs = new Map();
+  function addPage({ workflow_runs: rows, total_count: count }, page) {
+    const expected = Math.min(perPage, total - (page - 1) * perPage);
+    if (count !== total || !Array.isArray(rows) || rows.length !== expected) {
+      throw new Error('Incomplete review run history');
+    }
+    for (const run of rows) {
+      if (!validId(run?.id) || runs.has(run.id)) throw new Error('Invalid or repeated review run');
+      runs.set(run.id, run);
+    }
+  }
+  addPage(first, 1);
+  const pageCount = Math.ceil(total / perPage);
+  for (let page = 2; page <= pageCount; page += batchSize) {
+    const remaining = Math.min(batchSize, pageCount - page + 1);
+    const batch = await Promise.all(Array.from({ length: remaining }, (_, index) => readPage(page + index)));
+    for (const [index, response] of batch.entries()) addPage(response, page + index);
+  }
+  return [...runs.values()];
+}
+
 async function failedReviewSince(github, revision, previousRunId, previousAttempt, updated) {
-  const { workflow_runs: runs } = await github.get('/actions/workflows/pr-agent.yml/runs?per_page=100',
-    'Cannot check for newer unsuccessful reviews');
-  if (!Array.isArray(runs) || (runs.length === 100 && !runs.some((run) => String(run.id) === previousRunId))) return true;
+  const runs = await readReviewRuns(github);
   const title = new RegExp(`^洛神 · PR #${revision.prNumber}(?: [a-f0-9]{40})?$`, 'u');
-  const candidates = runs.filter((run) => validId(run.id) && String(run.id) !== revision.runId &&
+  const candidates = runs.filter((run) => String(run.id) !== revision.runId &&
     ['workflow_run', 'issue_comment'].includes(run.event) && title.test(run.display_title) &&
     Date.parse(run.updated_at) >= updated);
   const runAttempt = Number(revision.runAttempt);
