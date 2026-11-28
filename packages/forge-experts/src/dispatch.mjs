@@ -947,21 +947,33 @@ export function createDispatchService(ports) {
           await syncPendingIndex(scope, requestId, 'accepted');
           return;
         }
-        try {
-          inFlightReconcileReads.add(readKey);
-          const readPromise = reconcileByRequest({ requestId }).finally(() => {
-            inFlightReconcileReads.delete(readKey);
-          });
-          const result = await withTimeout(readPromise, reconcileTimeoutMs);
+        let notified = false;
+        const buildAndNotify = (result) => {
           const entry = Object.freeze({
             requestId,
-            taskId: result.taskId ?? record.taskId ?? null,
-            status: result.status ?? 'queued',
+            taskId: result?.taskId ?? record.taskId ?? null,
+            status: result?.status ?? 'queued',
             originSessionRef: record.originSessionRef,
             expertId: record.expertId,
           });
-          reconciled.push(entry);
-          try { ports.onTaskReconciled?.({ ...entry, scope }); } catch { /* best effort */ }
+          if (!notified) {
+            notified = true;
+            try { ports.onTaskReconciled?.({ ...entry, scope }); } catch { /* best effort */ }
+          }
+          return entry;
+        };
+        try {
+          inFlightReconcileReads.add(readKey);
+          const readPromise = reconcileByRequest({ requestId }).then((result) => {
+            buildAndNotify(result);
+            return result;
+          }).finally(() => {
+            inFlightReconcileReads.delete(readKey);
+          });
+          // Sink late rejections after timeout so timed-out background reads never cause unhandled rejections.
+          readPromise.catch(() => {});
+          const result = await withTimeout(readPromise, reconcileTimeoutMs);
+          reconciled.push(buildAndNotify(result));
         } catch (error) {
           if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey)) {
             notFound.push(requestId);

@@ -981,3 +981,71 @@ test('interleaved reconnect reconcile during in-flight dispatch does not drop pe
     await h2.host.close();
   }
 });
+
+test('timed-out reconcileByRequest that later succeeds still notifies onTaskReconciled once (#484)', async () => {
+  const sharedStorage = createMemoryStorage();
+  const scope = {
+    instanceId: 'delegra-prod-01',
+    orgId: 'org-alpha',
+    issuer: 'https://iam.corp.example',
+    subject: 'emp-1001',
+    verifiedAt: '2026-11-24T00:00:00Z',
+    validUntil: '2026-11-24T23:59:59Z',
+  };
+  let releaseSlowLookup = null;
+  const notifications = [];
+
+  const { createDispatchService } = await import('../src/dispatch.mjs');
+  const dispatch = createDispatchService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => ({ ...scope, scopeEpoch: 1 }),
+    assertScopeCurrent: () => {},
+    consumeSelection: () => ({ expertId: 'exp-fin-1', delegationScope: 'proj-fin', sessionId: 'sess-1' }),
+    runInPreferenceBoundary: (fn) => fn(),
+    listConfirmedEnabled: async () => [{ expertId: 'exp-fin-1', authContinuityDigest: 'sha256:c1' }],
+    isPreferencePending: () => false,
+    checkDelegraSessionScope: async () => ({
+      scopeVerified: true,
+      results: [{ expertId: 'exp-fin-1', callableInScope: true, authContinuityDigest: 'sha256:c1', acceptingTasks: 'accepting' }],
+    }),
+    evaluatePolicy: async () => ({ decision: 'allow' }),
+    openStorageDomain: (spec) => sharedStorage.open(spec),
+    generateRequestId: () => 'req-late-notify-1',
+    reconcileTimeoutMs: 20,
+    onTaskReconciled: (evt) => notifications.push(evt),
+    createDelegraTask: async () => {
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'wire dropped', { status: 503, retryable: true });
+    },
+    getDelegraTaskByRequest: async ({ requestId }) => {
+      await new Promise((resolve) => { releaseSlowLookup = resolve; });
+      return { taskId: 'task-late-notify-1', requestId, status: 'running' };
+    },
+    getDelegraTask: async () => ({}),
+    getDelegraTaskResult: async () => ({}),
+    createDelegraFollowup: async () => ({}),
+    cancelDelegraTask: async () => ({}),
+  });
+
+  await dispatch.open();
+  try {
+    await assert.rejects(
+      () => dispatch.dispatchTask({ selectionToken: 'tok-1', sessionId: 'sess-1', taskText: 'Slow reconcile test' }),
+      (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN',
+    );
+
+    const firstPass = await dispatch.reconcilePendingRequests();
+    assert.deepEqual(firstPass.reconciled, []);
+    assert.deepEqual(firstPass.stillPending, ['req-late-notify-1']);
+    assert.equal(notifications.length, 0);
+
+    // Underlying GET finishes after timeout -> still emits onTaskReconciled once so card converges.
+    releaseSlowLookup();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].requestId, 'req-late-notify-1');
+    assert.equal(notifications[0].taskId, 'task-late-notify-1');
+    assert.equal(notifications[0].status, 'running');
+  } finally {
+    await dispatch.close();
+  }
+});
