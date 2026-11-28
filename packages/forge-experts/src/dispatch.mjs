@@ -853,14 +853,14 @@ export function createDispatchService(ports) {
         details: { requestId },
       });
     }
-    if (input.requestId) {
-      const existing = await readCorrelation(scope, requestId);
-      if (existing && existing.payloadDigest !== payloadDigest) {
-        throw new ExpertsError('EXPERT_IDEMPOTENCY_CONFLICT', 'Follow-up requestId was already used with a different payload');
-      }
-    }
     inFlightDeliveries.add(deliveryKey);
     try {
+      if (input.requestId) {
+        const existing = await readCorrelation(scope, requestId);
+        if (existing && existing.payloadDigest !== payloadDigest) {
+          throw new ExpertsError('EXPERT_IDEMPOTENCY_CONFLICT', 'Follow-up requestId was already used with a different payload');
+        }
+      }
       await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
 
       // 3. Final serialized re-verification in the preference boundary before outbound delivery (§3.6).
@@ -949,6 +949,7 @@ export function createDispatchService(ports) {
         }));
       }
     }
+    ports.assertScopeCurrent(scope.scopeEpoch, scope);
     return Object.freeze({ scopeEpoch: scope.scopeEpoch, items: Object.freeze(items) });
   }
 

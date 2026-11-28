@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
-function loadClientModule({ eventSources = [], fetchImpl = null } = {}) {
+function loadClientModule({ eventSources = [], fetchImpl = null, react = null } = {}) {
   let moduleDef = null;
   const previousWindow = globalThis.window;
   const previousFetch = globalThis.fetch;
@@ -41,7 +41,7 @@ function loadClientModule({ eventSources = [], fetchImpl = null } = {}) {
 
   const exported = moduleDef.factory((dep) => {
     if (dep === 'react') {
-      return {
+      return react ?? {
         createElement: (type, props, ...children) => ({ type, props, children }),
         useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
         useRef: (init) => ({ current: init }),
@@ -1912,3 +1912,258 @@ test('turn-finalized arriving while draftRecoveryListener is temporarily unregis
     restore();
   }
 });
+
+function mountReviewTaskCard(t, { initialTask, fetchImpl }) {
+  const state = [];
+  const refs = [];
+  const effects = [];
+  let stateIndex;
+  let refIndex;
+  let effectIndex;
+  let pendingEffects;
+  let renderAgain;
+  const react = {
+    createElement: (type, props, ...children) => ({ type, props, children }),
+    useState(initial) {
+      const index = stateIndex++;
+      if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial;
+      return [state[index], (update) => {
+        const next = typeof update === 'function' ? update(state[index]) : update;
+        if (!Object.is(state[index], next)) {
+          state[index] = next;
+          renderAgain = true;
+        }
+      }];
+    },
+    useRef(initial) {
+      const index = refIndex++;
+      return refs[index] ??= { current: initial };
+    },
+    useEffect(effect, deps) {
+      const index = effectIndex++;
+      const previous = effects[index];
+      if (previous && deps?.every((value, offset) => Object.is(value, previous.deps?.[offset]))) return;
+      pendingEffects.push(() => {
+        previous?.cleanup?.();
+        effects[index] = { deps, cleanup: effect() };
+      });
+    },
+  };
+  const eventSources = [];
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl, react });
+  let dispose;
+  t.after(() => {
+    for (const effect of effects) effect.cleanup?.();
+    dispose?.();
+    restore();
+  });
+  exported.apply({ effect(register) { dispose = register(); } });
+
+  return {
+    render(nextTask = initialTask) {
+      initialTask = nextTask;
+      let tree;
+      do {
+        stateIndex = refIndex = effectIndex = 0;
+        pendingEffects = [];
+        renderAgain = false;
+        tree = exported.ExpertTaskStatusCard({ initialTask });
+        for (const effect of pendingEffects) effect();
+      } while (renderAgain);
+      return tree;
+    },
+    emitReconciled(entry) {
+      eventSources[0].emit({ type: 'task-reconciled', ...entry });
+    },
+  };
+}
+
+function cardElement(tree, testId) {
+  if (!tree || typeof tree !== 'object') return null;
+  if (tree.props?.['data-testid'] === testId) return tree;
+  for (const child of tree.children ?? []) {
+    const found = cardElement(child, testId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function cardJson(status, body) {
+  return { ok: status >= 200 && status < 300, status, async json() { return body; } };
+}
+
+for (const deniedAt of ['status', 'result', 'status recheck']) {
+  test('PR #484 review: clears cached content when ' + deniedAt + ' denies access', async (t) => {
+    const initialTask = { taskId: 'task-a', requestId: 'request-a', status: 'completed', runGeneration: 1 };
+    const cached = {
+      runGeneration: 1,
+      summary: 'previous summary',
+      rawResult: 'previous raw result',
+      result: 'previous result',
+      sources: [{ authorized: true, title: 'previous source' }],
+      artifacts: [{ authorized: true, label: 'previous artifact' }],
+    };
+    let revoked = false;
+    let statusReads = 0;
+    let currentResult = cached;
+    const deny = (status) => cardJson(status, { error: { code: status === 401 ? 'EXPERT_AUTH_REVOKED' : 'EXPERT_ORG_FORBIDDEN' } });
+    const card = mountReviewTaskCard(t, {
+      initialTask,
+      async fetchImpl(url) {
+        if (url.endsWith('/tasks/task-a')) {
+          statusReads += 1;
+          if (revoked && deniedAt === 'status') return deny(401);
+          if (revoked && deniedAt === 'status recheck' && statusReads === 2) return deny(403);
+          return cardJson(200, { status: 'completed', runGeneration: 1 });
+        }
+        assert.ok(url.endsWith('/tasks/task-a/result'), url);
+        if (revoked && deniedAt === 'result') return deny(403);
+        if (revoked && deniedAt === 'status recheck') return cardJson(200, { ...cached, runGeneration: 2 });
+        return cardJson(200, currentResult);
+      },
+    });
+
+    await cardElement(card.render(), 'fexp-task-refresh').props.onClick();
+    cardElement(card.render(), 'fexp-raw-toggle').props.onClick();
+    assert.equal(cardElement(card.render(), 'fexp-raw-content')?.children[0], cached.rawResult);
+
+    revoked = true;
+    statusReads = 0;
+    await cardElement(card.render(), 'fexp-task-refresh').props.onClick();
+    const assertCleared = (tree) => {
+      for (const part of ['fexp-task-summary', 'fexp-task-result', 'fexp-task-sources', 'fexp-task-artifacts', 'fexp-raw-drawer']) {
+        assert.equal(cardElement(tree, part), null, part + ' must be removed after authorization is denied');
+      }
+    };
+    const denied = card.render();
+    assertCleared(denied);
+    assert.match(cardElement(denied, 'fexp-task-notice').children[0], /授权已撤销|无权访问/u);
+    assertCleared(card.render({ ...initialTask, ...cached }));
+
+    // A successful, authorized result fetch restores only the fresh projection.
+    revoked = false;
+    currentResult = { runGeneration: 1, rawResult: 'fresh raw result', result: 'fresh result' };
+    await cardElement(card.render(), 'fexp-task-refresh').props.onClick();
+    const recovered = card.render();
+    assert.equal(cardElement(recovered, 'fexp-task-result').children[0], 'fresh result');
+    assert.equal(cardElement(recovered, 'fexp-raw-toggle').props['aria-expanded'], false);
+    assert.equal(cardElement(recovered, 'fexp-raw-content'), null);
+  });
+}
+
+test('PR #484 review: a late refresh cannot roll a reconciled task back in the same generation', async (t) => {
+  const resultStarted = Promise.withResolvers();
+  const resultReply = Promise.withResolvers();
+  const initialTask = { taskId: 'task-a', requestId: 'request-a', status: 'waiting_user', runGeneration: 2 };
+  const card = mountReviewTaskCard(t, {
+    initialTask,
+    async fetchImpl(url) {
+      if (url.endsWith('/tasks/task-a/result')) {
+        resultStarted.resolve();
+        return resultReply.promise;
+      }
+      assert.ok(url.endsWith('/tasks/task-a'), url);
+      return cardJson(200, { status: 'waiting_user', runGeneration: 2 });
+    },
+  });
+
+  const refresh = cardElement(card.render(), 'fexp-task-refresh').props.onClick();
+  await resultStarted.promise;
+  card.emitReconciled({ ...initialTask, status: 'completed', result: 'authoritative result' });
+  // The late reply can arrive in the same event batch, before the reconciled state is rendered.
+  resultReply.resolve(cardJson(200, { runGeneration: 2, result: 'stale partial result' }));
+  await refresh;
+
+  const current = card.render();
+  assert.equal(current.props['data-task-status'], 'completed');
+  assert.equal(cardElement(current, 'fexp-task-result').children[0], 'authoritative result');
+  assert.equal(cardElement(current, 'fexp-followup-btn'), null);
+});
+
+for (const requestOnly of [false, true]) {
+  test('PR #484 review: discards manual reconcile after switching ' + (requestOnly ? 'request-only' : 'identified') + ' task cards', async (t) => {
+    const reply = Promise.withResolvers();
+    const card = mountReviewTaskCard(t, {
+      initialTask: { ...(requestOnly ? {} : { taskId: 'task-a' }), requestId: 'request-a', status: 'unknown', runGeneration: 1 },
+      async fetchImpl(url) {
+        assert.ok(url.endsWith('/tasks/by-request/request-a'), url);
+        return reply.promise;
+      },
+    });
+
+    const reconcile = cardElement(card.render(), 'fexp-task-reconcile').props.onClick();
+    const newTask = {
+      ...(requestOnly ? {} : { taskId: 'task-b' }),
+      requestId: 'request-b',
+      status: requestOnly ? 'unknown' : 'completed',
+      runGeneration: 1,
+      result: 'result for task B',
+    };
+    const switched = card.render(newTask);
+    const newAction = requestOnly ? 'fexp-task-reconcile' : 'fexp-task-refresh';
+    reply.resolve(cardJson(200, { taskId: 'task-a', status: 'failed', runGeneration: 1, result: 'result for task A' }));
+    await reconcile;
+
+    const current = card.render();
+    assert.equal(current.props['data-task-status'], newTask.status);
+    assert.equal(cardElement(current, 'fexp-task-result').children[0], 'result for task B');
+    assert.match(JSON.stringify(current), /请求号：request-b/u);
+    assert.doesNotMatch(JSON.stringify(current), /任务号：task-a/u);
+    assert.equal(cardElement(switched, newAction).props.disabled, false, 'the old task must release the card actions');
+  });
+}
+
+for (const action of ['followup', 'cancel']) {
+  test('PR #484 review: discards a late ' + action + ' after switching tasks', async (t) => {
+    const reply = Promise.withResolvers();
+    const card = mountReviewTaskCard(t, {
+      initialTask: { taskId: 'task-a', requestId: 'request-a', status: 'waiting_user', runGeneration: 1 },
+      async fetchImpl(url) {
+        assert.ok(url.endsWith(action === 'followup' ? '/tasks/task-a/followups' : '/tasks/task-a/cancel'), url);
+        return reply.promise;
+      },
+    });
+
+    const followupInput = (tree) => cardElement(tree, 'fexp-followup-box').children[0];
+    if (action === 'followup') followupInput(card.render()).props.onChange({ target: { value: 'draft for task A' } });
+    const actionId = action === 'followup' ? 'fexp-followup-btn' : 'fexp-task-cancel';
+    const pending = cardElement(card.render(), actionId).props.onClick();
+    const taskB = card.render({ taskId: 'task-b', requestId: 'request-b', status: 'waiting_user', runGeneration: 1 });
+    followupInput(taskB).props.onChange({ target: { value: 'draft for task B' } });
+
+    if (action === 'followup') reply.reject(new Error('response lost'));
+    else reply.resolve(cardJson(200, { status: 'cancelled', runGeneration: 1, cancelRequested: true }));
+    await pending;
+
+    const current = card.render();
+    assert.equal(current.props['data-task-status'], 'waiting_user');
+    assert.match(JSON.stringify(current), /请求号：request-b/u);
+    assert.equal(followupInput(current).props.value, 'draft for task B');
+    assert.equal(cardElement(current, 'fexp-task-notice'), null);
+  });
+}
+
+for (const automatic of [true, false]) {
+  test('PR #484 review: first dispatch has an explicit inaccessible state after ' + (automatic ? 'automatic' : 'manual') + ' notFound', async (t) => {
+    const calls = [];
+    const card = mountReviewTaskCard(t, {
+      initialTask: { requestId: 'request-first', status: 'unknown' },
+      async fetchImpl(url, init) {
+        calls.push([url, init?.method]);
+        return cardJson(404, { error: { code: 'EXPERT_TASK_NOT_FOUND' } });
+      },
+    });
+
+    const pending = card.render();
+    assert.equal(pending.props['data-task-status'], 'unknown');
+    if (automatic) card.emitReconciled({ requestId: 'request-first', notFound: true, status: 'not_found' });
+    else await cardElement(pending, 'fexp-task-reconcile').props.onClick();
+
+    const current = card.render();
+    assert.equal(current.props['data-task-status'], 'not_found');
+    assert.match(cardElement(current, 'fexp-task-status-badge').children[0], /不可访问/u);
+    assert.match(cardElement(current, 'fexp-task-notice').children[0], /未找到.*无权查看/u);
+    assert.equal(cardElement(current, 'fexp-followup-btn'), null);
+    assert.deepEqual(calls, automatic ? [] : [['/api/forge-experts/tasks/by-request/request-first', 'GET']]);
+  });
+}
