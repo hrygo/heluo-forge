@@ -62,6 +62,7 @@ import {
   buildConfig,
   parseEnvConfig,
   planDigest,
+  readConfigFile,
   resolveBundleConfig,
   SUPPORTED_PLATFORMS,
 } from './lib/private-bundle.mjs';
@@ -168,8 +169,13 @@ export function parseArguments(argv) {
  */
 export function resolveEmployeeConfig({ config, configPath, env } = {}) {
   if (config !== undefined) return resolveBundleConfig({ config, allowSecret: true });
-  if (env !== undefined) return buildConfig(parseEnvConfig(configTextFromEnv(env), { allowSecret: true }));
-  return resolveBundleConfig({ configPath, allowSecret: true });
+  const text = env !== undefined ? configTextFromEnv(env) : readConfigFile(resolve(configPath));
+  const entries = parseEnvConfig(text, { allowSecret: true });
+  // Employee packages target the enterprise IAM's confirmed work-number claim.
+  if (!entries.some(({ key }) => key === 'HELUO_IAM_PROFILE_FIELDS')) {
+    entries.push({ key: 'HELUO_IAM_PROFILE_FIELDS', value: 'workNo=employeeNumber' });
+  }
+  return buildConfig(entries);
 }
 
 function readReleaseManifest(path) {

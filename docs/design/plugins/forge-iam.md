@@ -339,6 +339,8 @@ IAM 回函给出的轮换生效窗口最长为两分钟，既发访问令牌按�
 | `exclusiveServices` | string[] | `['deepseekAccount']` | 否 | 必须保持缺席的宿主服务名列表；命中即判 `exclusive-violation` 并告警具体服务名 |
 | `profileFields` | object | 空 | 否 | UserInfo 字段映射，仅接受 `workNo`/`name` 键，值为 claim 名 token；空表示不取画像 |
 
+Host 插件通过 `ctx.iam.getIdentityProfile()` 读取当前授权已加载的 UserInfo 字段。恢复已有登录后，`ctx.iam.resolveIdentityProfile()` 按需读取工号等已配置字段。同一授权的并发读取共用一次请求，登录失效或资料不可用时返回 `undefined`。
+
 授权请求恒定携带 `code_challenge` 与 `code_challenge_method=S256`；`pkce`、`pkceMethod`、`codeChallengeMethod`、`disablePkce` 一律按禁止配置项处理，不能通过配置关闭或降级。2026-11-23 答复确认 `S256` 可正常发码、`plain` 与 `S256` 均可用且不强制，并说明**省略该参数时按 `plain` 处理**；因此参数必须显式携带，不能依赖默认值。本实现固定使用 S256，不提供 `plain` 降级。`redirect_uri` 不受服务端校验后，S256 是授权码被转投时唯一有效的防护，见 ADR-33。
 
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
@@ -1143,12 +1145,12 @@ flowchart TD
 | 11 | 刷新令牌不可撤销的用户端文案与审计字段呈现规范 | 平台组 | 保证界面与审计如实呈现“访问令牌已撤销 / 刷新令牌自然过期” |
 | 12 | 机密客户端的凭据预置与轮换 | 平台组 + IAM | 核对目标终端预置、服务端轮换生效、旧会话拒绝和新登录 |
 | 13 | 实际签发响应是否与书面基线一致（AT 7200 秒、RT 滑动 7300 秒），以及是否返回 `refresh_expires_in` | IAM 团队 + 平台组 | 书面基线已由 6.0.3 反馈给出，本条只核验真实响应与休眠、断网恢复；调整提前量时按[后台续期时机与恢复余量](#731-后台续期时机与恢复余量)复核恢复目标 |
-| 14 | UserInfo 工号与姓名字段的最终口径：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法 | IAM 团队 | 取较新日期的 `work_no`/`pinyin` 为默认候选映射，联调确认前不把任一字段名写入契约；统一账户页展示名与审计主体显示名 |
+| 14 | 企业 UserInfo 字段为 `employeeNumber`（工号）、`displayName`（姓名）与 `giveName`（OA 账号） | IAM 团队 | 字段口径见 [issue #160](https://github.com/hrygo/heluo-forge/issues/160)。实际响应脱敏样例、账户页与审计主体展示待联调留证 |
 | 15 | 回调前缀匹配的边界：合法前缀限定为 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均被拒。大小写、尾斜杠与非数字端口未验 | IAM 团队 | 2026-11-23 答复：OIDC 授权流程不校验 `redirect_uri`，OAuth 授权流程校验。边界改为客户端职责，见 ADR-33；OAuth 流程的拒绝样例仍未提供，转 FB-IAM-09 |
 | 16 | PKCE 参数细节：2026-11-23 答复为 S256 可正常发码、`plain` 与 `S256` 均可用且不强制、省略参数按 `plain`、未登记参数静默忽略；厂商回函所称“不支持 PKCE”与实测不符 | IAM 团队 + 平台组 | 2026-11-23 答复：S256 可正常发码，省略 `code_challenge_method` 按 `plain`。参数显式携带、不降级；仍待我方一次真实往返留证 |
 | 17 | 网关身份头名与 consumer 类型的配置化，以及切换为 `Authorization: Bearer` 的适配边界 | 平台组 | 已实现：`iamTokenHeader`/`consumerTypeHeader`/`consumerType` 三键配置化，默认值保持现值；改为 `Authorization: Bearer` 的适配随 AIGS 立项 |
 | 18 | 官方旁路环境变量（如 `DEEPSEEK_API_KEY`）的运行期检测与处置口径 | 平台组 | 已实现检测与告警（`detectEnvBypass`、`formatEnvBypassWarning`）；阻断未实现，须用户裁决，不能以关闭检测换取可用性 |
-| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 已实现：插件配置 `profileFields` 与私版 `HELUO_IAM_PROFILE_FIELDS` 均落为同一映射，仅接受 `workNo`/`name`；未配置时不读取 UserInfo。字段名仍等第 14 项答复 |
+| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 私版 `HELUO_IAM_PROFILE_FIELDS` 写入插件配置 `profileFields`。统一制包默认映射 `workNo=employeeNumber`，显式配置优先 |
 | 20 | 运行期独占断言的覆盖面扩展：从单一 `deepseekAccount` 服务到装配可见的官方行结论 | 平台组 | 已实现：`exclusiveServices` 列表化（默认 `['deepseekAccount']`），企业可把官方行对应服务登记进去；未登记的行仍由装配期断言覆盖 |
 
 ### 12.2 已审定不采用的设计选项

@@ -328,6 +328,7 @@ jobs:
       - name: Build the employee package
         env:
           HELUO_IAM_CLIENT_ID: \${{ secrets.HELUO_IAM_CLIENT_ID }}
+          HELUO_IAM_PROFILE_FIELDS: \${{ secrets.HELUO_IAM_PROFILE_FIELDS }}
           HELUO_IAM_CLIENT_SECRET: \${{ secrets.HELUO_IAM_CLIENT_SECRET }}
         run: node scripts/build-employee-package.mjs
       - name: Attach to the draft Release

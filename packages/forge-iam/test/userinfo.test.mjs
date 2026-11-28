@@ -69,7 +69,34 @@ test('no field mapping means no UserInfo request', async (t) => {
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
+  assert.equal(await service.resolveIdentityProfile(), undefined);
   assert.equal(mock.counts.userInfo, 0);
+});
+
+test('a restored login retrieves the configured work number once for concurrent callers', async (t) => {
+  const mock = await startMockOidc();
+  const credentials = new MemoryCredentials();
+  const config = configFor(mock, { profileFields: { workNo: 'employeeNumber' } });
+  const first = createIamService(config, { credentials });
+  const restored = createIamService(config, { credentials });
+  t.after(async () => {
+    await first.dispose();
+    await restored.dispose();
+    await mock.close();
+  });
+
+  assert.equal((await signIn(first)).state, 'ready');
+  assert.deepEqual(first.getIdentityProfile(), { workNo: '10001234' });
+  assert.equal(mock.counts.userInfo, 1);
+  await first.dispose();
+
+  assert.equal((await restored.syncFromStore()).state, 'ready');
+  assert.equal(restored.getIdentityProfile(), undefined);
+  const profiles = await Promise.all([restored.resolveIdentityProfile(), restored.resolveIdentityProfile()]);
+  assert.deepEqual(profiles, [{ workNo: '10001234' }, { workNo: '10001234' }]);
+  assert.deepEqual(await restored.resolveIdentityProfile(), { workNo: '10001234' });
+  assert.equal(mock.counts.userInfo, 2);
+  assert.equal(JSON.stringify(restored.getSession()).includes('workNo'), false);
 });
 
 test('explicit login and panel polling preserve in-flight optional UserInfo discovery', { timeout: 4000 }, async (t) => {
@@ -138,10 +165,12 @@ test('late UserInfo for the previous access token is discarded after the same lo
   });
   assert.equal((await signIn(service)).state, 'ready');
   await profileRequest.promise;
+  const pendingProfile = service.resolveIdentityProfile();
   const { grant } = await store.read();
   await store.write({ ...grant, accessToken: 'synthetic-next-access', refreshToken: 'synthetic-next-refresh' });
   assert.equal((await service.syncFromStore()).state, 'ready');
   profileResponse.resolve(Response.json({ work_no: 'first-access-profile' }));
+  assert.equal(await pendingProfile, undefined);
   await setImmediate();
   assert.equal(service.getIdentityProfile(), undefined);
 });
