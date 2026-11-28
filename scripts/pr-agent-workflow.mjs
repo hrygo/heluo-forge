@@ -1,15 +1,16 @@
-import { appendFile, readFile } from 'node:fs/promises';
+import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { publishApproval, readApprovalReceipt, reconcileMainApprovals, recordWorkflowWithdrawal } from './pr-agent-approval.mjs';
 import { verifyReviewCoverage, verifyReviewFileModes } from './pr-agent-coverage.mjs';
-import { buildReviewComments, getReviewCommentMarker } from './pr-agent-review-comments.mjs';
+import { buildReviewComments, getReviewCommentMarker, reviewPriority, withoutResolvedDuplicates } from './pr-agent-review-comments.mjs';
+import { baselineKey, captureReviewContext, hasReviewIdentity, openBlockers, readReviewThreads,
+  reviewFindingLimit, reviewMarker, reviewReceipt } from './pr-agent-review-context.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
 import { isBranch, isSha, listReviews, pages, targetTip, validId } from './pr-agent-github.mjs';
 
 const allowedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 const signalPath = '.github/workflows/pr-agent-signal.yml';
 const summaryMarker = '<!-- pr-agent:describe:persistent -->';
-const reviewMarker = '<!-- pr-agent:review:full -->';
-const reviewFindingLimit = 4; // PR_REVIEWER__NUM_MAX_FINDINGS in the workflow.
 const diffMediaType = 'application/vnd.github.diff';
 const diffResponseTypes = new Set([diffMediaType, 'application/vnd.github.v3.diff']);
 
@@ -44,7 +45,9 @@ function githubClient(env, token = env.GH_TOKEN, scopeSignal) {
     api, repository, serverUrl: env.GITHUB_SERVER_URL,
     withSignal: (signal) => githubClient(env, token, signal),
     get: (path, label) => request('GET', path, undefined, label),
-    getDiff: (path) => request('GET', path, undefined, 'Cannot read raw PR diff', { accept: diffMediaType }),
+    getDiff: (path) => request('GET', path, undefined, 'Cannot read raw diff', { accept: diffMediaType }),
+    graphql: (query, variables) => request('POST', '', { query, variables }, 'Cannot read GitHub review threads',
+      { base: env.GITHUB_GRAPHQL_URL }),
     getAccount: (login) => request('GET', `/${encodeURIComponent(login)}`, undefined,
       'Cannot verify the GitHub approval identity', { base: usersApi }),
     getInstallationRepositories: () => request('GET', '/installation/repositories?per_page=2', undefined,
@@ -99,13 +102,25 @@ function reviewCanBeApproved(review) {
   if (review.merge_recommendation.trim() !== 'no_concerns_found' ||
       typeof review.security_concerns !== 'string' || review.security_concerns.trim() !== 'No' ||
       !Array.isArray(issues) || issues.length >= reviewFindingLimit) return false;
-  return issues.every((issue) => {
-    if (typeof issue?.issue_header !== 'string' || typeof issue.issue_content !== 'string' || !issue.issue_content.trim()) {
-      return false;
-    }
-    const heading = /^\[P3\][ \t]+([^\r\n]+)$/u.exec(issue.issue_header.trim());
-    return heading && !/\[P[0-9]+\]/iu.test(heading[1]);
-  });
+  return issues.every((issue) => reviewPriority(issue) === 'P3' &&
+    typeof issue.issue_content === 'string' && Boolean(issue.issue_content.trim()));
+}
+
+function contextRevision(github, env, prNumber, head, base, baseRef) {
+  const { GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: runAttempt, PR_AGENT_COVERAGE_INVOCATION: invocation } = env;
+  if (!/^[1-9]\d*$/u.test(runId ?? '') || !/^[1-9]\d*$/u.test(runAttempt ?? '') ||
+      !['initial', 'retry'].includes(invocation)) throw new Error('Invalid review context invocation');
+  return { repository: github.repository, prNumber, head, base, baseRef, runId, runAttempt, invocation };
+}
+
+async function readContext(path, revision) {
+  const context = JSON.parse(await readFile(path, 'utf8'));
+  if (context?.version !== 1 || Object.entries(revision).some(([key, value]) => context[key] !== value) ||
+      context.receipt !== reviewReceipt(revision) || !['full', 'incremental'].includes(context.mode) ||
+      (context.mode === 'incremental' && (!isSha(context.previousHead) || !Array.isArray(context.files)))) {
+    throw new Error('Invalid captured review context');
+  }
+  return context;
 }
 
 async function readReviewCoverage(path) {
@@ -215,9 +230,16 @@ async function capture(github, env, scope, event) {
     throw new Error('Use /describe or /describe_pr without arguments. Manual summary budgets are fixed.');
   }
   const upstreamInline = request.name === 'review' && Boolean(request.args);
+  const contextPath = usesNativeReview(scope) ? env.PR_AGENT_REVIEW_CONTEXT_PATH : undefined;
+  if (contextPath) {
+    const context = await captureReviewContext(github, contextRevision(github, env, prNumber, head, base, baseRef), { automatic });
+    await writeFile(contextPath, JSON.stringify(context), { flag: 'wx' });
+    console.log(context.mode === 'incremental' ? `Reviewing the patch since ${context.previousHead}.` : 'Reviewing the complete PR diff.');
+  }
   await appendFile(env.GITHUB_OUTPUT, [
     `head=${head}`, `base=${base}`, `base_ref=${baseRef}`, `started=${new Date().toISOString()}`,
-    `manual_summary=${manualSummary}`, `upstream_inline=${upstreamInline}`, '',
+    `manual_summary=${manualSummary}`, `upstream_inline=${upstreamInline}`, `finding_limit=${reviewFindingLimit}`,
+    `review_context=${contextPath ?? ''}`, '',
   ].join('\n'));
 }
 
@@ -292,11 +314,15 @@ async function validateReview(github, env, scope) {
   }
 
   const nativeReview = usesNativeReview(scope);
+  const context = nativeReview && env.PR_AGENT_REVIEW_CONTEXT_PATH
+    ? await readContext(env.PR_AGENT_REVIEW_CONTEXT_PATH, contextRevision(github, env, prNumber, head, base, ref))
+    : undefined;
+  const deltaFiles = context?.mode === 'incremental' ? context.files : undefined;
   const checkApprovals = nativeReview && env.PR_AGENT_APPROVAL_CONFIGURED === 'true' &&
     validId(pr.user?.id) && pr.user.type === 'User';
   const canCreateApproval = env.PR_AGENT_AUTO_APPROVE === 'true' && !pr.draft;
   const favorable = ref === 'main' && reviewCanBeApproved(review);
-  const eligible = checkApprovals && canCreateApproval && favorable && validId(pr.changed_files);
+  const eligible = checkApprovals && canCreateApproval && favorable && validId(pr.changed_files) && !deltaFiles;
 
   async function emitApprovalRevision(allowApproval) {
     if (!checkApprovals) return 'no-work';
@@ -329,16 +355,18 @@ async function validateReview(github, env, scope) {
     return 'emitted';
   }
 
-  if (automatic) {
+  if (automatic || context) {
     const started = Date.parse(env.REVIEW_STARTED_AT ?? '');
     if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
-    const markers = new Set([summaryMarker, reviewMarker]);
+    const markers = new Set(automatic ? [summaryMarker, reviewMarker] : [reviewMarker]);
     const earliest = Math.floor(started / 1000) * 1000;
     try {
       for await (const comment of pages(github, `/issues/${prNumber}/comments`, 'Cannot verify PR-Agent comments')) {
         if (comment?.user?.login !== 'github-actions[bot]' || typeof comment.body !== 'string' ||
             !(Date.parse(comment.updated_at) >= earliest)) continue;
-        for (const marker of markers) if (comment.body.includes(marker)) markers.delete(marker);
+        if (comment.body.includes(summaryMarker)) markers.delete(summaryMarker);
+        if (context ? hasReviewIdentity(comment.body) && comment.body.trimEnd().endsWith(`\n${context.receipt}`)
+          : comment.body.includes(reviewMarker)) markers.delete(reviewMarker);
         if (!markers.size) break;
       }
       if (markers.size) throw new Error('PR-Agent summary and review were not both refreshed for this run');
@@ -357,37 +385,50 @@ async function validateReview(github, env, scope) {
 
   // Options on a manual review are handled by the pinned upstream runner.
   let verifiedCoverage = false;
+  let confirmBaseline = false;
   let inlineCommentStatus = 'complete';
   if (nativeReview) {
     const issues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
-    const coverage = eligible && await readReviewCoverage(env.PR_AGENT_COVERAGE_PATH);
-    if (issues.length || coverage) {
-      const files = [];
+    const priorities = issues.map(reviewPriority);
+    const blockers = issues.filter((_, index) => priorities[index] === 'P0' || priorities[index] === 'P1');
+    const coverage = (eligible || context) && await readReviewCoverage(env.PR_AGENT_COVERAGE_PATH);
+    const threads = context?.threads && await readReviewThreads(github.withSignal(AbortSignal.timeout(12_000)), context)
+      .catch(() => null);
+    const files = [];
+    if (blockers.length || (coverage && !deltaFiles)) {
       try {
         for await (const file of pages(github, `${prPath}/files`, 'Cannot read PR files')) files.push(file);
       } catch {
         files.length = 0;
-        if (issues.length) inlineCommentStatus = 'incomplete';
+        if (blockers.length) inlineCommentStatus = 'incomplete';
         console.log('::warning::Unable to read complete PR files for inline comments or approval coverage.');
       }
-      const textCovered = Boolean(coverage) && verifyReviewCoverage(coverage, {
+    }
+    const textCovered = Boolean(coverage) && verifyReviewCoverage(coverage, {
         repository: github.repository, prNumber, head, base, baseRef: ref, review, files,
-        changedFileCount: pr.changed_files, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
-        invocation: env.PR_AGENT_COVERAGE_INVOCATION,
-      });
-      const comments = buildReviewComments({ issues, files, head });
-      if (comments.length) {
-        inlineCommentStatus = await publishReviewComments(github, prPath, head, comments, currentRevision);
-        if (inlineCommentStatus === 'revision-changed') return;
-      }
-      if (textCovered) {
-        try {
-          verifiedCoverage = verifyReviewFileModes(await github.getDiff(prPath), files);
-        } catch {
-          console.log('::warning::Unable to verify file modes for automatic approval.');
-        }
+        ...(deltaFiles ? { files: deltaFiles, changedFileCount: deltaFiles.length, previousHead: context.previousHead }
+          : { changedFileCount: pr.changed_files }),
+        runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT, invocation: env.PR_AGENT_COVERAGE_INVOCATION,
+    });
+    const candidates = buildReviewComments({ issues: blockers, files, head, base, deltaFiles });
+    const comments = withoutResolvedDuplicates(candidates, threads ?? [], head, base);
+    if (comments.length) {
+      inlineCommentStatus = await publishReviewComments(github, prPath, head, comments, currentRevision);
+      if (inlineCommentStatus === 'revision-changed') return;
+    }
+    if (textCovered && !deltaFiles) {
+      try {
+        verifiedCoverage = verifyReviewFileModes(await github.getDiff(prPath), files);
+      } catch {
+        console.log('::warning::Unable to verify file modes for complete review coverage.');
       }
     }
+    const recommendation = review.merge_recommendation.trim();
+    confirmBaseline = Boolean(context && (deltaFiles ? textCovered : verifiedCoverage) && threads &&
+      isDeepStrictEqual(openBlockers(threads), openBlockers(context.threads)) &&
+      Array.isArray(review.key_issues_to_review) && priorities.every(Boolean) && issues.length < reviewFindingLimit &&
+      comments.length === blockers.length && review.security_concerns?.trim?.() === 'No' &&
+      (recommendation === 'no_concerns_found' || (recommendation === 'changes_required' && blockers.length > 0)));
   }
   let publicationFailed = inlineCommentStatus === 'incomplete';
   if (!favorable || (verifiedCoverage && !publicationFailed)) {
@@ -399,8 +440,12 @@ async function validateReview(github, env, scope) {
   }
   if (publicationFailed) {
     await appendFile(env.GITHUB_OUTPUT, 'publication_failed=true\n');
-  } else if (automatic) {
-    await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
+  } else {
+    if (confirmBaseline) {
+      if (!await currentRevision()) return;
+      await appendFile(env.GITHUB_OUTPUT, `baseline_key=${baselineKey(context)}\n`);
+    }
+    if (automatic) await appendFile(env.GITHUB_OUTPUT, `review_key=${revisionKey(base, ref)}\n`);
   }
 }
 

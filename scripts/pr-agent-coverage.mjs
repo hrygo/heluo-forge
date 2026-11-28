@@ -12,8 +12,13 @@ function isObject(value) {
 }
 
 function matchesInvocation(proof, options) {
-  const { repository, prNumber, head, base, baseRef, runId, runAttempt, invocation, review } = options;
-  return isObject(proof) && proof.version === 1 &&
+  const { repository, prNumber, head, base, baseRef, runId, runAttempt, invocation, review, previousHead } = options;
+  if (!isObject(proof)) return false;
+  const scopeMatches = previousHead === undefined
+    ? proof.version === 1 && !Object.hasOwn(proof, 'mode') && !Object.hasOwn(proof, 'previousHead')
+    : proof.version === 2 && proof.mode === 'incremental' && isSha(previousHead) &&
+      previousHead !== head && proof.previousHead === previousHead;
+  return scopeMatches &&
     typeof runId === 'string' && positiveDecimal.test(runId) && proof.runId === runId &&
     typeof runAttempt === 'string' && positiveDecimal.test(runAttempt) && proof.runAttempt === runAttempt &&
     ['initial', 'retry'].includes(invocation) && proof.invocation === invocation &&

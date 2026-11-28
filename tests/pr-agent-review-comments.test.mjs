@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildReviewComments, getReviewCommentMarker } from '../scripts/pr-agent-review-comments.mjs';
+import { buildReviewComments, getReviewCommentMarker, withoutResolvedDuplicates } from '../scripts/pr-agent-review-comments.mjs';
 
 const head = 'a'.repeat(40);
 const modified = {
@@ -23,6 +23,40 @@ function finding(header, overrides = {}) {
 function locations(comments) {
   return comments.map(({ path, line, side }) => ({ path, line, side }));
 }
+
+test('resolved thread suppression requires unchanged right coordinates, author evidence and the same path', () => {
+  const changed = { ...modified, patch: '@@ -11,3 +11,3 @@\n-before\n+after\n kept\n-other\n+changed' };
+  const issues = [finding('[P1] [RIGHT] Same cause'), finding('[P1] [LEFT] Independent removal'),
+    finding('[P1] [RIGHT] A second changed row', { start_line: 13, end_line: 13 })];
+  const comments = buildReviewComments({ issues, files: [changed], head });
+  assert.equal(comments.length, 3);
+  const thread = { path: modified.filename, side: 'RIGHT', start: 11, end: 11, originalHead: head,
+    resolved: true, outdated: false, lastReply: 'Previously verified.' };
+  assert.deepEqual(withoutResolvedDuplicates(comments, [thread], head), comments.slice(1));
+  for (const override of [{ outdated: true }, { resolved: false }, { lastReply: '' },
+    { path: 'different-file.js' }, { originalHead: 'c'.repeat(40) }]) {
+    assert.deepEqual(withoutResolvedDuplicates(comments, [{ ...thread, ...override }], head), comments);
+  }
+});
+
+test('delta findings select only matching new rows even when a full hunk includes earlier changes', () => {
+  const full = { ...modified, patch: '@@ -11,3 +11,3 @@\n-before\n+after\n kept\n-other\n+changed' };
+  const delta = { ...modified, patch: '@@ -13 +13 @@\n-original\n+changed' };
+  const issues = [finding('[P1] [RIGHT] Range includes an older row', { end_line: 13 }),
+    finding('[P1] [LEFT] Previous-head coordinates', { end_line: 13 })];
+  assert.deepEqual(locations(buildReviewComments({ issues, files: [full], head, deltaFiles: [delta] })),
+    [{ path: modified.filename, line: 13, side: 'RIGHT' }]);
+});
+
+test('a resolved left comment needs a matching known base as well as the same head', () => {
+  const base = 'd'.repeat(40);
+  const [comment] = buildReviewComments({ issues: [finding('[P1] [LEFT] Old-side evidence')], files: [modified], head, base });
+  const thread = { path: modified.filename, side: 'LEFT', start: 11, end: 11, originalHead: head, originalBase: base,
+    resolved: true, outdated: false, lastReply: 'Verified within this revision.' };
+  assert.match(comment.body, /heluo-forge-pr-agent-comment-base:v1/u);
+  assert.deepEqual(withoutResolvedDuplicates([comment], [thread], head, base), []);
+  assert.deepEqual(withoutResolvedDuplicates([comment], [thread], head, 'e'.repeat(40)), [comment]);
+});
 
 test('anchors explicitly sided findings to different diff sides at the same line number', () => {
   const issues = [finding('[P1] [LEFT] Keep the previous behavior'), finding('[P2] [RIGHT] Check the new behavior')];

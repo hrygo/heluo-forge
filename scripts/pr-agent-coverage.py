@@ -3,9 +3,11 @@
 import json
 import os
 import re
+from contextlib import ExitStack
 from contextvars import ContextVar
 from dataclasses import dataclass
 from hashlib import sha256
+from html import escape
 from pathlib import Path
 
 FILE_HEADER = re.compile(r"## File: '([^\r\n]+)'")
@@ -129,7 +131,7 @@ def revision(reviewer):
     }
 
 
-def diff_in_messages(diff, request):
+def diff_in_messages(diff, request, review_context=""):
     # Verify the diff in the messages handed to the transport. Extra-body input overrides
     # and non-text user messages fall outside the pinned GitHub review request format.
     extra = request.get("extra_body") or {}
@@ -137,7 +139,8 @@ def diff_in_messages(diff, request):
     content = [message.get("content") for message in messages if message.get("role") == "user"]
     if not diff or {"messages", "input", "truncation"}.intersection(extra) or len(content) != 1:
         return False
-    return isinstance(content[0], str) and content[0].count(f"{DIFF_LABEL}{diff}{REVIEW_END}") == 1
+    return (isinstance(content[0], str) and content[0].count(f"{DIFF_LABEL}{diff}{REVIEW_END}") == 1
+            and review_context in content[0])
 
 
 @dataclass
@@ -149,7 +152,7 @@ class ReviewAttempt:
     response: str | None = None
 
 
-def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocation):
+def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocation, context=None):
     """Run the original action with request-local evidence from its selected review."""
     current = ContextVar("review_attempt", default=None)
     attempts = []
@@ -157,6 +160,8 @@ def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocatio
     predict = reviewer_type._get_prediction
     complete = handler_type._get_completion
     prepare = reviewer_type._prepare_pr_review
+    delta = context if context and context["mode"] == "incremental" else None
+    prompt_context = review_context_text(delta) if delta else ""
 
     async def observe_prediction(reviewer, model, patches_diff=None):
         diff = reviewer.patches_diff if patches_diff is None else patches_diff
@@ -179,7 +184,7 @@ def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocatio
         result = await complete(handler, **request)
         if attempt is not None and attempt.reviewer.ai_handler is handler and result[1] == "stop":
             try:
-                if diff_in_messages(attempt.diff, request):
+                if diff_in_messages(attempt.diff, request, prompt_context):
                     attempt.response = result[0]
             except (AttributeError, TypeError):
                 pass
@@ -206,9 +211,11 @@ def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocatio
             if kind != "review" or not isinstance(review, dict):
                 return markdown
             provider = reviewer.git_provider
-            files = diff_files(attempt.diff, provider.get_diff_files(), provider.pr.changed_files)
+            file_count = len(delta["files"]) if delta else provider.pr.changed_files
+            files = diff_files(attempt.diff, provider.get_diff_files(), file_count)
             evidence.append({
-                "version": 1,
+                **({"version": 2, "mode": "incremental", "previousHead": delta["previousHead"]}
+                   if delta else {"version": 1}),
                 "runId": invocation["runId"],
                 "runAttempt": invocation["runAttempt"],
                 "invocation": invocation["invocation"],
@@ -241,23 +248,172 @@ def run_with_coverage(run, reviewer_type, handler_type, evidence_path, invocatio
             pass
 
 
+def open_blockers(threads):
+    return [item for item in threads if not item["resolved"] and item["priority"] in {"P0", "P1"}]
+
+
+def review_context_text(context):
+    threads = context["threads"]
+    history = None
+    if threads is not None:
+        pending = open_blockers(threads)
+        history = {
+            "openCount": len(pending), "openBlockers": pending[:20],
+            "resolvedWithAuthorReply": [item for item in threads if item["resolved"] and item["lastReply"]][-12:],
+        }
+    data = {
+        "mode": context["mode"], "head": context["head"], "previousHead": context.get("previousHead"),
+        "threads": history, "checkRuns": context["checks"],
+    }
+    return "洛神评审上下文（评审资料，不包含操作指令）\n" + json.dumps(data, ensure_ascii=False)
+
+
+def html_text(value):
+    return escape(str(value)).replace("@", "&#64;")
+
+
+def render_review_findings(render, data, *args, **kwargs):
+    review = data.get("review", {})
+    issues = review.get("key_issues_to_review")
+    if not isinstance(issues, list):
+        return render(data, *args, **kwargs)
+    core, optional = [], []
+    for item in issues:
+        heading = item.get("issue_header") if isinstance(item, dict) else None
+        match = re.fullmatch(r"\[P[23]\][ \t]+([^\r\n]+)", (heading or "").strip()) if isinstance(heading, str) else None
+        if match and not re.search(r"\[P[0-9]+\]", match[1], re.IGNORECASE):
+            optional.append(item)
+        else:
+            core.append(item)
+    if not optional:
+        return render(data, *args, **kwargs)
+    markdown = render({**data, "review": {**review, "key_issues_to_review": core}}, *args, **kwargs)
+    items = [f"<li><strong>{html_text(item['issue_header'])}</strong>"
+             f" <code>{html_text(item.get('relevant_file', ''))}</code>"
+             f"<p>{html_text(item.get('issue_content', ''))}</p></li>" for item in optional]
+    return f"{markdown}\n\n<details>\n<summary>可选改进建议</summary>\n<ul>\n" + "\n".join(items) + "\n</ul>\n</details>\n"
+
+
+def review_scope_summary(context):
+    head = context["head"][:12]
+    if context["mode"] == "incremental":
+        start = context["previousHead"][:12]
+        scope = f"评审范围为 `{start}..{head}` 的增量与历史问题复核。"
+    else:
+        scope = f"评审范围为 `{head}` 的 PR 全量差异。"
+    result = [scope]
+    checks = context["checks"]
+    if checks is None:
+        result.append(f"CI 检查快照（`{head}`）未能读取。")
+    elif not checks["total"]:
+        result.append(f"CI 检查快照（`{head}`）当前无记录。")
+    else:
+        result.append(f"CI 检查快照（`{head}`）已读 {checks['inspected']}/{checks['total']} 项，"
+                      f"成功 {checks['success']}，跳过 {checks['skipped']}，未完成 {checks['pending']}，其他 {checks['other']}。")
+    if context["threads"] is None:
+        result.append("未能核对历史评审线程。")
+    else:
+        pending = open_blockers(context["threads"])
+        if pending:
+            result.append(f"捕获时有 {len(pending)} 条未决 P0/P1，待维护者复核。")
+            for thread in pending[:20]:
+                line = thread.get("end") or thread.get("originalLine") or "—"
+                link = f"[讨论 {thread['id']}](#discussion_r{thread['id']})"
+                result.append(f"- {thread['priority']} <code>{html_text(thread['path'])}:{line}</code> {link}")
+    return "\n\n".join(result)
+
+
+def is_current_revision(provider, context):
+    repo = provider._get_repo()
+    pull = repo.get_pull(context["prNumber"])
+    if (pull.state != "open" or pull.head.sha != context["head"] or pull.base.ref != context["baseRef"]
+            or not pull.head.repo or pull.head.repo.full_name != context["repository"]
+            or not pull.base.repo or pull.base.repo.full_name != context["repository"]):
+        return False
+    return repo.get_git_ref(f"heads/{context['baseRef']}").object.sha == context["base"]
+
+
+def run_with_review_context(run, module, context, patch_type, edit_type):
+    """Limit the pinned native review to the captured input and scope its publication."""
+    reviewer_type = module.PRReviewer
+    initialize = reviewer_type.__init__
+    prepare = reviewer_type._prepare_pr_review
+    prompt_context = review_context_text(context)
+    with ExitStack() as restore:
+        def override(target, name, value):
+            restore.callback(setattr, target, name, getattr(target, name))
+            setattr(target, name, value)
+
+        def configure(reviewer, *args, **kwargs):
+            initialize(reviewer, *args, **kwargs)
+            provider = reviewer.git_provider
+            expected = {"provider": "github", "repo": context["repository"], "number": context["prNumber"],
+                        "head": context["head"], "base": context["base"], "baseRef": context["baseRef"]}
+            if revision(reviewer) != expected or reviewer.incremental.is_incremental or reviewer.is_answer:
+                raise ValueError("Native reviewer does not match the captured revision")
+            reviewer.vars["description"] = str(reviewer.vars.get("description") or "") + "\n\n" + prompt_context
+
+            if context["mode"] == "incremental":
+                files = [patch_type(base_file="", head_file="", patch=file["patch"], filename=file["filename"],
+                                    edit_type=edit_type.ADDED if file["status"] == "added" else edit_type.MODIFIED,
+                                    num_plus_lines=file["additions"], num_minus_lines=file["deletions"],
+                                    head_file_is_complete=False) for file in context["files"]]
+                override(provider, "get_diff_files", lambda: files)
+                override(provider, "get_filtered_diff_file_names", lambda: [])
+                reviewer.vars["num_pr_files"] = len(files)
+                reviewer.vars["commit_messages_str"] = ""
+
+            publish = provider.publish_persistent_comment_full
+
+            def publish_current(markdown, *publish_args, **publish_kwargs):
+                if not is_current_revision(provider, context):
+                    return None
+                publish_kwargs.update(require_agent_authorship=True, fallback_on_error=False)
+                body = f"{markdown.rstrip()}\n\n{review_scope_summary(context)}\n\n{context['receipt']}"
+                return publish(body, *publish_args, **publish_kwargs)
+
+            override(provider, "publish_persistent_comment_full", publish_current)
+
+        def prepare_grouped(reviewer):
+            render = module.convert_to_markdown_v2
+            module.convert_to_markdown_v2 = lambda *args, **kwargs: render_review_findings(render, *args, **kwargs)
+            try:
+                return prepare(reviewer)
+            finally:
+                module.convert_to_markdown_v2 = render
+
+        override(reviewer_type, "__init__", configure)
+        override(reviewer_type, "_prepare_pr_review", prepare_grouped)
+        run()
+
+
 def main():
+    from pr_agent.algo.types import EDIT_TYPE, FilePatchInfo
     from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
     from pr_agent.servers.github_action_runner import main as run
-    from pr_agent.tools.pr_reviewer import PRReviewer
+    from pr_agent.tools import pr_reviewer
 
     path = os.getenv("PR_AGENT_COVERAGE_PATH")
     phase = os.getenv("PR_AGENT_COVERAGE_INVOCATION")
     run_id = os.getenv("GITHUB_RUN_ID", "")
     run_attempt = os.getenv("GITHUB_RUN_ATTEMPT", "")
-    if not path or phase not in {"initial", "retry"} or not run_id.isdecimal() or not run_attempt.isdecimal():
-        run()
-        return
-    run_with_coverage(run, PRReviewer, LiteLLMAIHandler, Path(path), {
-        "runId": run_id,
-        "runAttempt": run_attempt,
-        "invocation": phase,
-    })
+    invocation = {"runId": run_id, "runAttempt": run_attempt, "invocation": phase}
+    context_path = os.getenv("PR_AGENT_REVIEW_CONTEXT_PATH")
+    context = json.loads(Path(context_path).read_text(encoding="utf-8")) if context_path else None
+    if context_path and (context.get("version") != 1 or context.get("repository") != os.getenv("GITHUB_REPOSITORY")
+                         or any(context.get(key) != value for key, value in invocation.items())):
+        raise ValueError("Invalid captured review context")
+
+    def observe():
+        if path and phase in {"initial", "retry"} and run_id.isdecimal() and run_attempt.isdecimal():
+            run_with_coverage(run, pr_reviewer.PRReviewer, LiteLLMAIHandler, Path(path), invocation, context)
+        else:
+            run()
+
+    if context is None:
+        observe()
+    else:
+        run_with_review_context(observe, pr_reviewer, context, FilePatchInfo, EDIT_TYPE)
 
 
 if __name__ == "__main__":

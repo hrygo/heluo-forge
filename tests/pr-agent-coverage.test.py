@@ -95,7 +95,8 @@ class StubReviewer:
         )
 
     async def _get_prediction(self, model, patches_diff=None):
-        messages = [{"role": "user", "content": f"The PR code diff:\n======\n{self.sent}\n======\n"}]
+        messages = [{"role": "user", "content": f"{getattr(self, 'sent_context', '')}\n"
+                     f"The PR code diff:\n======\n{self.sent}\n======\n"}]
         response, _, _ = await self.ai_handler._get_completion(model=model, messages=messages)
         return response
 
@@ -106,10 +107,14 @@ class StubReviewer:
 
 class SelectedReview(unittest.TestCase):
     def run_review(self, finish="stop", sent=RENDERED, replace_result=False, second_attempt=False,
-                   action_failed=False, missing_observer_state=False):
+                   action_failed=False, missing_observer_state=False, context=None, include_context=True):
         reviewer = StubReviewer(finish, sent)
         if missing_observer_state:
             reviewer.incremental = SimpleNamespace()
+        if context:
+            reviewer.git_provider.pr.changed_files = 4
+            if include_context:
+                reviewer.sent_context = coverage["review_context_text"](context)
 
         async def action():
             reviewer.prediction = await reviewer._get_prediction("synthetic-model")
@@ -127,7 +132,7 @@ class SelectedReview(unittest.TestCase):
             def run():
                 coverage["run_with_coverage"](
                     lambda: asyncio.run(action()), StubReviewer, StubHandler, evidence_path,
-                    {"runId": "7", "runAttempt": "2", "invocation": "retry"},
+                    {"runId": "7", "runAttempt": "2", "invocation": "retry"}, context,
                 )
 
             if action_failed:
@@ -161,6 +166,36 @@ class SelectedReview(unittest.TestCase):
 
     def test_missing_observer_state_keeps_the_ordinary_review(self):
         self.assertIsNone(self.run_review(missing_observer_state=True))
+
+    def test_delta_evidence_requires_the_actual_request_to_contain_captured_history(self):
+        context = {"mode": "incremental", "head": "a" * 40, "previousHead": "c" * 40,
+                   "files": [{}], "checks": None, "threads": []}
+        proof = json.loads(self.run_review(context=context))
+        self.assertEqual(proof["version"], 2)
+        self.assertEqual(proof["previousHead"], context["previousHead"])
+        self.assertEqual(len(proof["files"]), 1)
+        self.assertIsNone(self.run_review(context=context, include_context=False))
+
+
+class ReviewPresentation(unittest.TestCase):
+    def test_optional_findings_are_folded_without_changing_the_structured_review(self):
+        original = {"review": {"key_issues_to_review": [
+            {"issue_header": "[P1] Current regression", "issue_content": "A required check is skipped."},
+            {"issue_header": "[P2] Optional check", "issue_content": "Check <input> and @user."},
+            {"issue_header": "[P3] Optional clarity", "issue_content": "Make this name clearer."},
+        ]}}
+        rendered = coverage["render_review_findings"](
+            lambda data: "\n".join(issue["issue_header"] for issue in data["review"]["key_issues_to_review"]), original,
+        )
+        self.assertTrue(rendered.startswith("[P1] Current regression\n"))
+        core, optional = rendered.split("<details>", 1)
+        self.assertNotIn("[P2]", core)
+        self.assertIn("可选改进建议", optional)
+        self.assertIn("[P2] Optional check", optional)
+        self.assertIn("[P3] Optional clarity", optional)
+        self.assertIn("&lt;input&gt;", optional)
+        self.assertNotIn("@user", optional)
+        self.assertEqual(len(original["review"]["key_issues_to_review"]), 3)
 
 
 if __name__ == "__main__":
