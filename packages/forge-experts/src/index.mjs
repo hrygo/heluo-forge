@@ -21,6 +21,10 @@ export const name = 'forge-experts';
 // "required", so the plugin never activates.
 export const inject = ['webServer', 'connection', 'storageDomain', 'iam'];
 
+// Contract constants for @heluo/forge-policy `policy.decide()` responses.
+const FORGE_POLICY_OUT_OF_SCOPE_RULE = 'out-of-scope';
+const ALLOWED_POLICY_DECISIONS = Object.freeze(['allow', 'confirm']);
+
 function readService(ctx, serviceName) {
   try {
     return typeof ctx?.get === 'function' ? ctx.get(serviceName) : ctx?.[serviceName];
@@ -307,7 +311,7 @@ export async function apply(ctx, config = {}) {
           throw new ExpertsError('EXPERT_POLICY_DENIED', 'Forge Policy egress check failed closed');
         }
         // Never treat generic forge-policy 'out-of-scope' fallback as explicit expert egress authorization.
-        if (verdict?.rule === 'out-of-scope') {
+        if (verdict?.rule === FORGE_POLICY_OUT_OF_SCOPE_RULE) {
           return {
             decision: 'deny',
             reason: 'Action is out-of-scope in Forge Policy catalog; explicit egress policy is required',
@@ -315,7 +319,7 @@ export async function apply(ctx, config = {}) {
         }
         const rawDecision = verdict?.action ?? verdict?.decision;
         // Fail-closed allowlist: only explicit 'allow' or 'confirm' passes through; any other value becomes 'deny'.
-        const decision = rawDecision === 'allow' || rawDecision === 'confirm' ? rawDecision : 'deny';
+        const decision = ALLOWED_POLICY_DECISIONS.includes(rawDecision) ? rawDecision : 'deny';
         return {
           decision,
           reason: verdict?.reason,
