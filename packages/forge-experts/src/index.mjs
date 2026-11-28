@@ -132,6 +132,7 @@ export function createExpertsHost(ports) {
     isDispatchEnabled: () => dispatchEnabled,
     resolveScope: () => scope.resolveForRequest(),
     assertScopeCurrent: (epoch, expectedScope) => scope.assertCurrent(epoch, expectedScope),
+    assertIamIdentityCurrent: (epoch, expectedScope) => scope.assertIamIdentityCurrent(epoch, expectedScope),
     consumeSelection: (params) => selection.consume(params),
     runInPreferenceBoundary: (fn) => preferences.runSerialized(fn),
     listConfirmedEnabled: (params) => preferences.listConfirmedEnabled(params),

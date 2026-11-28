@@ -1087,6 +1087,8 @@ window.__ModuleLoader__.load({
 
       let activeHooks = registerGroup();
       const handleTurnFinalized = (payload, { requireBufferedMatch = false } = {}) => {
+        // An expired attempt can still receive a definite outcome. Keep its draft for that outcome.
+        if (payload?.status === 'acceptance_unknown') return;
         const sessionKey = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : '';
         const digest = typeof payload?.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
         const exactKey = sessionKey && digest ? `${sessionKey}:${digest}` : null;
