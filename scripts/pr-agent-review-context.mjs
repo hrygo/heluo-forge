@@ -46,6 +46,17 @@ async function reviewJob(github, runId, runAttempt) {
   return jobs.find((job) => job?.name === reviewJobName && job.run_id === Number(runId) && job.run_attempt === Number(runAttempt));
 }
 
+function beganNativeReview(job) {
+  return job?.steps?.some((step) => step.name === 'Begin native review' && step.conclusion === 'success');
+}
+
+function failedEarlierAttemptSince(job, updated) {
+  if (job?.status !== 'completed' || typeof job.conclusion !== 'string' || !Array.isArray(job.steps)) return true;
+  if (job.conclusion === 'success' || !beganNativeReview(job)) return false;
+  const completed = Date.parse(job.completed_at);
+  return !Number.isFinite(completed) || completed >= updated;
+}
+
 async function failedReviewSince(github, revision, previousRunId, previousAttempt, updated) {
   const { workflow_runs: runs } = await github.get('/actions/workflows/pr-agent.yml/runs?per_page=100',
     'Cannot check for newer unsuccessful reviews');
@@ -55,9 +66,18 @@ async function failedReviewSince(github, revision, previousRunId, previousAttemp
     !(String(run.id) === previousRunId && String(run.run_attempt) === previousAttempt) &&
     ['workflow_run', 'issue_comment'].includes(run.event) && title.test(run.display_title) &&
     run.status === 'completed' && run.conclusion !== 'success' && Date.parse(run.updated_at) >= updated);
-  if (candidates.length > 10 || candidates.some((run) => !validId(run.run_attempt))) return true;
-  const jobs = await Promise.all(candidates.map((run) => reviewJob(github, run.id, run.run_attempt)));
-  return jobs.some((job) => job?.steps?.some((step) => step.name === 'Begin native review' && step.conclusion === 'success'));
+  // The workflow list exposes only the latest attempt of a run, which is active during capture.
+  const runAttempt = Number(revision.runAttempt);
+  const firstEarlierAttempt = previousRunId === revision.runId ? Number(previousAttempt) + 1 : 1;
+  const earlierCount = runAttempt - firstEarlierAttempt;
+  if (!validId(runAttempt) || earlierCount < 0 || candidates.length + earlierCount > 10 ||
+      candidates.some((run) => !validId(run.run_attempt))) return true;
+  const [jobs, earlierJobs] = await Promise.all([
+    Promise.all(candidates.map((run) => reviewJob(github, run.id, run.run_attempt))),
+    Promise.all(Array.from({ length: earlierCount }, (_, index) =>
+      reviewJob(github, revision.runId, firstEarlierAttempt + index))),
+  ]);
+  return jobs.some(beganNativeReview) || earlierJobs.some((job) => failedEarlierAttemptSince(job, updated));
 }
 
 async function previousReviewedHead(github, revision) {
@@ -148,6 +168,18 @@ export async function readReviewThreads(github, { prNumber, head }) {
 
 export function openBlockers(threads) {
   return threads.filter(({ resolved, priority }) => !resolved && (priority === 'P0' || priority === 'P1'));
+}
+
+export function hasHistoricalReviewEvidence(rechecks, blockers) {
+  if (!blockers.length) return true;
+  if (!Array.isArray(rechecks)) return false;
+  return blockers.every(({ id }) => {
+    const matches = rechecks.filter((item) => item?.thread_id === id);
+    if (matches.length !== 1) return false;
+    const [{ status, evidence }] = matches;
+    return (status === 'fix_evidence_found' || status === 'still_present') &&
+      typeof evidence === 'string' && Boolean(evidence.trim());
+  });
 }
 
 async function readChecks(github, head) {
