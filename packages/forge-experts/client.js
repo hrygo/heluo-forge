@@ -365,12 +365,26 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(statusRes));
             return;
           }
-          let merged = mergeTaskGeneration(task, pickTaskMutationFields(statusRes.body));
+          const statusPatch = pickTaskMutationFields(statusRes.body);
+          let merged = mergeTaskGeneration(task, statusPatch);
           if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'waiting_user') {
             const resultRes = await fetchTaskResult(model.taskId).catch(() => null);
             if (resultRes?.ok && resultRes.body) {
-              // Only merge allowlisted presentation fields so /result never clobbers authoritative status/taskId.
-              merged = { ...merged, ...pickTaskResultFields(resultRes.body) };
+              const statusGen = Number.isInteger(statusPatch.runGeneration) ? statusPatch.runGeneration : null;
+              const resultGen = Number.isInteger(resultRes.body.runGeneration) ? resultRes.body.runGeneration : null;
+              if (statusGen !== null && resultGen !== null && resultGen !== statusGen) {
+                // Generation advanced between /tasks/:id and /tasks/:id/result: re-read authoritative status instead of mixing snapshots.
+                const retryStatus = await fetchTaskStatus(model.taskId).catch(() => null);
+                if (retryStatus?.ok && retryStatus.body) {
+                  merged = mergeTaskGeneration(merged, pickTaskMutationFields(retryStatus.body), { resetPreviousResult: true });
+                } else {
+                  setNotice(ERROR_NOTICE.EXPERT_TASK_STATE_CONFLICT);
+                  return;
+                }
+              } else {
+                // Only merge allowlisted presentation fields so /result never clobbers authoritative status/taskId.
+                merged = { ...merged, ...pickTaskResultFields(resultRes.body) };
+              }
             }
           }
           setTask(merged);
@@ -388,6 +402,16 @@ window.__ModuleLoader__.load({
         try {
           const res = await postTaskFollowup(model.taskId, { taskText: followupText });
           if (!res.ok) {
+            if (resultCode(res) === 'EXPERT_ACCEPTANCE_UNKNOWN') {
+              const pendingReqId = typeof res?.body?.error?.details?.requestId === 'string' && res.body.error.details.requestId.trim()
+                ? res.body.error.details.requestId.trim()
+                : null;
+              setTask((prev) => ({
+                ...(prev ?? {}),
+                status: 'unknown',
+                ...(pendingReqId ? { requestId: pendingReqId } : {}),
+              }));
+            }
             setNotice(resultNotice(res));
             return;
           }
@@ -395,6 +419,7 @@ window.__ModuleLoader__.load({
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskMutationFields(res.body), { resetPreviousResult: true }));
         } catch {
+          setTask((prev) => ({ ...(prev ?? {}), status: 'unknown' }));
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
         } finally {
           setBusy(false);
@@ -626,6 +651,54 @@ window.__ModuleLoader__.load({
     }
 
     // §6 出口（管理包默认只注册设置页；隔离预览仅挂载候选组，dispatchEnabled 开放生产 @ 选择绑定与草稿保护）
+    function createReconcileTrigger() {
+      const RECONCILE_COOLDOWN_MS = 5_000;
+      let reconcileInFlight = false;
+      let lastReconcileAt = 0;
+      return () => {
+        const nowMs = Date.now();
+        if (reconcileInFlight || (lastReconcileAt !== 0 && nowMs - lastReconcileAt < RECONCILE_COOLDOWN_MS)) return;
+        reconcileInFlight = true;
+        lastReconcileAt = nowMs;
+        // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重与冷却防重连风暴，失败时重置冷却以允许下次重连重试。
+        postReconcilePending().then((res) => {
+          if (res && !res.ok) {
+            lastReconcileAt = 0;
+            if (typeof console !== 'undefined') {
+              console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
+            }
+            return;
+          }
+          if (Array.isArray(res?.body?.reconciled)) {
+            for (const entry of res.body.reconciled) {
+              notifyTaskReconciled(entry);
+            }
+          }
+        }).catch(() => {
+          lastReconcileAt = 0;
+          if (typeof console !== 'undefined') {
+            console.warn('[forge-experts] pending task reconciliation failed');
+          }
+        }).finally(() => {
+          reconcileInFlight = false;
+        });
+      };
+    }
+
+    // 存量任务恢复流（§9.2）：即使停用新委派（dispatchEnabled: false），重连 ready 后仍自动按原 requestId 对账并通知卡片，不开放新委派。
+    function mountTaskReconcileStream() {
+      const triggerReconcile = createReconcileTrigger();
+      return openEventStream((payload) => {
+        if (payload.type === 'ready') {
+          triggerReconcile();
+          return;
+        }
+        if (payload.type === 'task-reconciled') {
+          notifyTaskReconciled(payload);
+        }
+      });
+    }
+
     function mountMentionsSource(ctx, { enableSelectionBinding }) {
       const triggers = typeof ctx.get === 'function' ? ctx.get('inputTriggers') : ctx.inputTriggers;
       if (!triggers || typeof triggers.registerSource !== 'function') return () => {};
@@ -635,12 +708,10 @@ window.__ModuleLoader__.load({
       let activeEpoch = 0;
       let activeVersion = 0;
       const MAX_PENDING_DRAFTS = 32;
-      const RECONCILE_COOLDOWN_MS = 5_000;
       // Hoisted to mountMentionsSource closure so SSE reconnect/invalidation never drops buffered user drafts (#245/#246).
       const pendingDrafts = new Map();
       let draftRecoveryListener = null;
-      let reconcileInFlight = false;
-      let lastReconcileAt = 0;
+      const triggerReconcile = createReconcileTrigger();
 
       const rememberPendingDraft = (sessionKey, draft) => {
         pendingDrafts.delete(sessionKey);
@@ -784,33 +855,7 @@ window.__ModuleLoader__.load({
         (payload) => {
           if (payload.type === 'ready') {
             activeHooks = registerGroup() ?? activeHooks;
-            const nowMs = Date.now();
-            if (enableSelectionBinding && !reconcileInFlight && (lastReconcileAt === 0 || nowMs - lastReconcileAt >= RECONCILE_COOLDOWN_MS)) {
-              reconcileInFlight = true;
-              lastReconcileAt = nowMs;
-              // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重与冷却防重连风暴，失败时重置冷却以允许下次重连重试。
-              postReconcilePending().then((res) => {
-                if (res && !res.ok) {
-                  lastReconcileAt = 0;
-                  if (typeof console !== 'undefined') {
-                    console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
-                  }
-                  return;
-                }
-                if (Array.isArray(res?.body?.reconciled)) {
-                  for (const entry of res.body.reconciled) {
-                    notifyTaskReconciled(entry);
-                  }
-                }
-              }).catch(() => {
-                lastReconcileAt = 0;
-                if (typeof console !== 'undefined') {
-                  console.warn('[forge-experts] pending task reconciliation failed');
-                }
-              }).finally(() => {
-                reconcileInFlight = false;
-              });
-            }
+            if (enableSelectionBinding) triggerReconcile();
             return;
           }
           if (payload.type === 'task-reconciled') {
@@ -911,6 +956,8 @@ window.__ModuleLoader__.load({
           disposers.push(mountIsolatedMentionsSource(ctx));
         } else if (options?.dispatchEnabled === true) {
           disposers.push(mountProductionMentionsSource(ctx));
+        } else {
+          disposers.push(mountTaskReconcileStream());
         }
         // Cordis collects cleanup through `ctx.effect`; it never emits a
         // `dispose` event, so registering one leaks every slot subscription.
