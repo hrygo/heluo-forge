@@ -492,7 +492,12 @@ export function createDispatchService(ports) {
     } catch {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to read request correlation', { retryable: true });
     }
-    return raw == null ? null : parseCorrelationRecord(raw);
+    if (raw == null) return null;
+    const parsed = RequestCorrelationSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Stored request correlation is invalid', { retryable: true });
+    }
+    return parsed.data;
   }
 
   async function readCorrelation(scope, requestId) {
@@ -933,7 +938,7 @@ export function createDispatchService(ports) {
     inFlightDeliveries.add(deliveryKey);
     try {
       if (input.requestId) {
-        const existing = await readCorrelation(scope, requestId);
+        const existing = await readCorrelationFromStorage(scope, requestId);
         if (existing && existing.payloadDigest !== payloadDigest) {
           throw new ExpertsError('EXPERT_IDEMPOTENCY_CONFLICT', 'Follow-up requestId was already used with a different payload');
         }

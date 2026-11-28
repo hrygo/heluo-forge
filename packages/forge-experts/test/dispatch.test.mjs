@@ -1830,6 +1830,58 @@ for (const blockedTable of ['pending_index', 'correlations']) {
   });
 }
 
+for (const fault of ['read error', 'invalid record']) {
+  test('PR #484 review: a follow-up ' + fault + ' preserves correlation and prevents delivery', async () => {
+    let failRead = false;
+    const storage = createMemoryStorage({
+      beforeGet(domain, table) {
+        if (failRead && domain === 'forge_experts_requests' && table === 'correlations') {
+          throw new Error('Simulated correlation read failure');
+        }
+      },
+    });
+    const h = makeHarness({ storage });
+    const post = (path, body) => invokeRoute(h.host, {
+      method: 'POST', path: API_PREFIX + path, headers: mutationHeaders(), body,
+    });
+    const requestId = 'preserved-followup';
+    const followup = (taskText) => post('/tasks/task-1/followups', { taskText, requestId });
+    await h.host.open();
+    try {
+      await h.enableExpert();
+      const draft = { sessionId: 'sess-1', taskText: 'Initial task' };
+      const selection = await post('/selections', { ...draft, expertId: 'exp-fin-1', scopeEpoch: 2 });
+      assert.equal(selection.status, 201);
+      const dispatched = await post('/tasks', { ...draft, selectionToken: selection.body.selectionToken });
+      assert.equal(dispatched.status, 201);
+      assert.equal((await followup('Original follow-up')).status, 201);
+
+      const correlations = storage.domains.get('forge_experts_requests').get('correlations');
+      const [key, accepted] = [...correlations].find(([, record]) => record.requestId === requestId);
+      assert.equal(accepted.status, 'accepted');
+      if (fault === 'invalid record') correlations.set(key, { ...accepted, payloadDigest: null });
+      else failRead = true;
+      const before = new Map(correlations);
+
+      const denied = await followup('Different follow-up');
+      assert.equal(denied.status, 503);
+      assert.equal(denied.body.error.code, 'EXPERT_STORAGE_UNAVAILABLE');
+      assert.deepEqual(correlations, before);
+      assert.equal(h.followupCalls.length, 1);
+
+      failRead = false;
+      if (fault === 'invalid record') correlations.set(key, accepted);
+      const conflict = await followup('Different follow-up');
+      assert.equal(conflict.status, 409);
+      assert.equal(conflict.body.error.code, 'EXPERT_IDEMPOTENCY_CONFLICT');
+      assert.equal(correlations.get(key), accepted);
+      assert.equal(h.followupCalls.length, 1);
+    } finally {
+      await h.host.close();
+    }
+  });
+}
+
 test('concurrent followups with the same requestId persist and deliver only the winning payload (#484)', async () => {
   const firstReadStarted = Promise.withResolvers();
   const secondReadStarted = Promise.withResolvers();

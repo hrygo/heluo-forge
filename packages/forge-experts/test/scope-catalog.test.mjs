@@ -49,6 +49,26 @@ test('scope manager rejects unauthenticated IAM session and advances epoch on id
   assert.ok(changes.length >= 2);
 });
 
+test('PR #484 review: a conflicting IAM view is denied before Delegra scope verification', async () => {
+  const ready = { status: 'ready', signedIn: true, principal: SCOPE_A };
+  let session = { ...ready, state: 'signed-out' };
+  let verified = 0;
+  const manager = createScopeManager({
+    getIamSession: () => session,
+    resolveDelegraScope: () => {
+      verified += 1;
+      return SCOPE_A;
+    },
+  });
+
+  await assert.rejects(() => manager.resolveForRequest(), { code: 'EXPERT_UNAUTHENTICATED' });
+  assert.equal(verified, 0);
+
+  session = ready;
+  assert.equal((await manager.resolveForRequest()).orgId, SCOPE_A.orgId);
+  assert.equal(verified, 1);
+});
+
 test('stale Delegra verification cannot replace the newer IAM scope or advance its epoch (#484)', async () => {
   const lookupStarted = Promise.withResolvers();
   const releaseOldLookup = Promise.withResolvers();
