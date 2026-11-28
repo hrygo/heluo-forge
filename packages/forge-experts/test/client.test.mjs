@@ -2621,6 +2621,58 @@ for (const withMentions of [false, true]) {
   });
 }
 
+for (const pendingFollowup of [true, false]) {
+  test('PR #484 review: batch reconciliation denial clears cached results (' + (pendingFollowup ? 'retains the pending draft' : 'rejects an older refresh') + ')', async (t) => {
+    const pendingRefresh = Promise.withResolvers();
+    let followupCalls = 0;
+    const draft = 'Keep this draft while reconciling';
+    const card = mountReviewTaskCard(t, {
+      initialTask: { taskId: 'task-a', requestId: 'request-a', status: 'waiting_user', result: 'Cached result', rawResult: 'Cached original' },
+      async fetchImpl(url) {
+        if (url.endsWith('/tasks/reconcile')) return cardJson(401, { error: { code: 'EXPERT_AUTH_REVOKED' } });
+        if (url.endsWith('/tasks/task-a')) return cardJson(200, { status: 'completed', runGeneration: 1 });
+        if (url.endsWith('/tasks/task-a/result')) return pendingRefresh.promise;
+        if (url.endsWith('/tasks/task-a/followups')) {
+          followupCalls += 1;
+          return cardJson(503, { error: { code: 'EXPERT_ACCEPTANCE_UNKNOWN', details: { requestId: 'request-followup' } } });
+        }
+        assert.ok(url.endsWith('/tasks/by-request/request-followup'), url);
+        return cardJson(404, { error: { code: 'EXPERT_TASK_NOT_FOUND' } });
+      },
+    });
+
+    cardElement(card.render(), 'fexp-raw-toggle').props.onClick();
+    let refresh;
+    if (pendingFollowup) {
+      cardElement(card.render(), 'fexp-followup-box').children[0].props.onChange({ target: { value: draft } });
+      await cardElement(card.render(), 'fexp-followup-btn').props.onClick();
+    } else {
+      refresh = cardElement(card.render(), 'fexp-task-refresh').props.onClick();
+    }
+    assert.equal(cardElement(card.render(), 'fexp-raw-content').children[0], 'Cached original');
+
+    card.emitEvent({ type: 'ready', scopeEpoch: 4, hostInstanceId: 'host-a' });
+    await new Promise(setImmediate);
+    const denied = card.render();
+    assert.ok(!cardElement(denied, 'fexp-task-result'), 'batch authorization denial must clear the cached result');
+    assert.equal(cardElement(denied, 'fexp-raw-drawer'), null);
+
+    if (pendingFollowup) {
+      assert.equal(denied.props['data-task-status'], 'unknown');
+      assert.equal(cardElement(denied, 'fexp-followup-btn'), null);
+      await cardElement(denied, 'fexp-task-reconcile').props.onClick();
+      const retained = cardElement(card.render(), 'fexp-followup-box').children[0];
+      assert.equal(retained.props.value, draft);
+      assert.equal(retained.props.readOnly, true);
+      assert.equal(followupCalls, 1);
+    } else {
+      pendingRefresh.resolve(cardJson(200, { runGeneration: 1, result: 'Older authorized result', rawResult: 'Older original' }));
+      await refresh;
+      assert.equal(cardElement(card.render(), 'fexp-task-result'), null);
+    }
+  });
+}
+
 test('PR #484 review: a late refresh cannot roll a reconciled task back in the same generation', async (t) => {
   const resultStarted = Promise.withResolvers();
   const resultReply = Promise.withResolvers();
