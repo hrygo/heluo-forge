@@ -36,6 +36,10 @@ function isPendingStatus(status) {
   return status === 'pending_delivery' || status === 'unknown';
 }
 
+function isReconcilableStatus(status) {
+  return isPendingStatus(status) || status === 'not_found';
+}
+
 function normalizeReuseRefs(reuseRefs) {
   if (reuseRefs === undefined || reuseRefs === null) return Object.freeze([]);
   if (!Array.isArray(reuseRefs) || reuseRefs.length > MAX_REUSE_REFS) return null;
@@ -480,7 +484,12 @@ export function createDispatchService(ports) {
       retryable: true,
     });
     // Await table.get so both synchronous KvTable.get and async adapters work.
-    const raw = await table.get(deriveCorrelationKey({ ...scope, requestId }));
+    let raw;
+    try {
+      raw = await table.get(deriveCorrelationKey({ ...scope, requestId }));
+    } catch {
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to read request correlation', { retryable: true });
+    }
     return raw == null ? null : parseCorrelationRecord(raw);
   }
 
@@ -716,7 +725,7 @@ export function createDispatchService(ports) {
   }
 
   // Authoritative readback & cancel remain available even when dispatchEnabled is false (§5 / §9.2).
-  async function reconcileByRequestInternal({ requestId, fixedScope = null, onNotFound }) {
+  async function reconcileByRequestInternal({ requestId, fixedScope = null, onReconciled, onNotFound }) {
     if (!isNonEmptyString(requestId)) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'requestId is required');
     }
@@ -732,11 +741,15 @@ export function createDispatchService(ports) {
     });
     if (inFlightDeliveries.has(deliveryKey)) throw unresolved();
 
-    // Keep acceptance observations while reads overlap, including when a receipt could not be persisted.
-    const observations = activeReadbacks.get(deliveryKey) ?? { readers: 0, accepted: 0 };
-    activeReadbacks.set(deliveryKey, observations);
-    observations.readers += 1;
-    const acceptedAtStart = observations.accepted;
+    // Register under the same local boundary as a 404 settlement. The network read runs after releasing it.
+    const { observations, acceptedAtStart } = await runInRequestStorageBoundary(scope, () => {
+      ports.assertScopeCurrent(startEpoch, scope);
+      if (inFlightDeliveries.has(deliveryKey)) throw unresolved();
+      const active = activeReadbacks.get(deliveryKey) ?? { readers: 0, accepted: 0 };
+      activeReadbacks.set(deliveryKey, active);
+      active.readers += 1;
+      return { observations: active, acceptedAtStart: active.accepted };
+    });
     try {
       let authoritative;
       let notFound;
@@ -748,7 +761,8 @@ export function createDispatchService(ports) {
       }
       const assertReadbackCurrent = () => {
         ports.assertScopeCurrent(startEpoch, scope);
-        if (inFlightDeliveries.has(deliveryKey) || (notFound && observations.accepted !== acceptedAtStart)) {
+        if (inFlightDeliveries.has(deliveryKey)
+          || (notFound && (observations.readers > 1 || observations.accepted !== acceptedAtStart))) {
           throw unresolved();
         }
       };
@@ -761,7 +775,14 @@ export function createDispatchService(ports) {
 
       const current = await runInRequestStorageBoundary(scope, async () => {
         assertReadbackCurrent();
-        const record = await readCorrelation(scope, cleanId);
+        let record = null;
+        try {
+          record = await readCorrelationFromStorage(scope, cleanId);
+        } catch {
+          // Preserve authorized readback and keep a potentially unsettled local row discoverable.
+          assertReadbackCurrent();
+          if (!notFound) await syncPendingIndex(scope, cleanId, 'unknown');
+        }
         assertReadbackCurrent();
         if (notFound) {
           if (isPendingStatus(record?.status)) {
@@ -770,6 +791,8 @@ export function createDispatchService(ports) {
               status: 'not_found',
               updatedAt: new Date(now()).toISOString(),
             });
+          } else if (record?.status === 'not_found') {
+            await syncPendingIndex(scope, cleanId, 'not_found');
           }
           await assertActiveReadback();
           onNotFound?.();
@@ -781,7 +804,13 @@ export function createDispatchService(ports) {
             expertId: record.expertId,
             delegationScope: record.delegationScope,
           });
-          if (isPendingStatus(record.status) || record.status === 'not_found') {
+          if (record.status === 'not_found') {
+            // A later acceptance can supersede a settled 404. Re-register recovery before
+            // saving it so a failed acceptance write can be retried after restart.
+            await syncPendingIndex(scope, cleanId, 'unknown', { strict: true });
+            assertReadbackCurrent();
+          }
+          if (isReconcilableStatus(record.status)) {
             await writeCorrelationBestEffort(scope, {
               ...record,
               taskId: authoritative.taskId ?? record.taskId,
@@ -793,10 +822,12 @@ export function createDispatchService(ports) {
         return record;
       });
       await assertActiveReadback();
-      return Object.freeze({
+      const result = Object.freeze({
         ...authoritative,
         correlation: current ? Object.freeze({ originSessionRef: current.originSessionRef, expertId: current.expertId }) : null,
       });
+      onReconciled?.(result);
+      return result;
     } finally {
       observations.readers -= 1;
       if (observations.readers === 0 && activeReadbacks.get(deliveryKey) === observations) {
@@ -978,17 +1009,18 @@ export function createDispatchService(ports) {
       const records = await Promise.all(batch.map((requestId) => readCorrelation(scope, requestId)));
       for (const record of records) {
         if (!record) continue;
-        if (record.status !== 'pending_delivery' && record.status !== 'unknown') continue;
+        if (!isReconcilableStatus(record.status)) continue;
         items.push(Object.freeze({
           requestId: record.requestId,
           originSessionRef: record.originSessionRef,
           expertId: record.expertId,
-          status: record.status,
+          status: record.status === 'not_found' ? 'unknown' : record.status,
           createdAt: record.createdAt,
           updatedAt: record.updatedAt,
         }));
       }
     }
+    await ports.assertIamIdentityCurrent?.(scope.scopeEpoch, scope);
     ports.assertScopeCurrent(scope.scopeEpoch, scope);
     return Object.freeze({ scopeEpoch: scope.scopeEpoch, items: Object.freeze(items) });
   }
@@ -1018,6 +1050,7 @@ export function createDispatchService(ports) {
     const existingPass = inFlightReconciles.get(passKey);
     if (existingPass) {
       const result = await existingPass;
+      await ports.assertIamIdentityCurrent?.(startEpoch, scope);
       ports.assertScopeCurrent(startEpoch, scope);
       return result;
     }
@@ -1059,7 +1092,7 @@ export function createDispatchService(ports) {
             if (inFlightDeliveries.has(readKey)) {
               throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task delivery is still in flight', { retryable: true });
             }
-            if (isPendingStatus(current?.status)) return current;
+            if (isReconcilableStatus(current?.status)) return current;
             await syncPendingIndex(scope, requestId, 'accepted');
             return null;
           });
@@ -1112,10 +1145,8 @@ export function createDispatchService(ports) {
           const readPromise = reconcileByRequestInternal({
             requestId,
             fixedScope: scope,
+            onReconciled: buildAndNotify,
             onNotFound: notifyNotFoundOnce,
-          }).then((result) => {
-            buildAndNotify(result);
-            return result;
           }).finally(() => {
             activeReads.delete(readKey);
             if (activeReads.size === 0 && inFlightReconcileReadsByScope.get(scopeKey) === activeReads) {
@@ -1158,6 +1189,7 @@ export function createDispatchService(ports) {
 
     inFlightReconciles.set(passKey, pass);
     const result = await pass;
+    await ports.assertIamIdentityCurrent?.(startEpoch, scope);
     ports.assertScopeCurrent(startEpoch, scope);
     return result;
   }

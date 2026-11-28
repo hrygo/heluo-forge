@@ -251,6 +251,7 @@ export function createSelectionService(ports) {
       draftVersion: input.draftVersion,
       reuseRefs: input.reuseRefs,
       draftDigest,
+      draftRecoveryId: randomBytes(16).toString('hex'),
       createdAt,
       expiresAt,
     });
@@ -264,6 +265,7 @@ export function createSelectionService(ports) {
       scopeEpoch: entry.scopeEpoch,
       viewVersion: entry.viewVersion,
       draftDigest: entry.draftDigest,
+      draftRecoveryId: entry.draftRecoveryId,
       expiresAt: new Date(expiresAt).toISOString(),
     });
   }

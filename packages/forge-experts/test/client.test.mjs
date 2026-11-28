@@ -1169,103 +1169,83 @@ test('ExpertTaskStatusCard uses independent followup requestId when fetch drops 
   }
 });
 
-test('ExpertTaskStatusCard restores waiting_user and followup draft when reconcile confirms EXPERT_TASK_NOT_FOUND without auto-resending (#484)', async () => {
-  const previousWindow = globalThis.window;
-  const previousFetch = globalThis.fetch;
-  let moduleDef = null;
-  let followupCalls = 0;
-
-  globalThis.window = {
-    __ModuleLoader__: { load(def) { moduleDef = def; } },
-  };
-  globalThis.fetch = async (url, init) => {
-    if (url.includes('/followups') && init?.method === 'POST') {
-      followupCalls += 1;
-      if (followupCalls === 1) throw new Error('network dropped before reaching host');
-      return { ok: true, status: 201, async json() { return { taskId: 'task-nf-1', status: 'running', runGeneration: 2 }; } };
-    }
-    if (url.includes('/tasks/by-request/')) {
-      return {
-        ok: false,
-        status: 404,
-        async json() { return { error: { code: 'EXPERT_TASK_NOT_FOUND', message: 'not found' } }; },
-      };
-    }
-    throw new Error(`Unexpected fetch: ${url}`);
-  };
-
-  try {
-    new Function(clientSource)();
-    const stateSlots = [];
-    const refSlots = [];
-    let stateIdx = 0;
-    let refIdx = 0;
-    const exported = moduleDef.factory((dep) => {
-      if (dep === 'react') {
-        return {
-          createElement: (type, props, ...children) => ({ type, props, children }),
-          useState(init) {
-            const idx = stateIdx++;
-            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
-            return [
-              stateSlots[idx],
-              (next) => {
-                stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next;
-              },
-            ];
-          },
-          useRef(init) {
-            const idx = refIdx++;
-            if (!(idx in refSlots)) refSlots[idx] = { current: init };
-            return refSlots[idx];
-          },
-          useCallback: (fn) => fn,
-          useEffect: () => {},
-        };
-      }
-      throw new Error(`Unexpected require: ${dep}`);
+for (const viaSse of [false, true]) {
+  test(`follow-up 404 hides cached results and preserves the draft for same-request readback via ${viaSse ? 'SSE' : 'manual reconciliation'} (#484)`, async (t) => {
+    const taskId = 'task-unavailable';
+    const originalRequest = 'request-original';
+    const submittedText = 'Follow-up draft';
+    const cached = {
+      summary: 'cached summary',
+      rawResult: 'cached raw result',
+      result: 'cached result',
+      sources: [{ authorized: true, title: 'cached source' }],
+      artifacts: [{ authorized: true, label: 'cached artifact' }],
+    };
+    const initialTask = { taskId, requestId: originalRequest, status: 'waiting_user', runGeneration: 1, ...cached };
+    let followupId;
+    let authorized = false;
+    let sends = 0;
+    const reconciledRequests = [];
+    const card = mountReviewTaskCard(t, {
+      initialTask,
+      async fetchImpl(url, init) {
+        if (url.endsWith('/followups')) {
+          sends += 1;
+          followupId = JSON.parse(init.body).requestId;
+          if (!viaSse) throw new Error('response lost before receipt was read');
+          return cardJson(503, { error: { code: 'EXPERT_ACCEPTANCE_UNKNOWN', details: { requestId: followupId } } });
+        }
+        if (url.includes('/by-request/')) {
+          reconciledRequests.push(url);
+          return authorized
+            ? cardJson(200, { taskId, status: 'waiting_user', runGeneration: 2 })
+            : cardJson(404, { error: { code: 'EXPERT_TASK_NOT_FOUND' } });
+        }
+        if (url.endsWith('/result')) return cardJson(200, { result: 'fresh authorized result', runGeneration: 2 });
+        assert.ok(url.endsWith(`/tasks/${taskId}`), url);
+        return cardJson(200, { status: 'waiting_user', runGeneration: 2 });
+      },
     });
 
-    const initialTask = { taskId: 'task-nf-1', requestId: 'req-orig-1', status: 'waiting_user', runGeneration: 1 };
-    const renderCard = () => {
-      stateIdx = 0;
-      refIdx = 0;
-      return exported.ExpertTaskStatusCard({ initialTask });
+    const initial = card.render();
+    assert.equal(cardElement(initial, 'fexp-task-result').children[0], cached.result);
+    cardElement(initial, 'fexp-raw-toggle').props.onClick();
+    cardElement(initial, 'fexp-followup-box').children[0].props.onChange({ target: { value: submittedText } });
+    await cardElement(card.render(), 'fexp-followup-btn').props.onClick();
+    const pending = card.render();
+    assert.equal(pending.props['data-task-status'], 'unknown');
+    assert.ok(followupId && followupId !== originalRequest);
+    if (viaSse) card.emitReconciled({ requestId: followupId, notFound: true, status: 'not_found' });
+    else await cardElement(pending, 'fexp-task-reconcile').props.onClick();
+
+    const unavailable = card.render();
+    assert.equal(unavailable.props['data-task-status'], 'not_found');
+    assert.match(cardElement(unavailable, 'fexp-task-notice').children[0], /未找到.*无权查看/u);
+    const assertHidden = (tree) => {
+      for (const id of ['fexp-task-summary', 'fexp-task-result', 'fexp-task-sources', 'fexp-task-artifacts', 'fexp-raw-drawer', 'fexp-followup-btn', 'fexp-task-cancel']) {
+        assert.equal(cardElement(tree, id), null, id);
+      }
     };
-    const findNodes = (node, pred, acc = []) => {
-      if (!node || typeof node !== 'object') return acc;
-      if (pred(node)) acc.push(node);
-      for (const child of node.children ?? []) findNodes(child, pred, acc);
-      return acc;
-    };
+    assertHidden(unavailable);
+    assertHidden(card.render({ ...initialTask }));
+    const retainedDraft = cardElement(unavailable, 'fexp-followup-box').children[0];
+    assert.equal(retainedDraft.props.value, submittedText);
+    assert.equal(retainedDraft.props.readOnly, true);
+    assert.equal(sends, 1);
 
-    const t0 = renderCard();
-    findNodes(t0, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'Unsent followup draft' } });
-    const t1 = renderCard();
-    await findNodes(t1, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
-
-    const tUnknown = renderCard();
-    assert.equal(tUnknown.props['data-task-status'], 'unknown');
-    await findNodes(tUnknown, (n) => n.props?.['data-testid'] === 'fexp-task-reconcile')[0].props.onClick();
-
-    // Confirmed not accepted -> restores waiting_user + draft, does NOT auto-resend.
-    const tRestored = renderCard();
-    assert.equal(followupCalls, 1, 'must not auto-resend after not_found confirmation');
-    assert.equal(tRestored.props['data-task-status'], 'waiting_user');
-    assert.equal(findNodes(tRestored, (n) => n.type === 'input')[0].props.value, 'Unsent followup draft');
-
-    // User can explicitly retry now.
-    await findNodes(tRestored, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
-    const tRetried = renderCard();
-    assert.equal(followupCalls, 2);
-    assert.equal(tRetried.props['data-task-status'], 'running');
-  } finally {
-    if (previousWindow === undefined) delete globalThis.window;
-    else globalThis.window = previousWindow;
-    if (previousFetch === undefined) delete globalThis.fetch;
-    else globalThis.fetch = previousFetch;
-  }
-});
+    // Explicitly retry the read, keeping the same requestId. A fresh authorized result can then be displayed.
+    authorized = true;
+    await cardElement(card.render(), 'fexp-task-reconcile').props.onClick();
+    const settled = card.render();
+    assert.equal(settled.props['data-task-status'], 'waiting_user');
+    assert.equal(cardElement(settled, 'fexp-followup-box').children[0].props.value, '');
+    assert.equal(cardElement(settled, 'fexp-task-result'), null);
+    await cardElement(settled, 'fexp-task-refresh').props.onClick();
+    assert.equal(cardElement(card.render(), 'fexp-task-result').children[0], 'fresh authorized result');
+    assert.deepEqual(reconciledRequests, Array(viaSse ? 1 : 2).fill(`/api/forge-experts/tasks/by-request/${followupId}`));
+    assert.equal(sends, 1);
+  });
+}
 
 test('reconnect inside 5s cooldown schedules a single trailing reconcile once cooldown elapses (#484)', async () => {
   const eventSources = [];
@@ -1753,6 +1733,75 @@ for (const reconnect of [false, true]) {
     assert.deepEqual(recovered[0].draft, draft);
     assert.equal(calls.filter((url) => url.endsWith('/turns/finalized')).length, reconnect ? 1 : 0);
     assert.equal(calls.filter((url) => url.endsWith('/selections')).length, 1);
+  });
+}
+
+for (const reconnect of [false, true]) {
+  test(`two selections with the same draft digest recover their own versions via ${reconnect ? 'reconnect' : 'SSE'} (#484)`, async (t) => {
+    const eventSources = [];
+    const sessionId = 'sess-repeat';
+    const expertId = 'exp-fin-1';
+    const draftDigest = 'sha256:same-content';
+    const drafts = [7, 8].map((draftVersion) => ({ draftVersion, taskText: 'Same text and references', reuseRefs: ['ref-reviewed'] }));
+    const recoveryIds = ['draft-first', 'draft-second'];
+    const finalEvents = recoveryIds.map((draftRecoveryId) => ({
+      sessionId, expertId, draftDigest, draftRecoveryId, status: 'failed', code: 'EXPERT_POLICY_DENIED', preserveDraft: true,
+    }));
+    let prepareCalls = 0;
+    let polls = 0;
+    const { exported, restore } = loadClientModule({
+      eventSources,
+      async fetchImpl(url) {
+        if (url.includes('/mentions')) {
+          return cardJson(200, {
+            scopeEpoch: 5, viewVersion: 7,
+            candidates: [{ expertId, displayName: '经营分析专家', scopeEpoch: 5, viewVersion: 7 }],
+          });
+        }
+        if (url.endsWith('/selections')) {
+          const index = prepareCalls++;
+          return cardJson(201, { selectionToken: `token-${index}`, expertId, sessionId, draftDigest, draftRecoveryId: recoveryIds[index] });
+        }
+        if (url.endsWith('/turns/finalized')) {
+          polls += 1;
+          return cardJson(200, { scopeEpoch: 5, items: [finalEvents[0], finalEvents[0], finalEvents[1]] });
+        }
+        if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [], stillPending: [] });
+        assert.fail(`Unexpected request ${url}`);
+      },
+    });
+    let source;
+    let dispose;
+    t.after(() => { dispose?.(); restore(); });
+    exported.apply({
+      slots: { inject(_name, register) { return register(); }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          source = spec;
+          return () => { source = null; };
+        },
+      },
+      effect(register) { dispose = register(); },
+    }, { dispatchEnabled: true });
+    const [picked] = await source.query('', { sessionId });
+    const recovered = [];
+    source.onDraftRecovery((event) => recovered.push(event.draft));
+    assert.equal((await source.prepareSubmit({ picked, sessionId, ...drafts[0] })).ok, true);
+
+    const stream = eventSources[0];
+    stream.emit({ type: 'turn-finalized', ...finalEvents[0], status: 'acceptance_unknown', preserveDraft: false });
+    assert.equal((await source.prepareSubmit({ picked, sessionId, ...drafts[1] })).ok, true);
+    if (reconnect) {
+      stream.fail();
+    } else {
+      stream.emit({ type: 'turn-finalized', ...finalEvents[0], draftRecoveryId: 'unbuffered-attempt' });
+      for (const event of [finalEvents[0], finalEvents[0], finalEvents[1]]) stream.emit({ type: 'turn-finalized', ...event });
+    }
+    stream.emit({ type: 'ready', scopeEpoch: 5, viewVersion: 7 });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+    assert.deepEqual(recovered, drafts);
+    assert.equal(polls, reconnect ? 1 : 0);
   });
 }
 

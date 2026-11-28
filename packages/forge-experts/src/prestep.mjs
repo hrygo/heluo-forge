@@ -12,6 +12,7 @@ import { ExpertsError } from './errors.mjs';
 
 const DEFAULT_MAX_ACTIVE_TURNS = 128;
 const DEFAULT_TURN_TTL_MS = 5 * 60 * 1000;
+const DRAFT_RECOVERY_ID_RE = /^[a-f0-9]{32}$/u;
 const MODEL_DID_NOT_DELEGATE_NOTICE =
   '主助手未调用所选专家，未发起远端任务；已保留您的草稿，可重新确认后发送。';
 const EXPIRED_TURN_NOTICE =
@@ -73,18 +74,28 @@ export function createPreStepGuard(ports) {
   const recentFinalized = new Map();
   let finalizedSeq = 0;
 
-  function emitTurnFinalized(event) {
-    const { scope, ...wireEvent } = event ?? {};
-    const frozenWire = Object.freeze({ ...wireEvent });
+  function emitTurnFinalized(turn, { status, code, preserveDraft, notice }) {
+    const { scope, sessionId, expertId, draftDigest, draftRecoveryId } = turn;
+    const wireEvent = Object.freeze({
+      sessionId,
+      expertId,
+      ...(draftDigest ? { draftDigest } : {}),
+      ...(draftRecoveryId ? { draftRecoveryId } : {}),
+      status,
+      ...(code ? { code } : {}),
+      preserveDraft,
+      ...(notice ? { notice } : {}),
+    });
     const sKey = scopeKeyOf(scope);
     if (sKey) {
       const at = now();
       for (const [k, rec] of recentFinalized.entries()) {
         if (at >= rec.expiresAt) recentFinalized.delete(k);
       }
-      const key = `${sKey}:${wireEvent.sessionId ?? ''}:${wireEvent.draftDigest ?? ++finalizedSeq}`;
+      const legacyKey = draftRecoveryId ? null : (draftDigest || ++finalizedSeq);
+      const key = JSON.stringify([sKey, sessionId ?? '', draftRecoveryId ?? null, legacyKey]);
       recentFinalized.delete(key);
-      recentFinalized.set(key, { scopeKey: sKey, expiresAt: at + turnTtlMs, event: frozenWire });
+      recentFinalized.set(key, { scopeKey: sKey, expiresAt: at + turnTtlMs, event: wireEvent });
       while (recentFinalized.size > maxActiveTurns) {
         const oldest = recentFinalized.keys().next().value;
         if (oldest === undefined) break;
@@ -92,7 +103,7 @@ export function createPreStepGuard(ports) {
       }
     }
     try {
-      ports.onTurnFinalized?.(event);
+      ports.onTurnFinalized?.({ scope: scope ?? null, ...wireEvent });
     } catch { /* best effort */ }
   }
 
@@ -119,6 +130,7 @@ export function createPreStepGuard(ports) {
       sessionId: entry.sessionId,
       expertId: entry.expertId,
       draftDigest: entry.draftDigest ?? null,
+      draftRecoveryId: entry.draftRecoveryId,
       draft: entry.draft,
     });
     while (expiredAttemptedTurns.size > maxActiveTurns) {
@@ -142,11 +154,7 @@ export function createPreStepGuard(ports) {
         }
         if (entry.delegateAttempted) {
           rememberExpiredAttempted(id, entry);
-          emitTurnFinalized({
-            scope: entry.scope ?? null,
-            sessionId: entry.sessionId,
-            expertId: entry.expertId,
-            ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
+          emitTurnFinalized(entry, {
             status: 'acceptance_unknown',
             code: 'EXPERT_ACCEPTANCE_UNKNOWN',
             preserveDraft: false,
@@ -154,11 +162,7 @@ export function createPreStepGuard(ports) {
           });
           continue;
         }
-        emitTurnFinalized({
-          scope: entry.scope ?? null,
-          sessionId: entry.sessionId,
-          expertId: entry.expertId,
-          ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
+        emitTurnFinalized(entry, {
           status: 'expired',
           code: 'EXPERT_SELECTION_INVALID',
           preserveDraft: true,
@@ -287,6 +291,11 @@ export function createPreStepGuard(ports) {
 
     const turnId = randomBytes(16).toString('hex');
     const createdAt = now();
+    const draftRecoveryId = typeof binding.draftRecoveryId === 'string'
+      && binding.draftRecoveryId !== binding.selectionToken
+      && DRAFT_RECOVERY_ID_RE.test(binding.draftRecoveryId)
+      ? binding.draftRecoveryId
+      : null;
     activeTurns.set(turnId, {
       turnId,
       selectionToken: binding.selectionToken,
@@ -295,6 +304,7 @@ export function createPreStepGuard(ports) {
       scopeEpoch: binding.scopeEpoch,
       scope,
       draftDigest: binding.draftDigest ?? null,
+      draftRecoveryId,
       draft,
       delegateAttempted: false,
       createdAt,
@@ -369,11 +379,7 @@ export function createPreStepGuard(ports) {
     }
 
     if (isNonEmptyString(delegatedTaskId)) {
-      emitTurnFinalized({
-        scope: turn.scope ?? null,
-        sessionId: turn.sessionId,
-        expertId: turn.expertId,
-        ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
+      emitTurnFinalized(turn, {
         status: 'delegated',
         preserveDraft: false,
       });
@@ -402,11 +408,7 @@ export function createPreStepGuard(ports) {
         notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
       });
       if (!expiredAttempted) {
-        emitTurnFinalized({
-          scope: turn.scope ?? null,
-          sessionId: turn.sessionId,
-          expertId: turn.expertId,
-          ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
+        emitTurnFinalized(turn, {
           status: 'acceptance_unknown',
           code: 'EXPERT_ACCEPTANCE_UNKNOWN',
           preserveDraft: false,
@@ -439,16 +441,7 @@ export function createPreStepGuard(ports) {
       });
 
     // Notify host event stream with minimal non-sensitive metadata (never broadcast raw draft text).
-    emitTurnFinalized({
-      scope: turn.scope ?? null,
-      sessionId: turn.sessionId,
-      expertId: turn.expertId,
-      ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
-      status: outcome.status,
-      ...(outcome.code ? { code: outcome.code } : {}),
-      preserveDraft: true,
-      ...(outcome.notice ? { notice: outcome.notice } : {}),
-    });
+    emitTurnFinalized(turn, outcome);
 
     return outcome;
   }

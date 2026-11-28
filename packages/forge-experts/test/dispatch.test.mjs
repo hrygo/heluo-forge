@@ -6,7 +6,7 @@ import { createExpertsHost } from '../src/index.mjs';
 import { API_PREFIX, REQUEST_HEADER, createExpertsRoutes } from '../src/routes.mjs';
 import { ExpertsError } from '../src/errors.mjs';
 
-function createMemoryStorage({ asyncGet = false, failPutPredicate = null, beforeGet, onPut } = {}) {
+function createMemoryStorage({ asyncGet = false, failPutPredicate = null, beforeGet, beforePut, onPut } = {}) {
   const domains = new Map();
   return {
     domains,
@@ -31,13 +31,17 @@ function createMemoryStorage({ asyncGet = false, failPutPredicate = null, before
               if (barrier) return barrier.then(() => value);
               return (asyncGet && spec.name === 'forge_experts_requests') ? Promise.resolve(value) : value;
             },
-            async put(key, value) {
-              if (typeof failPutPredicate === 'function' && failPutPredicate(spec.name, tableName, key, value)) {
-                throw new Error('simulated storage write failure');
-              }
-              const parsed = schema?.parse ? schema.parse(value) : value;
-              rows.set(key, parsed);
-              onPut?.(spec.name, tableName, parsed);
+            put(key, value) {
+              const commit = () => {
+                if (typeof failPutPredicate === 'function' && failPutPredicate(spec.name, tableName, key, value)) {
+                  throw new Error('simulated storage write failure');
+                }
+                const parsed = schema?.parse ? schema.parse(value) : value;
+                rows.set(key, parsed);
+                onPut?.(spec.name, tableName, parsed);
+              };
+              const barrier = beforePut?.(spec.name, tableName, value);
+              return barrier ? barrier.then(commit) : commit();
             },
           };
         },
@@ -88,6 +92,7 @@ function makeHarness({
   storage = createMemoryStorage(),
   evaluatePolicy = async () => ({ decision: 'allow' }),
   backend = null,
+  iamOrgId = 'org-alpha',
   lookupByRequest,
   onCorrelationPersistError,
 } = {}) {
@@ -110,7 +115,7 @@ function makeHarness({
 
   const host = createExpertsHost({
     config: { managementEnabled: true, dispatchEnabled },
-    getIamSession: () => ({ state: 'ready', issuer: scope.issuer, subject: scope.subject, orgId: scope.orgId }),
+    getIamSession: () => ({ state: 'ready', issuer: scope.issuer, subject: scope.subject, orgId: iamOrgId }),
     getConnection: () => ({ requestRejection: () => undefined }),
     openStorageDomain: (spec) => storage.open(spec),
     resolveDelegraScope: async () => scope,
@@ -228,6 +233,7 @@ function makeHarness({
     setCallableInScope: (value) => { callableInScope = value; },
     setCreateBehavior: (value) => { createBehavior = value; },
     setSubject: (value) => { scope.subject = value; },
+    setIamOrgId: (value) => { iamOrgId = value; },
     getCreateCalls: () => createCalls,
     followupCalls,
     async enableExpert() {
@@ -243,6 +249,27 @@ function makeHarness({
       return put.body.editToken;
     },
   };
+}
+
+async function submitUnknownTask(h) {
+  await h.enableExpert();
+  h.setCreateBehavior('unknown');
+  const draft = { sessionId: 'sess-1', taskText: 'Pending task' };
+  const selected = await invokeRoute(h.host, {
+    method: 'POST',
+    path: `${API_PREFIX}/selections`,
+    headers: mutationHeaders(),
+    body: { ...draft, expertId: 'exp-fin-1', scopeEpoch: 2 },
+  });
+  assert.equal(selected.status, 201);
+  const submitted = await invokeRoute(h.host, {
+    method: 'POST',
+    path: `${API_PREFIX}/tasks`,
+    headers: mutationHeaders(),
+    body: { ...draft, selectionToken: selected.body.selectionToken },
+  });
+  assert.equal(submitted.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+  return submitted.body.error.details.requestId;
 }
 
 test('end-to-end dispatch route flow: prepare, dispatch, readback, result, followup, cancel, and minimal #247 correlation persistence', async () => {
@@ -1495,6 +1522,156 @@ for (const { olderRead, failAcceptanceWrite } of [
   });
 }
 
+for (const kv of ['synchronous', 'asynchronous']) {
+  test(`an overlapping 404 keeps a request discoverable across restart after an acceptance write fails with ${kv} KV (#484)`, async () => {
+    const requestId = 'req-0001';
+    const receipt = { taskId: 'task-accepted', requestId, status: 'running' };
+    const oldLookup = Promise.withResolvers();
+    const oldLookupStarted = Promise.withResolvers();
+    const newLookup = Promise.withResolvers();
+    const newLookupStarted = Promise.withResolvers();
+    const oldWriteStarted = Promise.withResolvers();
+    const releaseOldWrite = Promise.withResolvers();
+    let lookupCount = 0;
+    let failAcceptanceWrite = true;
+    const storage = createMemoryStorage({
+      asyncGet: kv === 'asynchronous',
+      failPutPredicate: (domain, table, _key, record) => failAcceptanceWrite
+        && domain === 'forge_experts_requests' && table === 'correlations' && record.status === 'accepted',
+      beforePut(domain, table, record) {
+        if (domain !== 'forge_experts_requests' || table !== 'correlations' || record.status !== 'not_found') return;
+        oldWriteStarted.resolve();
+        newLookup.resolve(receipt);
+        if (kv === 'asynchronous') return releaseOldWrite.promise;
+      },
+    });
+    const reconcile = (host) => invokeRoute(host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    const h = makeHarness({
+      storage,
+      lookupByRequest() {
+        lookupCount += 1;
+        if (lookupCount === 1) {
+          oldLookupStarted.resolve();
+          return oldLookup.promise;
+        }
+        assert.equal(lookupCount, 2);
+        newLookupStarted.resolve();
+        return newLookup.promise;
+      },
+    });
+    await h.host.open();
+    try {
+      assert.equal(await submitUnknownTask(h), requestId);
+      const older = reconcile(h.host);
+      await oldLookupStarted.promise;
+      const newer = invokeRoute(h.host, { path: `${API_PREFIX}/tasks/by-request/${requestId}` });
+      await newLookupStarted.promise;
+      oldLookup.reject(new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task unavailable during older read'));
+      // Either the 404 is deferred immediately, or it reaches the storage gate before the newer response settles.
+      await Promise.race([older, oldWriteStarted.promise]);
+      newLookup.resolve(receipt);
+      if (kv === 'asynchronous') await new Promise(setImmediate);
+      releaseOldWrite.resolve();
+
+      const [stale, accepted] = await Promise.all([older, newer]);
+      assert.equal(accepted.status, 200);
+      assert.equal(accepted.body.taskId, receipt.taskId);
+      const pending = await invokeRoute(h.host, { path: `${API_PREFIX}/tasks/pending` });
+      assert.deepEqual(pending.body.items.map(({ requestId, status }) => [requestId, status]), [[requestId, 'unknown']]);
+      assert.equal(stale.status, 200);
+      assert.deepEqual(stale.body, { reconciled: [], notFound: [], stillPending: [requestId] });
+    } finally {
+      releaseOldWrite.resolve();
+      await h.host.close();
+    }
+
+    failAcceptanceWrite = false;
+    const reopened = makeHarness({ storage, lookupByRequest: async () => receipt });
+    await reopened.host.open();
+    try {
+      const recovered = await reconcile(reopened.host);
+      assert.equal(recovered.status, 200);
+      assert.equal(recovered.body.reconciled[0]?.taskId, receipt.taskId);
+      assert.deepEqual(recovered.body.stillPending, []);
+      assert.equal(reopened.getCreateCalls(), 0);
+      const pending = await invokeRoute(reopened.host, { path: `${API_PREFIX}/tasks/pending` });
+      assert.deepEqual(pending.body.items, []);
+    } finally {
+      await reopened.host.close();
+    }
+  });
+}
+
+test('an authoritative success after a settled 404 reopens recovery if its acceptance write fails (#484)', async () => {
+  let failAcceptanceWrite = true;
+  let failCorrelationRead = false;
+  let failIndexWrite = false;
+  let lookupCount = 0;
+  const storage = createMemoryStorage({
+    beforeGet(domain, table) {
+      if (failCorrelationRead && domain === 'forge_experts_requests' && table === 'correlations') {
+        throw new Error('Simulated correlation read failure');
+      }
+    },
+    failPutPredicate: (domain, table, _key, record) => domain === 'forge_experts_requests'
+      && ((failIndexWrite && table === 'pending_index')
+        || (failAcceptanceWrite && table === 'correlations' && record.status === 'accepted')),
+  });
+  const h = makeHarness({
+    storage,
+    lookupByRequest: async ({ requestId }) => {
+      if (++lookupCount === 1) throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task unavailable');
+      return { taskId: 'task-accepted', requestId, status: 'running' };
+    },
+  });
+  const batch = () => invokeRoute(h.host, {
+    method: 'POST',
+    path: `${API_PREFIX}/tasks/reconcile`,
+    headers: mutationHeaders(),
+  });
+  const pending = () => invokeRoute(h.host, { path: `${API_PREFIX}/tasks/pending` });
+  await h.host.open();
+  try {
+    const requestId = await submitUnknownTask(h);
+    const notFound = await batch();
+    assert.equal(notFound.status, 200);
+    assert.deepEqual(notFound.body, { reconciled: [], notFound: [requestId], stillPending: [] });
+    assert.deepEqual((await pending()).body.items, []);
+
+    const manual = () => invokeRoute(h.host, { path: `${API_PREFIX}/tasks/by-request/${requestId}` });
+    failIndexWrite = true;
+    const indexFailure = await manual();
+    assert.equal(indexFailure.status, 503);
+    assert.equal(indexFailure.body.error.code, 'EXPERT_STORAGE_UNAVAILABLE');
+    failIndexWrite = false;
+
+    failCorrelationRead = true;
+    const definitive = await manual();
+    assert.equal(definitive.status, 200);
+    assert.equal(definitive.body.taskId, 'task-accepted');
+    assert.equal(definitive.body.correlation, null);
+    failCorrelationRead = false;
+    assert.deepEqual((await pending()).body.items.map(({ requestId, status }) => [requestId, status]), [[requestId, 'unknown']]);
+
+    const late = await manual();
+    assert.equal(late.status, 200);
+    assert.equal(late.body.taskId, 'task-accepted');
+    assert.deepEqual((await pending()).body.items.map(({ requestId, status }) => [requestId, status]), [[requestId, 'unknown']]);
+
+    failAcceptanceWrite = false;
+    const recovered = await batch();
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.body.reconciled[0]?.taskId, 'task-accepted');
+    assert.deepEqual((await pending()).body.items, []);
+  } finally {
+    await h.host.close();
+  }
+});
+
 test('followupTask rejects reused requestId with conflicting payload (409 EXPERT_IDEMPOTENCY_CONFLICT) and GET /turns/finalized returns scoped metadata (#484)', async () => {
   const h = makeHarness({ dispatchEnabled: true });
   await h.host.open();
@@ -1596,7 +1773,6 @@ for (const blockedTable of ['pending_index', 'correlations']) {
       const oldList = invokeRoute(h.host, { path });
       await readStarted.promise;
       h.setSubject('emp-1002');
-      const current = await h.host.scope.resolveForRequest();
       releaseRead.resolve();
 
       const stale = await oldList;
@@ -1605,7 +1781,7 @@ for (const blockedTable of ['pending_index', 'correlations']) {
       assert.equal('items' in stale.body, false);
       const currentList = await invokeRoute(h.host, { path });
       assert.equal(currentList.status, 200);
-      assert.deepEqual(currentList.body, { scopeEpoch: current.scopeEpoch, items: [] });
+      assert.deepEqual(currentList.body, { scopeEpoch: 3, items: [] });
     } finally {
       releaseRead.resolve();
       await h.host.close();
@@ -1693,64 +1869,72 @@ test('concurrent followups with the same requestId persist and deliver only the 
   }
 });
 
-test('POST /tasks/reconcile verifies IAM identity again before delivering a batch (#484)', async () => {
-  const lookupStarted = Promise.withResolvers();
-  const releaseLookup = Promise.withResolvers();
-  const h = makeHarness({
-    async lookupByRequest({ requestId }) {
-      lookupStarted.resolve();
-      await releaseLookup.promise;
-      return { taskId: 'task-old-employee', requestId, status: 'running' };
-    },
+for (const changedContext of ['employee', 'organization']) {
+  test(`POST /tasks/reconcile rejects a changed IAM ${changedContext} before delivering a batch or SSE (#484)`, async () => {
+    const lookupStarted = Promise.withResolvers();
+    const releaseLookup = Promise.withResolvers();
+    const h = makeHarness({
+      iamOrgId: 'iam-org-initial',
+      async lookupByRequest({ requestId }) {
+        lookupStarted.resolve();
+        await releaseLookup.promise;
+        return { taskId: 'task-old-employee', requestId, status: 'running' };
+      },
+    });
+    await h.host.open();
+    try {
+      await h.enableExpert();
+      const selection = await invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/selections`,
+        headers: mutationHeaders(),
+        body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Initial task' },
+      });
+      assert.equal(selection.status, 201);
+      h.setCreateBehavior('unknown');
+      const submitted = await invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/tasks`,
+        headers: mutationHeaders(),
+        body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Initial task' },
+      });
+      assert.equal(submitted.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+      // A verified Delegra organization can differ from the IAM context used to resolve it.
+      const pending = await invokeRoute(h.host, { path: `${API_PREFIX}/tasks/pending` });
+      assert.equal(pending.status, 200);
+      assert.equal(pending.body.items.length, 1);
+
+      const events = [];
+      const stream = Object.assign(new EventEmitter(), { method: 'GET', url: `${API_PREFIX}/events`, headers: {} });
+      await h.host.handleRequest(stream, {
+        setHeader() {},
+        write: (frame) => events.push(String(frame)),
+        end() {},
+      });
+      assert.equal(h.host.routes.clientCount(), 1);
+
+      const inFlight = invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/tasks/reconcile`,
+        headers: mutationHeaders(),
+      });
+      await lookupStarted.promise;
+      if (changedContext === 'employee') h.setSubject('emp-1002');
+      else h.setIamOrgId('iam-org-next');
+      releaseLookup.resolve();
+
+      // No other experts request has advanced the cached scope epoch since the IAM switch.
+      const stale = await inFlight;
+      assert.equal(stale.status, 409);
+      assert.deepEqual(Object.keys(stale.body), ['error']);
+      assert.equal(stale.body.error.code, 'EXPERT_SCOPE_MISMATCH');
+      assert.doesNotMatch(events.join(''), /task-reconciled|task-old-employee|req-0001/);
+    } finally {
+      releaseLookup.resolve();
+      await h.host.close();
+    }
   });
-  await h.host.open();
-  try {
-    await h.enableExpert();
-    const selection = await invokeRoute(h.host, {
-      method: 'POST',
-      path: `${API_PREFIX}/selections`,
-      headers: mutationHeaders(),
-      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Initial task' },
-    });
-    assert.equal(selection.status, 201);
-    h.setCreateBehavior('unknown');
-    const submitted = await invokeRoute(h.host, {
-      method: 'POST',
-      path: `${API_PREFIX}/tasks`,
-      headers: mutationHeaders(),
-      body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Initial task' },
-    });
-    assert.equal(submitted.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
-
-    const events = [];
-    const stream = Object.assign(new EventEmitter(), { method: 'GET', url: `${API_PREFIX}/events`, headers: {} });
-    await h.host.handleRequest(stream, {
-      setHeader() {},
-      write: (frame) => events.push(String(frame)),
-      end() {},
-    });
-    assert.equal(h.host.routes.clientCount(), 1);
-
-    const inFlight = invokeRoute(h.host, {
-      method: 'POST',
-      path: `${API_PREFIX}/tasks/reconcile`,
-      headers: mutationHeaders(),
-    });
-    await lookupStarted.promise;
-    h.setSubject('emp-1002');
-    releaseLookup.resolve();
-
-    // No other experts request has advanced the cached scope epoch since the IAM switch.
-    const stale = await inFlight;
-    assert.equal(stale.status, 409);
-    assert.deepEqual(Object.keys(stale.body), ['error']);
-    assert.equal(stale.body.error.code, 'EXPERT_SCOPE_MISMATCH');
-    assert.doesNotMatch(events.join(''), /task-reconciled|task-old-employee|req-0001/);
-  } finally {
-    releaseLookup.resolve();
-    await h.host.close();
-  }
-});
+}
 
 test('reconcilePendingRequests pins scope and drops stale lookup results without mutating old pending_index or broadcasting when identity switches mid-pass (#484)', async () => {
   const sharedStorage = createMemoryStorage();

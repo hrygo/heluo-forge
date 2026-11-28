@@ -230,6 +230,8 @@ window.__ModuleLoader__.load({
       const isCompleted = status === 'completed' || status === 'succeeded';
       const isWaitingUser = status === 'waiting_user';
       const isUnknown = status === 'unknown' || status === 'pending_delivery';
+      const isInaccessible = status === 'not_found';
+      const canReconcile = Boolean(requestId && (isUnknown || isInaccessible || !taskId));
       const isCancelled = status === 'cancelled' || status === 'cancelling' || task?.cancelRequested === true;
       const authorizedSources = filterAuthorizedCardItems(task?.sources);
       const authorizedArtifacts = filterAuthorizedCardItems(task?.artifacts);
@@ -250,9 +252,9 @@ window.__ModuleLoader__.load({
         isUnknown,
         isWaitingUser,
         cancelRequested: isCancelled,
-        canReconcile: Boolean(requestId && (isUnknown || !taskId)),
-        showReconcileAction: Boolean(requestId && (isUnknown || !taskId)),
-        canRefresh: Boolean(taskId && !isUnknown),
+        canReconcile,
+        showReconcileAction: canReconcile,
+        canRefresh: Boolean(taskId && !isUnknown && !isInaccessible),
         showFollowupInput: Boolean(isWaitingUser && taskId),
         canCancel: Boolean(taskId && !isTerminal && !isCancelled),
         showCancelAction: Boolean(taskId && !isTerminal && !isCancelled),
@@ -349,7 +351,7 @@ window.__ModuleLoader__.load({
       const [followupText, setFollowupText] = React.useState('');
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
-      const pendingFollowupBackupRef = React.useRef(null);
+      const pendingFollowupRef = React.useRef(null);
       const taskRef = React.useRef(initial);
       const operationRef = React.useRef(null);
       const reconcileVersionRef = React.useRef(0);
@@ -359,6 +361,8 @@ window.__ModuleLoader__.load({
         && !sameCardTask(taskRef.current, initial);
       const model = deriveTaskCardModel(switchedTask ? initial : task);
       const activeRequestId = model.requestId;
+      const showRetainedDraft = !switchedTask && model.status === 'not_found'
+        && pendingFollowupRef.current?.requestId === activeRequestId;
       const showRaw = rawExpanded && !switchedTask;
 
       // Keep the latest committed card data available to async callbacks before React renders it.
@@ -373,7 +377,6 @@ window.__ModuleLoader__.load({
       function beginOperation() {
         if (switchedTask || operationRef.current) return null;
         const operation = {
-          task: taskRef.current,
           taskId: model.taskId,
           requestId: model.requestId,
           reconcileVersion: reconcileVersionRef.current,
@@ -412,18 +415,12 @@ window.__ModuleLoader__.load({
         return true;
       }
 
-      function applyNotFound(requestId) {
-        const backup = pendingFollowupBackupRef.current;
-        if (backup?.followupRequestId === requestId) {
-          pendingFollowupBackupRef.current = null;
-          updateTask(backup.task);
-          setNotice('已确认本次追问未被远端受理，已恢复原任务状态与追问草稿，可手动重新发送。');
-          return true;
-        }
-
+      function applyNotFound() {
         const current = taskRef.current;
         if (current?.status === 'not_found') return false;
         if (normalizeCardId(current?.taskId) && current.status !== 'unknown' && current.status !== 'pending_delivery') return false;
+        // A by-request 404 can be an ACL denial even after a follow-up was accepted.
+        if (pendingFollowupRef.current) resultAccessDeniedRef.current = true;
         updateTask(mergeTaskGeneration(current, { status: 'not_found' }, { resetPreviousResult: true }));
         setRawExpanded(false);
         setNotice(ERROR_NOTICE.EXPERT_TASK_NOT_FOUND);
@@ -436,13 +433,13 @@ window.__ModuleLoader__.load({
         if (switchedTask) {
           operationRef.current = null;
           resultAccessDeniedRef.current = false;
-          pendingFollowupBackupRef.current = null;
+          pendingFollowupRef.current = null;
           updateTask(initial);
           setBusy(false);
           setFollowupText('');
           setRawExpanded(false);
           setNotice(null);
-        } else if (!pendingFollowupBackupRef.current
+        } else if (!pendingFollowupRef.current
           && (taskRef.current?.status !== 'not_found' || (initial?.status !== 'unknown' && initial?.status !== 'pending_delivery'))) {
           updateTask(mergeTaskGeneration(taskRef.current, initial));
         }
@@ -454,19 +451,19 @@ window.__ModuleLoader__.load({
           const current = taskRef.current;
           if (entry?.requestId !== activeRequestId || normalizeCardId(current?.requestId) !== activeRequestId) return;
           if (entry.notFound === true) {
-            if (applyNotFound(activeRequestId)) reconcileVersionRef.current += 1;
+            if (applyNotFound()) reconcileVersionRef.current += 1;
             return;
           }
           if (isStaleGeneration(current, entry)) return;
           const patch = pickTaskReconcileFields(entry, current);
-          const backup = pendingFollowupBackupRef.current;
-          const acceptedFollowup = backup?.followupRequestId === activeRequestId;
+          const pendingFollowup = pendingFollowupRef.current;
+          const acceptedFollowup = pendingFollowup?.requestId === activeRequestId;
           // The Host can announce the same projection in both SSE and the batch reply.
           if (!acceptedFollowup && Object.entries(patch).every(([key, value]) => Object.is(current[key], value))) return;
           reconcileVersionRef.current += 1;
           if (acceptedFollowup) {
-            pendingFollowupBackupRef.current = null;
-            setFollowupText((curr) => (curr === backup.submittedText ? '' : curr));
+            pendingFollowupRef.current = null;
+            setFollowupText((curr) => (curr === pendingFollowup.submittedText ? '' : curr));
           }
           setRawExpanded(false);
           updateTask(mergeTaskGeneration(current, patch));
@@ -486,7 +483,7 @@ window.__ModuleLoader__.load({
           const res = await reconcileTaskByRequest(model.requestId);
           if (!isCurrentOperation(operation) || isSupersededRead(operation, res.body)) return;
           if (!res.ok) {
-            if (resultCode(res) !== 'EXPERT_TASK_NOT_FOUND' || !applyNotFound(model.requestId)) {
+            if (resultCode(res) !== 'EXPERT_TASK_NOT_FOUND' || !applyNotFound()) {
               setNotice(resultNotice(res));
             }
             return;
@@ -496,9 +493,9 @@ window.__ModuleLoader__.load({
           const returnedTaskId = normalizeCardId(res.body?.taskId);
           if (currentTaskId && returnedTaskId && currentTaskId !== returnedTaskId) return;
 
-          if (pendingFollowupBackupRef.current?.followupRequestId === model.requestId) {
-            const acceptedText = pendingFollowupBackupRef.current.submittedText;
-            pendingFollowupBackupRef.current = null;
+          if (pendingFollowupRef.current?.requestId === model.requestId) {
+            const acceptedText = pendingFollowupRef.current.submittedText;
+            pendingFollowupRef.current = null;
             setFollowupText((curr) => (curr === acceptedText ? '' : curr));
           }
           setRawExpanded(false);
@@ -552,7 +549,7 @@ window.__ModuleLoader__.load({
               }
             }
           }
-          if (pendingFollowupBackupRef.current || isSupersededRead(operation, finalPatch)) return;
+          if (pendingFollowupRef.current || isSupersededRead(operation, finalPatch)) return;
           const current = taskRef.current;
           if (advancesTaskGeneration(current, finalPatch)) setRawExpanded(false);
           if (readAuthorizedResult) resultAccessDeniedRef.current = false;
@@ -571,7 +568,7 @@ window.__ModuleLoader__.load({
         const submittedText = followupText;
         const followupRequestId = generateClientRequestId();
         const markFollowupUnknown = (requestId) => {
-          pendingFollowupBackupRef.current = { task: operation.task, followupRequestId: requestId, submittedText };
+          pendingFollowupRef.current = { requestId, submittedText };
           updateTask({ ...taskRef.current, status: 'unknown', requestId });
         };
         try {
@@ -587,7 +584,7 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
-          pendingFollowupBackupRef.current = null;
+          pendingFollowupRef.current = null;
           setFollowupText((curr) => (curr === submittedText ? '' : curr));
           setRawExpanded(false);
           updateTask(mergeTaskGeneration(taskRef.current, { ...pickTaskMutationFields(res.body), requestId: followupRequestId }, { resetPreviousResult: true }));
@@ -660,9 +657,19 @@ window.__ModuleLoader__.load({
           }, showRaw ? '收起专家原文' : '展开专家原文'),
           showRaw ? h('pre', { 'data-testid': 'fexp-raw-content' }, model.rawResult) : null,
         ) : null,
-        model.showFollowupInput ? h('div', { 'data-testid': 'fexp-followup-box' },
-          h('input', { type: 'text', value: switchedTask ? '' : followupText, disabled: busy, placeholder: '输入补充说明…', onChange: (e) => setFollowupText(e.target.value) }),
-          h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-followup-btn', onClick: handleFollowup }, '发送追问'),
+        model.showFollowupInput || showRetainedDraft ? h('div', { 'data-testid': 'fexp-followup-box' },
+          h('input', {
+            type: 'text',
+            value: switchedTask ? '' : followupText,
+            disabled: busy,
+            readOnly: showRetainedDraft,
+            'aria-label': showRetainedDraft ? '待对账的追问草稿' : '补充说明',
+            placeholder: '输入补充说明…',
+            onChange: (e) => setFollowupText(e.target.value),
+          }),
+          model.showFollowupInput
+            ? h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-followup-btn', onClick: handleFollowup }, '发送追问')
+            : null,
         ) : null,
         h('div', { className: 'fexp-task-card-actions' },
           model.canReconcile ? h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-task-reconcile', onClick: handleReconcile }, '按原请求号对账') : null,
@@ -943,9 +950,16 @@ window.__ModuleLoader__.load({
       const reconciler = createReconcileTrigger();
       const triggerReconcile = reconciler.trigger;
 
-      const rememberPendingDraft = (sessionKey, draft) => {
-        pendingDrafts.delete(sessionKey);
-        pendingDrafts.set(sessionKey, draft);
+      const draftBufferKey = (sessionId, { draftRecoveryId, draftDigest } = {}) => {
+        const recoveryId = normalizeCardId(draftRecoveryId);
+        if (recoveryId) return JSON.stringify([sessionId, 'recovery', recoveryId]);
+        const digest = normalizeCardId(draftDigest);
+        return digest ? JSON.stringify([sessionId, 'digest', digest]) : JSON.stringify([sessionId]);
+      };
+
+      const rememberPendingDraft = (key, draft) => {
+        pendingDrafts.delete(key);
+        pendingDrafts.set(key, draft);
         while (pendingDrafts.size > MAX_PENDING_DRAFTS) {
           const oldest = pendingDrafts.keys().next().value;
           if (oldest === undefined) break;
@@ -1052,13 +1066,12 @@ window.__ModuleLoader__.load({
                   notice: resultNotice(result),
                 };
               }
-              if (typeof sessionId === 'string' && sessionId.trim()) {
-                const cleanSession = sessionId.trim();
-                const digestKey = typeof result.body.draftDigest === 'string' && result.body.draftDigest.trim()
-                  ? `${cleanSession}:${result.body.draftDigest.trim()}`
-                  : null;
-                if (digestKey) rememberPendingDraft(digestKey, draft);
-                rememberPendingDraft(cleanSession, draft);
+              const cleanSession = normalizeCardId(sessionId);
+              if (cleanSession) {
+                rememberPendingDraft(draftBufferKey(cleanSession, result.body), draft);
+                if (!normalizeCardId(result.body.draftRecoveryId) && normalizeCardId(result.body.draftDigest)) {
+                  rememberPendingDraft(draftBufferKey(cleanSession), draft);
+                }
               }
               return {
                 ok: true,
@@ -1089,21 +1102,18 @@ window.__ModuleLoader__.load({
       const handleTurnFinalized = (payload, { requireBufferedMatch = false } = {}) => {
         // An expired attempt can still receive a definite outcome. Keep its draft for that outcome.
         if (payload?.status === 'acceptance_unknown') return;
-        const sessionKey = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : '';
-        const digest = typeof payload?.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
-        const exactKey = sessionKey && digest ? `${sessionKey}:${digest}` : null;
-        let recoveredDraft = null;
-        if (exactKey) {
-          if (pendingDrafts.has(exactKey)) {
-            recoveredDraft = pendingDrafts.get(exactKey);
-            pendingDrafts.delete(exactKey);
-            if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
+        const sessionKey = normalizeCardId(payload?.sessionId);
+        const recoveryId = normalizeCardId(payload?.draftRecoveryId);
+        const key = sessionKey ? draftBufferKey(sessionKey, payload) : null;
+        const recoveredDraft = pendingDrafts.get(key) ?? null;
+        if (recoveredDraft) {
+          pendingDrafts.delete(key);
+          if (!recoveryId) {
+            const legacySessionKey = draftBufferKey(sessionKey);
+            if (pendingDrafts.get(legacySessionKey) === recoveredDraft) pendingDrafts.delete(legacySessionKey);
           }
-        } else if (sessionKey && pendingDrafts.has(sessionKey)) {
-          recoveredDraft = pendingDrafts.get(sessionKey);
-          pendingDrafts.delete(sessionKey);
         }
-        if (requireBufferedMatch && !recoveredDraft) return;
+        if ((recoveryId || requireBufferedMatch) && !recoveredDraft) return;
         if (payload?.preserveDraft !== true) return;
         const notice = typeof payload.notice === 'string' && payload.notice
           ? payload.notice
