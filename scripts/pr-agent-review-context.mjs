@@ -216,14 +216,15 @@ export function hasHistoricalReviewEvidence(rechecks, blockers) {
 }
 
 async function readChecks(github, head) {
+  const perPage = 100;
   const checks = { total: 0, inspected: 0, success: 0, skipped: 0, pending: 0, other: 0 };
   const seen = new Set();
   for (let page = 1; page <= 3; page++) {
-    const response = await github.get(`/commits/${head}/check-runs?filter=latest&per_page=100&page=${page}`,
+    const response = await github.get(`/commits/${head}/check-runs?filter=latest&per_page=${perPage}&page=${page}`,
       'Cannot read checks for the reviewed head');
     const { total_count: total, check_runs: runs } = response;
     if (!Number.isSafeInteger(total) || total < 0 || (page > 1 && total !== checks.total) ||
-        !Array.isArray(runs) || runs.length > 100 || checks.inspected + runs.length > total) return null;
+        !Array.isArray(runs) || runs.length !== Math.min(perPage, total - checks.inspected)) return null;
     checks.total = total;
     for (const run of runs) {
       if (!validId(run?.id) || seen.has(run.id) || run.head_sha !== head || typeof run.status !== 'string') return null;
@@ -235,7 +236,7 @@ async function readChecks(github, head) {
       else checks.other++;
     }
     checks.inspected = seen.size;
-    if (runs.length < 100 || checks.inspected === total) break;
+    if (checks.inspected === total) break;
   }
   return checks;
 }
