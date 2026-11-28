@@ -119,7 +119,7 @@ export function createPreStepGuard(ports) {
       sessionId: entry.sessionId,
       expertId: entry.expertId,
       draftDigest: entry.draftDigest ?? null,
-      selectionToken: entry.selectionToken ?? null,
+      draft: entry.draft,
     });
     while (expiredAttemptedTurns.size > maxActiveTurns) {
       const oldest = expiredAttemptedTurns.keys().next().value;
@@ -137,6 +137,9 @@ export function createPreStepGuard(ports) {
         if (entry?.selectionToken && activeTokens.get(entry.selectionToken) === id) {
           activeTokens.delete(entry.selectionToken);
         }
+        if (entry?.selectionToken) {
+          try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
+        }
         if (entry.delegateAttempted) {
           rememberExpiredAttempted(id, entry);
           emitTurnFinalized({
@@ -150,9 +153,6 @@ export function createPreStepGuard(ports) {
             notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
           });
           continue;
-        }
-        if (entry?.selectionToken) {
-          try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
         }
         emitTurnFinalized({
           scope: entry.scope ?? null,
@@ -297,7 +297,6 @@ export function createPreStepGuard(ports) {
       draftDigest: binding.draftDigest ?? null,
       draft,
       delegateAttempted: false,
-      delegatedTaskId: null,
       createdAt,
       expiresAt: createdAt + turnTtlMs,
     });
@@ -356,46 +355,20 @@ export function createPreStepGuard(ports) {
     if (!cleanTurnId) {
       return Object.freeze({ status: 'unbound', expertParticipated: false, completed: false, preserveDraft: false });
     }
-    const turn = activeTurns.get(cleanTurnId);
+    const expiredAttempted = expiredAttemptedTurns.get(cleanTurnId);
+    const turn = activeTurns.get(cleanTurnId) ?? expiredAttempted;
     if (!turn) {
-      const expiredAttempted = expiredAttemptedTurns.get(cleanTurnId);
-      if (expiredAttempted) {
-        expiredAttemptedTurns.delete(cleanTurnId);
-        if (isNonEmptyString(delegatedTaskId)) {
-          const cleanTaskId = delegatedTaskId.trim();
-          if (expiredAttempted.selectionToken) {
-            try { ports.discardSelection?.(expiredAttempted.selectionToken); } catch { /* best effort */ }
-          }
-          emitTurnFinalized({
-            scope: expiredAttempted.scope ?? null,
-            sessionId: expiredAttempted.sessionId,
-            expertId: expiredAttempted.expertId,
-            ...(expiredAttempted.draftDigest ? { draftDigest: expiredAttempted.draftDigest } : {}),
-            status: 'delegated',
-            preserveDraft: false,
-          });
-          return Object.freeze({
-            status: 'delegated',
-            expertParticipated: true,
-            completed: false,
-            taskId: cleanTaskId,
-            expertId: expiredAttempted.expertId,
-            sessionId: expiredAttempted.sessionId,
-            preserveDraft: false,
-          });
-        }
-      }
       return Object.freeze({ status: 'unbound', expertParticipated: false, completed: false, preserveDraft: false });
     }
+    expiredAttemptedTurns.delete(cleanTurnId);
     activeTurns.delete(cleanTurnId);
-    if (activeTokens.get(turn.selectionToken) === cleanTurnId) {
-      activeTokens.delete(turn.selectionToken);
+    if (turn.selectionToken) {
+      if (activeTokens.get(turn.selectionToken) === cleanTurnId) activeTokens.delete(turn.selectionToken);
+      // Invalidate an unused single-use selection on every final outcome.
+      try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
     }
 
     if (isNonEmptyString(delegatedTaskId)) {
-      turn.delegatedTaskId = delegatedTaskId.trim();
-      // Belt-and-suspenders single-use cleanup in case a custom host finalized without consuming via dispatchTask.
-      try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
       emitTurnFinalized({
         scope: turn.scope ?? null,
         sessionId: turn.sessionId,
@@ -408,18 +381,15 @@ export function createPreStepGuard(ports) {
         status: 'delegated',
         expertParticipated: true,
         completed: false,
-        taskId: turn.delegatedTaskId,
+        taskId: delegatedTaskId.trim(),
         expertId: turn.expertId,
         sessionId: turn.sessionId,
         preserveDraft: false,
       });
     }
 
-    // Ensure unused single-use selectionToken cannot be replayed after a failed or skipped turn.
-    try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
-
     const isAcceptanceUnknownError = error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN';
-    const isExpiredAttempted = !error && turn.delegateAttempted === true && now() >= turn.expiresAt;
+    const isExpiredAttempted = !error && (expiredAttempted || (turn.delegateAttempted === true && now() >= turn.expiresAt));
     if (isAcceptanceUnknownError || isExpiredAttempted) {
       const unknownOutcome = Object.freeze({
         status: 'acceptance_unknown',
@@ -431,16 +401,18 @@ export function createPreStepGuard(ports) {
         preserveDraft: false,
         notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
       });
-      emitTurnFinalized({
-        scope: turn.scope ?? null,
-        sessionId: turn.sessionId,
-        expertId: turn.expertId,
-        ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
-        status: 'acceptance_unknown',
-        code: 'EXPERT_ACCEPTANCE_UNKNOWN',
-        preserveDraft: false,
-        notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
-      });
+      if (!expiredAttempted) {
+        emitTurnFinalized({
+          scope: turn.scope ?? null,
+          sessionId: turn.sessionId,
+          expertId: turn.expertId,
+          ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
+          status: 'acceptance_unknown',
+          code: 'EXPERT_ACCEPTANCE_UNKNOWN',
+          preserveDraft: false,
+          notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+        });
+      }
       return unknownOutcome;
     }
 

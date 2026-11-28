@@ -1693,6 +1693,69 @@ test('SSE reconnect ready polls /turns/finalized and recovers draft finalized du
   }
 });
 
+for (const reconnect of [false, true]) {
+  test('interim acceptance_unknown keeps the exact draft for definite failure over ' + (reconnect ? 'reconnect polling' : 'SSE') + ' (#484)', async (t) => {
+    const eventSources = [];
+    const calls = [];
+    const sessionId = 'sess-late-denial';
+    const expertId = 'exp-fin-1';
+    const draftDigest = 'sha256:late-denial';
+    const draft = { taskText: 'Late policy denial draft', draftVersion: 7, reuseRefs: ['ref-reviewed'] };
+    const failed = { sessionId, expertId, draftDigest, status: 'failed', code: 'EXPERT_POLICY_DENIED', preserveDraft: true };
+    const { exported, restore } = loadClientModule({
+      eventSources,
+      async fetchImpl(url) {
+        calls.push(url);
+        if (url.includes('/mentions')) {
+          return cardJson(200, {
+            scopeEpoch: 5, viewVersion: 7,
+            candidates: [{ expertId, displayName: '经营分析专家', scopeEpoch: 5, viewVersion: 7 }],
+          });
+        }
+        if (url.endsWith('/selections')) return cardJson(201, { selectionToken: 'sel-late-denial', expertId, sessionId, draftDigest });
+        if (url.endsWith('/turns/finalized')) return cardJson(200, { scopeEpoch: 5, items: [failed, failed] });
+        if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [], stillPending: [] });
+        assert.fail(`Unexpected request ${url}`);
+      },
+    });
+    let source;
+    let dispose;
+    t.after(() => { dispose?.(); restore(); });
+    exported.apply({
+      slots: { inject(_name, register) { return register(); }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          source = spec;
+          return () => { source = null; };
+        },
+      },
+      effect(register) { dispose = register(); },
+    }, { dispatchEnabled: true });
+    const [picked] = await source.query('', { sessionId });
+    const recovered = [];
+    source.onDraftRecovery((event) => recovered.push(event));
+    assert.equal((await source.prepareSubmit({ picked, sessionId, ...draft })).ok, true);
+
+    const stream = eventSources[0];
+    stream.emit({
+      type: 'turn-finalized', sessionId, expertId, draftDigest, status: 'acceptance_unknown',
+      code: 'EXPERT_ACCEPTANCE_UNKNOWN', preserveDraft: false,
+    });
+    assert.deepEqual(recovered, [], 'uncertain acceptance must not restore the draft');
+    if (reconnect) stream.fail();
+    else stream.emit({ type: 'turn-finalized', ...failed });
+    stream.emit({ type: 'ready', scopeEpoch: 5, viewVersion: 7 });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].status, 'failed');
+    assert.equal(recovered[0].code, 'EXPERT_POLICY_DENIED');
+    assert.deepEqual(recovered[0].draft, draft);
+    assert.equal(calls.filter((url) => url.endsWith('/turns/finalized')).length, reconnect ? 1 : 0);
+    assert.equal(calls.filter((url) => url.endsWith('/selections')).length, 1);
+  });
+}
+
 test('ExpertTaskStatusCard ignores late handleRefresh response when a newer generation arrives via reconcile during /result (#484)', async () => {
   const previousWindow = globalThis.window;
   const previousFetch = globalThis.fetch;

@@ -16,7 +16,7 @@ function makeScope(overrides = {}) {
   });
 }
 
-function makeHarness({ dispatchEnabled = true, initialScope = makeScope() } = {}) {
+function makeHarness({ dispatchEnabled = true, initialScope = makeScope(), turnTtlMs, onTurnFinalized } = {}) {
   let activeScope = initialScope;
   let clock = 1_700_000_000_000;
   let mentionVersion = 1;
@@ -40,6 +40,9 @@ function makeHarness({ dispatchEnabled = true, initialScope = makeScope() } = {}
     resolveScope: async () => activeScope,
     inspectSelection: (params) => selection.inspect(params),
     discardSelection: (token) => selection.discard(token),
+    now: () => clock,
+    turnTtlMs,
+    onTurnFinalized,
   });
 
   return {
@@ -435,6 +438,58 @@ test('delegated turn finalizing past TTL preserves delegatedTaskId and never pro
   assert.equal(outcome.expertParticipated, true);
   assert.equal(outcome.taskId, 'task-late-42');
   assert.equal(outcome.preserveDraft, false);
+  assert.equal(selection.pendingCount(), 0);
+  assert.equal(prestep.listRecentFinalized(activeScope)[0].status, 'delegated');
+});
+
+test('late definite denial restores the original draft after a recent-turn poll prunes the attempted binding (#484)', async () => {
+  const events = [];
+  const h = makeHarness({ turnTtlMs: 10_000, onTurnFinalized: (event) => events.push(event) });
+  const draft = { taskText: '  Late policy denial draft  ', draftVersion: 7, reuseRefs: ['ref-reviewed'] };
+  const sessionId = 'sess-late-denial';
+  const expertId = 'exp-fin-1';
+  const selection = await h.selection.prepare({ ...draft, expertId, sessionId, scopeEpoch: 1, viewVersion: 1 });
+  const turnInput = { ...draft, sessionId, selectionToken: selection.selectionToken };
+  const turn = await h.prestep.prepareTurn(turnInput);
+  assert.equal(turn.allowed, true);
+  h.prestep.beforeToolCall({ turnId: turn.turnId, toolName: 'forge_experts.delegate', toolInput: turnInput });
+
+  h.advanceTime(15_000);
+  const scope = h.getScope();
+  const [interim] = h.prestep.listRecentFinalized(scope);
+  assert.equal(interim.status, 'acceptance_unknown');
+  assert.equal(interim.preserveDraft, false);
+  assert.equal('draft' in interim, false);
+  const pendingAfterPrune = h.selection.pendingCount();
+
+  const outcome = h.prestep.finalizeTurn({
+    turnId: turn.turnId,
+    error: new ExpertsError('EXPERT_POLICY_DENIED', 'Policy rejected the transfer'),
+  });
+  assert.deepEqual(outcome, {
+    status: 'failed',
+    code: 'EXPERT_POLICY_DENIED',
+    expertParticipated: false,
+    completed: false,
+    expertId,
+    sessionId,
+    preserveDraft: true,
+    draft,
+  });
+
+  const expectedEvent = {
+    sessionId, expertId, draftDigest: selection.draftDigest,
+    status: 'failed', code: 'EXPERT_POLICY_DENIED', preserveDraft: true,
+  };
+  assert.deepEqual(events[1], { scope, ...expectedEvent });
+  assert.deepEqual(h.prestep.listRecentFinalized(scope), [expectedEvent]);
+  assert.deepEqual(h.prestep.listRecentFinalized(makeScope({ subject: 'emp-bob' })), []);
+  assert.equal(pendingAfterPrune, 0);
+  const replay = await h.prestep.prepareTurn(turnInput);
+  assert.equal(replay.allowed, false);
+  assert.equal(replay.code, 'EXPERT_SELECTION_INVALID');
+  assert.equal(h.prestep.finalizeTurn({ turnId: turn.turnId }).status, 'unbound');
+  assert.equal(events.length, 2);
 });
 
 test('finalizeTurn treats EXPERT_ACCEPTANCE_UNKNOWN and expired attempted turns as acceptance_unknown (preserveDraft: false) and scopes listRecentFinalized (#484)', async () => {
@@ -485,4 +540,16 @@ test('finalizeTurn treats EXPERT_ACCEPTANCE_UNKNOWN and expired attempted turns 
   assert.equal(aliceRecent[0].sessionId, 'sess-u2');
   assert.equal('draft' in aliceRecent[0], false);
   assert.deepEqual(prestep.listRecentFinalized(bobScope), []);
+
+  // A final transport timeout after pruning keeps the already published unknown outcome.
+  const p3 = await selection.prepare({ expertId: 'exp-fin-1', sessionId: 'sess-u3', scopeEpoch: 1, viewVersion: 1, taskText: 'Late wire drop', draftVersion: 1 });
+  const t3 = await prestep.prepareTurn({ sessionId: 'sess-u3', selectionToken: p3.selectionToken, taskText: 'Late wire drop', draftVersion: 1 });
+  prestep.beforeToolCall({ turnId: t3.turnId, toolName: 'forge_experts.delegate', toolInput: { selectionToken: p3.selectionToken } });
+  clock += 15_000;
+  const recentBeforeLateResult = prestep.listRecentFinalized(aliceScope);
+  const out3 = prestep.finalizeTurn({ turnId: t3.turnId, error: new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'timeout') });
+  assert.equal(out3.status, 'acceptance_unknown');
+  assert.equal(out3.preserveDraft, false);
+  assert.equal('draft' in out3, false);
+  assert.deepEqual(prestep.listRecentFinalized(aliceScope), recentBeforeLateResult);
 });

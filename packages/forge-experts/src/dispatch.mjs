@@ -32,6 +32,10 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isPendingStatus(status) {
+  return status === 'pending_delivery' || status === 'unknown';
+}
+
 function normalizeReuseRefs(reuseRefs) {
   if (reuseRefs === undefined || reuseRefs === null) return Object.freeze([]);
   if (!Array.isArray(reuseRefs) || reuseRefs.length > MAX_REUSE_REFS) return null;
@@ -250,6 +254,7 @@ export const FollowupTaskBodySchema = Object.freeze({
  *   isDispatchEnabled: () => boolean,
  *   resolveScope: () => Promise<object>,
  *   assertScopeCurrent: (epoch: number, scope: object) => void,
+ *   assertIamIdentityCurrent?: (epoch: number, scope: object) => Promise<void>,
  *   consumeSelection: (params: object) => object,
  *   runInPreferenceBoundary: <T>(fn: () => Promise<T>) => Promise<T>,
  *   listConfirmedEnabled: (params: { scope: object, expertIds: string[] }) => Promise<Array<object>>,
@@ -279,7 +284,8 @@ export function createDispatchService(ports) {
   let table = null;
   let pendingIndexTable = null;
   let closed = false;
-  const pendingIndexQueues = new Map();
+  const requestStorageQueues = new Map();
+  const activeReadbacks = new Map();
   const inFlightReconciles = new Map();
   const inFlightDeliveries = new Set();
   const inFlightReconcileReadsByScope = new Map();
@@ -336,7 +342,8 @@ export function createDispatchService(ports) {
   async function close() {
     closed = true;
     taskContextById.clear();
-    pendingIndexQueues.clear();
+    requestStorageQueues.clear();
+    activeReadbacks.clear();
     inFlightReconciles.clear();
     inFlightDeliveries.clear();
     inFlightReconcileReadsByScope.clear();
@@ -368,74 +375,59 @@ export function createDispatchService(ports) {
     }
   }
 
-  function syncPendingIndex(scope, requestId, status, { strict = false } = {}) {
-    if (closed || !pendingIndexTable) {
-      if (strict) {
-        return Promise.reject(new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Pending request index storage is unavailable', {
-          retryable: true,
-        }));
-      }
-      return Promise.resolve();
-    }
-    const run = async () => {
-      if (closed || !pendingIndexTable) {
-        if (strict) {
-          throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Pending request index storage is unavailable', {
-            retryable: true,
-          });
-        }
-        return;
-      }
-      try {
-        const existing = await readPendingIndex(scope);
-        const isPending = status === 'pending_delivery' || status === 'unknown';
-        const filtered = existing.filter((id) => id !== requestId);
-        if (isPending) {
-          if (filtered.length >= MAX_PENDING_INDEX_IDS) {
-            if (strict) {
-              throw new ExpertsError('EXPERT_RATE_LIMITED', 'Pending request index capacity reached; reconcile pending requests before dispatching more', {
-                retryable: true,
-              });
-            }
-          } else {
-            filtered.push(requestId);
-          }
-        }
-        const unchanged = existing.length === filtered.length
-          && existing.every((id, idx) => id === filtered[idx]);
-        if (unchanged) return;
-        await pendingIndexTable.put(derivePendingIndexKey(scope), {
-          schemaVersion: 1,
-          requestIds: filtered,
-        });
-      } catch (error) {
-        try {
-          ports.onPendingIndexError?.({
-            requestId,
-            status,
-            message: error?.message ?? String(error),
-          });
-        } catch { /* diagnostics isolation */ }
-        if (strict) {
-          if (error instanceof ExpertsError) throw error;
-          throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to persist pending request index before outbound delivery', {
-            retryable: true,
-          });
-        }
-      }
-    };
-    const scopeKey = derivePendingIndexKey(scope);
-    const prev = pendingIndexQueues.get(scopeKey) ?? Promise.resolve();
-    const next = prev.then(run, run);
-    const settled = next.catch(() => {});
-    pendingIndexQueues.set(scopeKey, settled);
-    settled.finally(() => {
-      if (pendingIndexQueues.get(scopeKey) === settled) pendingIndexQueues.delete(scopeKey);
+  function runInRequestStorageBoundary(scope, run) {
+    // Both tables share one short, scope-local write boundary. Upstream reads and deliveries run outside it.
+    const key = derivePendingIndexKey(scope);
+    const previous = requestStorageQueues.get(key) ?? Promise.resolve();
+    const next = previous.then(run);
+    const tail = next.catch(() => {});
+    requestStorageQueues.set(key, tail);
+    tail.finally(() => {
+      if (requestStorageQueues.get(key) === tail) requestStorageQueues.delete(key);
     });
     return next;
   }
 
-  async function persistCorrelation(scope, record, { strictPendingIndex = false } = {}) {
+  async function syncPendingIndex(scope, requestId, status, { strict = false } = {}) {
+    try {
+      const existing = await readPendingIndex(scope);
+      const filtered = existing.filter((id) => id !== requestId);
+      if (isPendingStatus(status)) {
+        if (filtered.length >= MAX_PENDING_INDEX_IDS) {
+          if (strict) {
+            throw new ExpertsError('EXPERT_RATE_LIMITED', 'Pending request index capacity reached; reconcile pending requests before dispatching more', {
+              retryable: true,
+            });
+          }
+        } else {
+          filtered.push(requestId);
+        }
+      }
+      const unchanged = existing.length === filtered.length
+        && existing.every((id, idx) => id === filtered[idx]);
+      if (unchanged) return;
+      await pendingIndexTable.put(derivePendingIndexKey(scope), {
+        schemaVersion: 1,
+        requestIds: filtered,
+      });
+    } catch (error) {
+      try {
+        ports.onPendingIndexError?.({
+          requestId,
+          status,
+          message: error?.message ?? String(error),
+        });
+      } catch { /* diagnostics isolation */ }
+      if (strict) {
+        if (error instanceof ExpertsError) throw error;
+        throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to persist pending request index before outbound delivery', {
+          retryable: true,
+        });
+      }
+    }
+  }
+
+  async function writeCorrelation(scope, record, { stagePending = false } = {}) {
     if (closed || !table) {
       throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Request correlation storage is unavailable', {
         retryable: true,
@@ -445,47 +437,64 @@ export function createDispatchService(ports) {
     if (!validated.success) {
       throw new ExpertsError('EXPERT_INTERNAL_ERROR', `Invalid correlation record: ${validated.error}`);
     }
-    const key = deriveCorrelationKey({ ...scope, requestId: validated.data.requestId });
+    const { requestId, status } = validated.data;
+    const key = deriveCorrelationKey({ ...scope, requestId });
+    // Reserve discovery before staging a pending record. If the record write fails, reconciliation
+    // can inspect the reservation and clear it once storage confirms the record is absent.
+    if (stagePending) await syncPendingIndex(scope, requestId, status, { strict: true });
     try {
       await table.put(key, validated.data);
     } catch {
-      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to persist request correlation before outbound delivery', {
+      throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Failed to persist request correlation', {
         retryable: true,
       });
     }
-    await syncPendingIndex(scope, validated.data.requestId, validated.data.status, { strict: strictPendingIndex });
-    return validated.data;
+    if (!stagePending) await syncPendingIndex(scope, requestId, status);
   }
 
-  async function persistCorrelationBestEffort(scope, record) {
+  function stagePendingCorrelation(scope, record) {
+    return runInRequestStorageBoundary(scope, () => writeCorrelation(scope, record, { stagePending: true }));
+  }
+
+  async function writeCorrelationBestEffort(scope, record) {
     try {
-      await persistCorrelation(scope, record);
+      await writeCorrelation(scope, record);
     } catch (persistError) {
-      // Never swallow post-delivery correlation convergence failures silently:
-      // surface minimal non-sensitive metadata so stuck `pending_delivery` records remain observable.
+      // Surface minimal diagnostic metadata so stuck pending records remain observable.
       try {
         ports.onCorrelationPersistError?.({
           requestId: record.requestId,
           status: record.status,
           message: persistError?.message ?? String(persistError),
         });
-      } catch {
-        // Diagnostics callback must not override the primary dispatch outcome.
-      }
+      } catch { /* diagnostics isolation */ }
     }
   }
 
+  function persistCorrelationBestEffort(scope, record) {
+    return runInRequestStorageBoundary(scope, () => writeCorrelationBestEffort(scope, record));
+  }
+
+  async function readCorrelationFromStorage(scope, requestId) {
+    if (closed || !table) throw new ExpertsError('EXPERT_STORAGE_UNAVAILABLE', 'Request correlation storage is unavailable', {
+      retryable: true,
+    });
+    // Await table.get so both synchronous KvTable.get and async adapters work.
+    const raw = await table.get(deriveCorrelationKey({ ...scope, requestId }));
+    return raw == null ? null : parseCorrelationRecord(raw);
+  }
+
   async function readCorrelation(scope, requestId) {
-    if (closed || !table) return null;
     try {
-      // Await table.get so both synchronous KvTable.get and async storage adapters work seamlessly.
-      const raw = await table.get(deriveCorrelationKey({ ...scope, requestId }));
-      if (raw === undefined || raw === null) return null;
-      const parsed = RequestCorrelationSchema.safeParse(raw);
-      return parsed.success ? parsed.data : null;
+      return await readCorrelationFromStorage(scope, requestId);
     } catch {
       return null;
     }
+  }
+
+  function noteAccepted(key) {
+    const observations = activeReadbacks.get(key);
+    if (observations) observations.accepted += 1;
   }
 
   async function checkPolicy(policyInput) {
@@ -628,7 +637,7 @@ export function createDispatchService(ports) {
     const deliveryKey = deriveCorrelationKey({ ...scope, requestId });
     inFlightDeliveries.add(deliveryKey);
     try {
-      await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
+      await stagePendingCorrelation(scope, baseRecord);
 
       // 4. Final serialized re-verification in the same boundary as preference updates (§3.6).
       // A preference disable submitted earlier wins and aborts this dispatch before outbound transport.
@@ -664,6 +673,7 @@ export function createDispatchService(ports) {
           reuseRefs: input.reuseRefs,
           payloadDigest,
         });
+        noteAccepted(deliveryKey);
         rememberTaskContext(scope, receipt.taskId, {
           originSessionRef: binding.sessionId,
           expertId: binding.expertId,
@@ -706,63 +716,92 @@ export function createDispatchService(ports) {
   }
 
   // Authoritative readback & cancel remain available even when dispatchEnabled is false (§5 / §9.2).
-  async function reconcileByRequestInternal({ requestId, fixedScope = null }) {
+  async function reconcileByRequestInternal({ requestId, fixedScope = null, onNotFound }) {
     if (!isNonEmptyString(requestId)) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'requestId is required');
     }
     const cleanId = requestId.trim();
     const scope = fixedScope ?? await ports.resolveScope();
     const startEpoch = scope.scopeEpoch;
-    if (fixedScope) ports.assertScopeCurrent(startEpoch, scope);
+    ports.assertScopeCurrent(startEpoch, scope);
     const deliveryKey = deriveCorrelationKey({ ...scope, requestId: cleanId });
-    if (inFlightDeliveries.has(deliveryKey)) {
-      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request is still in flight; retry reconciliation shortly', {
-        status: 503,
-        retryable: true,
-        details: { requestId: cleanId },
-      });
-    }
-    const existing = await readCorrelation(scope, cleanId);
+    const unresolved = () => new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request has overlapping outcomes; retry reconciliation shortly', {
+      status: 503,
+      retryable: true,
+      details: { requestId: cleanId },
+    });
+    if (inFlightDeliveries.has(deliveryKey)) throw unresolved();
+
+    // Keep acceptance observations while reads overlap, including when a receipt could not be persisted.
+    const observations = activeReadbacks.get(deliveryKey) ?? { readers: 0, accepted: 0 };
+    activeReadbacks.set(deliveryKey, observations);
+    observations.readers += 1;
+    const acceptedAtStart = observations.accepted;
     try {
-      const authoritative = await ports.getDelegraTaskByRequest({ scope, requestId: cleanId });
-      ports.assertScopeCurrent(startEpoch, scope);
-      if (existing) {
-        rememberTaskContext(scope, authoritative.taskId ?? existing.taskId, {
-          originSessionRef: existing.originSessionRef,
-          expertId: existing.expertId,
-          delegationScope: existing.delegationScope,
-        });
-        const reconcilable = existing.status === 'pending_delivery' || existing.status === 'unknown';
-        await persistCorrelationBestEffort(scope, {
-          ...existing,
-          taskId: reconcilable ? (authoritative.taskId ?? existing.taskId) : existing.taskId,
-          status: reconcilable ? 'accepted' : existing.status,
-          updatedAt: new Date(now()).toISOString(),
-        });
+      let authoritative;
+      let notFound;
+      try {
+        authoritative = await ports.getDelegraTaskByRequest({ scope, requestId: cleanId });
+      } catch (error) {
+        if (!(error instanceof ExpertsError) || error.code !== 'EXPERT_TASK_NOT_FOUND') throw error;
+        notFound = error;
       }
+      const assertReadbackCurrent = () => {
+        ports.assertScopeCurrent(startEpoch, scope);
+        if (inFlightDeliveries.has(deliveryKey) || (notFound && observations.accepted !== acceptedAtStart)) {
+          throw unresolved();
+        }
+      };
+      const assertActiveReadback = async () => {
+        await ports.assertIamIdentityCurrent?.(startEpoch, scope);
+        assertReadbackCurrent();
+      };
+      await assertActiveReadback();
+      if (!notFound) noteAccepted(deliveryKey);
+
+      const current = await runInRequestStorageBoundary(scope, async () => {
+        assertReadbackCurrent();
+        const record = await readCorrelation(scope, cleanId);
+        assertReadbackCurrent();
+        if (notFound) {
+          if (isPendingStatus(record?.status)) {
+            await writeCorrelationBestEffort(scope, {
+              ...record,
+              status: 'not_found',
+              updatedAt: new Date(now()).toISOString(),
+            });
+          }
+          await assertActiveReadback();
+          onNotFound?.();
+          throw notFound;
+        }
+        if (record) {
+          rememberTaskContext(scope, authoritative.taskId ?? record.taskId, {
+            originSessionRef: record.originSessionRef,
+            expertId: record.expertId,
+            delegationScope: record.delegationScope,
+          });
+          if (isPendingStatus(record.status) || record.status === 'not_found') {
+            await writeCorrelationBestEffort(scope, {
+              ...record,
+              taskId: authoritative.taskId ?? record.taskId,
+              status: 'accepted',
+              updatedAt: new Date(now()).toISOString(),
+            });
+          }
+        }
+        return record;
+      });
+      await assertActiveReadback();
       return Object.freeze({
         ...authoritative,
-        correlation: existing ? Object.freeze({ originSessionRef: existing.originSessionRef, expertId: existing.expertId }) : null,
+        correlation: current ? Object.freeze({ originSessionRef: current.originSessionRef, expertId: current.expertId }) : null,
       });
-    } catch (error) {
-      if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
-        ports.assertScopeCurrent(startEpoch, scope);
-        if (inFlightDeliveries.has(deliveryKey)) {
-          throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request is still in flight; retry reconciliation shortly', {
-            status: 503,
-            retryable: true,
-            details: { requestId: cleanId },
-          });
-        }
-        if (existing) {
-          await persistCorrelationBestEffort(scope, {
-            ...existing,
-            status: 'not_found',
-            updatedAt: new Date(now()).toISOString(),
-          });
-        }
+    } finally {
+      observations.readers -= 1;
+      if (observations.readers === 0 && activeReadbacks.get(deliveryKey) === observations) {
+        activeReadbacks.delete(deliveryKey);
       }
-      throw error;
     }
   }
 
@@ -861,7 +900,7 @@ export function createDispatchService(ports) {
           throw new ExpertsError('EXPERT_IDEMPOTENCY_CONFLICT', 'Follow-up requestId was already used with a different payload');
         }
       }
-      await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
+      await stagePendingCorrelation(scope, baseRecord);
 
       // 3. Final serialized re-verification in the preference boundary before outbound delivery (§3.6).
       try {
@@ -890,6 +929,7 @@ export function createDispatchService(ports) {
           reuseRefs: input.reuseRefs,
           payloadDigest,
         });
+        noteAccepted(deliveryKey);
         await persistCorrelationBestEffort(scope, {
           ...baseRecord,
           status: 'accepted',
@@ -974,8 +1014,13 @@ export function createDispatchService(ports) {
     const scope = await ports.resolveScope();
     const startEpoch = scope.scopeEpoch;
     const scopeKey = derivePendingIndexKey(scope);
-    const existingPass = inFlightReconciles.get(scopeKey);
-    if (existingPass) return existingPass;
+    const passKey = `${scopeKey}:${startEpoch}`;
+    const existingPass = inFlightReconciles.get(passKey);
+    if (existingPass) {
+      const result = await existingPass;
+      ports.assertScopeCurrent(startEpoch, scope);
+      return result;
+    }
 
     const isScopeStillCurrent = () => {
       try {
@@ -1005,15 +1050,24 @@ export function createDispatchService(ports) {
           stillPending.push(requestId);
           return;
         }
-        const record = await readCorrelation(scope, requestId);
-        if (!isScopeStillCurrent()) {
+        let record;
+        try {
+          record = await runInRequestStorageBoundary(scope, async () => {
+            ports.assertScopeCurrent(startEpoch, scope);
+            const current = await readCorrelationFromStorage(scope, requestId);
+            ports.assertScopeCurrent(startEpoch, scope);
+            if (inFlightDeliveries.has(readKey)) {
+              throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task delivery is still in flight', { retryable: true });
+            }
+            if (isPendingStatus(current?.status)) return current;
+            await syncPendingIndex(scope, requestId, 'accepted');
+            return null;
+          });
+        } catch {
           stillPending.push(requestId);
           return;
         }
-        if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
-          await syncPendingIndex(scope, requestId, 'accepted');
-          return;
-        }
+        if (!record) return;
         let activeReads = inFlightReconcileReadsByScope.get(scopeKey);
         if (!activeReads) {
           activeReads = new Set();
@@ -1055,14 +1109,13 @@ export function createDispatchService(ports) {
         };
         try {
           activeReads.add(readKey);
-          const readPromise = reconcileByRequestInternal({ requestId, fixedScope: scope }).then((result) => {
+          const readPromise = reconcileByRequestInternal({
+            requestId,
+            fixedScope: scope,
+            onNotFound: notifyNotFoundOnce,
+          }).then((result) => {
             buildAndNotify(result);
             return result;
-          }).catch((err) => {
-            if (err instanceof ExpertsError && err.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey)) {
-              notifyNotFoundOnce();
-            }
-            throw err;
           }).finally(() => {
             activeReads.delete(readKey);
             if (activeReads.size === 0 && inFlightReconcileReadsByScope.get(scopeKey) === activeReads) {
@@ -1078,7 +1131,6 @@ export function createDispatchService(ports) {
         } catch (error) {
           if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey) && isScopeStillCurrent()) {
             notFound.push(requestId);
-            await syncPendingIndex(scope, requestId, 'not_found');
           } else {
             stillPending.push(requestId);
           }
@@ -1090,17 +1142,24 @@ export function createDispatchService(ports) {
         await Promise.all(batch.map((requestId) => reconcileOne(requestId)));
       }
 
+      if (requestIds.length > 0) {
+        ports.assertScopeCurrent(startEpoch, scope);
+        // IAM can switch while Delegra reads are in flight, before another route updates our epoch.
+        await ports.resolveScope();
+      }
       return Object.freeze({
         reconciled: Object.freeze(reconciled),
         notFound: Object.freeze(notFound),
         stillPending: Object.freeze(stillPending),
       });
     })().finally(() => {
-      if (inFlightReconciles.get(scopeKey) === pass) inFlightReconciles.delete(scopeKey);
+      if (inFlightReconciles.get(passKey) === pass) inFlightReconciles.delete(passKey);
     });
 
-    inFlightReconciles.set(scopeKey, pass);
-    return pass;
+    inFlightReconciles.set(passKey, pass);
+    const result = await pass;
+    ports.assertScopeCurrent(startEpoch, scope);
+    return result;
   }
 
   return Object.freeze({

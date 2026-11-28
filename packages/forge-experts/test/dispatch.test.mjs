@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createExpertsHost } from '../src/index.mjs';
-import { API_PREFIX, REQUEST_HEADER } from '../src/routes.mjs';
+import { API_PREFIX, REQUEST_HEADER, createExpertsRoutes } from '../src/routes.mjs';
 import { ExpertsError } from '../src/errors.mjs';
 
 function createMemoryStorage({ asyncGet = false, failPutPredicate = null, beforeGet, onPut } = {}) {
@@ -88,6 +88,7 @@ function makeHarness({
   storage = createMemoryStorage(),
   evaluatePolicy = async () => ({ decision: 'allow' }),
   backend = null,
+  lookupByRequest,
   onCorrelationPersistError,
 } = {}) {
   const scope = {
@@ -177,11 +178,11 @@ function makeHarness({
       tasksById.set(receipt.taskId, receipt);
       return receipt;
     },
-    getDelegraTaskByRequest: async ({ requestId }) => {
+    getDelegraTaskByRequest: lookupByRequest ?? (async ({ requestId }) => {
       const found = tasksByRequest.get(requestId);
       if (!found) throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Not found');
       return found;
-    },
+    }),
     getDelegraTask: async ({ taskId }) => {
       const found = tasksById.get(taskId);
       if (!found) throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Not found');
@@ -846,6 +847,128 @@ test('pending_index read failures fail closed (503 EXPERT_STORAGE_UNAVAILABLE) a
   }
 });
 
+for (const operation of ['dispatch', 'followup']) {
+  test(`pending_index write failure leaves no orphaned ${operation} correlation and no outbound delivery (#484)`, async () => {
+    let failIndexWrite = false;
+    const storage = createMemoryStorage({
+      failPutPredicate: (domain, table) => failIndexWrite
+        && domain === 'forge_experts_requests' && table === 'pending_index',
+    });
+    const h = makeHarness({ storage });
+    await h.host.open();
+    try {
+      await h.enableExpert();
+      const prepareDispatch = async () => {
+        const selection = await invokeRoute(h.host, {
+          method: 'POST',
+          path: `${API_PREFIX}/selections`,
+          headers: mutationHeaders(),
+          body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Original draft' },
+        });
+        assert.equal(selection.status, 201);
+        return () => invokeRoute(h.host, {
+          method: 'POST',
+          path: `${API_PREFIX}/tasks`,
+          headers: mutationHeaders(),
+          body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Original draft' },
+        });
+      };
+
+      let submit = await prepareDispatch();
+      let expectedTaskCalls = 0;
+      if (operation === 'followup') {
+        const accepted = await submit();
+        assert.equal(accepted.status, 201);
+        expectedTaskCalls = 1;
+        submit = () => invokeRoute(h.host, {
+          method: 'POST',
+          path: `${API_PREFIX}/tasks/${accepted.body.taskId}/followups`,
+          headers: mutationHeaders(),
+          body: { taskText: 'Follow-up draft', requestId: 'fu-index-write' },
+        });
+      }
+
+      failIndexWrite = true;
+      const rejected = await submit();
+      assert.equal(rejected.status, 503);
+      assert.equal(rejected.body.error.code, 'EXPERT_STORAGE_UNAVAILABLE');
+      assert.equal(h.getCreateCalls(), expectedTaskCalls);
+      assert.equal(h.followupCalls.length, 0);
+      const correlations = storage.domains.get('forge_experts_requests').get('correlations');
+      assert.deepEqual([...correlations.values()].map((row) => row.status), operation === 'followup' ? ['accepted'] : []);
+
+      failIndexWrite = false;
+      if (operation === 'dispatch') submit = await prepareDispatch();
+      assert.equal((await submit()).status, 201);
+      assert.deepEqual([...correlations.values()].map((row) => row.status), operation === 'followup' ? ['accepted', 'accepted'] : ['accepted']);
+    } finally {
+      await h.host.close();
+    }
+  });
+}
+
+test('failed correlation staging leaves only a reservation that reconciliation can clear after restart (#484)', async () => {
+  let failCorrelationRead = false;
+  const storage = createMemoryStorage({
+    failPutPredicate: (domain, table) => domain === 'forge_experts_requests' && table === 'correlations',
+    beforeGet(domain, table) {
+      if (failCorrelationRead && domain === 'forge_experts_requests' && table === 'correlations') {
+        throw new Error('Temporary correlation read failure');
+      }
+    },
+  });
+  const initial = makeHarness({ storage });
+  await initial.host.open();
+  try {
+    await initial.enableExpert();
+    const selection = await invokeRoute(initial.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Original draft' },
+    });
+    const failed = await invokeRoute(initial.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Original draft' },
+    });
+    assert.equal(failed.body.error.code, 'EXPERT_STORAGE_UNAVAILABLE');
+    assert.equal(initial.getCreateCalls(), 0);
+    const tables = storage.domains.get('forge_experts_requests');
+    assert.equal(tables.get('correlations').size, 0);
+    assert.deepEqual([...tables.get('pending_index').values()].flatMap((row) => row.requestIds), ['req-0001']);
+  } finally {
+    await initial.host.close();
+  }
+
+  const reopened = makeHarness({ storage });
+  await reopened.host.open();
+  try {
+    const reconcile = () => invokeRoute(reopened.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    const index = storage.domains.get('forge_experts_requests').get('pending_index');
+    const indexedRequests = () => [...index.values()].flatMap((row) => row.requestIds);
+    failCorrelationRead = true;
+    const unavailable = await reconcile();
+    assert.equal(unavailable.status, 200);
+    assert.deepEqual(unavailable.body, { reconciled: [], notFound: [], stillPending: ['req-0001'] });
+    assert.deepEqual(indexedRequests(), ['req-0001']);
+
+    failCorrelationRead = false;
+    const result = await reconcile();
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body, { reconciled: [], notFound: [], stillPending: [] });
+    assert.deepEqual(indexedRequests(), []);
+    assert.equal(reopened.getCreateCalls(), 0);
+  } finally {
+    await reopened.host.close();
+  }
+});
+
 test('interleaved reconnect reconcile during in-flight dispatch does not drop pending_index entry; restart still recovers by requestId (#484)', async () => {
   const sharedStorage = createMemoryStorage();
   const sharedBackend = { tasksByRequest: new Map(), tasksById: new Map() };
@@ -1115,6 +1238,7 @@ test('pending_index fails closed with EXPERT_RATE_LIMITED at capacity (100) with
       (err) => err instanceof ExpertsError && err.code === 'EXPERT_RATE_LIMITED',
     );
     assert.equal(createCalls, 100, 'capacity-rejected 101st request must not reach Delegra');
+    assert.equal(sharedStorage.domains.get('forge_experts_requests').get('correlations').size, 100);
 
     const pending = await dispatch.listPendingRequests();
     assert.equal(pending.items.length, 100);
@@ -1276,6 +1400,100 @@ test('manual reconcileByRequest during in-flight delivery returns EXPERT_ACCEPTA
     await dispatch.close();
   }
 });
+
+for (const { olderRead, failAcceptanceWrite } of [
+  { olderRead: 'batch', failAcceptanceWrite: false },
+  { olderRead: 'manual', failAcceptanceWrite: false },
+  { olderRead: 'batch', failAcceptanceWrite: true },
+]) {
+  const storageCase = failAcceptanceWrite ? ' with a failed acceptance write' : '';
+  test(`stale ${olderRead} 404 cannot replace a concurrent acceptance or notify notFound${storageCase} (#484)`, async () => {
+    const storage = createMemoryStorage({
+      failPutPredicate: (domain, table, _key, value) => failAcceptanceWrite
+        && domain === 'forge_experts_requests' && table === 'correlations' && value.status === 'accepted',
+    });
+    const slowLookupStarted = Promise.withResolvers();
+    const releaseSlowLookup = Promise.withResolvers();
+    const scope = {
+      instanceId: 'delegra-prod-01',
+      orgId: 'org-alpha',
+      issuer: 'https://iam.corp.example',
+      subject: 'emp-1001',
+      scopeEpoch: 1,
+    };
+    const requestId = 'req-older-404';
+    const lookupResult = { requestId, taskId: 'task-accepted', status: 'running' };
+    const notifications = [];
+    let lookupCount = 0;
+    const { createDispatchService } = await import('../src/dispatch.mjs');
+    const dispatch = createDispatchService({
+      isDispatchEnabled: () => true,
+      resolveScope: async () => scope,
+      assertScopeCurrent: () => {},
+      consumeSelection: () => ({ expertId: 'exp-fin-1', delegationScope: 'proj-fin', sessionId: 'sess-1' }),
+      runInPreferenceBoundary: (fn) => fn(),
+      listConfirmedEnabled: async () => [{ expertId: 'exp-fin-1', authContinuityDigest: 'sha256:c1' }],
+      isPreferencePending: () => false,
+      checkDelegraSessionScope: async () => ({
+        scopeVerified: true,
+        results: [{ expertId: 'exp-fin-1', callableInScope: true, authContinuityDigest: 'sha256:c1', acceptingTasks: 'accepting' }],
+      }),
+      evaluatePolicy: async () => ({ decision: 'allow' }),
+      openStorageDomain: (spec) => storage.open(spec),
+      generateRequestId: () => requestId,
+      onTaskReconciled: (event) => notifications.push(event),
+      createDelegraTask: async () => {
+        throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'receipt dropped', { status: 503, retryable: true });
+      },
+      getDelegraTaskByRequest: async () => {
+        lookupCount += 1;
+        if (lookupCount === 1) {
+          slowLookupStarted.resolve();
+          await releaseSlowLookup.promise;
+        } else if (lookupCount === 2) {
+          return lookupResult;
+        }
+        throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task inaccessible');
+      },
+    });
+    await dispatch.open();
+    try {
+      await assert.rejects(
+        dispatch.dispatchTask({ selectionToken: 'tok-1', sessionId: 'sess-1', taskText: 'Pending task' }),
+        { code: 'EXPERT_ACCEPTANCE_UNKNOWN' },
+      );
+      const manual = () => dispatch.reconcileByRequest({ requestId });
+      const batch = () => dispatch.reconcilePendingRequests();
+      const stale = olderRead === 'batch' ? batch() : manual();
+      const settledStale = stale.then((result) => ({ result }), (error) => ({ error }));
+      await slowLookupStarted.promise;
+      const fresh = olderRead === 'batch' ? await manual() : (await batch()).reconciled[0];
+      assert.equal(fresh.taskId, lookupResult.taskId);
+      const latestRecord = await dispatch.getCorrelation(scope, requestId);
+      assert.equal(latestRecord.status, failAcceptanceWrite ? 'unknown' : 'accepted');
+
+      releaseSlowLookup.resolve();
+      const outcome = await settledStale;
+      assert.deepEqual(await dispatch.getCorrelation(scope, requestId), latestRecord);
+      assert.equal(notifications.some((event) => event.notFound === true), false);
+      if (olderRead === 'batch') {
+        assert.deepEqual(outcome.result, { reconciled: [], notFound: [], stillPending: [requestId] });
+      } else {
+        assert.equal(outcome.error?.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+        assert.equal(outcome.error?.retryable, true);
+      }
+      const pending = await dispatch.listPendingRequests();
+      assert.deepEqual(pending.items.map((entry) => entry.requestId), failAcceptanceWrite ? [requestId] : []);
+
+      // A fresh authoritative 404 still reaches the caller and never returns cached task data.
+      await assert.rejects(manual(), { code: 'EXPERT_TASK_NOT_FOUND', status: 404 });
+      assert.equal((await dispatch.getCorrelation(scope, requestId)).status, failAcceptanceWrite ? 'not_found' : 'accepted');
+    } finally {
+      releaseSlowLookup.resolve();
+      await dispatch.close();
+    }
+  });
+}
 
 test('followupTask rejects reused requestId with conflicting payload (409 EXPERT_IDEMPOTENCY_CONFLICT) and GET /turns/finalized returns scoped metadata (#484)', async () => {
   const h = makeHarness({ dispatchEnabled: true });
@@ -1475,6 +1693,65 @@ test('concurrent followups with the same requestId persist and deliver only the 
   }
 });
 
+test('POST /tasks/reconcile verifies IAM identity again before delivering a batch (#484)', async () => {
+  const lookupStarted = Promise.withResolvers();
+  const releaseLookup = Promise.withResolvers();
+  const h = makeHarness({
+    async lookupByRequest({ requestId }) {
+      lookupStarted.resolve();
+      await releaseLookup.promise;
+      return { taskId: 'task-old-employee', requestId, status: 'running' };
+    },
+  });
+  await h.host.open();
+  try {
+    await h.enableExpert();
+    const selection = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Initial task' },
+    });
+    assert.equal(selection.status, 201);
+    h.setCreateBehavior('unknown');
+    const submitted = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Initial task' },
+    });
+    assert.equal(submitted.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+
+    const events = [];
+    const stream = Object.assign(new EventEmitter(), { method: 'GET', url: `${API_PREFIX}/events`, headers: {} });
+    await h.host.handleRequest(stream, {
+      setHeader() {},
+      write: (frame) => events.push(String(frame)),
+      end() {},
+    });
+    assert.equal(h.host.routes.clientCount(), 1);
+
+    const inFlight = invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    await lookupStarted.promise;
+    h.setSubject('emp-1002');
+    releaseLookup.resolve();
+
+    // No other experts request has advanced the cached scope epoch since the IAM switch.
+    const stale = await inFlight;
+    assert.equal(stale.status, 409);
+    assert.deepEqual(Object.keys(stale.body), ['error']);
+    assert.equal(stale.body.error.code, 'EXPERT_SCOPE_MISMATCH');
+    assert.doesNotMatch(events.join(''), /task-reconciled|task-old-employee|req-0001/);
+  } finally {
+    releaseLookup.resolve();
+    await h.host.close();
+  }
+});
+
 test('reconcilePendingRequests pins scope and drops stale lookup results without mutating old pending_index or broadcasting when identity switches mid-pass (#484)', async () => {
   const sharedStorage = createMemoryStorage();
   let activeScope = {
@@ -1535,7 +1812,16 @@ test('reconcilePendingRequests pins scope and drops stale lookup results without
       (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN',
     );
 
-    const passPromise = dispatch.reconcilePendingRequests();
+    const routes = createExpertsRoutes({
+      isManagementEnabled: () => true,
+      getConnection: () => ({ requestRejection: () => undefined }),
+      reconcilePendingTasks: () => dispatch.reconcilePendingRequests(),
+    });
+    const passPromise = invokeRoute({ handleRequest: routes.handle }, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
     await lookupStartedPromise;
 
     // Identity switches to Bob while Alice's lookup is in flight.
@@ -1545,9 +1831,10 @@ test('reconcilePendingRequests pins scope and drops stale lookup results without
 
     const result = await passPromise;
     assert.deepEqual(observedLookupScopes, ['emp-alice'], 'batch reconcile must stay pinned to Alice scope');
-    assert.deepEqual(result.reconciled, [], 'stale result after scope switch must not be returned');
-    assert.deepEqual(result.notFound, [], 'stale pass must not mark old request notFound');
-    assert.deepEqual(result.stillPending, ['req-scope-switch-1']);
+    assert.equal(result.status, 409);
+    assert.equal(result.body.error.code, 'EXPERT_SCOPE_MISMATCH');
+    assert.deepEqual(Object.keys(result.body), ['error']);
+    assert.doesNotMatch(JSON.stringify(result.body), /req-scope-switch-1|task-stale-1/);
     assert.equal(notifications.length, 0, 'stale result after scope switch must not broadcast onTaskReconciled');
 
     // Switch back to Alice: her pending_index and correlation remain intact.

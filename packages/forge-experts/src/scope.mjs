@@ -101,14 +101,24 @@ export function createScopeManager(ports) {
     }
   }
 
-  async function resolveForRequest() {
-    let rawSession;
+  async function readIamSession() {
     try {
-      rawSession = await ports.getIamSession();
+      return normalizeIamSession(await ports.getIamSession());
     } catch {
       throw new ExpertsError('EXPERT_UNAUTHENTICATED', 'Unable to read active IAM session', { retryable: true });
     }
-    const session = normalizeIamSession(rawSession);
+  }
+
+  async function assertIamIdentityCurrent(expectedEpoch, expectedScope) {
+    const session = await readIamSession();
+    assertCurrent(expectedEpoch, expectedScope);
+    if (!session || session.issuer !== expectedScope.issuer || session.subject !== expectedScope.subject) {
+      throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Active IAM identity has changed');
+    }
+  }
+
+  async function resolveForRequest() {
+    const session = await readIamSession();
     if (!session) {
       if (currentScope !== null) advanceEpoch(null);
       throw new ExpertsError('EXPERT_UNAUTHENTICATED', 'Employee sign-in is required');
@@ -153,6 +163,7 @@ export function createScopeManager(ports) {
     resolveForRequest,
     advanceEpoch,
     assertCurrent,
+    assertIamIdentityCurrent,
     watch,
   });
 }
