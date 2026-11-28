@@ -169,6 +169,31 @@ function recentExpertTurns(host) {
   });
 }
 
+test('SSE ready distinguishes a new Host at the same scope epoch and identifies same-Host reconnects (#484)', async (t) => {
+  const originalHost = makeHost();
+  const restartedHost = makeHost();
+  await originalHost.open();
+  t.after(() => originalHost.close());
+  await restartedHost.open();
+  t.after(() => restartedHost.close());
+
+  const original = await openExpertEventStream(originalHost);
+  const [firstReady] = original.frames;
+  original.close();
+  const reconnected = await openExpertEventStream(originalHost);
+  const [reconnectReady] = reconnected.frames;
+  const restarted = await openExpertEventStream(restartedHost);
+  const [restartReady] = restarted.frames;
+
+  assert.equal(firstReady.type, 'ready');
+  assert.equal(restartReady.scopeEpoch, firstReady.scopeEpoch);
+  assert.equal(typeof firstReady.hostInstanceId, 'string');
+  assert.ok(firstReady.hostInstanceId);
+  assert.equal(reconnectReady.hostInstanceId, firstReady.hostInstanceId);
+  assert.equal(typeof restartReady.hostInstanceId, 'string');
+  assert.notEqual(restartReady.hostInstanceId, firstReady.hostInstanceId);
+});
+
 test('turn recovery stays within its epoch when one employee changes IAM organization with the same Delegra scope', async (t) => {
   let iamOrg = 'iam-org-before';
   const host = makeHost({ dispatchEnabled: true, readIamOrg: () => iamOrg });
