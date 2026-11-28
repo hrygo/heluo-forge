@@ -166,7 +166,8 @@ async function withGitHub(run) {
         response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
       }
     } else if (request.method === 'GET' && /^\/commits\/[a-f0-9]{40}\/check-runs$/u.test(path)) {
-      response.end(JSON.stringify({ total_count: state.checkRuns.length, check_runs: pageOf(state.checkRuns) }));
+      response.end(JSON.stringify(state.checkRunPages?.[page] ??
+        { total_count: state.checkRuns.length, check_runs: pageOf(state.checkRuns) }));
     } else if (request.method === 'GET' && path === '/pulls/42/files') {
       response.statusCode = state.filesStatus;
       response.end(JSON.stringify(pageOf(state.files)));
@@ -1913,11 +1914,48 @@ function configureIncrementalReplay(state, env) {
   state.pr.changed_files = state.files.length;
   state.compareResponse = { status: 'ahead', base_commit: { sha: replayPrevious }, merge_base_commit: { sha: replayPrevious }, files };
   state.compareDiff = rawDiff(files);
-  state.checkRuns = Array.from({ length: 20 }, (_, index) => ({ head_sha: replayHead, status: 'completed',
+  state.checkRuns = Array.from({ length: 20 }, (_, index) => ({ id: index + 1, head_sha: replayHead, status: 'completed',
     conclusion: index < 18 ? 'success' : 'skipped' }));
   state.threads = [historicalThread({ path: replayResolvedPath, line: 519, sha: replayPrevious, priority: 'P2' })];
   return { mode, files };
 }
+
+test('CI snapshot counts only distinct runs from consistent pages', async (t) => {
+  const original = Array.from({ length: 101 }, (_, index) => ({ id: 101 - index, head_sha: replayHead,
+    status: 'completed', conclusion: 'success' }));
+  const failed = { ...original[0], id: 102, conclusion: 'failure' };
+  const insertion = [failed, ...original];
+  const cases = [
+    { name: 'a new failure inserted before the second page is read', total: 102, later: insertion.slice(100), expected: null },
+    { name: 'a duplicate across pages with an unchanged total', total: 101, later: [original[99]], expected: null },
+    { name: 'a changed total with distinct runs', total: 102, later: [original[100], failed], expected: null },
+    { name: 'a complete snapshot includes a failure on the second page', total: 101, later: [{ ...original[100], conclusion: 'failure' }],
+      expected: { total: 101, inspected: 101, success: 100, skipped: 0, pending: 0, other: 1 } },
+  ];
+  for (const { name, total, later, expected } of cases) await t.test(name, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode } = configureIncrementalReplay(state, env);
+      state.checkRunPages = {
+        1: { total_count: 101, check_runs: original.slice(0, 100) },
+        2: { total_count: total, check_runs: later },
+      };
+      const revision = await capture(mode);
+      const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+      assert.equal(context.mode, 'incremental');
+      assert.deepEqual(context.checks, expected);
+    });
+  });
+  await t.test('a stable snapshot exceeding the three-page limit reports its sample size', async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode } = configureIncrementalReplay(state, env);
+      state.checkRuns = Array.from({ length: 301 }, (_, index) => ({ ...original[0], id: index + 1 }));
+      const revision = await capture(mode);
+      const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+      assert.deepEqual(context.checks, { total: 301, inspected: 300, success: 300, skipped: 0, pending: 0, other: 0 });
+      assert.ok(!state.requests.some(({ url }) => url.endsWith('/check-runs?filter=latest&per_page=100&page=4')));
+    });
+  });
+});
 
 test('a new wording for an author-answered resolved P1 does not add an inline thread on the same revision', async () => {
   await withGitHub(async ({ state, env }) => {
@@ -2318,6 +2356,49 @@ test('a modified-file deletion publishes an explicitly scoped LEFT comment', asy
     assert.equal(write?.body.event, 'COMMENT');
     assert.deepEqual(write.body.comments.map(({ path, line, side }) => ({ path, line, side })),
       [{ path: 'src/example.js', line: 2, side: 'LEFT' }]);
+  });
+});
+
+test('LEFT publication is scoped to the target commit when head and finding stay the same', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const result = JSON.parse(prioritizedReview('P1'));
+    result.key_issues_to_review.push({ ...result.key_issues_to_review[0],
+      issue_header: '[P1] [LEFT 2-2] Required check removed', start_line: 0, end_line: 0 });
+    const output = JSON.stringify(result);
+    const original = await capture(env);
+    await submit(env, original, output);
+    await submit(env, original, output);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.comments.map(({ side }) => side)), [['RIGHT', 'LEFT']]);
+
+    const advanced = 'e'.repeat(40);
+    state.pr.base.sha = state.refs.main = advanced;
+    const current = await capture(env);
+    assert.equal(current.head, original.head);
+    assert.equal(current.base, advanced);
+    state.comments = [freshComment('pr-agent:describe:persistent'), freshComment('pr-agent:review:full')];
+    await submit(env, current, output);
+    await submit(env, current, output);
+
+    assert.deepEqual(reviewWrites(state).map(({ body }) => body.comments.map(({ side }) => side)), [['RIGHT', 'LEFT'], ['LEFT']]);
+    const targets = state.inlineComments.filter(({ side }) => side === 'LEFT').map(({ body }) =>
+      /<!-- heluo-forge-pr-agent-comment-base:v1 ([a-f0-9]{40}) -->/u.exec(body)?.[1]);
+    assert.deepEqual(targets, [base, advanced]);
+  });
+});
+
+test('a legacy LEFT comment without a target marker cannot suppress a scoped comment', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const output = prioritizedReview('P1', {
+      issue_header: '[P1] [LEFT 2-2] Required check removed', start_line: 0, end_line: 0,
+    });
+    await submit(env, revision, output);
+    const [legacy] = state.inlineComments;
+    legacy.body = legacy.body.replace(/<!-- heluo-forge-pr-agent-comment-base:v1 [a-f0-9]{40} -->\n\n/u, '');
+    await submit(env, revision, output);
+    await submit(env, revision, output);
+    assert.equal(reviewWrites(state).length, 2);
+    assert.match(state.inlineComments[1].body, new RegExp(`comment-base:v1 ${base}`, 'u'));
   });
 });
 

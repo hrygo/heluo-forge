@@ -12,6 +12,14 @@ export function getReviewCommentBase(body) {
   return /^<!-- heluo-forge-pr-agent-comment-base:v1 ([a-f0-9]{40}) -->$/u.exec(body.trimEnd().split('\n\n').at(-2))?.[1];
 }
 
+export function getReviewCommentKey({ body, side }) {
+  const marker = getReviewCommentMarker(body);
+  if (!marker || side === 'RIGHT') return marker;
+  // Published LEFT comments already carry the target commit in their body.
+  const base = getReviewCommentBase(body);
+  return base ? `${marker} ${base}` : marker;
+}
+
 export function reviewPriority(issue) {
   const heading = typeof issue?.issue_header === 'string' ? issue.issue_header.trim() : '';
   const match = /^\[(P[0-3])\][ \t]+([^\r\n]+)$/u.exec(heading);
