@@ -2,7 +2,7 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { publishApproval, readApprovalReceipt, reconcileMainApprovals, recordWorkflowWithdrawal } from './pr-agent-approval.mjs';
 import { verifyReviewCoverage, verifyReviewFileModes } from './pr-agent-coverage.mjs';
-import { buildReviewComments, getReviewCommentMarker, reviewPriority } from './pr-agent-review-comments.mjs';
+import { buildReviewComments, getReviewCommentKey, reviewPriority } from './pr-agent-review-comments.mjs';
 import { baselineKey, captureReviewContext, hasHistoricalReviewEvidence, hasReviewIdentity, openBlockers, readReviewThreads,
   reviewFindingLimit, reviewMarker, reviewReceipt } from './pr-agent-review-context.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
@@ -138,14 +138,15 @@ async function publishReviewComments(github, prPath, head, comments, currentRevi
   try {
     for await (const comment of pages(github, `${prPath}/comments`, 'Cannot read PR review comments')) {
       if (comment?.user?.login === 'github-actions[bot]' && comment.commit_id === head) {
-        seen.add(getReviewCommentMarker(comment.body));
+        const key = getReviewCommentKey(comment);
+        if (key) seen.add(key);
       }
     }
   } catch {
     console.log('::warning::Unable to read existing inline comments. Findings are available in the review summary.');
     return 'incomplete';
   }
-  const unpublished = comments.filter((comment) => !seen.has(getReviewCommentMarker(comment.body)));
+  const unpublished = comments.filter((comment) => !seen.has(getReviewCommentKey(comment)));
   if (!unpublished.length) return 'complete';
   if (!await currentRevision()) return 'revision-changed';
   try {

@@ -217,23 +217,27 @@ export function hasHistoricalReviewEvidence(rechecks, blockers) {
 
 async function readChecks(github, head) {
   const checks = { total: 0, inspected: 0, success: 0, skipped: 0, pending: 0, other: 0 };
+  const seen = new Set();
   for (let page = 1; page <= 3; page++) {
     const response = await github.get(`/commits/${head}/check-runs?filter=latest&per_page=100&page=${page}`,
       'Cannot read checks for the reviewed head');
     const { total_count: total, check_runs: runs } = response;
-    if (!Number.isSafeInteger(total) || total < 0 || !Array.isArray(runs) || runs.length > 100 ||
-        runs.some((run) => run?.head_sha !== head || typeof run.status !== 'string')) return null;
+    if (!Number.isSafeInteger(total) || total < 0 || (page > 1 && total !== checks.total) ||
+        !Array.isArray(runs) || runs.length > 100 || checks.inspected + runs.length > total) return null;
     checks.total = total;
-    checks.inspected += runs.length;
-    for (const { status, conclusion } of runs) {
+    for (const run of runs) {
+      if (!validId(run?.id) || seen.has(run.id) || run.head_sha !== head || typeof run.status !== 'string') return null;
+      seen.add(run.id);
+      const { status, conclusion } = run;
       if (status !== 'completed') checks.pending++;
       else if (conclusion === 'success') checks.success++;
       else if (conclusion === 'skipped') checks.skipped++;
       else checks.other++;
     }
-    if (runs.length < 100 || checks.inspected >= total) break;
+    checks.inspected = seen.size;
+    if (runs.length < 100 || checks.inspected === total) break;
   }
-  return checks.inspected <= checks.total ? checks : null;
+  return checks;
 }
 
 export async function captureReviewContext(github, revision, { automatic }) {
