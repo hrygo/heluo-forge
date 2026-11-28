@@ -268,6 +268,8 @@ test('解包规则：交给操作系统的才是真实文件——原生库与�
   const N = 'dsh/node_modules/';
   for (const unpacked of [
     '@deepseek-ai/node-addon-system-darwin-arm64/bin/system.node',
+    '@deepseek-ai/node-addon-system-linux-x64/bin/landlock-run',
+    '@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run',
     '@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node',
     '@img/sharp-libvips-darwin-arm64/lib/libvips-cpp.42.dylib',
     'sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib',
@@ -296,6 +298,7 @@ test('解包规则：交给操作系统的才是真实文件——原生库与�
     'nested/deep/xdg-open',
     '@vscode/ripgrep-darwin-arm64/lib/index.js',
     '@other-scope/ripgrep-darwin-arm64/bin/rg',
+    '@other-scope/node-addon-system-linux-x64/bin/landlock-run',
     'x/lib/person.so.js',
     'x/lib/is-also.js',
   ]) {
