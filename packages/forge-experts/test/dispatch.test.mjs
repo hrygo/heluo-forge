@@ -1179,3 +1179,91 @@ test('timed-out in-flight reconcile reads keep occupying concurrency slots and d
     await dispatch.close();
   }
 });
+
+test('manual reconcileByRequest during in-flight delivery returns EXPERT_ACCEPTANCE_UNKNOWN (503) instead of 404, and timed-out reconcile that later gets 404 notifies onTaskReconciled(notFound) (#484)', async () => {
+  const sharedStorage = createMemoryStorage();
+  const scope = {
+    instanceId: 'delegra-prod-01',
+    orgId: 'org-alpha',
+    issuer: 'https://iam.corp.example',
+    subject: 'emp-1001',
+    verifiedAt: '2026-11-24T00:00:00Z',
+    validUntil: '2026-11-24T23:59:59Z',
+  };
+  let seq = 0;
+  let releaseCreate = null;
+  let createStarted = null;
+  const createStartedPromise = new Promise((resolve) => { createStarted = resolve; });
+  let releaseLate404 = null;
+  const notifications = [];
+
+  const { createDispatchService } = await import('../src/dispatch.mjs');
+  const dispatch = createDispatchService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => ({ ...scope, scopeEpoch: 1 }),
+    assertScopeCurrent: () => {},
+    consumeSelection: () => ({ expertId: 'exp-fin-1', delegationScope: 'proj-fin', sessionId: 'sess-1' }),
+    runInPreferenceBoundary: (fn) => fn(),
+    listConfirmedEnabled: async () => [{ expertId: 'exp-fin-1', authContinuityDigest: 'sha256:c1' }],
+    isPreferencePending: () => false,
+    checkDelegraSessionScope: async () => ({
+      scopeVerified: true,
+      results: [{ expertId: 'exp-fin-1', callableInScope: true, authContinuityDigest: 'sha256:c1', acceptingTasks: 'accepting' }],
+    }),
+    evaluatePolicy: async () => ({ decision: 'allow' }),
+    openStorageDomain: (spec) => sharedStorage.open(spec),
+    generateRequestId: () => `req-guard-${++seq}`,
+    reconcileTimeoutMs: 20,
+    onTaskReconciled: (evt) => notifications.push(evt),
+    createDelegraTask: async ({ requestId }) => {
+      if (requestId === 'req-guard-1') {
+        createStarted();
+        await new Promise((resolve) => { releaseCreate = resolve; });
+        return { taskId: 'task-inflight-1', requestId, status: 'accepted' };
+      }
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'wire dropped', { status: 503, retryable: true });
+    },
+    getDelegraTaskByRequest: async ({ requestId }) => {
+      if (requestId === 'req-guard-2') {
+        await new Promise((resolve) => { releaseLate404 = resolve; });
+      }
+      throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'not found');
+    },
+    getDelegraTask: async () => ({}),
+    getDelegraTaskResult: async () => ({}),
+    createDelegraFollowup: async () => ({}),
+    cancelDelegraTask: async () => ({}),
+  });
+
+  await dispatch.open();
+  try {
+    // 1. In-flight delivery -> manual reconcileByRequest must return 503 EXPERT_ACCEPTANCE_UNKNOWN, never 404.
+    const inFlight = dispatch.dispatchTask({ selectionToken: 'tok-1', sessionId: 'sess-1', taskText: 'In-flight task' });
+    await createStartedPromise;
+    await assert.rejects(
+      () => dispatch.reconcileByRequest({ requestId: 'req-guard-1' }),
+      (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN' && err.status === 503,
+    );
+    releaseCreate();
+    const accepted = await inFlight;
+    assert.equal(accepted.taskId, 'task-inflight-1');
+
+    // 2. Timed-out reconcilePendingRequests whose underlying read later returns 404 still notifies onTaskReconciled({ notFound: true }).
+    await assert.rejects(
+      () => dispatch.dispatchTask({ selectionToken: 'tok-2', sessionId: 'sess-1', taskText: 'Late 404 task' }),
+      (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN',
+    );
+    const pass = await dispatch.reconcilePendingRequests();
+    assert.deepEqual(pass.stillPending, ['req-guard-2']);
+    assert.equal(notifications.length, 0);
+
+    releaseLate404();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].requestId, 'req-guard-2');
+    assert.equal(notifications[0].notFound, true);
+    assert.equal(notifications[0].status, 'not_found');
+  } finally {
+    await dispatch.close();
+  }
+});

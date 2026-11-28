@@ -712,6 +712,14 @@ export function createDispatchService(ports) {
     }
     const cleanId = requestId.trim();
     const scope = await ports.resolveScope();
+    const deliveryKey = deriveCorrelationKey({ ...scope, requestId: cleanId });
+    if (inFlightDeliveries.has(deliveryKey)) {
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request is still in flight; retry reconciliation shortly', {
+        status: 503,
+        retryable: true,
+        details: { requestId: cleanId },
+      });
+    }
     const existing = await readCorrelation(scope, cleanId);
     try {
       const authoritative = await ports.getDelegraTaskByRequest({ scope, requestId: cleanId });
@@ -734,13 +742,21 @@ export function createDispatchService(ports) {
         correlation: existing ? Object.freeze({ originSessionRef: existing.originSessionRef, expertId: existing.expertId }) : null,
       });
     } catch (error) {
-      const deliveryKey = deriveCorrelationKey({ ...scope, requestId: cleanId });
-      if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && existing && !inFlightDeliveries.has(deliveryKey)) {
-        await persistCorrelationBestEffort(scope, {
-          ...existing,
-          status: 'not_found',
-          updatedAt: new Date(now()).toISOString(),
-        });
+      if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
+        if (inFlightDeliveries.has(deliveryKey)) {
+          throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request is still in flight; retry reconciliation shortly', {
+            status: 503,
+            retryable: true,
+            details: { requestId: cleanId },
+          });
+        }
+        if (existing) {
+          await persistCorrelationBestEffort(scope, {
+            ...existing,
+            status: 'not_found',
+            updatedAt: new Date(now()).toISOString(),
+          });
+        }
       }
       throw error;
     }
@@ -982,11 +998,29 @@ export function createDispatchService(ports) {
           }
           return entry;
         };
+        const notifyNotFoundOnce = () => {
+          if (notified) return;
+          notified = true;
+          try {
+            ports.onTaskReconciled?.({
+              requestId,
+              taskId: null,
+              status: 'not_found',
+              notFound: true,
+              scope,
+            });
+          } catch { /* best effort */ }
+        };
         try {
           activeReads.add(readKey);
           const readPromise = reconcileByRequest({ requestId }).then((result) => {
             buildAndNotify(result);
             return result;
+          }).catch((err) => {
+            if (err instanceof ExpertsError && err.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey)) {
+              notifyNotFoundOnce();
+            }
+            throw err;
           }).finally(() => {
             activeReads.delete(readKey);
             if (activeReads.size === 0 && inFlightReconcileReadsByScope.get(scopeKey) === activeReads) {
