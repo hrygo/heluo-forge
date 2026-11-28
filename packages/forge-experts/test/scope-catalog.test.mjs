@@ -69,6 +69,24 @@ test('PR #484 review: a conflicting IAM view is denied before Delegra scope veri
   assert.equal(verified, 1);
 });
 
+for (const field of ['issuer', 'subject', 'orgId']) {
+  test('PR #484 review: rejects conflicting IAM identity fields (' + field + ')', async () => {
+    let verified = 0;
+    const manager = createScopeManager({
+      getIamSession: () => ({
+        state: 'ready', status: 'ready', signedIn: true, ...SCOPE_A,
+        principal: { ...SCOPE_A, [field]: 'conflicting-value' },
+      }),
+      resolveDelegraScope: () => {
+        verified += 1;
+        return SCOPE_A;
+      },
+    });
+    await assert.rejects(() => manager.resolveForRequest(), { code: 'EXPERT_UNAUTHENTICATED' });
+    assert.equal(verified, 0);
+  });
+}
+
 test('stale Delegra verification cannot replace the newer IAM scope or advance its epoch (#484)', async () => {
   const lookupStarted = Promise.withResolvers();
   const releaseOldLookup = Promise.withResolvers();

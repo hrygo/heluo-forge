@@ -372,6 +372,7 @@ window.__ModuleLoader__.load({
     }
 
     const taskReconciledListeners = new Set();
+    const taskScopeChangedListeners = new Set();
     function notifyTaskReconciled(entry) {
       if (!entry || typeof entry !== 'object') return;
       for (const listener of taskReconciledListeners) {
@@ -392,6 +393,7 @@ window.__ModuleLoader__.load({
       const operationRef = React.useRef(null);
       const reconcileVersionRef = React.useRef(0);
       const resultAccessDeniedRef = React.useRef(false);
+      const scopeInvalidatedRef = React.useRef(false);
       const switchedTask = initial !== initialRef.current
         && !sameCardTask(initialRef.current, initial)
         && !sameCardTask(taskRef.current, initial);
@@ -411,7 +413,7 @@ window.__ModuleLoader__.load({
       }
 
       function beginOperation() {
-        if (switchedTask || operationRef.current) return null;
+        if (scopeInvalidatedRef.current || switchedTask || operationRef.current) return null;
         const operation = {
           taskId: model.taskId,
           requestId: model.requestId,
@@ -465,7 +467,22 @@ window.__ModuleLoader__.load({
       }
 
       React.useEffect(() => {
-        if (initial === initialRef.current) return;
+        const invalidateCard = () => {
+          scopeInvalidatedRef.current = true;
+          operationRef.current = null;
+          pendingFollowupRef.current = null;
+          updateTask(null);
+          setRawExpanded(false);
+          setFollowupText('');
+          setNotice(null);
+          setBusy(false);
+        };
+        taskScopeChangedListeners.add(invalidateCard);
+        return () => taskScopeChangedListeners.delete(invalidateCard);
+      }, []);
+
+      React.useEffect(() => {
+        if (scopeInvalidatedRef.current || initial === initialRef.current) return;
         initialRef.current = initial;
         if (switchedTask) {
           operationRef.current = null;
@@ -615,7 +632,7 @@ window.__ModuleLoader__.load({
         };
         try {
           const res = await postTaskFollowup(model.taskId, { taskText: submittedText, requestId: followupRequestId });
-          if (!isCurrentOperation(operation)) return;
+          if (!isCurrentOperation(operation) || clearDeniedResult(res)) return;
           if (!res.ok) {
             if (resultCode(res) === 'EXPERT_ACCEPTANCE_UNKNOWN') {
               const pendingReqId = typeof res?.body?.error?.details?.requestId === 'string' && res.body.error.details.requestId.trim()
@@ -645,7 +662,7 @@ window.__ModuleLoader__.load({
         if (!operation) return;
         try {
           const res = await postTaskCancel(model.taskId);
-          if (!isCurrentOperation(operation)) return;
+          if (!isCurrentOperation(operation) || clearDeniedResult(res)) return;
           if (!res.ok) {
             setNotice(resultNotice(res));
             return;
@@ -665,6 +682,7 @@ window.__ModuleLoader__.load({
         }
       };
 
+      if (scopeInvalidatedRef.current) return null;
       return h('div', {
         className: 'fexp-task-card',
         'data-testid': 'fexp-task-card',
@@ -958,12 +976,47 @@ window.__ModuleLoader__.load({
       return { trigger, dispose };
     }
 
+    function isScopeEpoch(epoch) {
+      return Number.isSafeInteger(epoch) && epoch > 0;
+    }
+
+    function createScopeTracker(onChange) {
+      let epoch = 0;
+      let hostInstanceId = null;
+
+      function update(value, { scopeChanged = false, hostInstanceId: nextHost = null } = {}) {
+        const nextEpoch = isScopeEpoch(value) ? value : 0;
+        const hostChanged = Boolean(nextHost && hostInstanceId && nextHost !== hostInstanceId);
+        if (nextHost) hostInstanceId = nextHost;
+        if (!hostChanged && ((!nextEpoch && !scopeChanged) || (nextEpoch && nextEpoch === epoch))) return false;
+        const changed = hostChanged || epoch !== 0 || scopeChanged;
+        epoch = nextEpoch;
+        if (changed) {
+          for (const listener of taskScopeChangedListeners) {
+            try { listener(); } catch { /* observer isolation */ }
+          }
+          onChange?.();
+        }
+        return changed;
+      }
+
+      return { update, get epoch() { return epoch; }, get hostInstanceId() { return hostInstanceId; } };
+    }
+
     // 存量任务恢复流（§9.2）：即使停用新委派（dispatchEnabled: false），重连 ready 后仍自动按原 requestId 对账并通知卡片，不开放新委派。
     function mountTaskReconcileStream() {
       const reconciler = createReconcileTrigger();
+      const scope = createScopeTracker();
       const closeStream = openEventStream((payload) => {
         if (payload.type === 'ready') {
+          const hostInstanceId = normalizeCardId(payload.hostInstanceId);
+          if (hostInstanceId && hostInstanceId === scope.hostInstanceId && payload.scopeEpoch < scope.epoch) return;
+          scope.update(payload.scopeEpoch, { hostInstanceId });
           reconciler.trigger();
+          return;
+        }
+        if (payload.type === 'scope-changed') {
+          scope.update(payload.scopeEpoch, { scopeChanged: true });
           return;
         }
         if (payload.type === 'task-reconciled') {
@@ -978,14 +1031,12 @@ window.__ModuleLoader__.load({
 
     function mountMentionsSource(ctx, { enableSelectionBinding }) {
       const triggers = typeof ctx.get === 'function' ? ctx.get('inputTriggers') : ctx.inputTriggers;
-      if (!triggers || typeof triggers.registerSource !== 'function') return () => {};
+      if (!triggers || typeof triggers.registerSource !== 'function') return mountTaskReconcileStream();
 
       let unregister = null;
       let generation = 0;
       let activeEpoch = 0;
       let activeVersion = 0;
-      let recoveryScopeEpoch = 0;
-      let recoveryHostInstanceId = null;
       let scopeGeneration = 0;
       let pollGeneration = 0;
       let streamConnected = true;
@@ -1004,20 +1055,10 @@ window.__ModuleLoader__.load({
         draftRecoveryListener = null;
       };
 
-      const isScopeEpoch = (epoch) => Number.isSafeInteger(epoch) && epoch > 0;
-      const updateRecoveryScope = (epoch, { scopeChanged = false, hostInstanceId = null } = {}) => {
-        const nextEpoch = isScopeEpoch(epoch) ? epoch : 0;
-        const hostChanged = Boolean(hostInstanceId && recoveryHostInstanceId && hostInstanceId !== recoveryHostInstanceId);
-        if (hostInstanceId) recoveryHostInstanceId = hostInstanceId;
-        if (!hostChanged && ((!nextEpoch && !scopeChanged) || (nextEpoch && nextEpoch === recoveryScopeEpoch))) return false;
-        const changed = hostChanged || recoveryScopeEpoch !== 0 || scopeChanged;
-        recoveryScopeEpoch = nextEpoch;
-        if (changed) {
-          scopeGeneration += 1;
-          clearRecovery();
-        }
-        return changed;
-      };
+      const recoveryScope = createScopeTracker(() => {
+        scopeGeneration += 1;
+        clearRecovery();
+      });
 
       const draftBufferKey = (sessionId, { draftRecoveryId, draftDigest } = {}) => {
         const recoveryId = normalizeCardId(draftRecoveryId);
@@ -1060,8 +1101,8 @@ window.__ModuleLoader__.load({
             const result = await fetchMentions({ sessionId, query: typeof text === 'string' ? text : '' });
             if (disposed || mountedGen !== generation || !result.ok) return [];
             const epoch = result.body?.scopeEpoch;
-            if (isScopeEpoch(epoch) && epoch < recoveryScopeEpoch) return [];
-            if (updateRecoveryScope(epoch)) {
+            if (isScopeEpoch(epoch) && epoch < recoveryScope.epoch) return [];
+            if (recoveryScope.update(epoch)) {
               dropGroup();
               registerGroup();
               return [];
@@ -1115,9 +1156,9 @@ window.__ModuleLoader__.load({
           };
           sourceSpec.prepareSubmit = async ({ picked, sessionId, taskText, draftVersion, reuseRefs = [] } = {}) => {
             const draft = { taskText: typeof taskText === 'string' ? taskText : '', draftVersion: draftVersion ?? null, reuseRefs: Array.isArray(reuseRefs) ? [...reuseRefs] : [] };
-            const submitEpoch = recoveryScopeEpoch;
+            const submitEpoch = recoveryScope.epoch;
             const submitScopeGeneration = scopeGeneration;
-            const isSameScope = () => !disposed && submitEpoch !== 0 && submitEpoch === recoveryScopeEpoch
+            const isSameScope = () => !disposed && submitEpoch !== 0 && submitEpoch === recoveryScope.epoch
               && submitScopeGeneration === scopeGeneration;
             const isCurrentSubmit = () => isSameScope() && mountedGen === generation;
             const staleSelection = (includeDraft = true) => ({
@@ -1185,9 +1226,9 @@ window.__ModuleLoader__.load({
 
       registerGroup();
       const handleTurnFinalized = (payload, { requireBufferedMatch = false } = {}) => {
-        if (disposed || !recoveryScopeEpoch) return;
+        if (disposed || !recoveryScope.epoch) return;
         if (payload?.scopeEpoch !== undefined) {
-          if (payload.scopeEpoch !== recoveryScopeEpoch) return;
+          if (payload.scopeEpoch !== recoveryScope.epoch) return;
         } else if (!requireBufferedMatch && scopeGeneration !== 0) {
           // Legacy SSE frames cannot prove ownership after an identity change.
           return;
@@ -1233,18 +1274,18 @@ window.__ModuleLoader__.load({
           if (payload.type === 'ready') {
             if (!isScopeEpoch(payload.scopeEpoch)) return;
             const hostInstanceId = normalizeCardId(payload.hostInstanceId);
-            if (hostInstanceId && hostInstanceId === recoveryHostInstanceId && payload.scopeEpoch < recoveryScopeEpoch) return;
+            if (hostInstanceId && hostInstanceId === recoveryScope.hostInstanceId && payload.scopeEpoch < recoveryScope.epoch) return;
             streamConnected = true;
-            if (updateRecoveryScope(payload.scopeEpoch, { hostInstanceId })) dropGroup();
+            if (recoveryScope.update(payload.scopeEpoch, { hostInstanceId })) dropGroup();
             registerGroup();
             if (enableSelectionBinding) {
               triggerReconcile();
-              if (recoveryScopeEpoch && pendingDrafts.size > 0) {
-                const epoch = recoveryScopeEpoch;
+              if (recoveryScope.epoch && pendingDrafts.size > 0) {
+                const epoch = recoveryScope.epoch;
                 const generationAtStart = scopeGeneration;
                 const poll = ++pollGeneration;
                 const isCurrentPoll = () => !disposed && poll === pollGeneration
-                  && generationAtStart === scopeGeneration && epoch === recoveryScopeEpoch;
+                  && generationAtStart === scopeGeneration && epoch === recoveryScope.epoch;
                 fetchRecentFinalizedTurns().then((res) => {
                   if (!isCurrentPoll() || !res?.ok || res.body?.scopeEpoch !== epoch || !Array.isArray(res.body.items)) return;
                   for (const item of res.body.items) {
@@ -1265,7 +1306,7 @@ window.__ModuleLoader__.load({
             return;
           }
           if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {
-            if (payload.type === 'scope-changed') updateRecoveryScope(payload.scopeEpoch, { scopeChanged: true });
+            if (payload.type === 'scope-changed') recoveryScope.update(payload.scopeEpoch, { scopeChanged: true });
             dropGroup();
             registerGroup();
           }

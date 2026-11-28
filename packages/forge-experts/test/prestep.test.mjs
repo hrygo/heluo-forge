@@ -442,30 +442,36 @@ test('delegated turn finalizing past TTL preserves delegatedTaskId and never pro
   assert.equal(prestep.listRecentFinalized(activeScope)[0].status, 'delegated');
 });
 
-test('PR #484 review: an attempted turn without a receipt stays pending before TTL', async () => {
-  const events = [];
-  const h = makeHarness({ turnTtlMs: 10_000, onTurnFinalized: (event) => events.push(event) });
-  const draft = { expertId: 'exp-fin-1', sessionId: 'sess-no-receipt', taskText: 'Awaiting a receipt', draftVersion: 1 };
-  const selection = await h.selection.prepare({ ...draft, scopeEpoch: 1, viewVersion: 1 });
-  const input = { ...draft, selectionToken: selection.selectionToken };
-  const turn = await h.prestep.prepareTurn(input);
-  const guard = h.prestep.beforeToolCall({ turnId: turn.turnId, toolName: 'forge_experts.delegate', toolInput: input });
-  assert.equal(guard.allowed, true);
+for (const [name, error] of [
+  ['no outcome', null],
+  ['generic failure', new Error('Interrupted before tool result was delivered')],
+  ['internal error', new ExpertsError('EXPERT_INTERNAL_ERROR', 'An internal error is not proof of rejection')],
+]) {
+  test('PR #484 review: an attempted turn without a receipt stays pending before TTL (' + name + ')', async () => {
+    const events = [];
+    const h = makeHarness({ turnTtlMs: 10_000, onTurnFinalized: (event) => events.push(event) });
+    const draft = { expertId: 'exp-fin-1', sessionId: 'sess-no-receipt', taskText: 'Awaiting a receipt', draftVersion: 1 };
+    const selection = await h.selection.prepare({ ...draft, scopeEpoch: 1, viewVersion: 1 });
+    const input = { ...draft, selectionToken: selection.selectionToken };
+    const turn = await h.prestep.prepareTurn(input);
+    const guard = h.prestep.beforeToolCall({ turnId: turn.turnId, toolName: 'forge_experts.delegate', toolInput: input });
+    assert.equal(guard.allowed, true);
 
-  const outcome = h.prestep.finalizeTurn({ turnId: turn.turnId });
-  assert.equal(outcome.status, 'acceptance_unknown');
-  assert.equal(outcome.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
-  assert.equal(outcome.preserveDraft, false);
-  assert.equal('draft' in outcome, false);
-  assert.match(outcome.notice, /按原请求号.*切勿重复发送/u);
-  assert.doesNotMatch(outcome.notice, /超时|未发起/u);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].status, outcome.status);
-  assert.equal(events[0].preserveDraft, false);
-  assert.equal(h.prestep.listRecentFinalized(h.getScope())[0].status, outcome.status);
-  assert.equal(h.prestep.finalizeTurn({ turnId: turn.turnId }).status, 'unbound');
-  assert.equal(events.length, 1);
-});
+    const outcome = h.prestep.finalizeTurn({ turnId: turn.turnId, error });
+    assert.equal(outcome.status, 'acceptance_unknown');
+    assert.equal(outcome.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+    assert.equal(outcome.preserveDraft, false);
+    assert.equal('draft' in outcome, false);
+    assert.match(outcome.notice, /按原请求号.*切勿重复发送/u);
+    assert.doesNotMatch(outcome.notice, /超时|未发起/u);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].status, outcome.status);
+    assert.equal(events[0].preserveDraft, false);
+    assert.equal(h.prestep.listRecentFinalized(h.getScope())[0].status, outcome.status);
+    assert.equal(h.prestep.finalizeTurn({ turnId: turn.turnId }).status, 'unbound');
+    assert.equal(events.length, 1);
+  });
+}
 
 test('late definite denial restores the original draft after a recent-turn poll prunes the attempted binding (#484)', async () => {
   const events = [];

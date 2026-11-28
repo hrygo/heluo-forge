@@ -23,9 +23,15 @@ function normalizeIamSession(raw) {
   // Support both test/adapter shape (`state: 'ready'`) and real @heluo/forge-iam
   // `sessionView()` shape (`status: 'ready', signedIn: true, principal: { issuer, subject }`).
   const ready = raw.state === 'ready' || (raw.status === 'ready' && raw.signedIn === true);
-  const issuer = pickNonEmptyString(raw.issuer, raw.principal?.issuer);
-  const subject = pickNonEmptyString(raw.subject, raw.principal?.subject);
-  const orgId = pickNonEmptyString(raw.orgId, raw.principal?.orgId);
+  const { principal } = raw;
+  for (const field of ['issuer', 'subject', 'orgId']) {
+    const legacy = raw[field];
+    const current = principal?.[field];
+    if (isNonEmptyString(legacy) && isNonEmptyString(current) && legacy.trim() !== current.trim()) return null;
+  }
+  const issuer = pickNonEmptyString(raw.issuer, principal?.issuer);
+  const subject = pickNonEmptyString(raw.subject, principal?.subject);
+  const orgId = pickNonEmptyString(raw.orgId, principal?.orgId);
   if (!ready || !issuer || !subject) return null;
   return Object.freeze({
     state: 'ready',
