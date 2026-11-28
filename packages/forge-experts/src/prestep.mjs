@@ -17,8 +17,8 @@ const MODEL_DID_NOT_DELEGATE_NOTICE =
   '主助手未调用所选专家，未发起远端任务；已保留您的草稿，可重新确认后发送。';
 const EXPIRED_TURN_NOTICE =
   '专家确认已超时失效，未发起远端任务；已保留您的草稿，请重新确认后发送。';
-const DELEGATE_ATTEMPTED_EXPIRED_NOTICE =
-  '专家委派已发起但本轮确认超时，受理结果待对账；请按原请求号查单，切勿重复发送。';
+const DELEGATE_ACCEPTANCE_UNKNOWN_NOTICE =
+  '专家委派受理结果尚未确认，请按原请求号查单，切勿重复发送。';
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -159,7 +159,7 @@ export function createPreStepGuard(ports) {
             status: 'acceptance_unknown',
             code: 'EXPERT_ACCEPTANCE_UNKNOWN',
             preserveDraft: false,
-            notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+            notice: DELEGATE_ACCEPTANCE_UNKNOWN_NOTICE,
           });
           continue;
         }
@@ -356,6 +356,7 @@ export function createPreStepGuard(ports) {
   /**
    * Finalizes a bound turn after main-assistant execution:
    * - If delegation succeeded (`delegatedTaskId`), clears the turn without preserving draft.
+   * - If the tool passed the guard and no receipt or error arrived, acceptance stays unknown.
    * - If the model never invoked `forge_experts.delegate`, discards the unused single-use
    *   `selectionToken` (preventing replay), marks `expertParticipated: false, completed: false`,
    *   and returns `preserveDraft: true` with the original draft and an explicit notice (#245/#247).
@@ -396,8 +397,8 @@ export function createPreStepGuard(ports) {
     }
 
     const isAcceptanceUnknownError = error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN';
-    const isExpiredAttempted = !error && (expiredAttempted || (turn.delegateAttempted === true && now() >= turn.expiresAt));
-    if (isAcceptanceUnknownError || isExpiredAttempted) {
+    const missingOutcomeAfterAttempt = !error && (Boolean(expiredAttempted) || turn.delegateAttempted === true);
+    if (isAcceptanceUnknownError || missingOutcomeAfterAttempt) {
       const unknownOutcome = Object.freeze({
         status: 'acceptance_unknown',
         code: 'EXPERT_ACCEPTANCE_UNKNOWN',
@@ -406,14 +407,14 @@ export function createPreStepGuard(ports) {
         expertId: turn.expertId,
         sessionId: turn.sessionId,
         preserveDraft: false,
-        notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+        notice: DELEGATE_ACCEPTANCE_UNKNOWN_NOTICE,
       });
       if (!expiredAttempted) {
         emitTurnFinalized(turn, {
           status: 'acceptance_unknown',
           code: 'EXPERT_ACCEPTANCE_UNKNOWN',
           preserveDraft: false,
-          notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+          notice: DELEGATE_ACCEPTANCE_UNKNOWN_NOTICE,
         });
       }
       return unknownOutcome;

@@ -518,7 +518,12 @@ window.__ModuleLoader__.load({
         if (!operation) return;
         try {
           const res = await reconcileTaskByRequest(model.requestId);
-          if (!isCurrentOperation(operation) || isSupersededRead(operation, res.body)) return;
+          if (!isCurrentOperation(operation)) return;
+          if (res.status === 401 || res.status === 403) {
+            clearDeniedResult(res);
+            return;
+          }
+          if (isSupersededRead(operation, res.body)) return;
           if (!res.ok) {
             if (resultCode(res) !== 'EXPERT_TASK_NOT_FOUND' || !applyNotFound()) {
               setNotice(resultNotice(res));

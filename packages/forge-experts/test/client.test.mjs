@@ -2490,6 +2490,56 @@ for (const [deniedAt, statusCode] of [
   });
 }
 
+for (const [status, code] of [[401, 'EXPERT_AUTH_REVOKED'], [403, 'EXPERT_ORG_FORBIDDEN']]) {
+  test('PR #484 review: reconciliation clears cached results on authorization denial (' + status + ')', async (t) => {
+    const followupRequest = 'request-followup';
+    const draft = 'Draft for the pending follow-up';
+    let delivered = 0;
+    let reconcileResponse = cardJson(status, { error: { code } });
+    const card = mountReviewTaskCard(t, {
+      initialTask: {
+        taskId: 'task-a', requestId: 'request-a', status: 'waiting_user', runGeneration: 1,
+        summary: 'Cached summary', result: 'Cached result', rawResult: 'Cached original',
+        sources: [{ authorized: true, title: 'Cached source' }],
+        artifacts: [{ authorized: true, label: 'Cached artifact' }],
+      },
+      async fetchImpl(url) {
+        if (url.endsWith('/tasks/task-a/followups')) {
+          delivered += 1;
+          return cardJson(503, { error: { code: 'EXPERT_ACCEPTANCE_UNKNOWN', details: { requestId: followupRequest } } });
+        }
+        assert.ok(url.endsWith('/tasks/by-request/' + followupRequest), url);
+        return reconcileResponse;
+      },
+    });
+
+    cardElement(card.render(), 'fexp-raw-toggle').props.onClick();
+    cardElement(card.render(), 'fexp-followup-box').children[0].props.onChange({ target: { value: draft } });
+    await cardElement(card.render(), 'fexp-followup-btn').props.onClick();
+    const pending = card.render();
+    assert.equal(pending.props['data-task-status'], 'unknown');
+    assert.equal(cardElement(pending, 'fexp-raw-content')?.children[0], 'Cached original');
+
+    await cardElement(pending, 'fexp-task-reconcile').props.onClick();
+    const denied = card.render();
+    for (const part of ['fexp-task-summary', 'fexp-task-result', 'fexp-task-sources', 'fexp-task-artifacts', 'fexp-raw-drawer']) {
+      assert.ok(!cardElement(denied, part), part + ' must be removed after authorization is denied');
+    }
+    assert.equal(denied.props['data-task-status'], 'unknown');
+    assert.equal(cardElement(denied, 'fexp-followup-btn'), null);
+    assert.equal(delivered, 1);
+
+    reconcileResponse = cardJson(404, { error: { code: 'EXPERT_TASK_NOT_FOUND' } });
+    await cardElement(denied, 'fexp-task-reconcile').props.onClick();
+    const inaccessible = card.render();
+    assert.equal(inaccessible.props['data-task-status'], 'not_found');
+    const retained = cardElement(inaccessible, 'fexp-followup-box').children[0];
+    assert.equal(retained.props.value, draft);
+    assert.equal(retained.props.readOnly, true);
+    assert.equal(delivered, 1);
+  });
+}
+
 test('PR #484 review: a late refresh cannot roll a reconciled task back in the same generation', async (t) => {
   const resultStarted = Promise.withResolvers();
   const resultReply = Promise.withResolvers();
