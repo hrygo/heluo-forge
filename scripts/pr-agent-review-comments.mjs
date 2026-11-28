@@ -99,6 +99,15 @@ function indexChangedPaths(files) {
   return paths;
 }
 
+function indexRightRows(hunks) {
+  return new Map(hunks.flatMap(({ RIGHT }) => RIGHT.lines.map(({ number, text }) => [number, text])));
+}
+
+function reviewCommentMarker({ head, path, side, line, heading, content }) {
+  const hash = createHash('sha256').update(JSON.stringify([head, path, side, line, heading, content])).digest('hex');
+  return `<!-- heluo-forge-pr-agent-comment:v1 ${hash} -->`;
+}
+
 function parseFinding(issue) {
   if (typeof issue?.issue_header !== 'string' || typeof issue.issue_content !== 'string' ||
       typeof issue.relevant_file !== 'string' || !issue.relevant_file.trim()) return undefined;
@@ -112,32 +121,41 @@ function parseFinding(issue) {
   const start = leftStart ? Number(leftStart) : issue.start_line;
   const end = leftEnd ? Number(leftEnd) : issue.end_line;
   if (!Number.isSafeInteger(start) || start <= 0 || !Number.isSafeInteger(end) || end < start) return undefined;
-  return { heading: priority ? `${priority} ${title}` : title, priority: priority?.slice(1, -1), content, side, start, end };
+  const headingText = priority ? `${priority} ${title}` : title;
+  return { heading: headingText, title, priority: priority?.slice(1, -1), content, side, start, end };
 }
 
 function isResolvedDuplicate(threads, finding, { path, side, line, head, base, deltaRows }) {
-  const { priority, start, end } = finding;
+  const { priority, start, end, title, content } = finding;
   if (!priority) return false;
   return threads.some((thread) => {
     if (!thread.resolved || thread.outdated || !thread.lastReply ||
-        !thread.priority || thread.priority > priority || thread.path !== path || thread.side !== side) return false;
-    if (thread.originalHead === head) {
-      return thread.start <= line && line <= thread.end &&
-        (side === 'RIGHT' || (isSha(base) && thread.originalBase === base));
-    }
-    // A nearby delta row can supply an anchor for a reworded older finding.
-    // Compare the reported range with GitHub's current coordinates before using that anchor.
-    return deltaRows && side === 'RIGHT' && isSha(thread.originalHead) &&
-      thread.start <= end && start <= thread.end &&
-      !deltaRows.values().some((row) => thread.start <= row && row <= thread.end);
+        !thread.priority || thread.priority > priority || thread.path !== path || thread.side !== side ||
+        !thread.marker || !isSha(thread.originalHead) ||
+        !Number.isSafeInteger(thread.originalLine) || thread.originalLine <= 0) return false;
+
+    const sameLocation = thread.originalHead === head
+      ? thread.start <= line && line <= thread.end &&
+        (side === 'RIGHT' || (isSha(base) && thread.originalBase === base))
+      : deltaRows && side === 'RIGHT' && thread.start <= end && start <= thread.end &&
+        !deltaRows.keys().some((row) => thread.start <= row && row <= thread.end);
+    if (!sameLocation) return false;
+
+    // The original marker identifies the finding even when the current anchor has moved.
+    return thread.marker === reviewCommentMarker({
+      head: thread.originalHead, path, side, line: thread.originalLine,
+      heading: `[${thread.priority}] ${title}`, content,
+    });
   });
 }
 
 export function buildReviewComments({ issues, files, head, base, deltaFiles, threads = [] }) {
   if (!Array.isArray(issues) || !Array.isArray(files) || typeof head !== 'string' || !head) return [];
   const paths = indexChangedPaths(files);
-  const delta = deltaFiles && new Map(deltaFiles.map(({ filename, patch }) => [filename,
-    new Set(parseReviewPatch(patch).hunks.flatMap(({ RIGHT }) => RIGHT.lines.map(({ number }) => number)))]));
+  const delta = deltaFiles && new Map(deltaFiles.map(({ filename, patch }) => {
+    const { hunks } = parseReviewPatch(patch);
+    return [filename, { hunks, rightRows: indexRightRows(hunks) }];
+  }));
   const parsedPatches = new Map();
   const comments = new Map();
   for (const issue of issues) {
@@ -150,18 +168,23 @@ export function buildReviewComments({ issues, files, head, base, deltaFiles, thr
     const [{ file, onlySide }] = candidates;
     const path = file.filename;
     const side = requestedSide ?? onlySide;
-    const deltaRows = delta?.get(path);
-    if (!side || (delta && (side !== 'RIGHT' || !deltaRows))) continue;
+    const deltaPatch = delta?.get(path);
+    if (!side || (delta && (side !== 'RIGHT' || !deltaPatch))) continue;
 
-    if (!parsedPatches.has(file)) parsedPatches.set(file, parseReviewPatch(file.patch).hunks);
-    const hunk = parsedPatches.get(file).find(({ [side]: range }) =>
+    if (!parsedPatches.has(file)) {
+      const { hunks } = parseReviewPatch(file.patch);
+      parsedPatches.set(file, { hunks, rightRows: deltaPatch && indexRightRows(hunks) });
+    }
+    const fullPatch = parsedPatches.get(file);
+    const hunk = (deltaPatch ?? fullPatch).hunks.find(({ [side]: range }) =>
       start >= range.start && end < range.end);
-    const line = hunk?.[side].lines.find(({ number }) => number >= start && number <= end &&
-      (!deltaRows || deltaRows.has(number)))?.number;
-    if (line === undefined || isResolvedDuplicate(threads, finding, { path, side, line, head, base, deltaRows })) continue;
+    const line = hunk?.[side].lines.find(({ number, text }) => number >= start && number <= end &&
+      (!deltaPatch || fullPatch.rightRows.get(number) === text))?.number;
+    if (line === undefined || isResolvedDuplicate(threads, finding, {
+      path, side, line, head, base, deltaRows: deltaPatch?.rightRows,
+    })) continue;
 
-    const hash = createHash('sha256').update(JSON.stringify([head, path, side, line, heading, content])).digest('hex');
-    const marker = `<!-- heluo-forge-pr-agent-comment:v1 ${hash} -->`;
+    const marker = reviewCommentMarker({ head, path, side, line, heading, content });
     const baseMarker = side === 'LEFT' && isSha(base) ? `<!-- heluo-forge-pr-agent-comment-base:v1 ${base} -->\n\n` : '';
     const body = `**${heading}**\n\n${content}\n\n${baseMarker}${marker}`;
     comments.set(marker, { path, line, side, body });

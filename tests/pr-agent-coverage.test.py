@@ -303,16 +303,29 @@ class NativeReviewContext(unittest.TestCase):
 
     def test_incremental_prompt_declares_history_and_summary_uses_only_captured_blockers(self):
         result = self.run_review([self.response(recheck=[
-            {"thread_id": 11, "status": "fix_evidence_found", "evidence": "Was fixed in <hunk> by @author."},
+            {"thread_id": 11, "status": "fix_evidence_found",
+             "evidence": "Was fixed in <hunk> by @author. Literal `code` and "
+                         "[link](https://corp.example/review?q=1&tag=two) "
+                         "and https://example.invalid/path."},
             {"thread_id": 99, "status": "still_present", "evidence": "Uncaptured finding"},
             {"thread_id": 44, "status": "still_present", "evidence": "Resolved finding"},
         ])], pending=[self.thread(11), self.thread(22), self.thread(44, resolved=True)])
         self.assertIn("history_recheck: List[HistoricalReviewCheck]", result.system)
-        self.assertIn("discussion_r11) · 模型发现修复证据", result.body)
-        self.assertIn("Was fixed in &lt;hunk&gt; by &#64;author.", result.body)
+        self.assertIn("[讨论 11](#discussion_r11) · 模型发现修复证据", result.body)
+        self.assertIn("`` Was fixed in <hunk> by @author. Literal `code` and "
+                      "[link](https://corp.example/review?q=1&tag=two) and "
+                      "https://example.invalid/path. ``", result.body)
         self.assertIn("discussion_r22) · 待人工复核", result.body)
         self.assertNotIn("Uncaptured finding", result.body)
         self.assertNotIn("Resolved finding", result.body)
+
+    def test_history_evidence_with_edge_backticks_keeps_code_span_and_generated_anchor(self):
+        evidence = "``[link](https://corp.example/review)```"
+        result = self.run_review([self.response(recheck=[
+            {"thread_id": 11, "status": "fix_evidence_found", "evidence": evidence},
+        ])], pending=[self.thread(11)])
+        self.assertIn(f"```` {evidence} ````", result.body)
+        self.assertIn("[讨论 11](#discussion_r11) · 模型发现修复证据", result.body)
 
     def test_history_combines_visible_evidence_and_withholds_conflicting_or_incomplete_results(self):
         pending = [self.thread(11), self.thread(22)]
