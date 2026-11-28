@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320" role="img" aria-label="DOP 工作台蓝橙小火箭图标">
+  <defs>
+    <linearGradient id="wbRocketBody" x1="20%" y1="15%" x2="85%" y2="85%">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="55%" stop-color="#2563EB" />
+      <stop offset="100%" stop-color="#1D4ED8" />
+    </linearGradient>
+    <linearGradient id="wbRocketFlame" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#FB923C" />
+      <stop offset="100%" stop-color="#EA580C" />
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="280" height="280" rx="64" fill="#EFF6FF" />
+  <path d="M128 214 L84 238 L94 186 Z" fill="#F97316" />
+  <path d="M192 214 L236 238 L226 186 Z" fill="#F97316" />
+  <path d="M160 44 C198 84 214 140 206 202 L114 202 C106 140 122 84 160 44 Z" fill="url(#wbRocketBody)" />
+  <path d="M160 44 C180 70 192 98 197 126 L123 126 C128 98 140 70 160 44 Z" fill="#60A5FA" fill-opacity="0.35" />
+  <circle cx="160" cy="138" r="24" fill="#FFFFFF" stroke="#1D4ED8" stroke-width="8" />
+  <circle cx="160" cy="138" r="10" fill="#38BDF8" />
+  <rect x="132" y="202" width="56" height="16" rx="6" fill="#1E3A8A" />
+  <path d="M138 220 C138 250 148 272 160 284 C172 272 182 250 182 220 Z" fill="url(#wbRocketFlame)" />
+  <path d="M150 222 C150 242 155 256 160 264 C165 256 170 242 170 222 Z" fill="#FDE047" />
+</svg>

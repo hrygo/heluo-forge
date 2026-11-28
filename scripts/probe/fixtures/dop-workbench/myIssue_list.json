@@ -1,0 +1,555 @@
+{
+  "items": [
+    {
+      "assignee": {
+        "avatarDecor": {
+          "frameId": "specification_expert"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "businessOwner": {
+        "avatarDecor": {
+          "frameId": "daily_login"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-003",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000002",
+        "name": "示例用户2",
+        "secondOrg": {
+          "code": "ORG-MOCK-004",
+          "name": "示例二级部门"
+        },
+        "sex": "女",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "businessPartners": null,
+      "category": {
+        "id": "requirement",
+        "name": "需求类"
+      },
+      "children": null,
+      "code": "STORY-MOCK-1001",
+      "createDate": "2026-11-23 15:31:49",
+      "creator": {
+        "avatarDecor": {
+          "frameId": "daily_login"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-003",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000002",
+        "name": "示例用户2",
+        "secondOrg": {
+          "code": "ORG-MOCK-004",
+          "name": "示例二级部门"
+        },
+        "sex": "女",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "id": "0213f180ca3d4d7085fb598b48735ea3",
+      "mainStoryId": null,
+      "manager": {
+        "avatarDecor": {
+          "frameId": "specification_expert"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "parentId": null,
+      "planOnlineDate": "2026-12-22 00:00:00",
+      "postponeStart": null,
+      "progressState": {
+        "id": "normal",
+        "name": "正常"
+      },
+      "releaseDelay": 0,
+      "scheduleDelay": 0,
+      "state": {
+        "active": 1,
+        "id": "c21fd545abcf4840b08ade56db93b3a4",
+        "name": "新建",
+        "sequence": 10,
+        "teamId": "team-mock-001",
+        "typeId": "created"
+      },
+      "summary": "日终汇总报表自动化导出接口与异常差异预警通知",
+      "team": {
+        "id": "team-mock-001",
+        "internalRelease": 1,
+        "managerUser": {
+          "avatarDecor": {
+            "frameId": "specification_expert"
+          },
+          "blocked": 0,
+          "email": "user01[at]corp.example",
+          "firstOrg": {
+            "code": "ORG-MOCK-001",
+            "name": "示例一级部门"
+          },
+          "loginCode": "000001",
+          "name": "示例用户1",
+          "secondOrg": {
+            "code": "ORG-MOCK-002",
+            "name": "示例二级部门"
+          },
+          "sex": "男",
+          "state": null,
+          "type": {
+            "id": "employee",
+            "name": "员工"
+          }
+        },
+        "managers": [
+          {
+            "avatarDecor": null,
+            "blocked": null,
+            "email": null,
+            "firstOrg": null,
+            "loginCode": "000003",
+            "name": "示例用户3",
+            "secondOrg": null,
+            "sex": "男",
+            "state": null,
+            "type": null
+          },
+          {
+            "avatarDecor": null,
+            "blocked": null,
+            "email": null,
+            "firstOrg": null,
+            "loginCode": "000001",
+            "name": "示例用户1",
+            "secondOrg": null,
+            "sex": "男",
+            "state": null,
+            "type": null
+          }
+        ],
+        "name": "示例分队1",
+        "parent": {
+          "id": "group-mock-001",
+          "internalRelease": 0,
+          "managerUser": null,
+          "managers": null,
+          "name": "示例小组1",
+          "parent": null,
+          "signature": null,
+          "type": {
+            "id": "group",
+            "name": "小组"
+          }
+        },
+        "signature": null,
+        "type": {
+          "id": "team",
+          "name": "分队"
+        }
+      },
+      "type": {
+        "id": "main_story",
+        "name": "主办故事"
+      }
+    },
+    {
+      "assignee": {
+        "avatarDecor": {
+          "frameId": "version_higher_ups"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000006",
+        "name": "示例用户6",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "businessOwner": {
+        "avatarDecor": {
+          "frameId": "version_higher_ups"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000006",
+        "name": "示例用户6",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "businessPartners": null,
+      "category": {
+        "id": "requirement",
+        "name": "需求类"
+      },
+      "children": null,
+      "code": "STORY-MOCK-1002",
+      "createDate": "2026-11-13 17:21:23",
+      "creator": {
+        "avatarDecor": {
+          "frameId": "specification_expert"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "id": "42b204c8843d44e690e83afa3c9dafbf",
+      "mainStoryId": null,
+      "manager": {
+        "avatarDecor": {
+          "frameId": "version_higher_ups"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000006",
+        "name": "示例用户6",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "parentId": null,
+      "planOnlineDate": "2026-12-25 00:00:00",
+      "postponeStart": null,
+      "progressState": {
+        "id": "normal",
+        "name": "正常"
+      },
+      "releaseDelay": 0,
+      "scheduleDelay": 1,
+      "state": {
+        "active": 1,
+        "id": "8a60e6efe422460b85bff5ea4d8d2a5e",
+        "name": "新建",
+        "sequence": 10,
+        "teamId": "15f57d434ba142bf92c200364a01f6bd",
+        "typeId": "created"
+      },
+      "summary": "指标异常告警多渠道推送配置与审计归档改造",
+      "team": {
+        "id": "team-mock-001",
+        "internalRelease": 0,
+        "managerUser": null,
+        "managers": null,
+        "name": "示例分队1",
+        "parent": {
+          "id": "group-mock-001",
+          "internalRelease": 0,
+          "managerUser": null,
+          "managers": null,
+          "name": "示例小组1",
+          "parent": null,
+          "signature": null,
+          "type": {
+            "id": "group",
+            "name": "小组"
+          }
+        },
+        "signature": null,
+        "type": {
+          "id": "team",
+          "name": "分队"
+        }
+      },
+      "type": {
+        "id": "main_story",
+        "name": "主办故事"
+      }
+    },
+    {
+      "assignee": {
+        "avatarDecor": {
+          "frameId": "specification_expert"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "businessOwner": {
+        "avatarDecor": {
+          "frameId": "daily_login"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-003",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000002",
+        "name": "示例用户2",
+        "secondOrg": {
+          "code": "ORG-MOCK-004",
+          "name": "示例二级部门"
+        },
+        "sex": "女",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "businessPartners": null,
+      "category": {
+        "id": "requirement",
+        "name": "需求类"
+      },
+      "children": null,
+      "code": "STORY-MOCK-1003",
+      "createDate": "2026-09-24 09:17:32",
+      "creator": {
+        "avatarDecor": {
+          "frameId": "daily_login"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-003",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000002",
+        "name": "示例用户2",
+        "secondOrg": {
+          "code": "ORG-MOCK-004",
+          "name": "示例二级部门"
+        },
+        "sex": "女",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "id": "d15c21b5aa9647f096501edbc9780128",
+      "mainStoryId": null,
+      "manager": {
+        "avatarDecor": {
+          "frameId": "specification_expert"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "parentId": null,
+      "planOnlineDate": "2026-12-29 00:00:00",
+      "postponeStart": null,
+      "progressState": {
+        "id": "normal",
+        "name": "正常"
+      },
+      "releaseDelay": 0,
+      "scheduleDelay": 1,
+      "state": {
+        "active": 1,
+        "id": "cc5e763229944cb3ada592cb1ff7291f",
+        "name": "开发中",
+        "sequence": 40,
+        "teamId": "team-mock-001",
+        "typeId": "dev"
+      },
+      "summary": "示例工作项摘要3",
+      "team": {
+        "id": "team-mock-001",
+        "internalRelease": 1,
+        "managerUser": {
+          "avatarDecor": {
+            "frameId": "specification_expert"
+          },
+          "blocked": 0,
+          "email": "user01[at]corp.example",
+          "firstOrg": {
+            "code": "ORG-MOCK-001",
+            "name": "示例一级部门"
+          },
+          "loginCode": "000001",
+          "name": "示例用户1",
+          "secondOrg": {
+            "code": "ORG-MOCK-002",
+            "name": "示例二级部门"
+          },
+          "sex": "男",
+          "state": null,
+          "type": {
+            "id": "employee",
+            "name": "员工"
+          }
+        },
+        "managers": [
+          {
+            "avatarDecor": null,
+            "blocked": null,
+            "email": null,
+            "firstOrg": null,
+            "loginCode": "000003",
+            "name": "示例用户3",
+            "secondOrg": null,
+            "sex": "男",
+            "state": null,
+            "type": null
+          },
+          {
+            "avatarDecor": null,
+            "blocked": null,
+            "email": null,
+            "firstOrg": null,
+            "loginCode": "000001",
+            "name": "示例用户1",
+            "secondOrg": null,
+            "sex": "男",
+            "state": null,
+            "type": null
+          }
+        ],
+        "name": "示例分队1",
+        "parent": {
+          "id": "group-mock-001",
+          "internalRelease": 0,
+          "managerUser": null,
+          "managers": null,
+          "name": "示例小组1",
+          "parent": null,
+          "signature": null,
+          "type": {
+            "id": "group",
+            "name": "小组"
+          }
+        },
+        "signature": null,
+        "type": {
+          "id": "team",
+          "name": "分队"
+        }
+      },
+      "type": {
+        "id": "main_story",
+        "name": "主办故事"
+      }
+    }
+  ],
+  "pageNum": 1,
+  "pageSize": 5,
+  "totalItems": 7,
+  "totalPages": 2
+}

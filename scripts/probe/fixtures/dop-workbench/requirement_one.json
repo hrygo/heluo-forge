@@ -1,0 +1,291 @@
+{
+  "acceptedDate": "2026-11-18 10:58:16",
+  "accountFlag": "0",
+  "actualLineDate": null,
+  "annualPlan": 1,
+  "applyDate": "2026-11-09 00:00:00",
+  "applyUser": {
+    "avatarDecor": {
+      "frameId": null
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-005",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000009",
+    "name": "示例用户1",
+    "secondOrg": {
+      "code": "ORG-MOCK-006",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "archInfo": {
+    "acceptEndDate": null,
+    "acceptStartDate": null,
+    "archLabel": {
+      "archDesignBaseDays": null,
+      "id": "not_involved",
+      "name": "无架构变更",
+      "viewOrder": 5,
+      "visible": 1
+    },
+    "archManager": {
+      "avatarDecor": {
+        "frameId": null
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000010",
+      "name": "示例用户2",
+      "secondOrg": {
+        "code": "ORG-MOCK-007",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "requirementId": "a6524d93122e4aab96022254da0c05cf",
+    "reviewPlanEndDate": null,
+    "reviewPlanStartDate": null
+  },
+  "archManager": {
+    "avatarDecor": {
+      "frameId": null
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-003",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000010",
+    "name": "示例用户2",
+    "secondOrg": {
+      "code": "ORG-MOCK-007",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "archReview": null,
+  "archReviewPlanEndDate": null,
+  "archReviewPlanStartDate": null,
+  "assignee": {
+    "avatarDecor": {
+      "frameId": null
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-003",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000011",
+    "name": "示例用户3",
+    "secondOrg": {
+      "code": "ORG-MOCK-008",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "backGround": "<p>示例需求背景：当前企业研发效能汇总报表依赖运营人员次日手工导表与人工比对，存在 T+1 滞后、大额异常难以及时预警、审计归档缺乏统一脱敏导出模板等痛点。</p>",
+  "benefitInfos": [],
+  "branchName": null,
+  "budget": null,
+  "businessOwner": {
+    "avatarDecor": {
+      "frameId": null
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-005",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000009",
+    "name": "示例用户1",
+    "secondOrg": {
+      "code": "ORG-MOCK-006",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "category": {
+    "id": "daily_optimization",
+    "name": "日常优化",
+    "oa": "5"
+  },
+  "categoryDescription": null,
+  "categoryL1": {
+    "id": "cp",
+    "name": "产品服务",
+    "oa": "2",
+    "sequence": 1
+  },
+  "categoryL2": {
+    "categoryL1Id": "cp",
+    "id": "zc",
+    "name": "平台产品",
+    "oa": "3",
+    "sequence": 2
+  },
+  "completeDate": null,
+  "complianceFlag": "0",
+  "confirmCreateStoryDate": null,
+  "createDate": "2026-11-13 16:04:56",
+  "description": "<p>示例需求描述：1）支持日终批处理定时生成与前端按需导出企业汇总报表（CSV/PDF 格式与明细脱敏规则待业务最后确认）；2）建立指标核对差异预警机制（固定阈值与环比浮动比率口径待明确，预警触达渠道如站内/邮件/消息告警待勾选）；3）按历史跨度（90天/180天/365天可配选项待确认）提供查询与合规留痕归档，一期范围不自动回写外部系统。</p>",
+  "effectData": null,
+  "effectDataOA": null,
+  "effectDifferent": null,
+  "effectDifferentOA": null,
+  "id": "a6524d93122e4aab96022254da0c05cf",
+  "implementationOrg": {
+    "code": "ORG-MOCK-009",
+    "name": "示例一级部门"
+  },
+  "important": {
+    "id": "normal",
+    "name": "常规"
+  },
+  "incomeFlag": null,
+  "involveCoreProjectGroups": null,
+  "involveMobileApp": null,
+  "involveMobileAppExperienceTeam": null,
+  "isProject": "0",
+  "isProjectComplete": "0",
+  "manager": {
+    "avatarDecor": {
+      "frameId": null
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-003",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000011",
+    "name": "示例用户3",
+    "secondOrg": {
+      "code": "ORG-MOCK-008",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "mobileAppExperienceTeamDesc": null,
+  "mobileAppParticipateUsers": [],
+  "mode": {
+    "description": "迭代开展“用户故事拆分->故事分析及评审”，无需做整体需求分析。用户故事未评审，不允许拆分系统变更",
+    "id": "agile",
+    "name": "敏捷"
+  },
+  "name": "示例需求1：企业汇总报表日终自动化导出与异常预警改造",
+  "necessityType": null,
+  "no": "REQ-MOCK-1009",
+  "oaType": {
+    "id": "develop_not_production",
+    "name": "需开发产品类，非产品类需求"
+  },
+  "onlineDate": "2026-12-31 00:00:00",
+  "orgCode": "ORG-MOCK-006",
+  "orgName": "示例部门1",
+  "planAnalyseStartDate": null,
+  "planReviewEndDate": null,
+  "projectManager": {
+    "avatarDecor": {
+      "frameId": "version_higher_ups"
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-001",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000012",
+    "name": "示例用户4",
+    "secondOrg": {
+      "code": "ORG-MOCK-009",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "projectWbDevWorkload": null,
+  "projectWbTestWorkload": null,
+  "reportUser": null,
+  "reqBenefit": "<p>将日终手工统计耗时从 2.5 小时缩短至 10 分钟内，及时拦截指标异常差异。</p>",
+  "reqDocs": [
+    {
+      "docCode": "DOC-MOCK-1001",
+      "docId": "90001001",
+      "docName": "示例业务需求规格说明书_1.0.0",
+      "docVer": "1.1.0"
+    }
+  ],
+  "reqTopic": null,
+  "reqUrgency": null,
+  "responsibleOrg": {
+    "id": "1",
+    "name": "示例一级部门"
+  },
+  "reviewEndDate": "2026-11-19 10:48:46",
+  "reviewStartDate": "2026-11-19 10:45:43",
+  "stage": {
+    "id": "in_operation",
+    "name": "实施中"
+  },
+  "state": {
+    "id": "normal",
+    "name": "正常"
+  },
+  "systemOffline": null,
+  "systemOfflineReviewResult": null,
+  "tagType": null,
+  "team": null,
+  "totalScore": null,
+  "type": {
+    "id": "functional_optimization",
+    "name": "功能优化"
+  },
+  "urgency": "非紧急",
+  "wbDevWorkloadEvaluation": null,
+  "wbTestWorkloadEvaluation": null
+}

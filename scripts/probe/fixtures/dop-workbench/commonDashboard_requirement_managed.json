@@ -1,0 +1,251 @@
+{
+  "items": [
+    {
+      "archManagerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000008",
+        "name": "示例用户1",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "businessOwnerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000013",
+        "name": "示例用户2",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "errorState": "normal",
+      "managerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000002",
+        "name": "示例用户3",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "mode": {
+        "id": "agile",
+        "name": "敏捷"
+      },
+      "projectCode": "PRJ-MOCK-1001",
+      "projectId": "1a4dc8c87cb84511b7316757034b0b28",
+      "projectManager": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectManagerInProject": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectName": "示例项目1",
+      "requirementId": "a6524d93122e4aab96022254da0c05cf",
+      "requirementName": "示例需求1：企业汇总报表日终自动化导出与异常预警改造",
+      "requirementNo": "REQ-MOCK-1009",
+      "stage": {
+        "id": "released",
+        "name": "上线完成"
+      },
+      "state": {
+        "id": "complete",
+        "name": "完成"
+      }
+    },
+    {
+      "archManagerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000008",
+        "name": "示例用户1",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "businessOwnerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000014",
+        "name": "示例用户5",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "errorState": "normal",
+      "managerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000004",
+        "name": "示例用户6",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "mode": {
+        "id": "agile",
+        "name": "敏捷"
+      },
+      "projectCode": "PRJ-MOCK-1001",
+      "projectId": "1a4dc8c87cb84511b7316757034b0b28",
+      "projectManager": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectManagerInProject": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectName": "示例项目1",
+      "requirementId": "dc2cb51273ff489cada9fe06f7a9bb17",
+      "requirementName": "示例需求2：业务流程优化与标准化管理",
+      "requirementNo": "REQ-MOCK-1005",
+      "stage": {
+        "id": "released",
+        "name": "上线完成"
+      },
+      "state": {
+        "id": "complete",
+        "name": "完成"
+      }
+    },
+    {
+      "archManagerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000008",
+        "name": "示例用户1",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "businessOwnerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000015",
+        "name": "示例用户7",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "errorState": "notCompleteAcceptance",
+      "managerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000016",
+        "name": "示例用户8",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "mode": {
+        "id": "agile",
+        "name": "敏捷"
+      },
+      "projectCode": "PRJ-MOCK-1001",
+      "projectId": "1a4dc8c87cb84511b7316757034b0b28",
+      "projectManager": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectManagerInProject": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectName": "示例项目1",
+      "requirementId": "4ad274004f5e4a84a5218cca3b43571f",
+      "requirementName": "示例需求3：业务流程优化与标准化管理",
+      "requirementNo": "REQ-MOCK-1006",
+      "stage": {
+        "id": "released",
+        "name": "上线完成"
+      },
+      "state": {
+        "id": "complete",
+        "name": "完成"
+      }
+    }
+  ],
+  "pageNum": 1,
+  "pageSize": 10,
+  "totalItems": 10,
+  "totalPages": 1
+}

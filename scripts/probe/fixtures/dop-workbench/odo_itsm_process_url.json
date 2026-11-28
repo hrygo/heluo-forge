@@ -1,0 +1,6 @@
+{
+  "code": 0,
+  "data": "http://127.0.0.1:5610/ssologin?appid=example_itsm&uid=000001&signature=MOCK-SIG-0001&timestamp=1795760606771&type=1&wjbiid=EXAMPLE-UUID-0001",
+  "message": null,
+  "total": 0
+}

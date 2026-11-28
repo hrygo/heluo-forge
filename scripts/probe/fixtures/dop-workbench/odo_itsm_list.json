@@ -1,0 +1,49 @@
+{
+  "code": 0,
+  "data": {
+    "totalPage": 1,
+    "pageSize": 10,
+    "totalRecord": 1,
+    "pageNum": 1,
+    "results": [
+      {
+        "ASSIGN_TIME": "2026-02-09 11:09",
+        "ASSIGN_NAME": "示例用户1",
+        "APPLICANT_ORGNAME": null,
+        "typeName": "服务请求",
+        "PRIORITY": "",
+        "title": "示例工作项4",
+        "process_time": "4610.3小时",
+        "SYSTEM_ID": null,
+        "WJBIID": "000001",
+        "STATUS": 2,
+        "CURRENT_ACCEPTANCEGROUP_ID": "示例受理组",
+        "USERTASK_ID": "usertask2",
+        "CREATOR": "示例用户1",
+        "vipUser": null,
+        "A_PRIORITY": null,
+        "CREATETIME": "2026-02-09 11:08",
+        "total_time": "6962.2小时",
+        "TYPE": 6,
+        "CURRENT_ACCEPTANCEMAN_ID": "000001",
+        "BUSINESS_ID": "ITSM-MOCK-0001",
+        "APPLICANT_PHONE": "000-0000-0001",
+        "ID_": "Service_application:mock:1",
+        "readFlag": "true",
+        "APPLICANT": "000001",
+        "ISEVALUATE": "2",
+        "APPLICANT_EMAIL": "",
+        "applicantName": "示例用户1",
+        "PROCESSING_TIME": null,
+        "CURRENT_ACCEPTANCEMAN_NAME": "示例受理人(示例部门-000001)",
+        "SOURCE": "WEB",
+        "SSIID": "000001",
+        "CURRENT_ACCEPTANCEGROUP_NAME": "所有人",
+        "workOrderStatu": "1",
+        "USERTASK_NAME": "工作任务拆解"
+      }
+    ]
+  },
+  "message": null,
+  "total": 1
+}

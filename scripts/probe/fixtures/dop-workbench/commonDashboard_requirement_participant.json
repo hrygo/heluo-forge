@@ -1,0 +1,148 @@
+{
+  "items": [
+    {
+      "archManagerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000017",
+        "name": "示例用户1",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "businessOwnerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000018",
+        "name": "示例用户2",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "errorState": "unanalyzed",
+      "managerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户3",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "mode": {
+        "id": "agile",
+        "name": "敏捷"
+      },
+      "projectCode": null,
+      "projectId": null,
+      "projectManager": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户3",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectManagerInProject": null,
+      "projectName": null,
+      "requirementId": "2166ff03c7124b459b8ea96d6bbd22f6",
+      "requirementName": "示例需求4：业务流程优化与标准化管理",
+      "requirementNo": "REQ-MOCK-1007",
+      "stage": {
+        "id": "accepted",
+        "name": "已受理"
+      },
+      "state": {
+        "id": "normal",
+        "name": "正常"
+      }
+    },
+    {
+      "archManagerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000008",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "businessOwnerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000019",
+        "name": "示例用户5",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "errorState": "normal",
+      "managerUser": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户3",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "mode": {
+        "id": "agile",
+        "name": "敏捷"
+      },
+      "projectCode": null,
+      "projectId": null,
+      "projectManager": {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户3",
+        "secondOrg": null,
+        "sex": null,
+        "state": null,
+        "type": null
+      },
+      "projectManagerInProject": null,
+      "projectName": null,
+      "requirementId": "b4847208fe864584b9b64253d5b9b657",
+      "requirementName": "示例需求5：业务流程优化与标准化管理",
+      "requirementNo": "REQ-MOCK-1008",
+      "stage": {
+        "id": "in_operation",
+        "name": "实施中"
+      },
+      "state": {
+        "id": "normal",
+        "name": "正常"
+      }
+    }
+  ],
+  "pageNum": 1,
+  "pageSize": 5,
+  "totalItems": 4,
+  "totalPages": 1
+}

@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-11-26 12:17:29",
+  "infocode": "VP000000",
+  "msg": null,
+  "redirectUrl": null,
+  "data": {
+    "numPerPage": 10,
+    "totalRows": 0,
+    "totalPages": 0,
+    "currentPage": 1,
+    "startIndex": 0,
+    "lastIndex": 0,
+    "resultList": []
+  },
+  "status": 200,
+  "requestTraceId": "MOCK-TRACE-1004"
+}
