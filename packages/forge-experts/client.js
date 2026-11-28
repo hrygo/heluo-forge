@@ -144,10 +144,18 @@ window.__ModuleLoader__.load({
       return requestJson('POST', '/tasks/reconcile', {});
     }
 
-    function postTaskFollowup(taskId, { taskText, reuseRefs = [] }) {
+    function generateClientRequestId() {
+      if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+        return `fexp-fu-${globalThis.crypto.randomUUID()}`;
+      }
+      return `fexp-fu-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    function postTaskFollowup(taskId, { taskText, reuseRefs = [], requestId = null }) {
       return requestJson('POST', `/tasks/${encodeURIComponent(taskId)}/followups`, {
         taskText,
         ...(Array.isArray(reuseRefs) && reuseRefs.length > 0 ? { reuseRefs } : {}),
+        ...(typeof requestId === 'string' && requestId.trim() ? { requestId: requestId.trim() } : {}),
       });
     }
 
@@ -235,7 +243,7 @@ window.__ModuleLoader__.load({
         cancelRequested: isCancelled,
         canReconcile: Boolean(requestId && (isUnknown || !taskId)),
         showReconcileAction: Boolean(requestId && (isUnknown || !taskId)),
-        canRefresh: Boolean(taskId),
+        canRefresh: Boolean(taskId && !isUnknown),
         showFollowupInput: Boolean(isWaitingUser && taskId),
         canCancel: Boolean(taskId && !isTerminal && !isCancelled),
         showCancelAction: Boolean(taskId && !isTerminal && !isCancelled),
@@ -327,7 +335,8 @@ window.__ModuleLoader__.load({
         if (!activeRequestId) return undefined;
         const onReconciled = (entry) => {
           if (!entry || entry.requestId !== activeRequestId) return;
-          setTask((prev) => ({ ...(prev ?? {}), ...pickTaskReconcileFields(entry, prev) }));
+          setRawExpanded(false);
+          setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(entry, prev)));
           setNotice('已按原请求号完成权威状态对账。');
         };
         taskReconciledListeners.add(onReconciled);
@@ -397,19 +406,20 @@ window.__ModuleLoader__.load({
 
       const handleFollowup = async () => {
         if (!model.showFollowupInput || busy || !followupText.trim()) return;
+        const followupRequestId = generateClientRequestId();
         setBusy(true);
         setNotice(null);
         try {
-          const res = await postTaskFollowup(model.taskId, { taskText: followupText });
+          const res = await postTaskFollowup(model.taskId, { taskText: followupText, requestId: followupRequestId });
           if (!res.ok) {
             if (resultCode(res) === 'EXPERT_ACCEPTANCE_UNKNOWN') {
               const pendingReqId = typeof res?.body?.error?.details?.requestId === 'string' && res.body.error.details.requestId.trim()
                 ? res.body.error.details.requestId.trim()
-                : null;
+                : followupRequestId;
               setTask((prev) => ({
                 ...(prev ?? {}),
                 status: 'unknown',
-                ...(pendingReqId ? { requestId: pendingReqId } : {}),
+                requestId: pendingReqId,
               }));
             }
             setNotice(resultNotice(res));
@@ -419,7 +429,11 @@ window.__ModuleLoader__.load({
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskMutationFields(res.body), { resetPreviousResult: true }));
         } catch {
-          setTask((prev) => ({ ...(prev ?? {}), status: 'unknown' }));
+          setTask((prev) => ({
+            ...(prev ?? {}),
+            status: 'unknown',
+            requestId: followupRequestId,
+          }));
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
         } finally {
           setBusy(false);

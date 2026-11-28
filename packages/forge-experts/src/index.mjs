@@ -147,6 +147,7 @@ export function createExpertsHost(ports) {
         requestId: event.requestId,
         taskId: event.taskId,
         status: event.status,
+        ...(Number.isInteger(event?.runGeneration) ? { runGeneration: event.runGeneration } : {}),
       }, event?.scope ?? null);
     },
     createDelegraTask: ports.createDelegraTask ?? (() => {
