@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 import json
 import runpy
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 coverage = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/pr-agent-coverage.py"))
 diff_files = coverage["diff_files"]
@@ -196,6 +198,148 @@ class ReviewPresentation(unittest.TestCase):
         self.assertIn("&lt;input&gt;", optional)
         self.assertNotIn("@user", optional)
         self.assertEqual(len(original["review"]["key_issues_to_review"]), 3)
+
+
+class NativeReviewContext(unittest.TestCase):
+    def run_review(self, responses, *, files=("src/example.py",), pending=(), failed_chunks=0):
+        context = {"mode": "incremental", "repository": "corp/example", "prNumber": 42,
+                   "head": "a" * 40, "base": "b" * 40, "baseRef": "main", "previousHead": "c" * 40,
+                   "threads": list(pending), "checks": None, "receipt": "<!-- captured review -->",
+                   "files": [{"filename": name, "patch": "@@ -1 +1 @@\n-old\n+new", "status": "modified",
+                              "additions": 1, "deletions": 1} for name in files]}
+        repo = SimpleNamespace(full_name=context["repository"])
+        pull = SimpleNamespace(state="open", head=SimpleNamespace(sha=context["head"], repo=repo),
+                               base=SimpleNamespace(sha=context["base"], ref=context["baseRef"], repo=repo))
+        result = SimpleNamespace(body=None, structured=None, paths=[], omitted=[], system=None)
+        provider = SimpleNamespace(
+            pr=pull, get_pr_identity=lambda: {"provider": "github", "repo": repo.full_name, "number": 42,
+                                              "head_sha": context["head"]},
+            _get_repo=lambda: SimpleNamespace(get_pull=lambda _: pull,
+                                              get_git_ref=lambda _: SimpleNamespace(object=SimpleNamespace(sha=context["base"]))),
+            publish_persistent_comment_full=lambda body, **_: setattr(result, "body", body),
+            get_diff_files=lambda: [], get_filtered_diff_file_names=lambda: [],
+        )
+        settings = SimpleNamespace(config=SimpleNamespace(publish_output=True), pr_review_prompt=SimpleNamespace(system=(
+            "class Review(BaseModel):\n    key_issues_to_review: list\n\nclass PRReview(BaseModel):\n    review: Review\n")))
+
+        def native_merge(outputs, related_tickets=None, max_findings=None):
+            combined = {**outputs[0]["review"]}
+            combined["key_issues_to_review"] = [issue for output in outputs
+                                               for issue in output["review"]["key_issues_to_review"]][:max_findings]
+            return {"review": combined}
+
+        class FakeReviewer:
+            def __init__(self):
+                self.git_provider = provider
+                self.incremental = SimpleNamespace(is_incremental=False)
+                self.is_answer = False
+                self.vars = {}
+                self.review_failed_chunk_count = failed_chunks
+                self.remaining_files_list = []
+                self.partial_files_list = []
+                self.prediction_data = None
+
+            def _prepare_pr_review(self):
+                result.structured = self.prediction_data or responses[0]
+                return native.convert_to_markdown_v2(result.structured)
+
+            async def run(self):
+                pass
+
+        native = SimpleNamespace(PRReviewer=FakeReviewer, merge_review_chunks=native_merge, get_settings=lambda: settings,
+                                 PRReviewHeader=SimpleNamespace(REGULAR=SimpleNamespace(value="## PR Reviewer Guide")),
+                                 PRReviewIdentity=SimpleNamespace(REGULAR=SimpleNamespace(value="<!-- pr-agent:review:full -->")),
+                                 convert_to_markdown_v2=lambda data: json.dumps(data))
+
+        def run():
+            reviewer = native.PRReviewer()
+            result.paths = [file.filename for file in provider.get_diff_files()]
+            result.omitted = provider.get_filtered_diff_file_names()
+            result.system = settings.pr_review_prompt.system
+            if not result.paths:
+                asyncio.run(reviewer.run())
+                return
+            if len(responses) > 1:
+                reviewer.prediction_data = native.merge_review_chunks(responses, max_findings=10)
+            provider.publish_persistent_comment_full(reviewer._prepare_pr_review())
+
+        filters = {
+            "pr_agent.algo.comment_identity": SimpleNamespace(format_pr_review_header=lambda: "## PR Reviewer Guide 🔍"),
+            "pr_agent.algo.file_filter": SimpleNamespace(filter_ignored=lambda patches: [
+                file for file in patches if not file.filename.startswith("vendor/")]),
+            "pr_agent.algo.language_handler": SimpleNamespace(partition_files_by_language_filter=lambda patches: (
+                [file for file in patches if file.filename != "pnpm-lock.yaml"],
+                [file.filename for file in patches if file.filename == "pnpm-lock.yaml"],
+            )),
+        }
+        with patch.dict(sys.modules, filters):
+            coverage["run_with_review_context"](run, native, context, SimpleNamespace,
+                                                SimpleNamespace(ADDED="added", MODIFIED="modified"))
+        return result
+
+    @staticmethod
+    def response(headers=(), recheck=None):
+        review = {"risk_level": "low", "security_concerns": "No",
+                  "key_issues_to_review": [{"issue_header": header} for header in headers]}
+        if recheck is not None:
+            review["history_recheck"] = recheck
+        return {"review": review}
+
+    @staticmethod
+    def thread(thread_id, resolved=False):
+        return {"id": thread_id, "priority": "P1", "resolved": resolved, "path": "src/example.py", "end": 2,
+                "lastReply": ""}
+
+    def test_chunked_structured_result_and_summary_keep_later_blockers_before_optional_items(self):
+        early = self.response([f"[P{3 - index % 2}] Optional {index}" for index in range(10)])
+        late = self.response(["[P1] Blocking regression", "[P0] Data loss"])
+        result = self.run_review([early, late])
+        headings = [item["issue_header"] for item in result.structured["review"]["key_issues_to_review"]]
+        self.assertEqual(headings[:3], ["[P0] Data loss", "[P1] Blocking regression", "[P2] Optional 1"])
+        self.assertEqual(headings[-1], "[P3] Optional 4")
+        self.assertEqual(len(headings), 10)
+        self.assertIn("[P1] Blocking regression", result.body.split("<details>", 1)[0])
+        self.assertEqual(result.structured["review"]["risk_level"], "low")
+
+    def test_incremental_prompt_declares_history_and_summary_uses_only_captured_blockers(self):
+        result = self.run_review([self.response(recheck=[
+            {"thread_id": 11, "status": "fix_evidence_found", "evidence": "Was fixed in <hunk> by @author."},
+            {"thread_id": 99, "status": "still_present", "evidence": "Uncaptured finding"},
+            {"thread_id": 44, "status": "still_present", "evidence": "Resolved finding"},
+        ])], pending=[self.thread(11), self.thread(22), self.thread(44, resolved=True)])
+        self.assertIn("history_recheck: List[HistoricalReviewCheck]", result.system)
+        self.assertIn("discussion_r11) · 模型发现修复证据", result.body)
+        self.assertIn("Was fixed in &lt;hunk&gt; by &#64;author.", result.body)
+        self.assertIn("discussion_r22) · 待人工复核", result.body)
+        self.assertNotIn("Uncaptured finding", result.body)
+        self.assertNotIn("Resolved finding", result.body)
+
+    def test_history_combines_visible_evidence_and_withholds_conflicting_or_incomplete_results(self):
+        pending = [self.thread(11), self.thread(22)]
+        first = self.response(recheck=[{"thread_id": 11, "status": "insufficient_evidence", "evidence": ""},
+                                       {"thread_id": 22, "status": "still_present", "evidence": "Still occurs."}])
+        second = self.response(recheck=[{"thread_id": 11, "status": "fix_evidence_found", "evidence": "Guard added."},
+                                        {"thread_id": 22, "status": "fix_evidence_found", "evidence": "Guard added."}])
+        result = self.run_review([first, second], pending=pending)
+        self.assertIn("discussion_r11) · 模型发现修复证据", result.body)
+        self.assertIn("discussion_r22) · 待人工复核", result.body)
+        partial = self.run_review([first, second], pending=pending, failed_chunks=1)
+        self.assertIn("discussion_r11) · 待人工复核", partial.body)
+
+    def test_incremental_excludes_ignored_and_generated_files_and_discloses_both(self):
+        result = self.run_review([self.response()], files=("src/example.py", "pnpm-lock.yaml", "vendor/generated.py"))
+        self.assertEqual(result.paths, ["src/example.py"])
+        self.assertEqual(result.omitted, ["pnpm-lock.yaml", "vendor/generated.py"])
+        self.assertIn("本轮未评审", result.body)
+        self.assertIn("pnpm-lock.yaml", result.body)
+        self.assertIn("vendor/generated.py", result.body)
+
+    def test_all_filtered_publishes_only_scope_without_creating_a_verdict(self):
+        result = self.run_review([self.response()], files=("pnpm-lock.yaml", "vendor/generated.py"))
+        self.assertEqual(result.paths, [])
+        self.assertIsNone(result.structured)
+        self.assertIn("本轮增量文件均被过滤，未启动模型评审", result.body or "")
+        self.assertTrue(result.body.endswith("\n\n<!-- heluo-forge-pr-agent-review-scope-only:v1 -->\n\n<!-- captured review -->"))
 
 
 if __name__ == "__main__":

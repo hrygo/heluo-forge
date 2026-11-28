@@ -533,6 +533,22 @@ test('only a fresh complete review can emit an approval, independently of commen
   });
 });
 
+test('a complete scoped review with approval disabled or a draft still cannot authorize approval', async (t) => {
+  for (const scenario of ['approval disabled', 'draft']) await t.test(scenario, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const scoped = { ...env, ...approvalEnv, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+      if (scenario === 'approval disabled') scoped.PR_AGENT_AUTO_APPROVE = 'false';
+      if (scenario === 'draft') state.pr.draft = true;
+      const manual = await commentEvent(scoped, '/review');
+      const revision = await capture(manual);
+      state.comments.push(persistentReview(head, base));
+      assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+      assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^baseline_key=/mu);
+      assert.deepEqual(reviewWrites(state), []);
+    });
+  });
+});
+
 test('an independently incomplete GitHub diff cannot authorize an approval', async () => {
   await withGitHub(async ({ state, env }) => {
     const manual = await commentEvent({ ...env, ...approvalEnv }, '/review');
@@ -1914,6 +1930,22 @@ test('a new wording for an author-answered resolved P1 does not add an inline th
   });
 });
 
+test('a resolved lower-priority discussion does not suppress a stronger blocker on the same line', async (t) => {
+  for (const [oldPriority, newPriority] of [['P2', 'P1'], ['P1', 'P0']]) {
+    await t.test(oldPriority + ' to ' + newPriority, async () => {
+      await withGitHub(async ({ state, env }) => {
+        const scoped = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+        state.threads = [historicalThread({ priority: oldPriority })];
+        const manual = await commentEvent(scoped, '/review');
+        const revision = await capture(manual);
+        state.comments.push(persistentReview(head, base));
+        await submit(manual, revision, prioritizedReview(newPriority));
+        assert.deepEqual(reviewWrites(state).map(({ body }) => body.comments[0].line), [2]);
+      });
+    });
+  }
+});
+
 test('a first full review can publish seven distinct blockers in one batch and skip optional inline findings', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, EVENT_HEAD: replayFirst, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
@@ -1960,6 +1992,55 @@ test('the #484 replay selects the last reviewed head and only publishes comments
     await submit(mode, revision, review);
     assert.deepEqual(state.inlineComments.map(({ path, side, line }) => ({ path, side, line })), [{ path: files[0].filename, side: 'RIGHT', line: 11 }]);
     assert.doesNotMatch(await readFile(env.GITHUB_OUTPUT, 'utf8'), /baseline_key=/u);
+  });
+});
+
+test('resolved delta positions suppress a reworded range but permit evidence on changed lines', async (t) => {
+  const cases = [
+    { name: 'range overlaps an unchanged resolved line', start: 519, threadLineChanged: false, expected: [] },
+    { name: 'independent evidence is on the next changed line', start: 520, threadLineChanged: false, expected: [520] },
+    { name: 'the previously resolved line actually changed', start: 519, threadLineChanged: true, expected: [519] },
+  ];
+  for (const { name, start, threadLineChanged, expected } of cases) await t.test(name, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode, files } = configureIncrementalReplay(state, env);
+      const full = { ...fixtureFile(replayResolvedPath, 519), additions: 2, deletions: 2,
+        patch: '@@ -519,2 +519,2 @@\n-old row\n-old row\n+first row\n+new row' };
+      files.push(threadLineChanged ? full : fixtureFile(replayResolvedPath, 520));
+      state.files.splice(-1, 1, full);
+      state.compareDiff = rawDiff(files);
+      state.threads = [historicalThread({ path: replayResolvedPath, line: 519, sha: replayPrevious })];
+      const revision = await capture(mode);
+      const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+      assert.equal(context.mode, 'incremental');
+      state.comments.push(persistentReview(replayHead, replayBase));
+      await submit(mode, revision, prioritizedReview('P1', {
+        relevant_file: replayResolvedPath, start_line: start, end_line: 520,
+        issue_header: '[P1] [RIGHT] New wording on the affected range',
+      }));
+      assert.deepEqual(state.inlineComments.map(({ line }) => line), expected);
+    });
+  });
+});
+
+test('an entirely filtered delta can refresh scope without generating review or approval evidence', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const { mode } = configureIncrementalReplay(state, env);
+    const revision = await capture(mode);
+    const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+    assert.equal(context.mode, 'incremental');
+    const scopeOnly = '<!-- heluo-forge-pr-agent-review-scope-only:v1 -->';
+    const normal = persistentReview(replayHead, replayBase);
+    const markScopeOnly = (comment) => ({ ...comment,
+      body: comment.body.replace('\n\n<!-- heluo-forge-pr-agent-review-run:', '\n\n' + scopeOnly + '\n\n<!-- heluo-forge-pr-agent-review-run:'),
+    });
+    state.comments.push(markScopeOnly(persistentReview(replayHead, replayBase, { attempt: '7' })));
+    await assert.rejects(submit(mode, revision, ''), /did not produce structured review output/u);
+    state.comments.push(markScopeOnly(normal));
+    await submit({ ...mode, ...approvalEnv }, revision, '');
+    assert.doesNotMatch(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^(approval_revision|baseline_key|review_key)=/mu);
+    assert.deepEqual(reviewWrites(state), []);
+    await assert.rejects(submit(mode, revision, cleanReview()), /summary and review were not both refreshed/u);
   });
 });
 
