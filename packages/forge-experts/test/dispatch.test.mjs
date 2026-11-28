@@ -836,3 +836,148 @@ test('pending_index read failures fail closed (503 EXPERT_STORAGE_UNAVAILABLE) a
     await h.host.close();
   }
 });
+
+test('interleaved reconnect reconcile during in-flight dispatch does not drop pending_index entry; restart still recovers by requestId (#484)', async () => {
+  const sharedStorage = createMemoryStorage();
+  const sharedBackend = { tasksByRequest: new Map(), tasksById: new Map() };
+  let releaseCreate = null;
+  let createStarted = null;
+  const createStartedPromise = new Promise((resolve) => { createStarted = resolve; });
+  let createCalls = 0;
+
+  const scope = {
+    instanceId: 'delegra-prod-01',
+    orgId: 'org-alpha',
+    issuer: 'https://iam.corp.example',
+    subject: 'emp-1001',
+    verifiedAt: '2026-11-24T00:00:00Z',
+    validUntil: '2026-11-24T23:59:59Z',
+  };
+
+  const h1 = createExpertsHost({
+    config: { managementEnabled: true, dispatchEnabled: true },
+    getIamSession: () => ({ state: 'ready', issuer: scope.issuer, subject: scope.subject, orgId: scope.orgId }),
+    getConnection: () => ({ requestRejection: () => undefined }),
+    openStorageDomain: (spec) => sharedStorage.open(spec),
+    resolveDelegraScope: async () => scope,
+    fetchDelegraCatalog: async () => ({
+      scope,
+      catalogVersion: 'cv-1',
+      completeness: 'complete',
+      coveredScopes: [scope.orgId],
+      items: [{
+        expertId: 'exp-fin-1',
+        displayName: '经营分析专家',
+        disambiguation: '财务分析组',
+        summary: { disclosureState: 'available', responsibility: '分析经营报表' },
+        access: { readable: true, callableInOrg: true, callableReason: 'granted', authContinuityDigest: 'sha256:cont-1' },
+        availability: { acceptingTasks: 'accepting', reason: null },
+      }],
+      page: { nextCursor: null, hasMore: false },
+    }),
+    verifyOrgCallable: async () => ({ callableInOrg: true, authContinuityDigest: 'sha256:cont-1' }),
+    resolveSessionScope: async () => ({ delegationScope: 'proj-fin' }),
+    checkDelegraSessionScope: async ({ expertIds }) => ({
+      scope,
+      scopeVerified: true,
+      validUntil: scope.validUntil,
+      results: expertIds.map((expertId) => ({
+        expertId,
+        callableInScope: true,
+        callableReason: 'granted',
+        acceptingTasks: 'accepting',
+        authContinuityDigest: 'sha256:cont-1',
+      })),
+    }),
+    evaluatePolicy: async () => ({ decision: 'allow' }),
+    generateRequestId: () => 'req-interleaved-1',
+    createDelegraTask: async (params) => {
+      createCalls += 1;
+      createStarted();
+      await new Promise((resolve) => { releaseCreate = resolve; });
+      const committed = {
+        scope,
+        taskId: 'task-interleaved-1',
+        requestId: params.requestId,
+        status: 'accepted',
+        acceptedAt: '2026-11-24T00:01:00Z',
+        runGeneration: 1,
+        resultVersion: 0,
+        idempotentReplay: false,
+      };
+      sharedBackend.tasksByRequest.set(params.requestId, committed);
+      sharedBackend.tasksById.set(committed.taskId, committed);
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Wire dropped after commit', { status: 503, retryable: true });
+    },
+    getDelegraTaskByRequest: async ({ requestId }) => {
+      const found = sharedBackend.tasksByRequest.get(requestId);
+      if (!found) throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Not found');
+      return found;
+    },
+    getDelegraTask: async ({ taskId }) => sharedBackend.tasksById.get(taskId),
+    getDelegraTaskResult: async () => ({}),
+    createDelegraFollowup: async () => ({}),
+    cancelDelegraTask: async () => ({}),
+  });
+
+  await h1.open();
+  try {
+    const cat = await invokeRoute(h1, { path: `${API_PREFIX}/catalog?view=callable` });
+    await invokeRoute(h1, {
+      method: 'PUT',
+      path: `${API_PREFIX}/preferences/exp-fin-1`,
+      headers: mutationHeaders(),
+      body: { enabled: true, editToken: cat.body.items[0].preference.editToken },
+    });
+    const sel = await invokeRoute(h1, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Interleaved task' },
+    });
+
+    const dispatchPromise = invokeRoute(h1, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-1', taskText: 'Interleaved task' },
+    });
+    await createStartedPromise;
+
+    // Another window reconnects while outbound delivery is still in flight.
+    const midReconcile = await invokeRoute(h1, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    assert.equal(midReconcile.status, 200);
+    assert.deepEqual(midReconcile.body.notFound, []);
+    assert.deepEqual(midReconcile.body.stillPending, ['req-interleaved-1']);
+
+    releaseCreate();
+    const dispatchRes = await dispatchPromise;
+    assert.equal(dispatchRes.status, 503);
+    assert.equal(dispatchRes.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+  } finally {
+    await h1.close();
+  }
+
+  // After restart, pending_index still retains req-interleaved-1 and recovers task-interleaved-1 without re-creating.
+  const h2 = makeHarness({ dispatchEnabled: false, storage: sharedStorage, backend: sharedBackend });
+  await h2.host.open();
+  try {
+    const afterRestart = await invokeRoute(h2.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/reconcile`,
+      headers: mutationHeaders(),
+    });
+    assert.equal(afterRestart.status, 200);
+    assert.equal(afterRestart.body.reconciled.length, 1);
+    assert.equal(afterRestart.body.reconciled[0].requestId, 'req-interleaved-1');
+    assert.equal(afterRestart.body.reconciled[0].taskId, 'task-interleaved-1');
+    assert.equal(createCalls, 1);
+    assert.equal(h2.getCreateCalls(), 0);
+  } finally {
+    await h2.host.close();
+  }
+});

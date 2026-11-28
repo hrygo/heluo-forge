@@ -372,3 +372,67 @@ test('apply() disables new dispatch tools when dispatchEnabled is true and agent
   assert.ok(registeredTools.includes('forge_experts.get_status'), 'readback tools remain available (§9.2)');
   assert.ok(registeredTools.includes('forge_experts.cancel'), 'cancel tool remains available (§9.2)');
 });
+
+test('delegated turn finalizing past TTL preserves delegatedTaskId and never prompts user to resend (#484)', async () => {
+  let clock = 1_700_000_000_000;
+  const activeScope = makeScope();
+  const selection = createSelectionService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => activeScope,
+    assertScopeCurrent: () => {},
+    resolveSessionScope: async (sessionId) => ({ delegationScope: `dsh:session:${sessionId}` }),
+    getMentionVersion: () => 1,
+    now: () => clock,
+    selectionTtlMs: 300_000,
+  });
+
+  const events = [];
+  const prestep = createPreStepGuard({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => activeScope,
+    inspectSelection: (params) => selection.inspect(params),
+    discardSelection: (token) => selection.discard(token),
+    onTurnFinalized: (evt) => events.push(evt),
+    now: () => clock,
+    turnTtlMs: 10_000,
+  });
+
+  const prep = await selection.prepare({
+    expertId: 'exp-fin-1',
+    sessionId: 'sess-ttl',
+    scopeEpoch: 1,
+    viewVersion: 1,
+    taskText: 'Long running delegation',
+    draftVersion: 1,
+  });
+  const turn = await prestep.prepareTurn({
+    sessionId: 'sess-ttl',
+    selectionToken: prep.selectionToken,
+    taskText: 'Long running delegation',
+    draftVersion: 1,
+  });
+  assert.equal(turn.allowed, true);
+
+  // Delegate tool was invoked before TTL expiry.
+  const guard = prestep.beforeToolCall({
+    turnId: turn.turnId,
+    toolName: 'forge_experts.delegate',
+    toolInput: { selectionToken: prep.selectionToken, expertId: 'exp-fin-1', sessionId: 'sess-ttl' },
+  });
+  assert.equal(guard.allowed, true);
+
+  // Clock advances past TTL and background pruning runs before finalizeTurn arrives.
+  clock += 15_000;
+  assert.equal(prestep.activeTurnCount(), 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].status, 'acceptance_unknown');
+  assert.equal(events[0].preserveDraft, false, 'attempted delegation past TTL must not restore draft for blind resend');
+  assert.doesNotMatch(events[0].notice, /未发起远端任务/u);
+
+  // Late finalizeTurn carrying delegatedTaskId still resolves as delegated instead of unbound.
+  const outcome = prestep.finalizeTurn({ turnId: turn.turnId, delegatedTaskId: 'task-late-42' });
+  assert.equal(outcome.status, 'delegated');
+  assert.equal(outcome.expertParticipated, true);
+  assert.equal(outcome.taskId, 'task-late-42');
+  assert.equal(outcome.preserveDraft, false);
+});

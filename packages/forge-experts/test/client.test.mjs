@@ -575,3 +575,201 @@ test('buffered pendingDraft survives SSE scope-changed and disconnect/ready reco
     restore();
   }
 });
+
+test('turn-finalized with mismatched draftDigest never restores another window draft in the same session (#484)', async () => {
+  const eventSources = [];
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/mentions')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            scopeEpoch: 5,
+            viewVersion: 7,
+            candidates: [{ expertId: 'exp-fin-1', displayName: '经营分析专家', scopeEpoch: 5, viewVersion: 7 }],
+          };
+        },
+      };
+    }
+    if (url.includes('/selections') && init?.method === 'POST') {
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return {
+            selectionToken: 'sel-win-b',
+            expertId: 'exp-fin-1',
+            sessionId: 'sess-shared',
+            draftDigest: 'sha256:digest-B',
+            expiresAt: '2030-01-01T00:02:00.000Z',
+          };
+        },
+      };
+    }
+    return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    let registeredSpec = null;
+    const disposeCallbacks = [];
+    const ctx = {
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          registeredSpec = spec;
+          return () => { registeredSpec = null; };
+        },
+      },
+      effect(register) {
+        const d = register();
+        if (typeof d === 'function') disposeCallbacks.push(d);
+      },
+    };
+
+    exported.apply(ctx, { dispatchEnabled: true });
+    const rows = await registeredSpec.query('', { sessionId: 'sess-shared' });
+    const recovered = [];
+    registeredSpec.onDraftRecovery((evt) => recovered.push(evt));
+
+    const prepB = await registeredSpec.prepareSubmit({
+      picked: rows[0],
+      sessionId: 'sess-shared',
+      taskText: 'Window B draft',
+      draftVersion: 2,
+    });
+    assert.equal(prepB.ok, true);
+
+    // Window A's failure arrives with digest-A: must NOT recover Window B's draft.
+    eventSources[0].emit({
+      type: 'turn-finalized',
+      sessionId: 'sess-shared',
+      expertId: 'exp-fin-1',
+      draftDigest: 'sha256:digest-A',
+      status: 'model_did_not_delegate',
+      preserveDraft: true,
+    });
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].draft, null, 'mismatched draftDigest must not fall back to another window draft');
+
+    // Window B's own failure later arrives with digest-B: Window B's draft is still intact.
+    eventSources[0].emit({
+      type: 'turn-finalized',
+      sessionId: 'sess-shared',
+      expertId: 'exp-fin-1',
+      draftDigest: 'sha256:digest-B',
+      status: 'model_did_not_delegate',
+      preserveDraft: true,
+    });
+    assert.equal(recovered.length, 2);
+    assert.equal(recovered[1].draft?.taskText, 'Window B draft');
+
+    for (const fn of disposeCallbacks) fn();
+  } finally {
+    restore();
+  }
+});
+
+test('ExpertTaskStatusCard clears previous generation result, rawResult, sources, and artifacts after followup (#484)', async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let moduleDef = null;
+
+  globalThis.window = {
+    __ModuleLoader__: { load(def) { moduleDef = def; } },
+  };
+  globalThis.fetch = async (url, init) => {
+    if (url.includes('/followups') && init?.method === 'POST') {
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return { taskId: 'task-gen-1', status: 'running', runGeneration: 2 };
+        },
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    new Function(clientSource)();
+    const stateSlots = [];
+    const refSlots = [];
+    let stateIdx = 0;
+    let refIdx = 0;
+    const exported = moduleDef.factory((dep) => {
+      if (dep === 'react') {
+        return {
+          createElement: (type, props, ...children) => ({ type, props, children }),
+          useState(init) {
+            const idx = stateIdx++;
+            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+            return [
+              stateSlots[idx],
+              (next) => {
+                stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next;
+              },
+            ];
+          },
+          useRef(init) {
+            const idx = refIdx++;
+            if (!(idx in refSlots)) refSlots[idx] = { current: init };
+            return refSlots[idx];
+          },
+          useCallback: (fn) => fn,
+          useEffect: () => {},
+        };
+      }
+      throw new Error(`Unexpected require: ${dep}`);
+    });
+
+    const initialTask = {
+      taskId: 'task-gen-1',
+      requestId: 'req-gen-1',
+      status: 'waiting_user',
+      runGeneration: 1,
+      summary: 'Generation 1 summary',
+      result: 'Generation 1 output',
+      rawResult: 'Generation 1 raw transcript',
+      sources: [{ id: 's1', title: 'Old Source', authorized: true }],
+      artifacts: [{ id: 'a1', label: 'old-report.pdf', authorized: true }],
+      waitingUserNotice: { readOnly: true, message: 'Need region filter' },
+    };
+
+    const renderCard = () => {
+      stateIdx = 0;
+      refIdx = 0;
+      return exported.ExpertTaskStatusCard({ initialTask });
+    };
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    const beforeTree = renderCard();
+    assert.equal(findNodes(beforeTree, (n) => n.props?.['data-testid'] === 'fexp-task-result').length, 1);
+    assert.equal(findNodes(beforeTree, (n) => n.props?.['data-testid'] === 'fexp-task-artifacts').length, 1);
+
+    const inputNode = findNodes(beforeTree, (n) => n.type === 'input')[0];
+    inputNode.props.onChange({ target: { value: 'Focus on East China' } });
+    const midTree = renderCard();
+    const followupBtn = findNodes(midTree, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0];
+    await followupBtn.props.onClick();
+
+    const afterTree = renderCard();
+    assert.equal(afterTree.props['data-task-status'], 'running');
+    assert.equal(findNodes(afterTree, (n) => n.props?.['data-testid'] === 'fexp-task-result').length, 0);
+    assert.equal(findNodes(afterTree, (n) => n.props?.['data-testid'] === 'fexp-raw-drawer').length, 0);
+    assert.equal(findNodes(afterTree, (n) => n.props?.['data-testid'] === 'fexp-task-sources').length, 0);
+    assert.equal(findNodes(afterTree, (n) => n.props?.['data-testid'] === 'fexp-task-artifacts').length, 0);
+    assert.equal(findNodes(afterTree, (n) => n.props?.['data-testid'] === 'fexp-task-waiting-notice').length, 0);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});

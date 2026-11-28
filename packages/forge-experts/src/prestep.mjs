@@ -16,6 +16,8 @@ const MODEL_DID_NOT_DELEGATE_NOTICE =
   '主助手未调用所选专家，未发起远端任务；已保留您的草稿，可重新确认后发送。';
 const EXPIRED_TURN_NOTICE =
   '专家确认已超时失效，未发起远端任务；已保留您的草稿，请重新确认后发送。';
+const DELEGATE_ATTEMPTED_EXPIRED_NOTICE =
+  '专家委派已发起但本轮确认超时，受理结果待对账；请按原请求号查单，切勿重复发送。';
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -60,14 +62,50 @@ export function createPreStepGuard(ports) {
 
   const activeTurns = new Map();
   const activeTokens = new Map();
+  const expiredAttemptedTurns = new Map();
 
-  function pruneExpiredTurns() {
+  function rememberExpiredAttempted(id, entry) {
+    expiredAttemptedTurns.delete(id);
+    expiredAttemptedTurns.set(id, {
+      scope: entry.scope ?? null,
+      sessionId: entry.sessionId,
+      expertId: entry.expertId,
+      draftDigest: entry.draftDigest ?? null,
+      selectionToken: entry.selectionToken ?? null,
+    });
+    while (expiredAttemptedTurns.size > maxActiveTurns) {
+      const oldest = expiredAttemptedTurns.keys().next().value;
+      if (oldest === undefined) break;
+      expiredAttemptedTurns.delete(oldest);
+    }
+  }
+
+  function pruneExpiredTurns(skipTurnId = null) {
     const at = now();
     for (const [id, entry] of activeTurns.entries()) {
+      if (skipTurnId && id === skipTurnId) continue;
       if (at >= entry.expiresAt) {
         activeTurns.delete(id);
+        if (entry?.selectionToken && activeTokens.get(entry.selectionToken) === id) {
+          activeTokens.delete(entry.selectionToken);
+        }
+        if (entry.delegateAttempted) {
+          rememberExpiredAttempted(id, entry);
+          try {
+            ports.onTurnFinalized?.({
+              scope: entry.scope ?? null,
+              sessionId: entry.sessionId,
+              expertId: entry.expertId,
+              ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
+              status: 'acceptance_unknown',
+              code: 'EXPERT_ACCEPTANCE_UNKNOWN',
+              preserveDraft: false,
+              notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+            });
+          } catch { /* best effort */ }
+          continue;
+        }
         if (entry?.selectionToken) {
-          if (activeTokens.get(entry.selectionToken) === id) activeTokens.delete(entry.selectionToken);
           try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
         }
         try {
@@ -94,6 +132,7 @@ export function createPreStepGuard(ports) {
     }
     activeTurns.clear();
     activeTokens.clear();
+    expiredAttemptedTurns.clear();
   }
 
   /**
@@ -212,6 +251,7 @@ export function createPreStepGuard(ports) {
       scope,
       draftDigest: binding.draftDigest ?? null,
       draft,
+      delegateAttempted: false,
       delegatedTaskId: null,
       createdAt,
       expiresAt: createdAt + turnTtlMs,
@@ -254,6 +294,7 @@ export function createPreStepGuard(ports) {
     if (isNonEmptyString(toolInput.sessionId) && toolInput.sessionId.trim() !== turn.sessionId) {
       throw new ExpertsError('EXPERT_SELECTION_INVALID', 'Delegate tool call sessionId does not match bound user session');
     }
+    turn.delegateAttempted = true;
     return Object.freeze({ allowed: true, expertId: turn.expertId });
   }
 
@@ -265,13 +306,42 @@ export function createPreStepGuard(ports) {
    *   and returns `preserveDraft: true` with the original draft and an explicit notice (#245/#247).
    */
   function finalizeTurn({ turnId, delegatedTaskId = null, error = null } = {}) {
-    pruneExpiredTurns();
-    if (!isNonEmptyString(turnId)) {
+    const cleanTurnId = isNonEmptyString(turnId) ? turnId.trim() : null;
+    pruneExpiredTurns(cleanTurnId);
+    if (!cleanTurnId) {
       return Object.freeze({ status: 'unbound', expertParticipated: false, completed: false, preserveDraft: false });
     }
-    const cleanTurnId = turnId.trim();
     const turn = activeTurns.get(cleanTurnId);
     if (!turn) {
+      const expiredAttempted = expiredAttemptedTurns.get(cleanTurnId);
+      if (expiredAttempted) {
+        expiredAttemptedTurns.delete(cleanTurnId);
+        if (isNonEmptyString(delegatedTaskId)) {
+          const cleanTaskId = delegatedTaskId.trim();
+          if (expiredAttempted.selectionToken) {
+            try { ports.discardSelection?.(expiredAttempted.selectionToken); } catch { /* best effort */ }
+          }
+          try {
+            ports.onTurnFinalized?.({
+              scope: expiredAttempted.scope ?? null,
+              sessionId: expiredAttempted.sessionId,
+              expertId: expiredAttempted.expertId,
+              ...(expiredAttempted.draftDigest ? { draftDigest: expiredAttempted.draftDigest } : {}),
+              status: 'delegated',
+              preserveDraft: false,
+            });
+          } catch { /* best effort */ }
+          return Object.freeze({
+            status: 'delegated',
+            expertParticipated: true,
+            completed: false,
+            taskId: cleanTaskId,
+            expertId: expiredAttempted.expertId,
+            sessionId: expiredAttempted.sessionId,
+            preserveDraft: false,
+          });
+        }
+      }
       return Object.freeze({ status: 'unbound', expertParticipated: false, completed: false, preserveDraft: false });
     }
     activeTurns.delete(cleanTurnId);

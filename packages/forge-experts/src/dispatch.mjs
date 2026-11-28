@@ -279,8 +279,10 @@ export function createDispatchService(ports) {
   let table = null;
   let pendingIndexTable = null;
   let closed = false;
-  let pendingIndexQueue = Promise.resolve();
+  const pendingIndexQueues = new Map();
   const inFlightReconciles = new Map();
+  const inFlightDeliveries = new Set();
+  const inFlightReconcileReads = new Set();
   const reconcileTimeoutMs = Number.isInteger(ports.reconcileTimeoutMs) && ports.reconcileTimeoutMs > 0
     ? ports.reconcileTimeoutMs
     : 10_000;
@@ -334,7 +336,10 @@ export function createDispatchService(ports) {
   async function close() {
     closed = true;
     taskContextById.clear();
+    pendingIndexQueues.clear();
     inFlightReconciles.clear();
+    inFlightDeliveries.clear();
+    inFlightReconcileReads.clear();
     if (domainHandle) {
       const closing = domainHandle;
       domainHandle = null;
@@ -412,8 +417,14 @@ export function createDispatchService(ports) {
         }
       }
     };
-    const next = pendingIndexQueue.then(run, run);
-    pendingIndexQueue = next.catch(() => {});
+    const scopeKey = derivePendingIndexKey(scope);
+    const prev = pendingIndexQueues.get(scopeKey) ?? Promise.resolve();
+    const next = prev.then(run, run);
+    const settled = next.catch(() => {});
+    pendingIndexQueues.set(scopeKey, settled);
+    settled.finally(() => {
+      if (pendingIndexQueues.get(scopeKey) === settled) pendingIndexQueues.delete(scopeKey);
+    });
     return next;
   }
 
@@ -607,77 +618,83 @@ export function createDispatchService(ports) {
       createdAt,
       updatedAt: createdAt,
     };
-    await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
-
-    // 4. Final serialized re-verification in the same boundary as preference updates (§3.6).
-    // A preference disable submitted earlier wins and aborts this dispatch before outbound transport.
-    let scopeCheck;
+    const deliveryKey = deriveCorrelationKey({ ...scope, requestId });
+    inFlightDeliveries.add(deliveryKey);
     try {
-      scopeCheck = await verifyInPreferenceBoundary({
-        scope,
-        startEpoch,
-        expertId: binding.expertId,
-        delegationScope: binding.delegationScope,
-      });
-    } catch (error) {
-      await persistCorrelationBestEffort(scope, {
-        ...baseRecord,
-        status: 'aborted_before_delivery',
-        updatedAt: new Date(now()).toISOString(),
-      });
-      throw error;
-    }
+      await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
 
-    // 5. Outbound atomic delivery (outside preference lock so network I/O never stalls preferences).
-    if (!scopeCheck) {
-      throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Missing verified scope check before delivery');
-    }
-    try {
-      const receipt = await ports.createDelegraTask({
-        scope,
-        expertId: binding.expertId,
-        delegationScope: binding.delegationScope,
-        requestId,
-        originSessionRef: binding.sessionId,
-        taskText: input.taskText,
-        reuseRefs: input.reuseRefs,
-        payloadDigest,
-      });
-      rememberTaskContext(scope, receipt.taskId, {
-        originSessionRef: binding.sessionId,
-        expertId: binding.expertId,
-        delegationScope: binding.delegationScope,
-      });
-      await persistCorrelationBestEffort(scope, {
-        ...baseRecord,
-        taskId: receipt.taskId ?? null,
-        status: 'accepted',
-        updatedAt: new Date(now()).toISOString(),
-      });
-      return Object.freeze({
-        ...receipt,
-        requestId,
-        originSessionRef: binding.sessionId,
-      });
-    } catch (error) {
-      if (error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN') {
+      // 4. Final serialized re-verification in the same boundary as preference updates (§3.6).
+      // A preference disable submitted earlier wins and aborts this dispatch before outbound transport.
+      let scopeCheck;
+      try {
+        scopeCheck = await verifyInPreferenceBoundary({
+          scope,
+          startEpoch,
+          expertId: binding.expertId,
+          delegationScope: binding.delegationScope,
+        });
+      } catch (error) {
         await persistCorrelationBestEffort(scope, {
           ...baseRecord,
-          status: 'unknown',
+          status: 'aborted_before_delivery',
           updatedAt: new Date(now()).toISOString(),
         });
-        throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', error.message, {
-          status: 503,
-          retryable: true,
-          details: { ...(error.details ?? {}), requestId },
-        });
+        throw error;
       }
-      await persistCorrelationBestEffort(scope, {
-        ...baseRecord,
-        status: 'rejected',
-        updatedAt: new Date(now()).toISOString(),
-      });
-      throw error;
+
+      // 5. Outbound atomic delivery (outside preference lock so network I/O never stalls preferences).
+      if (!scopeCheck) {
+        throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Missing verified scope check before delivery');
+      }
+      try {
+        const receipt = await ports.createDelegraTask({
+          scope,
+          expertId: binding.expertId,
+          delegationScope: binding.delegationScope,
+          requestId,
+          originSessionRef: binding.sessionId,
+          taskText: input.taskText,
+          reuseRefs: input.reuseRefs,
+          payloadDigest,
+        });
+        rememberTaskContext(scope, receipt.taskId, {
+          originSessionRef: binding.sessionId,
+          expertId: binding.expertId,
+          delegationScope: binding.delegationScope,
+        });
+        await persistCorrelationBestEffort(scope, {
+          ...baseRecord,
+          taskId: receipt.taskId ?? null,
+          status: 'accepted',
+          updatedAt: new Date(now()).toISOString(),
+        });
+        return Object.freeze({
+          ...receipt,
+          requestId,
+          originSessionRef: binding.sessionId,
+        });
+      } catch (error) {
+        if (error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN') {
+          await persistCorrelationBestEffort(scope, {
+            ...baseRecord,
+            status: 'unknown',
+            updatedAt: new Date(now()).toISOString(),
+          });
+          throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', error.message, {
+            status: 503,
+            retryable: true,
+            details: { ...(error.details ?? {}), requestId },
+          });
+        }
+        await persistCorrelationBestEffort(scope, {
+          ...baseRecord,
+          status: 'rejected',
+          updatedAt: new Date(now()).toISOString(),
+        });
+        throw error;
+      }
+    } finally {
+      inFlightDeliveries.delete(deliveryKey);
     }
   }
 
@@ -710,7 +727,8 @@ export function createDispatchService(ports) {
         correlation: existing ? Object.freeze({ originSessionRef: existing.originSessionRef, expertId: existing.expertId }) : null,
       });
     } catch (error) {
-      if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && existing) {
+      const deliveryKey = deriveCorrelationKey({ ...scope, requestId: cleanId });
+      if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && existing && !inFlightDeliveries.has(deliveryKey)) {
         await persistCorrelationBestEffort(scope, {
           ...existing,
           status: 'not_found',
@@ -796,59 +814,65 @@ export function createDispatchService(ports) {
       createdAt,
       updatedAt: createdAt,
     };
-    await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
-
-    // 3. Final serialized re-verification in the preference boundary before outbound delivery (§3.6).
+    const deliveryKey = deriveCorrelationKey({ ...scope, requestId });
+    inFlightDeliveries.add(deliveryKey);
     try {
-      await verifyInPreferenceBoundary({
-        scope,
-        startEpoch,
-        expertId: knownContext.expertId,
-        delegationScope: knownContext.delegationScope,
-      });
-    } catch (error) {
-      await persistCorrelationBestEffort(scope, {
-        ...baseRecord,
-        status: 'aborted_before_delivery',
-        updatedAt: new Date(now()).toISOString(),
-      });
-      throw error;
-    }
+      await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
 
-    // 4. Outbound followup delivery with correlation status convergence.
-    try {
-      const receipt = await ports.createDelegraFollowup({
-        scope,
-        taskId: cleanTaskId,
-        requestId,
-        taskText: input.taskText,
-        reuseRefs: input.reuseRefs,
-      });
-      await persistCorrelationBestEffort(scope, {
-        ...baseRecord,
-        status: 'accepted',
-        updatedAt: new Date(now()).toISOString(),
-      });
-      return receipt;
-    } catch (error) {
-      if (error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN') {
+      // 3. Final serialized re-verification in the preference boundary before outbound delivery (§3.6).
+      try {
+        await verifyInPreferenceBoundary({
+          scope,
+          startEpoch,
+          expertId: knownContext.expertId,
+          delegationScope: knownContext.delegationScope,
+        });
+      } catch (error) {
         await persistCorrelationBestEffort(scope, {
           ...baseRecord,
-          status: 'unknown',
+          status: 'aborted_before_delivery',
           updatedAt: new Date(now()).toISOString(),
         });
-        throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', error.message, {
-          status: 503,
-          retryable: true,
-          details: { ...(error.details ?? {}), requestId },
-        });
+        throw error;
       }
-      await persistCorrelationBestEffort(scope, {
-        ...baseRecord,
-        status: 'rejected',
-        updatedAt: new Date(now()).toISOString(),
-      });
-      throw error;
+
+      // 4. Outbound followup delivery with correlation status convergence.
+      try {
+        const receipt = await ports.createDelegraFollowup({
+          scope,
+          taskId: cleanTaskId,
+          requestId,
+          taskText: input.taskText,
+          reuseRefs: input.reuseRefs,
+        });
+        await persistCorrelationBestEffort(scope, {
+          ...baseRecord,
+          status: 'accepted',
+          updatedAt: new Date(now()).toISOString(),
+        });
+        return receipt;
+      } catch (error) {
+        if (error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN') {
+          await persistCorrelationBestEffort(scope, {
+            ...baseRecord,
+            status: 'unknown',
+            updatedAt: new Date(now()).toISOString(),
+          });
+          throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', error.message, {
+            status: 503,
+            retryable: true,
+            details: { ...(error.details ?? {}), requestId },
+          });
+        }
+        await persistCorrelationBestEffort(scope, {
+          ...baseRecord,
+          status: 'rejected',
+          updatedAt: new Date(now()).toISOString(),
+        });
+        throw error;
+      }
+    } finally {
+      inFlightDeliveries.delete(deliveryKey);
     }
   }
 
@@ -913,13 +937,22 @@ export function createDispatchService(ports) {
       const stillPending = [];
 
       const reconcileOne = async (requestId) => {
+        const readKey = deriveCorrelationKey({ ...scope, requestId });
+        if (inFlightDeliveries.has(readKey) || inFlightReconcileReads.has(readKey)) {
+          stillPending.push(requestId);
+          return;
+        }
         const record = await readCorrelation(scope, requestId);
         if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
           await syncPendingIndex(scope, requestId, 'accepted');
           return;
         }
         try {
-          const result = await withTimeout(reconcileByRequest({ requestId }), reconcileTimeoutMs);
+          inFlightReconcileReads.add(readKey);
+          const readPromise = reconcileByRequest({ requestId }).finally(() => {
+            inFlightReconcileReads.delete(readKey);
+          });
+          const result = await withTimeout(readPromise, reconcileTimeoutMs);
           const entry = Object.freeze({
             requestId,
             taskId: result.taskId ?? record.taskId ?? null,
@@ -930,7 +963,7 @@ export function createDispatchService(ports) {
           reconciled.push(entry);
           try { ports.onTaskReconciled?.({ ...entry, scope }); } catch { /* best effort */ }
         } catch (error) {
-          if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
+          if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey)) {
             notFound.push(requestId);
             await syncPendingIndex(scope, requestId, 'not_found');
           } else {

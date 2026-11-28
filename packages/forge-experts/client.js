@@ -283,6 +283,22 @@ window.__ModuleLoader__.load({
       return pickTaskFields(body, ['status', 'runId', 'runGeneration', 'resultVersion', 'cancelRequested', 'waitingUserNotice', 'summary']);
     }
 
+    function mergeTaskGeneration(prev, patch, { resetPreviousResult = false } = {}) {
+      const prevGen = Number.isInteger(prev?.runGeneration) ? prev.runGeneration : null;
+      const nextGen = Number.isInteger(patch?.runGeneration) ? patch.runGeneration : null;
+      const generationChanged = prevGen !== null && nextGen !== null && nextGen !== prevGen;
+      const base = { ...(prev ?? {}) };
+      if (resetPreviousResult || generationChanged) {
+        base.summary = null;
+        base.rawResult = null;
+        base.result = null;
+        base.sources = [];
+        base.artifacts = [];
+        base.waitingUserNotice = null;
+      }
+      return { ...base, ...patch };
+    }
+
     const taskReconciledListeners = new Set();
     function notifyTaskReconciled(entry) {
       if (!entry || typeof entry !== 'object') return;
@@ -330,7 +346,7 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
-          setTask((prev) => ({ ...(prev ?? {}), ...pickTaskReconcileFields(res.body, prev) }));
+          setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(res.body, prev)));
           setNotice('已按原请求号完成权威状态对账。');
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
@@ -349,7 +365,7 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(statusRes));
             return;
           }
-          let merged = { ...(task ?? {}), ...pickTaskMutationFields(statusRes.body) };
+          let merged = mergeTaskGeneration(task, pickTaskMutationFields(statusRes.body));
           if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'waiting_user') {
             const resultRes = await fetchTaskResult(model.taskId).catch(() => null);
             if (resultRes?.ok && resultRes.body) {
@@ -376,7 +392,8 @@ window.__ModuleLoader__.load({
             return;
           }
           setFollowupText('');
-          setTask((prev) => ({ ...(prev ?? {}), ...pickTaskMutationFields(res.body) }));
+          setRawExpanded(false);
+          setTask((prev) => mergeTaskGeneration(prev, pickTaskMutationFields(res.body), { resetPreviousResult: true }));
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
         } finally {
@@ -805,13 +822,15 @@ window.__ModuleLoader__.load({
             const digest = typeof payload.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
             const exactKey = sessionKey && digest ? `${sessionKey}:${digest}` : null;
             let recoveredDraft = null;
-            if (exactKey && pendingDrafts.has(exactKey)) {
-              recoveredDraft = pendingDrafts.get(exactKey);
-              pendingDrafts.delete(exactKey);
-              if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
+            if (exactKey) {
+              if (pendingDrafts.has(exactKey)) {
+                recoveredDraft = pendingDrafts.get(exactKey);
+                pendingDrafts.delete(exactKey);
+                if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
+              }
             } else if (sessionKey && pendingDrafts.has(sessionKey)) {
               recoveredDraft = pendingDrafts.get(sessionKey);
-              if (!exactKey) pendingDrafts.delete(sessionKey);
+              pendingDrafts.delete(sessionKey);
             }
             if (payload.preserveDraft !== true) return;
             const notice = typeof payload.notice === 'string' && payload.notice
@@ -863,6 +882,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       deriveTaskCardModel,
+      // Compatibility alias retained for existing callers and tests.
       deriveTaskCardState: deriveTaskCardModel,
       ExpertTaskStatusCard,
       apply(ctx, options = {}) {
