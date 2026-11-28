@@ -243,6 +243,19 @@ export function createExpertsRoutes(ports) {
         return true;
       }
 
+      if (url.pathname === `${API_PREFIX}/turns/finalized`) {
+        if (req.method !== 'GET') {
+          methodNotAllowed(res, 'GET');
+          return true;
+        }
+        const scope = await ports.resolveScope();
+        const items = typeof ports.listRecentFinalizedTurns === 'function'
+          ? await ports.listRecentFinalizedTurns(scope)
+          : [];
+        sendJson(res, 200, { scopeEpoch: scope.scopeEpoch, items });
+        return true;
+      }
+
       if (url.pathname === `${API_PREFIX}/tasks`) {
         const dispatchTask = requireRoutePort(req, res, {
           method: 'POST',

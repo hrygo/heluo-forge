@@ -27,6 +27,13 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function scopeKeyOf(scope) {
+  if (!scope || typeof scope !== 'object') return null;
+  const parts = [scope.instanceId, scope.orgId, scope.issuer, scope.subject];
+  if (parts.some((p) => typeof p !== 'string' || !p.trim())) return null;
+  return JSON.stringify(parts.map((p) => p.trim()));
+}
+
 function snapshotDraft({ taskText, draftVersion, reuseRefs }) {
   return Object.freeze({
     taskText: typeof taskText === 'string' ? taskText : '',
@@ -63,6 +70,47 @@ export function createPreStepGuard(ports) {
   const activeTurns = new Map();
   const activeTokens = new Map();
   const expiredAttemptedTurns = new Map();
+  const recentFinalized = new Map();
+  let finalizedSeq = 0;
+
+  function emitTurnFinalized(event) {
+    const { scope, ...wireEvent } = event ?? {};
+    const frozenWire = Object.freeze({ ...wireEvent });
+    const sKey = scopeKeyOf(scope);
+    if (sKey) {
+      const at = now();
+      for (const [k, rec] of recentFinalized.entries()) {
+        if (at >= rec.expiresAt) recentFinalized.delete(k);
+      }
+      const key = `${sKey}:${wireEvent.sessionId ?? ''}:${wireEvent.draftDigest ?? ++finalizedSeq}`;
+      recentFinalized.delete(key);
+      recentFinalized.set(key, { scopeKey: sKey, expiresAt: at + turnTtlMs, event: frozenWire });
+      while (recentFinalized.size > maxActiveTurns) {
+        const oldest = recentFinalized.keys().next().value;
+        if (oldest === undefined) break;
+        recentFinalized.delete(oldest);
+      }
+    }
+    try {
+      ports.onTurnFinalized?.(event);
+    } catch { /* best effort */ }
+  }
+
+  function listRecentFinalized(scope) {
+    pruneExpiredTurns();
+    const sKey = scopeKeyOf(scope);
+    if (!sKey) return Object.freeze([]);
+    const at = now();
+    const items = [];
+    for (const [key, rec] of recentFinalized.entries()) {
+      if (at >= rec.expiresAt) {
+        recentFinalized.delete(key);
+        continue;
+      }
+      if (rec.scopeKey === sKey) items.push(rec.event);
+    }
+    return Object.freeze(items);
+  }
 
   function rememberExpiredAttempted(id, entry) {
     expiredAttemptedTurns.delete(id);
@@ -91,35 +139,31 @@ export function createPreStepGuard(ports) {
         }
         if (entry.delegateAttempted) {
           rememberExpiredAttempted(id, entry);
-          try {
-            ports.onTurnFinalized?.({
-              scope: entry.scope ?? null,
-              sessionId: entry.sessionId,
-              expertId: entry.expertId,
-              ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
-              status: 'acceptance_unknown',
-              code: 'EXPERT_ACCEPTANCE_UNKNOWN',
-              preserveDraft: false,
-              notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
-            });
-          } catch { /* best effort */ }
+          emitTurnFinalized({
+            scope: entry.scope ?? null,
+            sessionId: entry.sessionId,
+            expertId: entry.expertId,
+            ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
+            status: 'acceptance_unknown',
+            code: 'EXPERT_ACCEPTANCE_UNKNOWN',
+            preserveDraft: false,
+            notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+          });
           continue;
         }
         if (entry?.selectionToken) {
           try { ports.discardSelection?.(entry.selectionToken); } catch { /* best effort */ }
         }
-        try {
-          ports.onTurnFinalized?.({
-            scope: entry.scope ?? null,
-            sessionId: entry.sessionId,
-            expertId: entry.expertId,
-            ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
-            status: 'expired',
-            code: 'EXPERT_SELECTION_INVALID',
-            preserveDraft: true,
-            notice: EXPIRED_TURN_NOTICE,
-          });
-        } catch { /* best effort */ }
+        emitTurnFinalized({
+          scope: entry.scope ?? null,
+          sessionId: entry.sessionId,
+          expertId: entry.expertId,
+          ...(entry.draftDigest ? { draftDigest: entry.draftDigest } : {}),
+          status: 'expired',
+          code: 'EXPERT_SELECTION_INVALID',
+          preserveDraft: true,
+          notice: EXPIRED_TURN_NOTICE,
+        });
       }
     }
   }
@@ -133,6 +177,7 @@ export function createPreStepGuard(ports) {
     activeTurns.clear();
     activeTokens.clear();
     expiredAttemptedTurns.clear();
+    recentFinalized.clear();
   }
 
   /**
@@ -321,16 +366,14 @@ export function createPreStepGuard(ports) {
           if (expiredAttempted.selectionToken) {
             try { ports.discardSelection?.(expiredAttempted.selectionToken); } catch { /* best effort */ }
           }
-          try {
-            ports.onTurnFinalized?.({
-              scope: expiredAttempted.scope ?? null,
-              sessionId: expiredAttempted.sessionId,
-              expertId: expiredAttempted.expertId,
-              ...(expiredAttempted.draftDigest ? { draftDigest: expiredAttempted.draftDigest } : {}),
-              status: 'delegated',
-              preserveDraft: false,
-            });
-          } catch { /* best effort */ }
+          emitTurnFinalized({
+            scope: expiredAttempted.scope ?? null,
+            sessionId: expiredAttempted.sessionId,
+            expertId: expiredAttempted.expertId,
+            ...(expiredAttempted.draftDigest ? { draftDigest: expiredAttempted.draftDigest } : {}),
+            status: 'delegated',
+            preserveDraft: false,
+          });
           return Object.freeze({
             status: 'delegated',
             expertParticipated: true,
@@ -353,16 +396,14 @@ export function createPreStepGuard(ports) {
       turn.delegatedTaskId = delegatedTaskId.trim();
       // Belt-and-suspenders single-use cleanup in case a custom host finalized without consuming via dispatchTask.
       try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
-      try {
-        ports.onTurnFinalized?.({
-          scope: turn.scope ?? null,
-          sessionId: turn.sessionId,
-          expertId: turn.expertId,
-          ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
-          status: 'delegated',
-          preserveDraft: false,
-        });
-      } catch { /* best effort */ }
+      emitTurnFinalized({
+        scope: turn.scope ?? null,
+        sessionId: turn.sessionId,
+        expertId: turn.expertId,
+        ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
+        status: 'delegated',
+        preserveDraft: false,
+      });
       return Object.freeze({
         status: 'delegated',
         expertParticipated: true,
@@ -376,6 +417,32 @@ export function createPreStepGuard(ports) {
 
     // Ensure unused single-use selectionToken cannot be replayed after a failed or skipped turn.
     try { ports.discardSelection?.(turn.selectionToken); } catch { /* best effort */ }
+
+    const isAcceptanceUnknownError = error instanceof ExpertsError && error.code === 'EXPERT_ACCEPTANCE_UNKNOWN';
+    const isExpiredAttempted = !error && turn.delegateAttempted === true && now() >= turn.expiresAt;
+    if (isAcceptanceUnknownError || isExpiredAttempted) {
+      const unknownOutcome = Object.freeze({
+        status: 'acceptance_unknown',
+        code: 'EXPERT_ACCEPTANCE_UNKNOWN',
+        expertParticipated: false,
+        completed: false,
+        expertId: turn.expertId,
+        sessionId: turn.sessionId,
+        preserveDraft: false,
+        notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+      });
+      emitTurnFinalized({
+        scope: turn.scope ?? null,
+        sessionId: turn.sessionId,
+        expertId: turn.expertId,
+        ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
+        status: 'acceptance_unknown',
+        code: 'EXPERT_ACCEPTANCE_UNKNOWN',
+        preserveDraft: false,
+        notice: DELEGATE_ATTEMPTED_EXPIRED_NOTICE,
+      });
+      return unknownOutcome;
+    }
 
     const outcome = error
       ? Object.freeze({
@@ -400,18 +467,16 @@ export function createPreStepGuard(ports) {
       });
 
     // Notify host event stream with minimal non-sensitive metadata (never broadcast raw draft text).
-    try {
-      ports.onTurnFinalized?.({
-        scope: turn.scope ?? null,
-        sessionId: turn.sessionId,
-        expertId: turn.expertId,
-        ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
-        status: outcome.status,
-        ...(outcome.code ? { code: outcome.code } : {}),
-        preserveDraft: true,
-        ...(outcome.notice ? { notice: outcome.notice } : {}),
-      });
-    } catch { /* best effort */ }
+    emitTurnFinalized({
+      scope: turn.scope ?? null,
+      sessionId: turn.sessionId,
+      expertId: turn.expertId,
+      ...(turn.draftDigest ? { draftDigest: turn.draftDigest } : {}),
+      status: outcome.status,
+      ...(outcome.code ? { code: outcome.code } : {}),
+      preserveDraft: true,
+      ...(outcome.notice ? { notice: outcome.notice } : {}),
+    });
 
     return outcome;
   }
@@ -420,6 +485,7 @@ export function createPreStepGuard(ports) {
     prepareTurn,
     beforeToolCall,
     finalizeTurn,
+    listRecentFinalized,
     clear,
     activeTurnCount: () => {
       pruneExpiredTurns();

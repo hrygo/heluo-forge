@@ -144,6 +144,10 @@ window.__ModuleLoader__.load({
       return requestJson('POST', '/tasks/reconcile', {});
     }
 
+    function fetchRecentFinalizedTurns() {
+      return requestJson('GET', '/turns/finalized');
+    }
+
     function generateClientRequestId() {
       if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
         return `fexp-fu-${globalThis.crypto.randomUUID()}`;
@@ -291,10 +295,17 @@ window.__ModuleLoader__.load({
       return pickTaskFields(body, ['status', 'runId', 'runGeneration', 'resultVersion', 'cancelRequested', 'waitingUserNotice', 'summary']);
     }
 
-    function mergeTaskGeneration(prev, patch, { resetPreviousResult = false } = {}) {
+    function isStaleGeneration(prev, patch) {
       const prevGen = Number.isInteger(prev?.runGeneration) ? prev.runGeneration : null;
       const nextGen = Number.isInteger(patch?.runGeneration) ? patch.runGeneration : null;
-      const generationChanged = prevGen !== null && nextGen !== null && nextGen !== prevGen;
+      return prevGen !== null && nextGen !== null && nextGen < prevGen;
+    }
+
+    function mergeTaskGeneration(prev, patch, { resetPreviousResult = false } = {}) {
+      if (isStaleGeneration(prev, patch)) return prev;
+      const prevGen = Number.isInteger(prev?.runGeneration) ? prev.runGeneration : null;
+      const nextGen = Number.isInteger(patch?.runGeneration) ? patch.runGeneration : null;
+      const generationChanged = prevGen !== null && nextGen !== null && nextGen > prevGen;
       const base = { ...(prev ?? {}) };
       if (resetPreviousResult || generationChanged) {
         base.summary = null;
@@ -328,17 +339,21 @@ window.__ModuleLoader__.load({
         if (initial && initial !== initialRef.current) {
           const switchedTask = initialRef.current?.taskId && initial.taskId && initialRef.current.taskId !== initial.taskId;
           initialRef.current = initial;
-          setTask(initial);
           if (switchedTask) {
             pendingFollowupBackupRef.current = null;
+            setTask(initial);
             setFollowupText('');
             setRawExpanded(false);
             setNotice(null);
+          } else if (!pendingFollowupBackupRef.current) {
+            setTask((prev) => mergeTaskGeneration(prev, initial));
           }
         }
       }, [initial]);
       const model = deriveTaskCardModel(task ?? initial);
       const activeRequestId = model.requestId;
+      const taskRef = React.useRef(task ?? initial);
+      taskRef.current = task ?? initial;
       React.useEffect(() => {
         if (!activeRequestId) return undefined;
         const onReconciled = (entry) => {
@@ -352,9 +367,11 @@ window.__ModuleLoader__.load({
             }
             return;
           }
+          if (isStaleGeneration(taskRef.current, entry)) return;
           if (pendingFollowupBackupRef.current?.followupRequestId === activeRequestId) {
+            const acceptedText = pendingFollowupBackupRef.current.submittedText;
             pendingFollowupBackupRef.current = null;
-            setFollowupText('');
+            setFollowupText((curr) => (curr === acceptedText ? '' : curr));
           }
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(entry, prev)));
@@ -385,9 +402,11 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
+          if (isStaleGeneration(taskRef.current, res.body)) return;
           if (pendingFollowupBackupRef.current?.followupRequestId === model.requestId) {
+            const acceptedText = pendingFollowupBackupRef.current.submittedText;
             pendingFollowupBackupRef.current = null;
-            setFollowupText('');
+            setFollowupText((curr) => (curr === acceptedText ? '' : curr));
           }
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(res.body, prev)));
@@ -400,7 +419,7 @@ window.__ModuleLoader__.load({
       };
 
       const handleRefresh = async () => {
-        if (!model.taskId || busy) return;
+        if (!model.taskId || model.isUnknown || busy) return;
         setBusy(true);
         setNotice(null);
         try {
@@ -409,6 +428,7 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(statusRes));
             return;
           }
+          const prevGen = Number.isInteger(task?.runGeneration) ? task.runGeneration : null;
           const statusPatch = pickTaskMutationFields(statusRes.body);
           let merged = mergeTaskGeneration(task, statusPatch);
           if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'waiting_user') {
@@ -431,6 +451,9 @@ window.__ModuleLoader__.load({
               }
             }
           }
+          if (prevGen !== null && Number.isInteger(merged?.runGeneration) && merged.runGeneration > prevGen) {
+            setRawExpanded(false);
+          }
           setTask(merged);
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_DIRECTORY_UNAVAILABLE);
@@ -441,17 +464,18 @@ window.__ModuleLoader__.load({
 
       const handleFollowup = async () => {
         if (!model.showFollowupInput || busy || !followupText.trim()) return;
+        const submittedText = followupText;
         const followupRequestId = generateClientRequestId();
         setBusy(true);
         setNotice(null);
         try {
-          const res = await postTaskFollowup(model.taskId, { taskText: followupText, requestId: followupRequestId });
+          const res = await postTaskFollowup(model.taskId, { taskText: submittedText, requestId: followupRequestId });
           if (!res.ok) {
             if (resultCode(res) === 'EXPERT_ACCEPTANCE_UNKNOWN') {
               const pendingReqId = typeof res?.body?.error?.details?.requestId === 'string' && res.body.error.details.requestId.trim()
                 ? res.body.error.details.requestId.trim()
                 : followupRequestId;
-              pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId: pendingReqId };
+              pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId: pendingReqId, submittedText };
               setTask((prev) => ({
                 ...(prev ?? {}),
                 status: 'unknown',
@@ -462,11 +486,11 @@ window.__ModuleLoader__.load({
             return;
           }
           pendingFollowupBackupRef.current = null;
-          setFollowupText('');
+          setFollowupText((curr) => (curr === submittedText ? '' : curr));
           setRawExpanded(false);
-          setTask((prev) => mergeTaskGeneration(prev, pickTaskMutationFields(res.body), { resetPreviousResult: true }));
+          setTask((prev) => mergeTaskGeneration(prev, { ...pickTaskMutationFields(res.body), requestId: followupRequestId }, { resetPreviousResult: true }));
         } catch {
-          pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId };
+          pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId, submittedText };
           setTask((prev) => ({
             ...(prev ?? {}),
             status: 'unknown',
@@ -489,7 +513,7 @@ window.__ModuleLoader__.load({
             return;
           }
           const patch = pickTaskMutationFields(res.body);
-          setTask((prev) => ({ ...(prev ?? {}), ...patch }));
+          setTask((prev) => mergeTaskGeneration(prev, patch));
           const nextStatus = patch.status ?? task?.status;
           if (nextStatus === 'cancelling' || nextStatus === 'cancelled' || patch.cancelRequested === true) {
             setNotice('取消请求已提交；专家已经执行的外部动作不会被自动撤销。');
@@ -538,7 +562,7 @@ window.__ModuleLoader__.load({
           rawExpanded ? h('pre', { 'data-testid': 'fexp-raw-content' }, model.rawResult) : null,
         ) : null,
         model.showFollowupInput ? h('div', { 'data-testid': 'fexp-followup-box' },
-          h('input', { type: 'text', value: followupText, placeholder: '输入补充说明…', onChange: (e) => setFollowupText(e.target.value) }),
+          h('input', { type: 'text', value: followupText, disabled: busy, placeholder: '输入补充说明…', onChange: (e) => setFollowupText(e.target.value) }),
           h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-followup-btn', onClick: handleFollowup }, '发送追问'),
         ) : null,
         h('div', { className: 'fexp-task-card-actions' },
@@ -957,11 +981,57 @@ window.__ModuleLoader__.load({
       };
 
       let activeHooks = registerGroup();
+      const handleTurnFinalized = (payload, { requireBufferedMatch = false } = {}) => {
+        const sessionKey = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : '';
+        const digest = typeof payload?.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
+        const exactKey = sessionKey && digest ? `${sessionKey}:${digest}` : null;
+        let recoveredDraft = null;
+        if (exactKey) {
+          if (pendingDrafts.has(exactKey)) {
+            recoveredDraft = pendingDrafts.get(exactKey);
+            pendingDrafts.delete(exactKey);
+            if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
+          }
+        } else if (sessionKey && pendingDrafts.has(sessionKey)) {
+          recoveredDraft = pendingDrafts.get(sessionKey);
+          pendingDrafts.delete(sessionKey);
+        }
+        if (requireBufferedMatch && !recoveredDraft) return;
+        if (payload?.preserveDraft !== true) return;
+        const notice = typeof payload.notice === 'string' && payload.notice
+          ? payload.notice
+          : (ERROR_NOTICE[payload.code] ?? ERROR_NOTICE.EXPERT_SELECTION_INVALID);
+        const listener = activeHooks?.getRecoveryListener?.() ?? draftRecoveryListener;
+        if (typeof listener === 'function') {
+          try {
+            listener({
+              sessionId: sessionKey || null,
+              expertId: payload.expertId ?? null,
+              status: payload.status ?? 'failed',
+              code: payload.code ?? null,
+              preserveDraft: true,
+              draft: recoveredDraft,
+              notice,
+            });
+          } catch { /* best effort */ }
+        }
+      };
+
       const closeStream = openEventStream(
         (payload) => {
           if (payload.type === 'ready') {
             activeHooks = registerGroup() ?? activeHooks;
-            if (enableSelectionBinding) triggerReconcile();
+            if (enableSelectionBinding) {
+              triggerReconcile();
+              if (pendingDrafts.size > 0) {
+                fetchRecentFinalizedTurns().then((res) => {
+                  if (!res?.ok || !Array.isArray(res.body?.items)) return;
+                  for (const item of res.body.items) {
+                    handleTurnFinalized(item, { requireBufferedMatch: true });
+                  }
+                }).catch(() => {});
+              }
+            }
             return;
           }
           if (payload.type === 'task-reconciled') {
@@ -969,38 +1039,7 @@ window.__ModuleLoader__.load({
             return;
           }
           if (payload.type === 'turn-finalized' && enableSelectionBinding) {
-            const sessionKey = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
-            const digest = typeof payload.draftDigest === 'string' && payload.draftDigest.trim() ? payload.draftDigest.trim() : null;
-            const exactKey = sessionKey && digest ? `${sessionKey}:${digest}` : null;
-            let recoveredDraft = null;
-            if (exactKey) {
-              if (pendingDrafts.has(exactKey)) {
-                recoveredDraft = pendingDrafts.get(exactKey);
-                pendingDrafts.delete(exactKey);
-                if (pendingDrafts.get(sessionKey) === recoveredDraft) pendingDrafts.delete(sessionKey);
-              }
-            } else if (sessionKey && pendingDrafts.has(sessionKey)) {
-              recoveredDraft = pendingDrafts.get(sessionKey);
-              pendingDrafts.delete(sessionKey);
-            }
-            if (payload.preserveDraft !== true) return;
-            const notice = typeof payload.notice === 'string' && payload.notice
-              ? payload.notice
-              : (ERROR_NOTICE[payload.code] ?? ERROR_NOTICE.EXPERT_SELECTION_INVALID);
-            const listener = activeHooks?.getRecoveryListener?.() ?? draftRecoveryListener;
-            if (typeof listener === 'function') {
-              try {
-                listener({
-                  sessionId: sessionKey || null,
-                  expertId: payload.expertId ?? null,
-                  status: payload.status ?? 'failed',
-                  code: payload.code ?? null,
-                  preserveDraft: true,
-                  draft: recoveredDraft,
-                  notice,
-                });
-              } catch { /* best effort */ }
-            }
+            handleTurnFinalized(payload);
             return;
           }
           if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {

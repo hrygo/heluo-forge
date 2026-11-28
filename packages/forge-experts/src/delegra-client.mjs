@@ -296,6 +296,12 @@ export function createDelegraClient(options) {
     }
 
     if (!parsed || typeof parsed !== 'object') {
+      if (transportUnknownOnFailure) {
+        throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Delegra returned an empty acceptance response; reconcile via by-request', {
+          status: 503,
+          retryable: true,
+        });
+      }
       throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Delegra returned an empty response payload');
     }
 
