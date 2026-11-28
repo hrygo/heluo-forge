@@ -1267,3 +1267,66 @@ test('manual reconcileByRequest during in-flight delivery returns EXPERT_ACCEPTA
     await dispatch.close();
   }
 });
+
+test('followupTask rejects reused requestId with conflicting payload (409 EXPERT_IDEMPOTENCY_CONFLICT) and GET /turns/finalized returns scoped metadata (#484)', async () => {
+  const h = makeHarness({ dispatchEnabled: true });
+  await h.host.open();
+  try {
+    await h.enableExpert();
+    const sel = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Initial task for followup conflict' },
+    });
+    const dispatched = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-1', taskText: 'Initial task for followup conflict' },
+    });
+    assert.equal(dispatched.status, 201);
+
+    const fu1 = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/task-1/followups`,
+      headers: mutationHeaders(),
+      body: { taskText: 'Followup payload A', requestId: 'fu-client-1' },
+    });
+    assert.equal(fu1.status, 201);
+
+    // Reusing the same client requestId with a different payload must fail closed with 409 EXPERT_IDEMPOTENCY_CONFLICT.
+    const fuConflict = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/task-1/followups`,
+      headers: mutationHeaders(),
+      body: { taskText: 'Followup payload B (different)', requestId: 'fu-client-1' },
+    });
+    assert.equal(fuConflict.status, 409);
+    assert.equal(fuConflict.body.error.code, 'EXPERT_IDEMPOTENCY_CONFLICT');
+
+    // GET /turns/finalized returns recent finalized turns for reconnect recovery without raw draft text.
+    const sel2 = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Missed SSE turn draft' },
+    });
+    const turn = await h.host.prestep.prepareTurn({
+      sessionId: 'sess-1',
+      selectionToken: sel2.body.selectionToken,
+      taskText: 'Missed SSE turn draft',
+    });
+    assert.equal(turn.allowed, true);
+    h.host.prestep.finalizeTurn({ turnId: turn.turnId });
+
+    const finalizedRes = await invokeRoute(h.host, { path: `${API_PREFIX}/turns/finalized` });
+    assert.equal(finalizedRes.status, 200);
+    assert.equal(finalizedRes.body.items.length, 1);
+    assert.equal(finalizedRes.body.items[0].status, 'model_did_not_delegate');
+    assert.equal(finalizedRes.body.items[0].preserveDraft, true);
+    assert.equal('draft' in finalizedRes.body.items[0], false);
+  } finally {
+    await h.host.close();
+  }
+});

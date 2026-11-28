@@ -43,6 +43,7 @@ export function createExpertsHost(ports) {
   let preferencesRef = null;
   let mentionsRef = null;
   let selectionRef = null;
+  let prestepRef = null;
 
   const scope = createScopeManager({
     getIamSession: ports.getIamSession,
@@ -198,6 +199,7 @@ export function createExpertsHost(ports) {
     reconcileTaskByRequest: dispatchPorts.reconcileByRequest,
     listPendingTasks: () => dispatch.listPendingRequests(),
     reconcilePendingTasks: () => dispatch.reconcilePendingRequests(),
+    listRecentFinalizedTurns: (targetScope) => prestepRef?.listRecentFinalized(targetScope) ?? [],
     getViewVersion: () => Math.max(catalog.getViewVersion(), preferences.getViewVersion(), mentions.getViewVersion()),
   });
   routesRef = routes;
@@ -215,6 +217,7 @@ export function createExpertsHost(ports) {
     turnTtlMs: ports.turnTtlMs,
     maxActiveTurns: ports.maxActiveTurns,
   });
+  prestepRef = prestep;
 
   const tools = createExpertToolBridge({
     isDispatchEnabled: () => dispatchEnabled,

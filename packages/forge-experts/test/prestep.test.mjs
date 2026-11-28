@@ -436,3 +436,53 @@ test('delegated turn finalizing past TTL preserves delegatedTaskId and never pro
   assert.equal(outcome.taskId, 'task-late-42');
   assert.equal(outcome.preserveDraft, false);
 });
+
+test('finalizeTurn treats EXPERT_ACCEPTANCE_UNKNOWN and expired attempted turns as acceptance_unknown (preserveDraft: false) and scopes listRecentFinalized (#484)', async () => {
+  let clock = 1_700_000_000_000;
+  const aliceScope = makeScope({ subject: 'emp-alice' });
+  const bobScope = makeScope({ subject: 'emp-bob' });
+  const selection = createSelectionService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => aliceScope,
+    assertScopeCurrent: () => {},
+    resolveSessionScope: async (sessionId) => ({ delegationScope: `dsh:session:${sessionId}` }),
+    getMentionVersion: () => 1,
+    now: () => clock,
+    selectionTtlMs: 300_000,
+  });
+
+  const prestep = createPreStepGuard({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => aliceScope,
+    inspectSelection: (params) => selection.inspect(params),
+    discardSelection: (token) => selection.discard(token),
+    now: () => clock,
+    turnTtlMs: 10_000,
+  });
+
+  // 1. EXPERT_ACCEPTANCE_UNKNOWN error -> acceptance_unknown, preserveDraft: false
+  const p1 = await selection.prepare({ expertId: 'exp-fin-1', sessionId: 'sess-u1', scopeEpoch: 1, viewVersion: 1, taskText: 'Wire drop turn', draftVersion: 1 });
+  const t1 = await prestep.prepareTurn({ sessionId: 'sess-u1', selectionToken: p1.selectionToken, taskText: 'Wire drop turn', draftVersion: 1 });
+  prestep.beforeToolCall({ turnId: t1.turnId, toolName: 'forge_experts.delegate', toolInput: { selectionToken: p1.selectionToken, expertId: 'exp-fin-1', sessionId: 'sess-u1' } });
+  const out1 = prestep.finalizeTurn({ turnId: t1.turnId, error: new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'timeout', { status: 503, retryable: true }) });
+  assert.equal(out1.status, 'acceptance_unknown');
+  assert.equal(out1.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+  assert.equal(out1.preserveDraft, false);
+  assert.equal('draft' in out1, false);
+
+  // 2. Direct finalizeTurn past TTL with delegateAttempted: true and no delegatedTaskId -> acceptance_unknown, preserveDraft: false
+  const p2 = await selection.prepare({ expertId: 'exp-fin-1', sessionId: 'sess-u2', scopeEpoch: 1, viewVersion: 1, taskText: 'Expired attempted turn', draftVersion: 1 });
+  const t2 = await prestep.prepareTurn({ sessionId: 'sess-u2', selectionToken: p2.selectionToken, taskText: 'Expired attempted turn', draftVersion: 1 });
+  prestep.beforeToolCall({ turnId: t2.turnId, toolName: 'forge_experts.delegate', toolInput: { selectionToken: p2.selectionToken, expertId: 'exp-fin-1', sessionId: 'sess-u2' } });
+  clock += 15_000;
+  const out2 = prestep.finalizeTurn({ turnId: t2.turnId });
+  assert.equal(out2.status, 'acceptance_unknown');
+  assert.equal(out2.preserveDraft, false);
+
+  // 3. listRecentFinalized returns Alice's recent finalized events without raw draft text, and isolates Bob's scope.
+  const aliceRecent = prestep.listRecentFinalized(aliceScope);
+  assert.equal(aliceRecent.length, 1);
+  assert.equal(aliceRecent[0].sessionId, 'sess-u2');
+  assert.equal('draft' in aliceRecent[0], false);
+  assert.deepEqual(prestep.listRecentFinalized(bobScope), []);
+});

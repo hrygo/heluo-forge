@@ -1455,3 +1455,240 @@ test('manual and automatic reconciliation clear accepted followupText even when 
     else globalThis.fetch = previousFetch;
   }
 });
+
+test('ExpertTaskStatusCard drops stale lower-generation reconcile snapshots, preserves edits made during slow followup, and protects unknown lock on parent re-render (#484)', async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let moduleDef = null;
+  const eventSources = [];
+  let releaseSlowFollowup = null;
+  let followupAttempt = 0;
+
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.onmessage = null;
+      this.onerror = null;
+      eventSources.push(this);
+    }
+    emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
+    close() {}
+  }
+
+  globalThis.window = {
+    __ModuleLoader__: { load(def) { moduleDef = def; } },
+    EventSource: FakeEventSource,
+  };
+  globalThis.fetch = async (url, init) => {
+    if (url.includes('/followups') && init?.method === 'POST') {
+      followupAttempt += 1;
+      if (followupAttempt === 1) {
+        await new Promise((resolve) => { releaseSlowFollowup = resolve; });
+        return { ok: true, status: 201, async json() { return { taskId: 'task-race-1', status: 'running', runGeneration: 2 }; } };
+      }
+      throw new Error('wire drop on 2nd followup');
+    }
+    return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+  };
+
+  try {
+    new Function(clientSource)();
+    const stateSlots = [];
+    const refSlots = [];
+    const effectCleanups = [];
+    let stateIdx = 0;
+    let refIdx = 0;
+    const exported = moduleDef.factory((dep) => {
+      if (dep === 'react') {
+        return {
+          createElement: (type, props, ...children) => ({ type, props, children }),
+          useState(init) {
+            const idx = stateIdx++;
+            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+            return [
+              stateSlots[idx],
+              (next) => { stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next; },
+            ];
+          },
+          useRef(init) {
+            const idx = refIdx++;
+            if (!(idx in refSlots)) refSlots[idx] = { current: init };
+            return refSlots[idx];
+          },
+          useCallback: (fn) => fn,
+          useEffect(fn) {
+            const cleanup = fn();
+            if (typeof cleanup === 'function') effectCleanups.push(cleanup);
+          },
+        };
+      }
+      throw new Error(`Unexpected require: ${dep}`);
+    });
+
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: false });
+
+    let currentInitial = { taskId: 'task-race-1', requestId: 'req-g1', status: 'waiting_user', runGeneration: 1 };
+    const renderCard = () => {
+      stateIdx = 0;
+      refIdx = 0;
+      return exported.ExpertTaskStatusCard({ initialTask: currentInitial });
+    };
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    // 1. Slow followup disables input and preserves text if modified before response resolves.
+    const t0 = renderCard();
+    findNodes(t0, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'First followup' } });
+    const t1 = renderCard();
+    const pendingSubmit = findNodes(t1, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+    const tBusy = renderCard();
+    assert.equal(findNodes(tBusy, (n) => n.type === 'input')[0].props.disabled, true, 'followup input must be disabled while submitting');
+    findNodes(tBusy, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'Newer unsent note' } });
+    releaseSlowFollowup();
+    await pendingSubmit;
+    const tAfterFu = renderCard();
+    assert.equal(tAfterFu.props['data-task-status'], 'running');
+
+    // 2. Late lower-generation reconcile event (g1 waiting_user) must NOT roll back g2 running.
+    eventSources[0].emit({
+      type: 'task-reconciled',
+      requestId: 'req-g1',
+      taskId: 'task-race-1',
+      status: 'waiting_user',
+      runGeneration: 1,
+    });
+    const tAfterLateReconcile = renderCard();
+    assert.equal(tAfterLateReconcile.props['data-task-status'], 'running', 'stale lower-generation reconcile must not roll back task');
+
+    // 3. Move to g2 waiting_user, trigger wire-drop unknown lock, then parent re-renders with new initialTask object for same taskId -> lock must remain intact.
+    currentInitial = { taskId: 'task-race-1', requestId: 'req-g2', status: 'waiting_user', runGeneration: 2 };
+    renderCard();
+    const tWait2 = renderCard();
+    assert.equal(tWait2.props['data-task-status'], 'waiting_user');
+    assert.equal(findNodes(tWait2, (n) => n.type === 'input')[0].props.value, 'Newer unsent note');
+    await findNodes(tWait2, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+    const tLocked = renderCard();
+    assert.equal(tLocked.props['data-task-status'], 'unknown');
+
+    currentInitial = { taskId: 'task-race-1', requestId: 'req-g2', status: 'waiting_user', runGeneration: 2 };
+    renderCard();
+    const tAfterParentRerender = renderCard();
+    assert.equal(tAfterParentRerender.props['data-task-status'], 'unknown', 'parent re-render must not clobber active unknown reconcile lock');
+
+    for (const c of effectCleanups) c();
+    for (const d of disposers) d();
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});
+
+test('SSE reconnect ready polls /turns/finalized and recovers draft finalized during disconnect (#484)', async () => {
+  const eventSources = [];
+  let finalizedPolls = 0;
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/mentions')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            scopeEpoch: 5,
+            viewVersion: 7,
+            candidates: [{ expertId: 'exp-fin-1', displayName: '经营分析专家', scopeEpoch: 5, viewVersion: 7 }],
+          };
+        },
+      };
+    }
+    if (url.includes('/selections') && init?.method === 'POST') {
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return {
+            selectionToken: 'sel-missed-sse-1',
+            expertId: 'exp-fin-1',
+            sessionId: 'sess-missed',
+            draftDigest: 'sha256:missed-1',
+            expiresAt: '2030-01-01T00:02:00.000Z',
+          };
+        },
+      };
+    }
+    if (url.includes('/turns/finalized')) {
+      finalizedPolls += 1;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            scopeEpoch: 5,
+            items: [{
+              sessionId: 'sess-missed',
+              expertId: 'exp-fin-1',
+              draftDigest: 'sha256:missed-1',
+              status: 'model_did_not_delegate',
+              preserveDraft: true,
+              notice: '主助手未调用所选专家，已保留您的草稿。',
+            }],
+          };
+        },
+      };
+    }
+    if (url.includes('/tasks/reconcile')) {
+      return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    let registeredSpec = null;
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          registeredSpec = spec;
+          return () => { registeredSpec = null; };
+        },
+      },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: true });
+
+    const rows = await registeredSpec.query('', { sessionId: 'sess-missed' });
+    const recovered = [];
+    registeredSpec.onDraftRecovery((evt) => recovered.push(evt));
+
+    const prep = await registeredSpec.prepareSubmit({
+      picked: rows[0],
+      sessionId: 'sess-missed',
+      taskText: 'Draft finalized while SSE was disconnected',
+      draftVersion: 3,
+    });
+    assert.equal(prep.ok, true);
+
+    // SSE disconnects while turn finalizes on host, then reconnects with ready (no turn-finalized SSE frame received).
+    eventSources[0].fail();
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 5, viewVersion: 7 });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+    assert.equal(finalizedPolls, 1);
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].draft?.taskText, 'Draft finalized while SSE was disconnected');
+
+    for (const d of disposers) d();
+  } finally {
+    restore();
+  }
+});

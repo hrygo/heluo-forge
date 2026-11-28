@@ -838,6 +838,19 @@ export function createDispatchService(ports) {
       updatedAt: createdAt,
     };
     const deliveryKey = deriveCorrelationKey({ ...scope, requestId });
+    if (inFlightDeliveries.has(deliveryKey)) {
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Follow-up request is already in flight; reconcile before retrying', {
+        status: 503,
+        retryable: true,
+        details: { requestId },
+      });
+    }
+    if (input.requestId) {
+      const existing = await readCorrelation(scope, requestId);
+      if (existing && existing.payloadDigest !== payloadDigest) {
+        throw new ExpertsError('EXPERT_IDEMPOTENCY_CONFLICT', 'Follow-up requestId was already used with a different payload');
+      }
+    }
     inFlightDeliveries.add(deliveryKey);
     try {
       await persistCorrelation(scope, baseRecord, { strictPendingIndex: true });
@@ -867,6 +880,7 @@ export function createDispatchService(ports) {
           requestId,
           taskText: input.taskText,
           reuseRefs: input.reuseRefs,
+          payloadDigest,
         });
         await persistCorrelationBestEffort(scope, {
           ...baseRecord,
