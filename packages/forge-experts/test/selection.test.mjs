@@ -178,6 +178,41 @@ test('selection fails closed when dispatch is disabled and enforces single-use d
   );
 });
 
+test('each selection gets an independent draft recovery ID with no selection authority', async () => {
+  const scope = makeScope();
+  const selection = createSelectionService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => scope,
+    assertScopeCurrent: () => {},
+    resolveSessionScope: async () => ({ delegationScope: 'proj-alpha' }),
+  });
+  const input = {
+    expertId: 'exp-1',
+    sessionId: 'sess-1',
+    scopeEpoch: 1,
+    taskText: 'Unchanged draft',
+    draftVersion: 7,
+  };
+  const first = await selection.prepare(input);
+  const second = await selection.prepare(input);
+  assert.equal(first.draftDigest, second.draftDigest);
+  assert.match(first.draftRecoveryId, /^[a-f0-9]{32}$/u);
+  assert.match(second.draftRecoveryId, /^[a-f0-9]{32}$/u);
+  assert.notEqual(first.draftRecoveryId, second.draftRecoveryId);
+  assert.notEqual(first.draftRecoveryId, first.selectionToken);
+
+  const binding = { ...input, scope, selectionToken: first.selectionToken };
+  assert.equal(selection.inspect(binding).draftRecoveryId, first.draftRecoveryId);
+  assert.throws(
+    () => selection.consume({ ...binding, selectionToken: first.draftRecoveryId }),
+    { code: 'EXPERT_SELECTION_INVALID' },
+  );
+  assert.equal(selection.consume(binding).draftRecoveryId, first.draftRecoveryId);
+  await assert.rejects(selection.prepare({ ...input, draftRecoveryId: second.draftRecoveryId }), {
+    code: 'EXPERT_REQUEST_INVALID',
+  });
+});
+
 test('selection enforces per-owner quota so one noisy session cannot evict another session', async () => {
   let activeScope = makeScope({ subject: 'emp-victim' });
   const selection = createSelectionService({

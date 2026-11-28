@@ -479,6 +479,7 @@ test('late definite denial restores the original draft after a recent-turn poll 
 
   const expectedEvent = {
     sessionId, expertId, draftDigest: selection.draftDigest,
+    draftRecoveryId: selection.draftRecoveryId,
     status: 'failed', code: 'EXPERT_POLICY_DENIED', preserveDraft: true,
   };
   assert.deepEqual(events[1], { scope, ...expectedEvent });
@@ -490,6 +491,94 @@ test('late definite denial restores the original draft after a recent-turn poll 
   assert.equal(replay.code, 'EXPERT_SELECTION_INVALID');
   assert.equal(h.prestep.finalizeTurn({ turnId: turn.turnId }).status, 'unbound');
   assert.equal(events.length, 2);
+});
+
+for (const secondVersion of [7, 8]) {
+  test(`same-digest selections with draft versions 7 and ${secondVersion} have separate finalized outcomes (#484)`, async () => {
+    const events = [];
+    const h = makeHarness({ turnTtlMs: 10_000, onTurnFinalized: (event) => events.push(event) });
+    const sessionId = 'sess-same-digest';
+    const expertId = 'exp-fin-1';
+    const firstDraft = { taskText: '  Same draft  ', draftVersion: 7, reuseRefs: ['ref-reviewed'] };
+    const secondDraft = { ...firstDraft, draftVersion: secondVersion };
+    const pick = (draft) => h.selection.prepare({ ...draft, expertId, sessionId, scopeEpoch: 1, viewVersion: 1 });
+    const first = await pick(firstDraft);
+    const second = await pick(secondDraft);
+    assert.equal(first.draftDigest, second.draftDigest);
+
+    const firstInput = { ...firstDraft, sessionId, selectionToken: first.selectionToken };
+    const firstTurn = await h.prestep.prepareTurn(firstInput);
+    const secondTurn = await h.prestep.prepareTurn({ ...secondDraft, sessionId, selectionToken: second.selectionToken });
+    assert.equal(firstTurn.allowed, true);
+    assert.equal(secondTurn.allowed, true);
+    h.prestep.beforeToolCall({ turnId: firstTurn.turnId, toolName: 'forge_experts.delegate', toolInput: firstInput });
+
+    h.advanceTime(9_000);
+    const skipped = h.prestep.finalizeTurn({ turnId: secondTurn.turnId });
+    assert.deepEqual(skipped.draft, secondDraft);
+    h.advanceTime(2_000);
+    const scope = h.getScope();
+    const interim = h.prestep.listRecentFinalized(scope);
+    assert.deepEqual(interim.map((event) => event.status), ['model_did_not_delegate', 'acceptance_unknown']);
+    assert.deepEqual(interim.map((event) => event.draftRecoveryId), [second.draftRecoveryId, first.draftRecoveryId]);
+
+    const denied = h.prestep.finalizeTurn({
+      turnId: firstTurn.turnId,
+      error: new ExpertsError('EXPERT_POLICY_DENIED', 'Policy rejected the transfer'),
+    });
+    assert.deepEqual(denied.draft, firstDraft);
+    assert.equal(denied.preserveDraft, true);
+
+    const recent = h.prestep.listRecentFinalized(scope);
+    assert.deepEqual(recent.map((event) => [event.status, event.draftRecoveryId]), [
+      ['model_did_not_delegate', second.draftRecoveryId],
+      ['failed', first.draftRecoveryId],
+    ]);
+    assert.deepEqual(events.map((event) => [event.status, event.draftRecoveryId]), [
+      ['model_did_not_delegate', second.draftRecoveryId],
+      ['acceptance_unknown', first.draftRecoveryId],
+      ['failed', first.draftRecoveryId],
+    ]);
+    for (const event of [...events, ...recent]) {
+      assert.equal(event.sessionId, sessionId);
+      assert.equal(event.draftDigest, first.draftDigest);
+      for (const key of ['selectionToken', 'draft', 'taskText', 'reuseRefs']) assert.equal(Object.hasOwn(event, key), false);
+    }
+    assert.deepEqual(h.prestep.listRecentFinalized(makeScope({ subject: 'emp-bob' })), []);
+  });
+}
+
+test('custom selection bindings without an independent recovery ID retain digest-based finalization', async () => {
+  const scope = makeScope();
+  const events = [];
+  const prestep = createPreStepGuard({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => scope,
+    inspectSelection: ({ selectionToken, sessionId }) => ({
+      selectionToken,
+      sessionId,
+      expertId: 'exp-fin-1',
+      scopeEpoch: scope.scopeEpoch,
+      draftDigest: 'sha256:legacy-digest',
+      ...(selectionToken.startsWith('b') ? { draftRecoveryId: selectionToken } : {}),
+    }),
+    onTurnFinalized: (event) => events.push(event),
+  });
+  const input = { sessionId: 'sess-legacy', taskText: 'Legacy draft' };
+  const first = await prestep.prepareTurn({ ...input, selectionToken: 'a'.repeat(32) });
+  const second = await prestep.prepareTurn({ ...input, selectionToken: 'b'.repeat(32) });
+  assert.equal(first.allowed, true);
+  assert.equal(second.allowed, true);
+  prestep.finalizeTurn({ turnId: first.turnId });
+  prestep.finalizeTurn({ turnId: second.turnId, error: new ExpertsError('EXPERT_POLICY_DENIED', 'Policy rejected the transfer') });
+
+  assert.equal(events.length, 2);
+  for (const event of events) {
+    assert.equal(event.draftDigest, 'sha256:legacy-digest');
+    assert.equal(Object.hasOwn(event, 'draftRecoveryId'), false);
+    assert.equal(Object.hasOwn(event, 'selectionToken'), false);
+  }
+  assert.deepEqual(prestep.listRecentFinalized(scope).map((event) => event.status), ['failed']);
 });
 
 test('finalizeTurn treats EXPERT_ACCEPTANCE_UNKNOWN and expired attempted turns as acceptance_unknown (preserveDraft: false) and scopes listRecentFinalized (#484)', async () => {

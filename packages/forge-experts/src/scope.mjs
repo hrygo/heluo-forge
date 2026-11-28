@@ -71,6 +71,7 @@ export function createScopeManager(ports) {
 
   let scopeEpoch = 1;
   let currentScope = null;
+  let currentIamOrgId = null;
   const listeners = new Set();
 
   function emitChange() {
@@ -81,9 +82,10 @@ export function createScopeManager(ports) {
     }
   }
 
-  function advanceEpoch(nextScope = null) {
+  function advanceEpoch(nextScope = null, iamOrgId = null) {
     scopeEpoch += 1;
     currentScope = nextScope;
+    currentIamOrgId = iamOrgId;
     emitChange();
     return { scopeEpoch, scope: currentScope };
   }
@@ -112,7 +114,8 @@ export function createScopeManager(ports) {
   async function assertIamIdentityCurrent(expectedEpoch, expectedScope) {
     const session = await readIamSession();
     assertCurrent(expectedEpoch, expectedScope);
-    if (!session || session.issuer !== expectedScope.issuer || session.subject !== expectedScope.subject) {
+    if (!session || session.issuer !== expectedScope.issuer || session.subject !== expectedScope.subject
+      || (session.orgId ?? null) !== currentIamOrgId) {
       throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Active IAM identity has changed');
     }
   }
@@ -140,8 +143,10 @@ export function createScopeManager(ports) {
       throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Delegra scope binding does not match active IAM identity');
     }
 
-    if (!sameScope(currentScope, normalized)) {
-      advanceEpoch(normalized);
+    // The IAM input and the verified Delegra organization can differ. Track changes to each independently.
+    const iamOrgId = session.orgId ?? null;
+    if (!sameScope(currentScope, normalized) || iamOrgId !== currentIamOrgId) {
+      advanceEpoch(normalized, iamOrgId);
     } else if (currentScope.validUntil !== normalized.validUntil) {
       currentScope = normalized;
     }
