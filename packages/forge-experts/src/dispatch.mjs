@@ -706,12 +706,14 @@ export function createDispatchService(ports) {
   }
 
   // Authoritative readback & cancel remain available even when dispatchEnabled is false (§5 / §9.2).
-  async function reconcileByRequest({ requestId }) {
+  async function reconcileByRequestInternal({ requestId, fixedScope = null }) {
     if (!isNonEmptyString(requestId)) {
       throw new ExpertsError('EXPERT_REQUEST_INVALID', 'requestId is required');
     }
     const cleanId = requestId.trim();
-    const scope = await ports.resolveScope();
+    const scope = fixedScope ?? await ports.resolveScope();
+    const startEpoch = scope.scopeEpoch;
+    if (fixedScope) ports.assertScopeCurrent(startEpoch, scope);
     const deliveryKey = deriveCorrelationKey({ ...scope, requestId: cleanId });
     if (inFlightDeliveries.has(deliveryKey)) {
       throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request is still in flight; retry reconciliation shortly', {
@@ -723,6 +725,7 @@ export function createDispatchService(ports) {
     const existing = await readCorrelation(scope, cleanId);
     try {
       const authoritative = await ports.getDelegraTaskByRequest({ scope, requestId: cleanId });
+      ports.assertScopeCurrent(startEpoch, scope);
       if (existing) {
         rememberTaskContext(scope, authoritative.taskId ?? existing.taskId, {
           originSessionRef: existing.originSessionRef,
@@ -743,6 +746,7 @@ export function createDispatchService(ports) {
       });
     } catch (error) {
       if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND') {
+        ports.assertScopeCurrent(startEpoch, scope);
         if (inFlightDeliveries.has(deliveryKey)) {
           throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task request is still in flight; retry reconciliation shortly', {
             status: 503,
@@ -760,6 +764,10 @@ export function createDispatchService(ports) {
       }
       throw error;
     }
+  }
+
+  async function reconcileByRequest({ requestId }) {
+    return reconcileByRequestInternal({ requestId });
   }
 
   async function getTask({ taskId }) {
@@ -963,9 +971,19 @@ export function createDispatchService(ports) {
   // and per-call timeout, without ever blindly re-sending createDelegraTask.
   async function reconcilePendingRequests() {
     const scope = await ports.resolveScope();
+    const startEpoch = scope.scopeEpoch;
     const scopeKey = derivePendingIndexKey(scope);
     const existingPass = inFlightReconciles.get(scopeKey);
     if (existingPass) return existingPass;
+
+    const isScopeStillCurrent = () => {
+      try {
+        ports.assertScopeCurrent(startEpoch, scope);
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
     const pass = (async () => {
       const requestIds = await readPendingIndex(scope);
@@ -974,6 +992,10 @@ export function createDispatchService(ports) {
       const stillPending = [];
 
       const reconcileOne = async (requestId) => {
+        if (!isScopeStillCurrent()) {
+          stillPending.push(requestId);
+          return;
+        }
         const readKey = deriveCorrelationKey({ ...scope, requestId });
         const existingReads = inFlightReconcileReadsByScope.get(scopeKey);
         if (inFlightDeliveries.has(readKey)
@@ -983,6 +1005,10 @@ export function createDispatchService(ports) {
           return;
         }
         const record = await readCorrelation(scope, requestId);
+        if (!isScopeStillCurrent()) {
+          stillPending.push(requestId);
+          return;
+        }
         if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
           await syncPendingIndex(scope, requestId, 'accepted');
           return;
@@ -998,6 +1024,7 @@ export function createDispatchService(ports) {
         }
         let notified = false;
         const buildAndNotify = (result) => {
+          if (!isScopeStillCurrent()) return null;
           const entry = Object.freeze({
             requestId,
             taskId: result?.taskId ?? record.taskId ?? null,
@@ -1013,7 +1040,7 @@ export function createDispatchService(ports) {
           return entry;
         };
         const notifyNotFoundOnce = () => {
-          if (notified) return;
+          if (notified || !isScopeStillCurrent()) return;
           notified = true;
           try {
             ports.onTaskReconciled?.({
@@ -1027,7 +1054,7 @@ export function createDispatchService(ports) {
         };
         try {
           activeReads.add(readKey);
-          const readPromise = reconcileByRequest({ requestId }).then((result) => {
+          const readPromise = reconcileByRequestInternal({ requestId, fixedScope: scope }).then((result) => {
             buildAndNotify(result);
             return result;
           }).catch((err) => {
@@ -1044,9 +1071,11 @@ export function createDispatchService(ports) {
           // Sink late rejections after timeout so timed-out background reads never cause unhandled rejections.
           readPromise.catch(() => {});
           const result = await withTimeout(readPromise, reconcileTimeoutMs);
-          reconciled.push(buildAndNotify(result));
+          const entry = buildAndNotify(result);
+          if (entry) reconciled.push(entry);
+          else stillPending.push(requestId);
         } catch (error) {
-          if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey)) {
+          if (error instanceof ExpertsError && error.code === 'EXPERT_TASK_NOT_FOUND' && !inFlightDeliveries.has(readKey) && isScopeStillCurrent()) {
             notFound.push(requestId);
             await syncPendingIndex(scope, requestId, 'not_found');
           } else {

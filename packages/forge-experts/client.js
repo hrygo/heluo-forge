@@ -420,41 +420,53 @@ window.__ModuleLoader__.load({
 
       const handleRefresh = async () => {
         if (!model.taskId || model.isUnknown || busy) return;
+        const targetTaskId = model.taskId;
         setBusy(true);
         setNotice(null);
         try {
-          const statusRes = await fetchTaskStatus(model.taskId);
+          const statusRes = await fetchTaskStatus(targetTaskId);
           if (!statusRes.ok) {
             setNotice(resultNotice(statusRes));
             return;
           }
-          const prevGen = Number.isInteger(task?.runGeneration) ? task.runGeneration : null;
           const statusPatch = pickTaskMutationFields(statusRes.body);
-          let merged = mergeTaskGeneration(task, statusPatch);
-          if (merged.status === 'completed' || merged.status === 'succeeded' || merged.status === 'waiting_user') {
-            const resultRes = await fetchTaskResult(model.taskId).catch(() => null);
+          let finalPatch = statusPatch;
+          let resetPreviousResult = false;
+          const candidateStatus = statusPatch.status ?? taskRef.current?.status;
+          if (candidateStatus === 'completed' || candidateStatus === 'succeeded' || candidateStatus === 'waiting_user') {
+            const resultRes = await fetchTaskResult(targetTaskId).catch(() => null);
             if (resultRes?.ok && resultRes.body) {
               const statusGen = Number.isInteger(statusPatch.runGeneration) ? statusPatch.runGeneration : null;
               const resultGen = Number.isInteger(resultRes.body.runGeneration) ? resultRes.body.runGeneration : null;
               if (statusGen !== null && resultGen !== null && resultGen !== statusGen) {
                 // Generation advanced between /tasks/:id and /tasks/:id/result: re-read authoritative status instead of mixing snapshots.
-                const retryStatus = await fetchTaskStatus(model.taskId).catch(() => null);
+                const retryStatus = await fetchTaskStatus(targetTaskId).catch(() => null);
                 if (retryStatus?.ok && retryStatus.body) {
-                  merged = mergeTaskGeneration(merged, pickTaskMutationFields(retryStatus.body), { resetPreviousResult: true });
+                  finalPatch = pickTaskMutationFields(retryStatus.body);
+                  resetPreviousResult = true;
                 } else {
                   setNotice(ERROR_NOTICE.EXPERT_TASK_STATE_CONFLICT);
                   return;
                 }
               } else {
                 // Only merge allowlisted presentation fields so /result never clobbers authoritative status/taskId.
-                merged = { ...merged, ...pickTaskResultFields(resultRes.body) };
+                finalPatch = { ...statusPatch, ...pickTaskResultFields(resultRes.body) };
               }
             }
           }
-          if (prevGen !== null && Number.isInteger(merged?.runGeneration) && merged.runGeneration > prevGen) {
+          const latestPrev = taskRef.current;
+          if (latestPrev?.taskId && latestPrev.taskId !== targetTaskId) return;
+          if (pendingFollowupBackupRef.current || isStaleGeneration(latestPrev, finalPatch)) return;
+          const prevGen = Number.isInteger(latestPrev?.runGeneration) ? latestPrev.runGeneration : null;
+          const nextGen = Number.isInteger(finalPatch?.runGeneration) ? finalPatch.runGeneration : null;
+          if (prevGen !== null && nextGen !== null && nextGen > prevGen) {
             setRawExpanded(false);
           }
-          setTask(merged);
+          setTask((prev) => {
+            if (prev?.taskId && prev.taskId !== targetTaskId) return prev;
+            if (pendingFollowupBackupRef.current || isStaleGeneration(prev, finalPatch)) return prev;
+            return mergeTaskGeneration(prev, finalPatch, { resetPreviousResult });
+          });
         } catch {
           setNotice(ERROR_NOTICE.EXPERT_DIRECTORY_UNAVAILABLE);
         } finally {
@@ -839,6 +851,7 @@ window.__ModuleLoader__.load({
       const MAX_PENDING_DRAFTS = 32;
       // Hoisted to mountMentionsSource closure so SSE reconnect/invalidation never drops buffered user drafts (#245/#246).
       const pendingDrafts = new Map();
+      const pendingRecoveries = [];
       let draftRecoveryListener = null;
       const reconciler = createReconcileTrigger();
       const triggerReconcile = reconciler.trigger;
@@ -913,6 +926,11 @@ window.__ModuleLoader__.load({
           // 任何失效、撤权或网络异常均保留草稿并给出明确提示，不静默发送（#245 / #246）。
           sourceSpec.onDraftRecovery = (listener) => {
             draftRecoveryListener = typeof listener === 'function' ? listener : null;
+            if (typeof draftRecoveryListener === 'function' && pendingRecoveries.length > 0) {
+              for (const event of pendingRecoveries.splice(0)) {
+                try { draftRecoveryListener(event); } catch { /* best effort */ }
+              }
+            }
             return () => {
               if (draftRecoveryListener === listener) draftRecoveryListener = null;
             };
@@ -1001,19 +1019,21 @@ window.__ModuleLoader__.load({
         const notice = typeof payload.notice === 'string' && payload.notice
           ? payload.notice
           : (ERROR_NOTICE[payload.code] ?? ERROR_NOTICE.EXPERT_SELECTION_INVALID);
+        const recoveryEvent = {
+          sessionId: sessionKey || null,
+          expertId: payload.expertId ?? null,
+          status: payload.status ?? 'failed',
+          code: payload.code ?? null,
+          preserveDraft: true,
+          draft: recoveredDraft,
+          notice,
+        };
         const listener = activeHooks?.getRecoveryListener?.() ?? draftRecoveryListener;
         if (typeof listener === 'function') {
-          try {
-            listener({
-              sessionId: sessionKey || null,
-              expertId: payload.expertId ?? null,
-              status: payload.status ?? 'failed',
-              code: payload.code ?? null,
-              preserveDraft: true,
-              draft: recoveredDraft,
-              notice,
-            });
-          } catch { /* best effort */ }
+          try { listener(recoveryEvent); } catch { /* best effort */ }
+        } else {
+          pendingRecoveries.push(recoveryEvent);
+          while (pendingRecoveries.length > MAX_PENDING_DRAFTS) pendingRecoveries.shift();
         }
       };
 
@@ -1057,6 +1077,7 @@ window.__ModuleLoader__.load({
         closeStream();
         reconciler.dispose();
         pendingDrafts.clear();
+        pendingRecoveries.length = 0;
         draftRecoveryListener = null;
         dropGroup();
       };

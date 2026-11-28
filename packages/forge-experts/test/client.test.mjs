@@ -1692,3 +1692,223 @@ test('SSE reconnect ready polls /turns/finalized and recovers draft finalized du
     restore();
   }
 });
+
+test('ExpertTaskStatusCard ignores late handleRefresh response when a newer generation arrives via reconcile during /result (#484)', async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let moduleDef = null;
+  const eventSources = [];
+  let releaseDelayedResult = null;
+  let resultStarted = null;
+  const resultStartedPromise = new Promise((resolve) => { resultStarted = resolve; });
+
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.onmessage = null;
+      this.onerror = null;
+      eventSources.push(this);
+    }
+    emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
+    close() {}
+  }
+
+  globalThis.window = {
+    __ModuleLoader__: { load(def) { moduleDef = def; } },
+    EventSource: FakeEventSource,
+  };
+  globalThis.fetch = async (url) => {
+    if (url.endsWith('/tasks/task-late-ref-1')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { taskId: 'task-late-ref-1', status: 'waiting_user', runGeneration: 1 }; },
+      };
+    }
+    if (url.endsWith('/tasks/task-late-ref-1/result')) {
+      resultStarted();
+      await new Promise((resolve) => { releaseDelayedResult = resolve; });
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { taskId: 'task-late-ref-1', runGeneration: 1, result: 'Old Gen 1 result' }; },
+      };
+    }
+    return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+  };
+
+  try {
+    new Function(clientSource)();
+    const stateSlots = [];
+    const refSlots = [];
+    const effectCleanups = [];
+    let stateIdx = 0;
+    let refIdx = 0;
+    const exported = moduleDef.factory((dep) => {
+      if (dep === 'react') {
+        return {
+          createElement: (type, props, ...children) => ({ type, props, children }),
+          useState(init) {
+            const idx = stateIdx++;
+            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+            return [
+              stateSlots[idx],
+              (next) => { stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next; },
+            ];
+          },
+          useRef(init) {
+            const idx = refIdx++;
+            if (!(idx in refSlots)) refSlots[idx] = { current: init };
+            return refSlots[idx];
+          },
+          useCallback: (fn) => fn,
+          useEffect(fn) {
+            const cleanup = fn();
+            if (typeof cleanup === 'function') effectCleanups.push(cleanup);
+          },
+        };
+      }
+      throw new Error(`Unexpected require: ${dep}`);
+    });
+
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: false });
+
+    const initialTask = { taskId: 'task-late-ref-1', requestId: 'req-late-ref-1', status: 'waiting_user', runGeneration: 1 };
+    const renderCard = () => {
+      stateIdx = 0;
+      refIdx = 0;
+      return exported.ExpertTaskStatusCard({ initialTask });
+    };
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    const t0 = renderCard();
+    const refreshPromise = findNodes(t0, (n) => n.props?.['data-testid'] === 'fexp-task-refresh')[0].props.onClick();
+    await resultStartedPromise;
+
+    // While /result for g1 is still in flight, SSE reconcile advances card to g2 running.
+    eventSources[0].emit({
+      type: 'task-reconciled',
+      requestId: 'req-late-ref-1',
+      taskId: 'task-late-ref-1',
+      status: 'running',
+      runGeneration: 2,
+    });
+    renderCard();
+
+    // Delayed g1 /result resolves -> must NOT roll back g2 running to g1 waiting_user.
+    releaseDelayedResult();
+    await refreshPromise;
+    const tAfter = renderCard();
+    assert.equal(tAfter.props['data-task-status'], 'running');
+    assert.equal(findNodes(tAfter, (n) => n.props?.['data-testid'] === 'fexp-task-result').length, 0);
+    assert.equal(findNodes(tAfter, (n) => n.props?.['data-testid'] === 'fexp-followup-btn').length, 0);
+
+    for (const c of effectCleanups) c();
+    for (const d of disposers) d();
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});
+
+test('turn-finalized arriving while draftRecoveryListener is temporarily unregistered queues recovery and delivers once when new listener attaches (#484)', async () => {
+  const eventSources = [];
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/mentions')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            scopeEpoch: 5,
+            viewVersion: 7,
+            candidates: [{ expertId: 'exp-fin-1', displayName: '经营分析专家', scopeEpoch: 5, viewVersion: 7 }],
+          };
+        },
+      };
+    }
+    if (url.includes('/selections') && init?.method === 'POST') {
+      return {
+        ok: true,
+        status: 201,
+        async json() {
+          return {
+            selectionToken: 'sel-queued-rec-1',
+            expertId: 'exp-fin-1',
+            sessionId: 'sess-remount',
+            draftDigest: 'sha256:remount-1',
+            expiresAt: '2030-01-01T00:02:00.000Z',
+          };
+        },
+      };
+    }
+    return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [], items: [] }; } };
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    let registeredSpec = null;
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      inputTriggers: {
+        registerSource(spec) {
+          registeredSpec = spec;
+          return () => { registeredSpec = null; };
+        },
+      },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: true });
+
+    const rows = await registeredSpec.query('', { sessionId: 'sess-remount' });
+    const oldRecovered = [];
+    const detachOld = registeredSpec.onDraftRecovery((evt) => oldRecovered.push(evt));
+
+    const prep = await registeredSpec.prepareSubmit({
+      picked: rows[0],
+      sessionId: 'sess-remount',
+      taskText: 'Draft during listener remount',
+      draftVersion: 1,
+    });
+    assert.equal(prep.ok, true);
+
+    // Old listener detaches before turn-finalized arrives.
+    detachOld();
+    eventSources[0].emit({
+      type: 'turn-finalized',
+      sessionId: 'sess-remount',
+      expertId: 'exp-fin-1',
+      draftDigest: 'sha256:remount-1',
+      status: 'model_did_not_delegate',
+      preserveDraft: true,
+      notice: '主助手未调用所选专家，已保留您的草稿。',
+    });
+    assert.equal(oldRecovered.length, 0);
+
+    // New listener attaches after remount -> receives the queued draft recovery exactly once.
+    const newRecovered = [];
+    registeredSpec.onDraftRecovery((evt) => newRecovered.push(evt));
+    assert.equal(newRecovered.length, 1);
+    assert.equal(newRecovered[0].draft?.taskText, 'Draft during listener remount');
+
+    // Attaching another listener later must not replay already-delivered recovery.
+    const laterRecovered = [];
+    registeredSpec.onDraftRecovery((evt) => laterRecovered.push(evt));
+    assert.equal(laterRecovered.length, 0);
+
+    for (const d of disposers) d();
+  } finally {
+    restore();
+  }
+});

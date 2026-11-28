@@ -1330,3 +1330,89 @@ test('followupTask rejects reused requestId with conflicting payload (409 EXPERT
     await h.host.close();
   }
 });
+
+test('reconcilePendingRequests pins scope and drops stale lookup results without mutating old pending_index or broadcasting when identity switches mid-pass (#484)', async () => {
+  const sharedStorage = createMemoryStorage();
+  let activeScope = {
+    instanceId: 'delegra-prod-01',
+    orgId: 'org-alpha',
+    issuer: 'https://iam.corp.example',
+    subject: 'emp-alice',
+    scopeEpoch: 1,
+    verifiedAt: '2026-11-24T00:00:00Z',
+    validUntil: '2026-11-24T23:59:59Z',
+  };
+  let releaseLookup = null;
+  let lookupStarted = null;
+  const lookupStartedPromise = new Promise((resolve) => { lookupStarted = resolve; });
+  const observedLookupScopes = [];
+  const notifications = [];
+
+  const { createDispatchService } = await import('../src/dispatch.mjs');
+  const dispatch = createDispatchService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => activeScope,
+    assertScopeCurrent: (epoch, expected) => {
+      if (epoch !== activeScope.scopeEpoch || expected?.subject !== activeScope.subject) {
+        throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Scope switched');
+      }
+    },
+    consumeSelection: () => ({ expertId: 'exp-fin-1', delegationScope: 'proj-fin', sessionId: 'sess-1' }),
+    runInPreferenceBoundary: (fn) => fn(),
+    listConfirmedEnabled: async () => [{ expertId: 'exp-fin-1', authContinuityDigest: 'sha256:c1' }],
+    isPreferencePending: () => false,
+    checkDelegraSessionScope: async () => ({
+      scopeVerified: true,
+      results: [{ expertId: 'exp-fin-1', callableInScope: true, authContinuityDigest: 'sha256:c1', acceptingTasks: 'accepting' }],
+    }),
+    evaluatePolicy: async () => ({ decision: 'allow' }),
+    openStorageDomain: (spec) => sharedStorage.open(spec),
+    generateRequestId: () => 'req-scope-switch-1',
+    onTaskReconciled: (evt) => notifications.push(evt),
+    createDelegraTask: async () => {
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'wire dropped', { status: 503, retryable: true });
+    },
+    getDelegraTaskByRequest: async ({ scope, requestId }) => {
+      observedLookupScopes.push(scope.subject);
+      lookupStarted();
+      await new Promise((resolve) => { releaseLookup = resolve; });
+      return { taskId: 'task-stale-1', requestId, status: 'running', runGeneration: 1 };
+    },
+    getDelegraTask: async () => ({}),
+    getDelegraTaskResult: async () => ({}),
+    createDelegraFollowup: async () => ({}),
+    cancelDelegraTask: async () => ({}),
+  });
+
+  await dispatch.open();
+  try {
+    await assert.rejects(
+      () => dispatch.dispatchTask({ selectionToken: 'tok-1', sessionId: 'sess-1', taskText: 'Alice pending task' }),
+      (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN',
+    );
+
+    const passPromise = dispatch.reconcilePendingRequests();
+    await lookupStartedPromise;
+
+    // Identity switches to Bob while Alice's lookup is in flight.
+    const aliceScope = activeScope;
+    activeScope = { ...aliceScope, subject: 'emp-bob', scopeEpoch: 2 };
+    releaseLookup();
+
+    const result = await passPromise;
+    assert.deepEqual(observedLookupScopes, ['emp-alice'], 'batch reconcile must stay pinned to Alice scope');
+    assert.deepEqual(result.reconciled, [], 'stale result after scope switch must not be returned');
+    assert.deepEqual(result.notFound, [], 'stale pass must not mark old request notFound');
+    assert.deepEqual(result.stillPending, ['req-scope-switch-1']);
+    assert.equal(notifications.length, 0, 'stale result after scope switch must not broadcast onTaskReconciled');
+
+    // Switch back to Alice: her pending_index and correlation remain intact.
+    activeScope = { ...aliceScope, scopeEpoch: 3 };
+    const pendingAlice = await dispatch.listPendingRequests();
+    assert.equal(pendingAlice.items.length, 1);
+    assert.equal(pendingAlice.items[0].requestId, 'req-scope-switch-1');
+    assert.equal(pendingAlice.items[0].status, 'unknown');
+  } finally {
+    await dispatch.close();
+  }
+});
