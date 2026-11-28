@@ -2167,3 +2167,85 @@ for (const automatic of [true, false]) {
     assert.deepEqual(calls, automatic ? [] : [['/api/forge-experts/tasks/by-request/request-first', 'GET']]);
   });
 }
+
+for (const sameTask of [true, false]) {
+  test('PR #484 recheck: ' + (sameTask ? 'accepts a newer manual result after learning its task id' : 'rejects a result for a conflicting learned task id'), async (t) => {
+    const reply = Promise.withResolvers();
+    const card = mountReviewTaskCard(t, {
+      initialTask: { taskId: '  ', requestId: 'request-a', status: 'unknown' },
+      async fetchImpl(url) {
+        assert.ok(url.endsWith('/tasks/by-request/request-a'), url);
+        return reply.promise;
+      },
+    });
+
+    const manual = cardElement(card.render(), 'fexp-task-reconcile').props.onClick();
+    card.emitReconciled({ requestId: 'request-a', taskId: 'task-a', status: 'running', runGeneration: 1 });
+    reply.resolve(cardJson(200, {
+      taskId: sameTask ? 'task-a' : 'task-b',
+      status: 'completed',
+      runGeneration: 2,
+      result: 'manual result',
+    }));
+    await manual;
+
+    const current = card.render();
+    assert.match(JSON.stringify(current), /任务号：task-a/u);
+    assert.equal(current.props['data-task-status'], sameTask ? 'completed' : 'running');
+    assert.equal(cardElement(current, 'fexp-task-result')?.children[0], sameTask ? 'manual result' : undefined);
+  });
+}
+
+test('PR #484 recheck: a duplicate notFound cannot discard a successful manual retry', async (t) => {
+  const reply = Promise.withResolvers();
+  const card = mountReviewTaskCard(t, {
+    initialTask: { requestId: 'request-a', status: 'unknown' },
+    async fetchImpl(url) {
+      assert.ok(url.endsWith('/tasks/by-request/request-a'), url);
+      return reply.promise;
+    },
+  });
+  card.render();
+  const announcement = { requestId: 'request-a', status: 'not_found', notFound: true };
+  card.emitReconciled(announcement);
+  const unavailable = card.render();
+  assert.equal(unavailable.props['data-task-status'], 'not_found');
+
+  const manual = cardElement(unavailable, 'fexp-task-reconcile').props.onClick();
+  card.emitReconciled(announcement);
+  reply.resolve(cardJson(200, { taskId: 'task-a', status: 'completed', runGeneration: 1, result: 'found result' }));
+  await manual;
+
+  const current = card.render();
+  assert.equal(current.props['data-task-status'], 'completed');
+  assert.equal(cardElement(current, 'fexp-task-result')?.children[0], 'found result');
+});
+
+test('PR #484 recheck: a duplicate completed announcement cannot discard a same-generation result refresh', async (t) => {
+  const resultStarted = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  const card = mountReviewTaskCard(t, {
+    initialTask: { requestId: 'request-a', status: 'unknown' },
+    async fetchImpl(url) {
+      if (url.endsWith('/tasks/task-a/result')) {
+        resultStarted.resolve();
+        return reply.promise;
+      }
+      assert.ok(url.endsWith('/tasks/task-a'), url);
+      return cardJson(200, { status: 'completed', runGeneration: 1 });
+    },
+  });
+  card.render();
+  const announcement = { requestId: 'request-a', taskId: 'task-a', status: 'completed', runGeneration: 1 };
+  card.emitReconciled(announcement);
+
+  const refresh = cardElement(card.render(), 'fexp-task-refresh').props.onClick();
+  await resultStarted.promise;
+  card.emitReconciled(announcement);
+  reply.resolve(cardJson(200, { runGeneration: 1, result: 'first authorized result' }));
+  await refresh;
+
+  const current = card.render();
+  assert.equal(current.props['data-task-status'], 'completed');
+  assert.equal(cardElement(current, 'fexp-task-result')?.children[0], 'first authorized result');
+});

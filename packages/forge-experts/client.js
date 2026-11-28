@@ -216,12 +216,16 @@ window.__ModuleLoader__.load({
       return items.filter((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item) && item.authorized === true);
     }
 
+    function normalizeCardId(value) {
+      return typeof value === 'string' ? value.trim() || null : null;
+    }
+
     function deriveTaskCardModel(task) {
       const status = typeof task?.status === 'string' && TASK_STATUS_LABELS[task.status]
         ? task.status
         : 'unknown';
-      const taskId = typeof task?.taskId === 'string' && task.taskId.trim() ? task.taskId.trim() : null;
-      const requestId = typeof task?.requestId === 'string' && task.requestId.trim() ? task.requestId.trim() : null;
+      const taskId = normalizeCardId(task?.taskId);
+      const requestId = normalizeCardId(task?.requestId);
       const isTerminal = TERMINAL_TASK_STATUSES.has(status);
       const isCompleted = status === 'completed' || status === 'succeeded';
       const isWaitingUser = status === 'waiting_user';
@@ -286,9 +290,8 @@ window.__ModuleLoader__.load({
     function pickTaskReconcileFields(body, prev) {
       const picked = pickTaskFields(body, ['status', 'runId', 'runGeneration', 'resultVersion', 'acceptedAt', 'waitingUserNotice', 'summary', 'rawResult', 'result', 'sources', 'artifacts']);
       // Preserve existing authoritative taskId/requestId; only adopt taskId when previously unknown.
-      if (!prev?.taskId && typeof body?.taskId === 'string' && body.taskId.trim()) {
-        picked.taskId = body.taskId.trim();
-      }
+      const taskId = normalizeCardId(body?.taskId);
+      if (!normalizeCardId(prev?.taskId) && taskId) picked.taskId = taskId;
       return picked;
     }
 
@@ -308,8 +311,11 @@ window.__ModuleLoader__.load({
     }
 
     function sameCardTask(left, right) {
-      if (left?.taskId && right?.taskId) return left.taskId === right.taskId;
-      return Boolean(left?.requestId && left.requestId === right?.requestId);
+      const leftTaskId = normalizeCardId(left?.taskId);
+      const rightTaskId = normalizeCardId(right?.taskId);
+      if (leftTaskId && rightTaskId) return leftTaskId === rightTaskId;
+      const requestId = normalizeCardId(left?.requestId);
+      return Boolean(requestId && requestId === normalizeCardId(right?.requestId));
     }
 
     function mergeTaskGeneration(prev, patch, { resetPreviousResult = false } = {}) {
@@ -366,7 +372,12 @@ window.__ModuleLoader__.load({
 
       function beginOperation() {
         if (switchedTask || operationRef.current) return null;
-        const operation = { task: taskRef.current, reconcileVersion: reconcileVersionRef.current };
+        const operation = {
+          task: taskRef.current,
+          taskId: model.taskId,
+          requestId: model.requestId,
+          reconcileVersion: reconcileVersionRef.current,
+        };
         operationRef.current = operation;
         setBusy(true);
         setNotice(null);
@@ -376,8 +387,8 @@ window.__ModuleLoader__.load({
       function isCurrentOperation(operation) {
         const current = taskRef.current;
         return operationRef.current === operation
-          && current?.taskId === operation.task?.taskId
-          && current?.requestId === operation.task?.requestId;
+          && normalizeCardId(current?.requestId) === operation.requestId
+          && (!operation.taskId || normalizeCardId(current?.taskId) === operation.taskId);
       }
 
       function finishOperation(operation) {
@@ -411,7 +422,8 @@ window.__ModuleLoader__.load({
         }
 
         const current = taskRef.current;
-        if (current?.taskId && current.status !== 'unknown' && current.status !== 'pending_delivery') return false;
+        if (current?.status === 'not_found') return false;
+        if (normalizeCardId(current?.taskId) && current.status !== 'unknown' && current.status !== 'pending_delivery') return false;
         updateTask(mergeTaskGeneration(current, { status: 'not_found' }, { resetPreviousResult: true }));
         setRawExpanded(false);
         setNotice(ERROR_NOTICE.EXPERT_TASK_NOT_FOUND);
@@ -440,21 +452,24 @@ window.__ModuleLoader__.load({
         if (!activeRequestId) return undefined;
         const onReconciled = (entry) => {
           const current = taskRef.current;
-          if (!entry || entry.requestId !== activeRequestId
-            || typeof current?.requestId !== 'string' || current.requestId.trim() !== activeRequestId) return;
+          if (entry?.requestId !== activeRequestId || normalizeCardId(current?.requestId) !== activeRequestId) return;
           if (entry.notFound === true) {
             if (applyNotFound(activeRequestId)) reconcileVersionRef.current += 1;
             return;
           }
           if (isStaleGeneration(current, entry)) return;
+          const patch = pickTaskReconcileFields(entry, current);
+          const backup = pendingFollowupBackupRef.current;
+          const acceptedFollowup = backup?.followupRequestId === activeRequestId;
+          // The Host can announce the same projection in both SSE and the batch reply.
+          if (!acceptedFollowup && Object.entries(patch).every(([key, value]) => Object.is(current[key], value))) return;
           reconcileVersionRef.current += 1;
-          if (pendingFollowupBackupRef.current?.followupRequestId === activeRequestId) {
-            const acceptedText = pendingFollowupBackupRef.current.submittedText;
+          if (acceptedFollowup) {
             pendingFollowupBackupRef.current = null;
-            setFollowupText((curr) => (curr === acceptedText ? '' : curr));
+            setFollowupText((curr) => (curr === backup.submittedText ? '' : curr));
           }
           setRawExpanded(false);
-          updateTask(mergeTaskGeneration(current, pickTaskReconcileFields(entry, current)));
+          updateTask(mergeTaskGeneration(current, patch));
           setNotice('已按原请求号完成权威状态对账。');
         };
         taskReconciledListeners.add(onReconciled);
@@ -476,12 +491,16 @@ window.__ModuleLoader__.load({
             }
             return;
           }
+          const current = taskRef.current;
+          const currentTaskId = normalizeCardId(current?.taskId);
+          const returnedTaskId = normalizeCardId(res.body?.taskId);
+          if (currentTaskId && returnedTaskId && currentTaskId !== returnedTaskId) return;
+
           if (pendingFollowupBackupRef.current?.followupRequestId === model.requestId) {
             const acceptedText = pendingFollowupBackupRef.current.submittedText;
             pendingFollowupBackupRef.current = null;
             setFollowupText((curr) => (curr === acceptedText ? '' : curr));
           }
-          const current = taskRef.current;
           setRawExpanded(false);
           updateTask(mergeTaskGeneration(current, pickTaskReconcileFields(res.body, current)));
           setNotice('已按原请求号完成权威状态对账。');
