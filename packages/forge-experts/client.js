@@ -373,6 +373,8 @@ window.__ModuleLoader__.load({
 
     const taskReconciledListeners = new Set();
     const taskScopeChangedListeners = new Set();
+    const taskAccessDeniedListeners = new Set();
+    let taskScopeRevision = 0;
     function notifyTaskReconciled(entry) {
       if (!entry || typeof entry !== 'object') return;
       for (const listener of taskReconciledListeners) {
@@ -393,6 +395,7 @@ window.__ModuleLoader__.load({
       const operationRef = React.useRef(null);
       const reconcileVersionRef = React.useRef(0);
       const resultAccessDeniedRef = React.useRef(false);
+      const resultAccessRevisionRef = React.useRef(0);
       const scopeInvalidatedRef = React.useRef(false);
       const switchedTask = initial !== initialRef.current
         && !sameCardTask(initialRef.current, initial)
@@ -418,6 +421,7 @@ window.__ModuleLoader__.load({
           taskId: model.taskId,
           requestId: model.requestId,
           reconcileVersion: reconcileVersionRef.current,
+          resultAccessRevision: resultAccessRevisionRef.current,
         };
         operationRef.current = operation;
         setBusy(true);
@@ -448,6 +452,7 @@ window.__ModuleLoader__.load({
         const taskNotFound = response?.status === 404 && resultCode(response) === 'EXPERT_TASK_NOT_FOUND';
         if (!taskNotFound && response?.status !== 401 && response?.status !== 403) return false;
         resultAccessDeniedRef.current = true;
+        resultAccessRevisionRef.current += 1;
         updateTask(taskRef.current);
         setRawExpanded(false);
         setNotice(resultNotice(response));
@@ -477,8 +482,15 @@ window.__ModuleLoader__.load({
           setNotice(null);
           setBusy(false);
         };
+        const onAccessDenied = (response) => {
+          if (!scopeInvalidatedRef.current) clearDeniedResult(response);
+        };
         taskScopeChangedListeners.add(invalidateCard);
-        return () => taskScopeChangedListeners.delete(invalidateCard);
+        taskAccessDeniedListeners.add(onAccessDenied);
+        return () => {
+          taskScopeChangedListeners.delete(invalidateCard);
+          taskAccessDeniedListeners.delete(onAccessDenied);
+        };
       }, []);
 
       React.useEffect(() => {
@@ -608,7 +620,8 @@ window.__ModuleLoader__.load({
               }
             }
           }
-          if (pendingFollowupRef.current || isSupersededRead(operation, finalPatch)) return;
+          if (operation.resultAccessRevision !== resultAccessRevisionRef.current
+            || pendingFollowupRef.current || isSupersededRead(operation, finalPatch)) return;
           const current = taskRef.current;
           if (advancesTaskGeneration(current, finalPatch)) setRawExpanded(false);
           if (readAuthorizedResult) resultAccessDeniedRef.current = false;
@@ -905,10 +918,17 @@ window.__ModuleLoader__.load({
         if (disposed || reconcileInFlight) return;
         reconcileInFlight = true;
         lastReconcileAt = Date.now();
+        const scopeAtStart = taskScopeRevision;
         // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重、冷却与合并补跑，失败时重置冷却以允许下次重连重试。
         postReconcilePending().then((res) => {
+          if (disposed || scopeAtStart !== taskScopeRevision) return;
           if (res && !res.ok) {
             lastReconcileAt = 0;
+            if (res.status === 401 || res.status === 403) {
+              for (const listener of taskAccessDeniedListeners) {
+                try { listener(res); } catch { /* observer isolation */ }
+              }
+            }
             if (typeof console !== 'undefined') {
               console.warn('[forge-experts] pending task reconciliation failed:', resultCode(res));
             }
@@ -992,6 +1012,7 @@ window.__ModuleLoader__.load({
         const changed = hostChanged || epoch !== 0 || scopeChanged;
         epoch = nextEpoch;
         if (changed) {
+          taskScopeRevision += 1;
           for (const listener of taskScopeChangedListeners) {
             try { listener(); } catch { /* observer isolation */ }
           }
