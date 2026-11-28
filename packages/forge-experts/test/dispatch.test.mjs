@@ -1049,3 +1049,68 @@ test('timed-out reconcileByRequest that later succeeds still notifies onTaskReco
     await dispatch.close();
   }
 });
+
+test('pending_index fails closed with EXPERT_RATE_LIMITED at capacity (100) without evicting the first unresolved request (#484)', async () => {
+  const sharedStorage = createMemoryStorage();
+  const scope = {
+    instanceId: 'delegra-prod-01',
+    orgId: 'org-alpha',
+    issuer: 'https://iam.corp.example',
+    subject: 'emp-1001',
+    verifiedAt: '2026-11-24T00:00:00Z',
+    validUntil: '2026-11-24T23:59:59Z',
+  };
+  let seq = 0;
+  let createCalls = 0;
+
+  const { createDispatchService } = await import('../src/dispatch.mjs');
+  const dispatch = createDispatchService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => ({ ...scope, scopeEpoch: 1 }),
+    assertScopeCurrent: () => {},
+    consumeSelection: () => ({ expertId: 'exp-fin-1', delegationScope: 'proj-fin', sessionId: 'sess-1' }),
+    runInPreferenceBoundary: (fn) => fn(),
+    listConfirmedEnabled: async () => [{ expertId: 'exp-fin-1', authContinuityDigest: 'sha256:c1' }],
+    isPreferencePending: () => false,
+    checkDelegraSessionScope: async () => ({
+      scopeVerified: true,
+      results: [{ expertId: 'exp-fin-1', callableInScope: true, authContinuityDigest: 'sha256:c1', acceptingTasks: 'accepting' }],
+    }),
+    evaluatePolicy: async () => ({ decision: 'allow' }),
+    openStorageDomain: (spec) => sharedStorage.open(spec),
+    generateRequestId: () => `req-cap-${++seq}`,
+    createDelegraTask: async () => {
+      createCalls += 1;
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'wire dropped', { status: 503, retryable: true });
+    },
+    getDelegraTaskByRequest: async () => ({}),
+    getDelegraTask: async () => ({}),
+    getDelegraTaskResult: async () => ({}),
+    createDelegraFollowup: async () => ({}),
+    cancelDelegraTask: async () => ({}),
+  });
+
+  await dispatch.open();
+  try {
+    for (let i = 0; i < 100; i += 1) {
+      await assert.rejects(
+        () => dispatch.dispatchTask({ selectionToken: `tok-${i}`, sessionId: 'sess-1', taskText: `Task ${i}` }),
+        (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN',
+      );
+    }
+    assert.equal(createCalls, 100);
+
+    // 101st dispatch must fail closed before outbound delivery and preserve req-cap-1.
+    await assert.rejects(
+      () => dispatch.dispatchTask({ selectionToken: 'tok-101', sessionId: 'sess-1', taskText: 'Task 101' }),
+      (err) => err instanceof ExpertsError && err.code === 'EXPERT_RATE_LIMITED',
+    );
+    assert.equal(createCalls, 100, 'capacity-rejected 101st request must not reach Delegra');
+
+    const pending = await dispatch.listPendingRequests();
+    assert.equal(pending.items.length, 100);
+    assert.equal(pending.items[0].requestId, 'req-cap-1', 'first unresolved request must remain in pending_index');
+  } finally {
+    await dispatch.close();
+  }
+});

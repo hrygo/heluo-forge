@@ -1028,3 +1028,143 @@ test('reconnect reconcile stream stays active when dispatchEnabled is false with
     restore();
   }
 });
+
+test('ExpertTaskStatusCard uses independent followup requestId when fetch drops and clears previous generation on SSE task-reconciled (#484)', async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let moduleDef = null;
+  const eventSources = [];
+  const followupBodies = [];
+  const reconciledIds = [];
+
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.onmessage = null;
+      this.onerror = null;
+      eventSources.push(this);
+    }
+    emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
+    close() {}
+  }
+
+  globalThis.window = {
+    __ModuleLoader__: { load(def) { moduleDef = def; } },
+    EventSource: FakeEventSource,
+  };
+  globalThis.fetch = async (url, init) => {
+    if (url.includes('/followups') && init?.method === 'POST') {
+      followupBodies.push(JSON.parse(init.body));
+      throw new Error('network dropped after server accept');
+    }
+    if (url.includes('/tasks/by-request/')) {
+      const id = decodeURIComponent(url.split('/tasks/by-request/')[1]);
+      reconciledIds.push(id);
+      return { ok: true, status: 200, async json() { return { taskId: 'task-drop-1', status: 'running', runGeneration: 2 }; } };
+    }
+    return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+  };
+
+  try {
+    new Function(clientSource)();
+    const stateSlots = [];
+    const refSlots = [];
+    const effectCleanups = [];
+    let stateIdx = 0;
+    let refIdx = 0;
+    const exported = moduleDef.factory((dep) => {
+      if (dep === 'react') {
+        return {
+          createElement: (type, props, ...children) => ({ type, props, children }),
+          useState(init) {
+            const idx = stateIdx++;
+            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+            return [
+              stateSlots[idx],
+              (next) => {
+                stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next;
+              },
+            ];
+          },
+          useRef(init) {
+            const idx = refIdx++;
+            if (!(idx in refSlots)) refSlots[idx] = { current: init };
+            return refSlots[idx];
+          },
+          useCallback: (fn) => fn,
+          useEffect(fn) {
+            const cleanup = fn();
+            if (typeof cleanup === 'function') effectCleanups.push(cleanup);
+          },
+        };
+      }
+      throw new Error(`Unexpected require: ${dep}`);
+    });
+
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: false });
+
+    const initialTask = {
+      taskId: 'task-drop-1',
+      requestId: 'req-orig-old-1',
+      status: 'waiting_user',
+      runGeneration: 1,
+      summary: 'Gen 1 summary',
+      result: 'Gen 1 result',
+      rawResult: 'Gen 1 raw',
+      sources: [{ id: 's1', title: 'Gen 1 source', authorized: true }],
+      artifacts: [{ id: 'a1', label: 'gen1.pdf', authorized: true }],
+    };
+    const renderCard = () => {
+      stateIdx = 0;
+      refIdx = 0;
+      return exported.ExpertTaskStatusCard({ initialTask });
+    };
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    const t0 = renderCard();
+    findNodes(t0, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'Followup text' } });
+    const t1 = renderCard();
+    await findNodes(t1, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+
+    assert.equal(followupBodies.length, 1);
+    const sentReqId = followupBodies[0].requestId;
+    assert.ok(sentReqId && sentReqId !== 'req-orig-old-1', 'followup must send an independent requestId');
+
+    const tUnknown = renderCard();
+    assert.equal(tUnknown.props['data-task-status'], 'unknown');
+    assert.equal(findNodes(tUnknown, (n) => n.props?.['data-testid'] === 'fexp-followup-btn').length, 0);
+    assert.equal(findNodes(tUnknown, (n) => n.props?.['data-testid'] === 'fexp-task-refresh').length, 0, 'generic refresh must stay locked while followup acceptance is unknown');
+
+    // Auto-reconcile SSE event with runGeneration: 2 converges card and clears Gen 1 results.
+    eventSources[0].emit({
+      type: 'task-reconciled',
+      requestId: sentReqId,
+      taskId: 'task-drop-1',
+      status: 'running',
+      runGeneration: 2,
+    });
+    const tAfterSse = renderCard();
+    assert.equal(tAfterSse.props['data-task-status'], 'running');
+    assert.equal(findNodes(tAfterSse, (n) => n.props?.['data-testid'] === 'fexp-task-result').length, 0);
+    assert.equal(findNodes(tAfterSse, (n) => n.props?.['data-testid'] === 'fexp-raw-drawer').length, 0);
+    assert.equal(findNodes(tAfterSse, (n) => n.props?.['data-testid'] === 'fexp-task-artifacts').length, 0);
+    assert.equal(reconciledIds.includes('req-orig-old-1'), false);
+
+    for (const c of effectCleanups) c();
+    for (const d of disposers) d();
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});

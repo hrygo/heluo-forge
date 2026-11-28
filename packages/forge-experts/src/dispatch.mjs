@@ -391,8 +391,15 @@ export function createDispatchService(ports) {
         const isPending = status === 'pending_delivery' || status === 'unknown';
         const filtered = existing.filter((id) => id !== requestId);
         if (isPending) {
-          filtered.push(requestId);
-          while (filtered.length > MAX_PENDING_INDEX_IDS) filtered.shift();
+          if (filtered.length >= MAX_PENDING_INDEX_IDS) {
+            if (strict) {
+              throw new ExpertsError('EXPERT_RATE_LIMITED', 'Pending request index capacity reached; reconcile pending requests before dispatching more', {
+                retryable: true,
+              });
+            }
+          } else {
+            filtered.push(requestId);
+          }
         }
         const unchanged = existing.length === filtered.length
           && existing.every((id, idx) => id === filtered[idx]);
@@ -953,6 +960,7 @@ export function createDispatchService(ports) {
             requestId,
             taskId: result?.taskId ?? record.taskId ?? null,
             status: result?.status ?? 'queued',
+            ...(Number.isInteger(result?.runGeneration) ? { runGeneration: result.runGeneration } : {}),
             originSessionRef: record.originSessionRef,
             expertId: record.expertId,
           });
