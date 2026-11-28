@@ -2044,18 +2044,119 @@ test('an entirely filtered delta can refresh scope without generating review or 
   });
 });
 
-test('a clean delta advances the baseline without inline writes or automatic approval', async () => {
+function incrementalProof(files) {
+  return { version: 2, mode: 'incremental', previousHead: replayPrevious, files: files.map(({ filename }, index) => ({
+    path: filename, left: digest(`${index + 11}\told row\n`), right: digest(`${index + 11}\tnew row\n`),
+  })) };
+}
+
+test('a clean delta advances the baseline without inline writes or automatic approval', async (t) => {
+  for (const withHistory of [false, true]) await t.test(withHistory ? 'with evidence for both historical blockers' : 'without historical blockers', async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode, files } = configureIncrementalReplay(state, env);
+      const history = withHistory ? [
+        { thread_id: 4725011058, status: 'fix_evidence_found', evidence: 'The changed guard now handles the missing entry.' },
+        { thread_id: 4725149579, status: 'still_present', evidence: 'The changed branch still skips the required verification.' },
+      ] : [];
+      for (const item of history) {
+        state.threads.push(historicalThread({ id: item.thread_id, sha: replayPrevious, resolved: false }));
+      }
+      const revision = await capture(mode);
+      state.comments.push(persistentReview(replayHead, replayBase));
+      const review = cleanReview(withHistory ? { history_recheck: history } : {});
+      assert.equal(await approvalRevision({ ...mode, ...approvalEnv }, revision, review, incrementalProof(files)), undefined);
+      assert.deepEqual(reviewWrites(state), []);
+      assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), new RegExp(`^baseline_key=${replayHead} ${replayBase} main initial$`, 'mu'));
+    });
+  });
+});
+
+test('incomplete historical rechecks preserve the ordinary review and make the next push use the full diff', async (t) => {
+  const known = { thread_id: 4725011058, status: 'fix_evidence_found', evidence: 'The changed guard now handles the missing entry.' };
+  const other = 4725149579;
+  const cases = {
+    'missing history field': {},
+    'unrelated thread': { history: [{ ...known, thread_id: other }] },
+    'only one of two blockers is rechecked': { history: [known], extraBlocker: other },
+    'insufficient evidence': { history: [{ ...known, status: 'insufficient_evidence' }] },
+    'blank evidence': { history: [{ ...known, evidence: ' \t ' }] },
+    'conflicting results': { history: [known, { ...known, status: 'still_present' }] },
+    'duplicate results': { history: [known, known] },
+  };
+  for (const [name, { history, extraBlocker }] of Object.entries(cases)) await t.test(name, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode, files } = configureIncrementalReplay(state, env);
+      state.threads.push(historicalThread({ id: known.thread_id, sha: replayPrevious, resolved: false }));
+      if (extraBlocker) state.threads.push(historicalThread({ id: extraBlocker, sha: replayPrevious, resolved: false }));
+      const revision = await capture(mode);
+      assert.equal(JSON.parse(await readFile(revision.review_context, 'utf8')).mode, 'incremental');
+      state.comments.push(persistentReview(replayHead, replayBase));
+      const review = cleanReview({ history_recheck: history });
+      assert.equal(await approvalRevision({ ...mode, ...approvalEnv }, revision, review, incrementalProof(files)), undefined);
+      const output = await readFile(env.GITHUB_OUTPUT, 'utf8');
+      assert.match(output, /^review_key=/mu);
+
+      const laterHead = '7'.repeat(40);
+      state.pr.head.sha = laterHead;
+      state.compareResponse.base_commit.sha = replayHead;
+      state.compareResponse.merge_base_commit.sha = replayHead;
+      const priorKey = /^baseline_key=(.+)$/mu.exec(output)?.[1];
+      state.attemptJobs['12345/1'] = [{ name: '洛神 (ubuntu-x64)', run_id: 12345, run_attempt: 1, conclusion: 'success',
+        steps: priorKey ? [{ name: `Confirm incremental baseline ${priorKey}`, conclusion: 'success' }] : [] }];
+      const next = { ...mode, GITHUB_RUN_ID: '12346', EVENT_HEAD: laterHead,
+        PR_AGENT_REVIEW_CONTEXT_PATH: mode.PR_AGENT_REVIEW_CONTEXT_PATH + '.next' };
+      const refreshed = await capture(next);
+      assert.equal(JSON.parse(await readFile(refreshed.review_context, 'utf8')).mode, 'full');
+      assert.equal(priorKey, undefined);
+      assert.deepEqual(reviewWrites(state), []);
+    });
+  });
+});
+
+test('a settled full review can still confirm a baseline with historical threads', async () => {
   await withGitHub(async ({ state, env }) => {
-    const { mode, files } = configureIncrementalReplay(state, env);
-    state.threads.push(historicalThread({ id: 4725011058, sha: replayPrevious, resolved: false }));
-    const revision = await capture(mode);
-    state.comments.push(persistentReview(replayHead, replayBase));
-    const proof = { version: 2, mode: 'incremental', previousHead: replayPrevious, files: files.map(({ filename }, index) => ({
-      path: filename, left: digest(`${index + 11}\told row\n`), right: digest(`${index + 11}\tnew row\n`),
-    })) };
-    assert.equal(await approvalRevision({ ...mode, ...approvalEnv }, revision, cleanReview(), proof), undefined);
-    assert.deepEqual(reviewWrites(state), []);
-    assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), new RegExp(`^baseline_key=${replayHead} ${replayBase} main initial$`, 'mu'));
+    const scoped = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+    const manual = await commentEvent(scoped, '/review');
+    state.threads = [historicalThread({ resolved: false })];
+    const revision = await capture(manual);
+    state.comments.push(persistentReview(head, base));
+    assert.equal(await approvalRevision(manual, revision, cleanReview()), undefined);
+    assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^baseline_key=/mu);
+  });
+});
+
+test('reruns inspect earlier attempts of the same run before reusing a baseline', async (t) => {
+  const cases = [
+    { name: 'a failed native attempt since the baseline', jobs: ['failure'], expected: 'full', firstUsedFull: true },
+    { name: 'a later skipped attempt does not hide an earlier failure', jobs: ['failure', 'skipped'], expected: 'full' },
+    { name: 'a missing previous review job', jobs: [null], expected: 'full' },
+    { name: 'a known skipped prior review job', jobs: ['skipped'], expected: 'incremental' },
+    { name: 'failure predates the latest confirmed summary', jobs: ['failure'], expected: 'incremental', older: true },
+  ];
+  for (const { name, jobs, expected, firstUsedFull, older } of cases) await t.test(name, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode } = configureIncrementalReplay(state, env);
+      if (firstUsedFull) {
+        state.threadStatus = 503;
+        const first = await capture(mode);
+        assert.equal(JSON.parse(await readFile(first.review_context, 'utf8')).mode, 'full');
+        state.threadStatus = 200;
+      }
+      const completed = new Date(Date.now() + (older ? -30_000 : 30_000)).toISOString();
+      const runAttempt = jobs.length + 1;
+      state.runs[12345] = { id: 12345, run_attempt: runAttempt, event: 'workflow_run', status: 'in_progress', conclusion: null,
+        display_title: `洛神 · PR #42 ${replayHead}`, updated_at: completed };
+      for (const [index, conclusion] of jobs.entries()) {
+        if (conclusion === null) continue;
+        const attempt = index + 1;
+        state.attemptJobs[`12345/${attempt}`] = [{ name: '洛神 (ubuntu-x64)', run_id: 12345, run_attempt: attempt, status: 'completed',
+          completed_at: completed, conclusion, steps: conclusion === 'skipped' ? [] : [{ name: 'Begin native review', conclusion: 'success' }] }];
+      }
+      const rerun = { ...mode, GITHUB_RUN_ATTEMPT: String(runAttempt), PR_AGENT_REVIEW_CONTEXT_PATH: mode.PR_AGENT_REVIEW_CONTEXT_PATH + '.rerun' };
+      const revision = await capture(rerun);
+      assert.equal(JSON.parse(await readFile(revision.review_context, 'utf8')).mode, expected);
+      assert.ok(state.requests.some(({ url }) => url.includes('/actions/runs/12345/attempts/1/jobs')));
+    });
   });
 });
 

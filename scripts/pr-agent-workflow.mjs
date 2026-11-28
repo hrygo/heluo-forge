@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { publishApproval, readApprovalReceipt, reconcileMainApprovals, recordWorkflowWithdrawal } from './pr-agent-approval.mjs';
 import { verifyReviewCoverage, verifyReviewFileModes } from './pr-agent-coverage.mjs';
 import { buildReviewComments, getReviewCommentMarker, reviewPriority } from './pr-agent-review-comments.mjs';
-import { baselineKey, captureReviewContext, hasReviewIdentity, openBlockers, readReviewThreads,
+import { baselineKey, captureReviewContext, hasHistoricalReviewEvidence, hasReviewIdentity, openBlockers, readReviewThreads,
   reviewFindingLimit, reviewMarker, reviewReceipt } from './pr-agent-review-context.mjs';
 import { handleChangeRequests, parseChangeRequest } from './pr-agent-change-request.mjs';
 import { isBranch, isSha, listReviews, pages, targetTip, validId } from './pr-agent-github.mjs';
@@ -440,8 +440,10 @@ async function validateReview(github, env, scope) {
       }
     }
     const recommendation = review.merge_recommendation.trim();
-    confirmBaseline = Boolean(context && (deltaFiles ? textCovered : verifiedCoverage) && threads &&
-      isDeepStrictEqual(openBlockers(threads), openBlockers(context.threads)) &&
+    const historicalBlockers = threads && openBlockers(threads);
+    confirmBaseline = Boolean(context && (deltaFiles ? textCovered : verifiedCoverage) && historicalBlockers &&
+      isDeepStrictEqual(historicalBlockers, openBlockers(context.threads)) &&
+      (!deltaFiles || hasHistoricalReviewEvidence(review.history_recheck, historicalBlockers)) &&
       Array.isArray(review.key_issues_to_review) && priorities.every(Boolean) && issues.length < reviewFindingLimit &&
       comments.length === blockers.length && review.security_concerns?.trim?.() === 'No' &&
       (recommendation === 'no_concerns_found' || (recommendation === 'changes_required' && blockers.length > 0)));
