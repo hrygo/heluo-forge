@@ -486,7 +486,7 @@ test('Stage C4-B async task status & recovery card renders reconcile, refresh, c
   }
 });
 
-test('buffered pendingDraft survives SSE scope-changed and disconnect/ready reconnect before turn-finalized recovery (#481/#483)', async () => {
+test('buffered pendingDraft survives preference invalidation and reconnect in the same scope (#481/#483)', async () => {
   const eventSources = [];
   const fetchImpl = async (url, init) => {
     if (url.includes('/mentions')) {
@@ -554,9 +554,10 @@ test('buffered pendingDraft survives SSE scope-changed and disconnect/ready reco
     });
     assert.equal(prep.ok, true);
 
-    eventSources[0].emit({ type: 'scope-changed', scopeEpoch: 6, viewVersion: 8 });
+    eventSources[0].emit({ type: 'preference-updated', scopeEpoch: 5, viewVersion: 8 });
+    eventSources[0].emit({ type: 'mentions-invalidated', scopeEpoch: 5, viewVersion: 9 });
     eventSources[0].fail();
-    eventSources[0].emit({ type: 'ready', scopeEpoch: 6, viewVersion: 8 });
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 5, viewVersion: 9 });
     eventSources[0].emit({
       type: 'turn-finalized',
       sessionId: 'sess-reconnect',
@@ -1805,6 +1806,173 @@ for (const reconnect of [false, true]) {
   });
 }
 
+function mountDraftRecovery(t, fetchImpl) {
+  const eventSources = [];
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  let source;
+  let dispose;
+  t.after(() => { dispose?.(); restore(); });
+  exported.apply({
+    slots: { inject(_name, register) { return register(); }, register() { return () => {}; } },
+    inputTriggers: {
+      registerSource(spec) {
+        source = spec;
+        return () => { source = null; };
+      },
+    },
+    effect(register) { dispose = register(); },
+  }, { dispatchEnabled: true });
+  return { getSource: () => source, stream: eventSources[0], dispose: () => dispose?.() };
+}
+
+test('an IAM scope change discards buffered and queued drafts and delayed finalized projections (#484)', async (t) => {
+  const sessionId = 'sess-reused';
+  const expertId = 'exp-fin-1';
+  const draftDigest = 'sha256:identical-across-epochs';
+  const pollStarted = Promise.withResolvers();
+  const pollReply = Promise.withResolvers();
+  let scopeEpoch = 5;
+  let submissions = 0;
+  const finalized = (draftRecoveryId, epoch = 5) => ({
+    type: 'turn-finalized', sessionId, expertId, draftDigest, draftRecoveryId, scopeEpoch: epoch,
+    status: 'failed', code: 'EXPERT_POLICY_DENIED', preserveDraft: true,
+  });
+  const { getSource, stream } = mountDraftRecovery(t, (url) => {
+    if (url.includes('/mentions')) return cardJson(200, {
+      scopeEpoch, viewVersion: 7, candidates: [{ expertId, displayName: '专家', scopeEpoch, viewVersion: 7 }],
+    });
+    if (url.endsWith('/selections')) {
+      submissions += 1;
+      return cardJson(201, {
+        selectionToken: `token-${submissions}`, expertId, sessionId, draftDigest, scopeEpoch,
+        ...(scopeEpoch === 5 ? { draftRecoveryId: `old-${submissions}` } : {}),
+      });
+    }
+    if (url.endsWith('/turns/finalized')) {
+      pollStarted.resolve();
+      return pollReply.promise;
+    }
+    if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+    assert.fail(`Unexpected request ${url}`);
+  });
+
+  const oldSource = getSource();
+  const [picked] = await oldSource.query('', { sessionId });
+  for (const taskText of ['queued draft', 'late SSE draft', 'late poll draft']) {
+    assert.equal((await oldSource.prepareSubmit({ picked, sessionId, taskText })).ok, true);
+  }
+  stream.emit(finalized('old-1'));
+  stream.emit({ type: 'ready', scopeEpoch });
+  await pollStarted.promise;
+
+  scopeEpoch = 6;
+  stream.emit({ type: 'scope-changed', scopeEpoch });
+  const stale = [];
+  const detachStale = oldSource.onDraftRecovery((event) => stale.push(event));
+  const recovered = [];
+  const currentSource = getSource();
+  currentSource.onDraftRecovery((event) => recovered.push(event));
+  detachStale();
+  stream.emit(finalized('old-2'));
+  pollReply.resolve(cardJson(200, { scopeEpoch: 5, items: [finalized('old-3')] }));
+  await new Promise(setImmediate);
+  assert.deepEqual(stale, []);
+  assert.deepEqual(recovered, []);
+
+  const [currentPick] = await currentSource.query('', { sessionId });
+  assert.equal((await currentSource.prepareSubmit({ picked: currentPick, sessionId, taskText: 'current draft' })).ok, true);
+  // A legacy frame carries no epoch and can collide with a new account's identical digest.
+  stream.emit({ ...finalized(undefined), scopeEpoch: undefined });
+  assert.deepEqual(recovered, []);
+  stream.emit(finalized(undefined, 6));
+  assert.deepEqual(recovered.map(({ draft }) => draft?.taskText), ['current draft']);
+});
+
+for (const boundary of ['scope-changed', 'reconnect with a different scope', 'disposal']) {
+  test(`a pending prepareSubmit cannot register a draft after ${boundary} (#484)`, async (t) => {
+    const sessionId = 'sess-prepare';
+    const expertId = 'exp-fin-1';
+    const started = Promise.withResolvers();
+    const reply = Promise.withResolvers();
+    const { getSource, stream, dispose } = mountDraftRecovery(t, (url) => {
+      if (url.includes('/mentions')) return cardJson(200, {
+        scopeEpoch: 5, viewVersion: 7, candidates: [{ expertId, displayName: '专家', scopeEpoch: 5, viewVersion: 7 }],
+      });
+      if (url.endsWith('/selections')) {
+        started.resolve();
+        return reply.promise;
+      }
+      if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+      assert.fail(`Unexpected request ${url}`);
+    });
+    const oldSource = getSource();
+    const [picked] = await oldSource.query('', { sessionId });
+    const prepare = oldSource.prepareSubmit({ picked, sessionId, taskText: 'old in-flight draft' });
+    await started.promise;
+    if (boundary === 'disposal') dispose();
+    else if (boundary === 'scope-changed') stream.emit({ type: 'scope-changed', scopeEpoch: 6 });
+    else {
+      stream.fail();
+      stream.emit({ type: 'ready', scopeEpoch: 6 });
+    }
+
+    reply.resolve(cardJson(201, { selectionToken: 'old-token', draftRecoveryId: 'old-recovery', expertId, sessionId, scopeEpoch: 5 }));
+    const late = await prepare;
+    assert.equal(late.ok, false);
+    assert.equal(late.preserveDraft, true);
+    assert.equal(Object.hasOwn(late, 'draft'), false, 'the stale completion must not export the previous scope draft');
+    if (boundary !== 'disposal') {
+      const restored = [];
+      getSource().onDraftRecovery((event) => restored.push(event));
+      stream.emit({
+        type: 'turn-finalized', scopeEpoch: 6, sessionId, expertId, draftRecoveryId: 'old-recovery',
+        status: 'failed', preserveDraft: true,
+      });
+      assert.deepEqual(restored, []);
+    }
+  });
+}
+
+test('initial ready binds recovery and a restarted Host with a lower epoch clears the prior scope (#484)', async (t) => {
+  const sessionId = 'sess-reused';
+  const expertId = 'exp-fin-1';
+  const draftDigest = 'sha256:reused-across-hosts';
+  let scopeEpoch = 9;
+  const { getSource, stream } = mountDraftRecovery(t, (url) => {
+    if (url.includes('/mentions')) return cardJson(200, {
+      scopeEpoch, viewVersion: 1, candidates: [{ expertId, displayName: '专家', scopeEpoch, viewVersion: 1 }],
+    });
+    if (url.endsWith('/selections')) return cardJson(201, {
+      selectionToken: `selected-${scopeEpoch}`, sessionId, expertId, draftDigest, scopeEpoch,
+    });
+    if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+    assert.fail(`Unexpected request ${url}`);
+  });
+  stream.emit({ type: 'ready', scopeEpoch });
+  const oldSource = getSource();
+  const [previousPick] = await oldSource.query('', { sessionId });
+  assert.equal((await oldSource.prepareSubmit({ picked: previousPick, sessionId, taskText: 'previous draft' })).ok, true);
+
+  stream.fail();
+  scopeEpoch = 2;
+  stream.emit({ type: 'ready', scopeEpoch });
+  const currentSource = getSource();
+  const restored = [];
+  currentSource.onDraftRecovery((event) => restored.push(event.draft?.taskText));
+  const failed = {
+    type: 'turn-finalized', sessionId, expertId, draftDigest, status: 'failed', preserveDraft: true,
+  };
+  stream.emit({ ...failed, scopeEpoch: 9 });
+  assert.deepEqual(restored, []);
+  const [currentPick] = await currentSource.query('', { sessionId });
+  assert.equal((await currentSource.prepareSubmit({ picked: currentPick, sessionId, taskText: 'restarted host draft' })).ok, true);
+  stream.emit(failed);
+  stream.emit({ ...failed, scopeEpoch: 9 });
+  assert.deepEqual(restored, []);
+  stream.emit({ ...failed, scopeEpoch });
+  assert.deepEqual(restored, ['restarted host draft']);
+});
+
 test('ExpertTaskStatusCard ignores late handleRefresh response when a newer generation arrives via reconcile during /result (#484)', async () => {
   const previousWindow = globalThis.window;
   const previousFetch = globalThis.fetch;
@@ -2104,8 +2272,11 @@ function cardJson(status, body) {
   return { ok: status >= 200 && status < 300, status, async json() { return body; } };
 }
 
-for (const deniedAt of ['status', 'result', 'status recheck']) {
-  test('PR #484 review: clears cached content when ' + deniedAt + ' denies access', async (t) => {
+for (const [deniedAt, statusCode] of [
+  ['status', 401], ['result', 403], ['status recheck', 403],
+  ['status', 404], ['result', 404], ['status recheck', 404],
+]) {
+  test(`PR #484 review: clears cached content when ${deniedAt} denies access (${statusCode})`, async (t) => {
     const initialTask = { taskId: 'task-a', requestId: 'request-a', status: 'completed', runGeneration: 1 };
     const cached = {
       runGeneration: 1,
@@ -2118,18 +2289,19 @@ for (const deniedAt of ['status', 'result', 'status recheck']) {
     let revoked = false;
     let statusReads = 0;
     let currentResult = cached;
-    const deny = (status) => cardJson(status, { error: { code: status === 401 ? 'EXPERT_AUTH_REVOKED' : 'EXPERT_ORG_FORBIDDEN' } });
+    const code = { 401: 'EXPERT_AUTH_REVOKED', 403: 'EXPERT_ORG_FORBIDDEN', 404: 'EXPERT_TASK_NOT_FOUND' }[statusCode];
+    const deny = () => cardJson(statusCode, { error: { code } });
     const card = mountReviewTaskCard(t, {
       initialTask,
       async fetchImpl(url) {
         if (url.endsWith('/tasks/task-a')) {
           statusReads += 1;
-          if (revoked && deniedAt === 'status') return deny(401);
-          if (revoked && deniedAt === 'status recheck' && statusReads === 2) return deny(403);
+          if (revoked && deniedAt === 'status') return deny();
+          if (revoked && deniedAt === 'status recheck' && statusReads === 2) return deny();
           return cardJson(200, { status: 'completed', runGeneration: 1 });
         }
         assert.ok(url.endsWith('/tasks/task-a/result'), url);
-        if (revoked && deniedAt === 'result') return deny(403);
+        if (revoked && deniedAt === 'result') return deny();
         if (revoked && deniedAt === 'status recheck') return cardJson(200, { ...cached, runGeneration: 2 });
         return cardJson(200, currentResult);
       },
@@ -2149,7 +2321,7 @@ for (const deniedAt of ['status', 'result', 'status recheck']) {
     };
     const denied = card.render();
     assertCleared(denied);
-    assert.match(cardElement(denied, 'fexp-task-notice').children[0], /授权已撤销|无权访问/u);
+    assert.match(cardElement(denied, 'fexp-task-notice').children[0], /授权已撤销|无权访问|无权查看/u);
     assertCleared(card.render({ ...initialTask, ...cached }));
 
     // A successful, authorized result fetch restores only the fresh projection.

@@ -121,10 +121,10 @@ function requireRoutePort(req, res, { method, mutation = false, portFn, disabled
 }
 
 function scopeKeyOf(scope) {
-  if (!scope || typeof scope !== 'object') return null;
+  if (!scope || !Number.isInteger(scope.scopeEpoch) || scope.scopeEpoch < 1) return null;
   const parts = [scope.instanceId, scope.orgId, scope.issuer, scope.subject];
   if (parts.some((p) => typeof p !== 'string' || !p.trim())) return null;
-  return JSON.stringify(parts.map((p) => p.trim()));
+  return JSON.stringify([...parts.map((p) => p.trim()), scope.scopeEpoch]);
 }
 
 export function createExpertsRoutes(ports) {
@@ -132,6 +132,7 @@ export function createExpertsRoutes(ports) {
 
   function broadcast(event, targetScope = null) {
     const targetKey = scopeKeyOf(targetScope);
+    if (targetScope && !targetKey) return;
     const frame = `data: ${JSON.stringify(event)}\n\n`;
     for (const [res, clientKey] of sseClients.entries()) {
       if (targetKey && clientKey !== targetKey) continue;
@@ -173,11 +174,16 @@ export function createExpertsRoutes(ports) {
           return true;
         }
         const scope = await ports.resolveScope();
+        await ports.assertIamIdentityCurrent?.(scope.scopeEpoch, scope);
+        ports.assertScopeCurrent?.(scope.scopeEpoch, scope);
+        const scopeKey = scopeKeyOf(scope);
+        if (!scopeKey) throw new ExpertsError('EXPERT_SCOPE_MISMATCH', 'Active event stream scope is invalid');
+        if (res.destroyed || res.writableEnded) return true;
         res.statusCode = 200;
         res.setHeader('content-type', 'text/event-stream; charset=utf-8');
         res.setHeader('cache-control', 'no-store');
         res.setHeader('x-content-type-options', 'nosniff');
-        sseClients.set(res, scopeKeyOf(scope));
+        sseClients.set(res, scopeKey);
         res.write(`data: ${JSON.stringify({ type: 'ready', scopeEpoch: scope.scopeEpoch, viewVersion: ports.getViewVersion() })}\n\n`);
         const cleanup = () => sseClients.delete(res);
         req.on?.('close', cleanup);
@@ -252,6 +258,8 @@ export function createExpertsRoutes(ports) {
         const items = typeof ports.listRecentFinalizedTurns === 'function'
           ? await ports.listRecentFinalizedTurns(scope)
           : [];
+        await ports.assertIamIdentityCurrent?.(scope.scopeEpoch, scope);
+        ports.assertScopeCurrent?.(scope.scopeEpoch, scope);
         sendJson(res, 200, { scopeEpoch: scope.scopeEpoch, items });
         return true;
       }

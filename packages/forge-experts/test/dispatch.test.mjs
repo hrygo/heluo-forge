@@ -1672,6 +1672,47 @@ test('an authoritative success after a settled 404 reopens recovery if its accep
   }
 });
 
+for (const indexFault of ['write failure', 'capacity']) {
+  test(`a durable acceptance keeps authorized readback available after pending_index ${indexFault} (#484)`, async () => {
+    let failIndexWrites = false;
+    let lookupCount = 0;
+    const storage = createMemoryStorage({
+      failPutPredicate: (domain, table) => failIndexWrites
+        && domain === 'forge_experts_requests' && table === 'pending_index',
+    });
+    const h = makeHarness({
+      storage,
+      lookupByRequest: async ({ requestId }) => {
+        if (++lookupCount === 1) throw new ExpertsError('EXPERT_TASK_NOT_FOUND', 'Task unavailable');
+        return { taskId: 'task-recovered', requestId, status: 'completed' };
+      },
+    });
+    await h.host.open();
+    try {
+      const requestId = await submitUnknownTask(h);
+      const manual = () => invokeRoute(h.host, { path: `${API_PREFIX}/tasks/by-request/${requestId}` });
+      assert.equal((await manual()).status, 404);
+      const index = storage.domains.get('forge_experts_requests').get('pending_index');
+      const [scopeKey] = index.keys();
+      assert.deepEqual(index.get(scopeKey).requestIds, []);
+      const otherPending = indexFault === 'capacity'
+        ? Array.from({ length: 100 }, (_, i) => `req-other-${i}`)
+        : [];
+      index.set(scopeKey, { schemaVersion: 1, requestIds: otherPending });
+      failIndexWrites = indexFault === 'write failure';
+
+      const accepted = await manual();
+      assert.equal(accepted.status, 200);
+      assert.equal(accepted.body.taskId, 'task-recovered');
+      const scope = await h.host.scope.resolveForRequest();
+      assert.equal((await h.host.dispatch.getCorrelation(scope, requestId)).status, 'accepted');
+      assert.deepEqual(index.get(scopeKey).requestIds, otherPending);
+    } finally {
+      await h.host.close();
+    }
+  });
+}
+
 test('followupTask rejects reused requestId with conflicting payload (409 EXPERT_IDEMPOTENCY_CONFLICT) and GET /turns/finalized returns scoped metadata (#484)', async () => {
   const h = makeHarness({ dispatchEnabled: true });
   await h.host.open();
