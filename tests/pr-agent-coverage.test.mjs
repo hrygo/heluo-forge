@@ -40,6 +40,18 @@ const proof = {
   ],
 };
 
+test('full and incremental coverage cannot substitute for each other', () => {
+  const previousHead = 'c'.repeat(40);
+  for (const extra of [{ previousHead }, { mode: 'incremental' }]) {
+    assert.equal(verifyReviewCoverage({ ...proof, ...extra }, input), false);
+  }
+  const delta = { ...proof, version: 2, mode: 'incremental', previousHead };
+  assert.equal(verifyReviewCoverage(delta, { ...input, previousHead }), true);
+  assert.equal(verifyReviewCoverage(delta, input), false);
+  assert.equal(verifyReviewCoverage(delta, { ...input, previousHead: 'e'.repeat(40) }), false);
+  assert.equal(verifyReviewCoverage(proof, { ...input, previousHead }), false);
+});
+
 const leftPath = String.raw`"a/src/\346\226\260 \346\226\207\344\273\266.js"`;
 const rightPath = String.raw`"b/src/\346\226\260 \346\226\207\344\273\266.js"`;
 const modifiedDiff = [

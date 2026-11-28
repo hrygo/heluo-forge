@@ -86,6 +86,9 @@ async function withGitHub(run) {
     } },
     approvalRules: [],
     compareStatus: 200,
+    threads: [],
+    threadStatus: 200,
+    checkRuns: [],
     requests: [],
     approvalBot: approver,
     postStatus: 200,
@@ -112,7 +115,15 @@ async function withGitHub(run) {
     const path = url.pathname.replace(/^\/repos\/corp\/example/u, '');
     const page = Number(url.searchParams.get('page') ?? '1');
     const pageOf = (items) => items.slice((page - 1) * 100, page * 100);
-    if (request.method === 'GET' && path === `${usersPath}/${encodeURIComponent(state.approvalBot.login)}`) {
+    if (request.method === 'POST' && path === '/graphql') {
+      response.statusCode = state.threadStatus;
+      const threads = state.threadPages?.[body.variables.after ?? 'first'] ??
+        { nodes: state.threads, pageInfo: { hasNextPage: false, endCursor: null } };
+      response.end(JSON.stringify({ data: { repository: { pullRequest: {
+        number: 42, headRefOid: state.pr.head.sha, author: { login: state.pr.user.login },
+        reviewThreads: threads,
+      } } }, errors: state.threadErrors }));
+    } else if (request.method === 'GET' && path === `${usersPath}/${encodeURIComponent(state.approvalBot.login)}`) {
       response.statusCode = state.approvalIdentityStatus;
       response.end(JSON.stringify(state.approvalBot));
     } else if (request.method === 'GET' && path === '/installation/repositories') {
@@ -148,7 +159,14 @@ async function withGitHub(run) {
       response.end(JSON.stringify(state.refResponse ?? { ref: 'refs/heads/' + ref, object: { type: 'commit', sha: state.refs[ref] } }));
     } else if (request.method === 'GET' && /^\/compare\/[a-f0-9]{40}\.\.\.[a-f0-9]{40}$/u.test(path)) {
       response.statusCode = state.compareStatus;
-      response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
+      if (request.headers.accept === 'application/vnd.github.diff' && state.compareDiff) {
+        response.setHeader('content-type', state.diffType);
+        response.end(state.compareDiff);
+      } else {
+        response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
+      }
+    } else if (request.method === 'GET' && /^\/commits\/[a-f0-9]{40}\/check-runs$/u.test(path)) {
+      response.end(JSON.stringify({ total_count: state.checkRuns.length, check_runs: pageOf(state.checkRuns) }));
     } else if (request.method === 'GET' && path === '/pulls/42/files') {
       response.statusCode = state.filesStatus;
       response.end(JSON.stringify(pageOf(state.files)));
@@ -180,15 +198,16 @@ async function withGitHub(run) {
       response.end(JSON.stringify({ user: maintainer, permission: state.permission }));
     } else if (request.method === 'GET' && path === '/actions/workflows/pr-agent.yml/runs') {
       response.statusCode = state.runListStatus;
-      const runs = Object.values(state.runs).filter((run) => run.event === url.searchParams.get('event') &&
-        run.conclusion === url.searchParams.get('status'));
-      response.end(JSON.stringify({ workflow_runs: pageOf(runs) }));
+      const event = url.searchParams.get('event');
+      const status = url.searchParams.get('status');
+      const runs = Object.values(state.runs).filter((run) => (!event || run.event === event) && (!status || run.conclusion === status));
+      response.end(JSON.stringify({ workflow_runs: pageOf(runs), total_count: runs.length }));
     } else if (request.method === 'GET' && /^\/actions\/runs\/\d+\/jobs$/u.test(path)) {
       const jobs = state.jobs[path.split('/').at(-2)] ?? [];
       response.end(JSON.stringify({ total_count: jobs.length, jobs: pageOf(jobs) }));
     } else if (request.method === 'GET' && /^\/actions\/runs\/\d+\/attempts\/\d+\/jobs$/u.test(path)) {
       const [, , , runId, , runAttempt] = path.split('/');
-      const jobs = [{ name: '洛神自动批准 (ubuntu-x64)', run_id: Number(runId), run_attempt: Number(runAttempt),
+      const jobs = state.attemptJobs?.[`${runId}/${runAttempt}`] ?? [{ name: '洛神自动批准 (ubuntu-x64)', run_id: Number(runId), run_attempt: Number(runAttempt),
         status: 'completed', steps: [{ name: 'Reconcile or approve the reviewed PR revision',
           status: 'completed', conclusion: 'success' }] }];
       response.end(JSON.stringify({ total_count: jobs.length, jobs: pageOf(jobs) }));
@@ -231,6 +250,7 @@ async function withGitHub(run) {
   const env = {
     ...process.env,
     GITHUB_API_URL: 'http://127.0.0.1:' + server.address().port,
+    GITHUB_GRAPHQL_URL: 'http://127.0.0.1:' + server.address().port + '/graphql',
     GITHUB_SERVER_URL: 'https://github.com',
     GITHUB_REPOSITORY: repository,
     GITHUB_OUTPUT: join(directory, 'output'),
@@ -457,7 +477,7 @@ test('a complete automatic or bare review with zero findings or P3 only emits an
     const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
     assert.deepEqual(await approvalRevision(manual, await capture(manual),
       cleanReview({ key_issues_to_review: [issue] })), expected);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.deepEqual(reviewWrites(state), []);
     assert.equal(state.approverRequests, undefined);
   });
 });
@@ -473,7 +493,7 @@ test('a severe, ambiguous, or capped finding list does not emit an approval', as
       { key_issues_to_review: 'No issues' },
       { key_issues_to_review: [null] },
       { key_issues_to_review: [{ ...finding('P3'), issue_header: '[P3] [P1] Ambiguous priority' }] },
-      { key_issues_to_review: Array.from({ length: 4 }, () => finding('P3')) },
+      { key_issues_to_review: Array.from({ length: 10 }, () => finding('P3')) },
       { merge_recommendation: 'needs_review' },
       { security_concerns: 'A concern needs verification' },
       { security_concerns: undefined },
@@ -557,7 +577,7 @@ test('GitHub versioned diff responses can authorize an otherwise complete approv
   });
 });
 
-test('an unlisted code owner blocks automatic approval while keeping the official COMMENT', async () => {
+test('an unlisted code owner blocks automatic approval for an otherwise eligible P3 review', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token', PR_AGENT_HUMAN_CODEOWNERS: 'another-owner' };
     const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
@@ -565,7 +585,7 @@ test('an unlisted code owner blocks automatic approval while keeping the officia
     assert.equal(candidate?.allowApproval, true);
     const { stdout } = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(candidate) });
     assert.match(stdout, /skipped-protection/u);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.deepEqual(reviewWrites(state), []);
   });
 });
 
@@ -578,11 +598,11 @@ test('code owners limited to unrelated paths cannot authorize an APPROVE', async
     assert.equal(candidate?.allowApproval, true);
     const { stdout } = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(candidate) });
     assert.match(stdout, /skipped-protection/u);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.deepEqual(reviewWrites(state), []);
   });
 });
 
-test('an effective ruleset requiring an additional approval preserves the official COMMENT only', async () => {
+test('an effective ruleset requiring an additional approval prevents automatic approval', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
     state.approvalRules = [{ type: 'pull_request', parameters: {
@@ -593,11 +613,11 @@ test('an effective ruleset requiring an additional approval preserves the offici
     assert.equal(candidate?.allowApproval, true);
     const { stdout } = await execute('approve', { ...mode, APPROVAL_REVISION: JSON.stringify(candidate) });
     assert.match(stdout, /skipped-protection/u);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.deepEqual(reviewWrites(state), []);
   });
 });
 
-test('unavailable file-mode evidence preserves the native COMMENT and review key', async () => {
+test('unavailable file-mode evidence preserves the completed review key without producing an approval', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv };
     const revision = await capture(mode);
@@ -605,7 +625,7 @@ test('unavailable file-mode evidence preserves the native COMMENT and review key
     state.diffStatus = 503;
     assert.equal(await approvalRevision(mode, revision, cleanReview({ key_issues_to_review: [issue] })), undefined);
     assert.equal(state.diffReads, 1);
-    assert.deepEqual(reviewWrites(state).map(({ body }) => body.event), ['COMMENT']);
+    assert.deepEqual(reviewWrites(state), []);
     assert.match(await readFile(mode.GITHUB_OUTPUT, 'utf8'), /^review_key=[a-f0-9]{40} main$/mu);
 
     state.diffStatus = 206;
@@ -718,7 +738,7 @@ test('a bare /review reports an inline POST failure while preserving the summary
   });
 });
 
-test('an inline POST failure alone does not change an existing approval for a favorable review', async () => {
+test('an optional finding does not try an inline POST or disrupt an existing approval', async () => {
   await withGitHub(async ({ state, env }) => {
     const mode = { ...env, ...approvalEnv, PR_AGENT_APPROVAL_TOKEN: 'approval-test-token' };
     const eligible = await approvalRevision(mode, await capture(mode), cleanReview());
@@ -728,8 +748,8 @@ test('an inline POST failure alone does not change an existing approval for a fa
     const captured = await capture(next);
     const issue = JSON.parse(prioritizedReview('P3')).key_issues_to_review[0];
     state.postStatus = 503;
-    assert.equal(await approvalRevision(next, captured, cleanReview({ key_issues_to_review: [issue] })), undefined);
-    assert.equal(await readFile(next.GITHUB_OUTPUT, 'utf8'), 'publication_failed=true\n');
+    assert.equal((await approvalRevision(next, captured, cleanReview({ key_issues_to_review: [issue] })))?.allowApproval, true);
+    assert.doesNotMatch(await readFile(next.GITHUB_OUTPUT, 'utf8'), /publication_failed=/u);
     assert.deepEqual(state.inlineComments, []);
     assert.deepEqual(state.reviews.map(({ state }) => state), ['APPROVED']);
   });
@@ -1673,13 +1693,14 @@ test('the workflow retries both tools once with the same pinned image and valida
   const summary = stepDefinition('Run PR-Agent summary');
   const retrySummary = stepDefinition('Retry PR-Agent summary');
   const retry = stepDefinition('Retry PR-Agent');
-  assert.match(stepDefinition('Capture refreshed PR revision'), /if: \$\{\{ steps\.validation\.outputs\.retry == 'true' \}\}/u);
+  assert.match(stepDefinition('Capture refreshed PR revision'), /!cancelled\(\) && steps\.validation\.outputs\.retry == 'true'/u);
   assert.equal(uses.exec(summary)?.[1], image);
   assert.equal(uses.exec(retrySummary)?.[1], image);
   assert.equal(uses.exec(retry)?.[1], image);
   assert.match(retrySummary, /env: \*pr_agent_summary_env/u);
   assert.match(retry, /env: \*pr_agent_env/u);
   const recheck = stepDefinition('Validate refreshed PR-Agent review');
+  assert.match(recheck, /!cancelled\(\) && steps\.validation\.outputs\.retry == 'true'/u);
   assert.match(recheck, /steps\.retry_revision\.outputs\.base/u);
   assert.match(recheck, /steps\.pr_agent_retry\.outputs\.review/u);
 });
@@ -1798,7 +1819,7 @@ test('a head repository that changes during a run does not change formal reviews
   });
 });
 
-test('all four model priorities publish native COMMENT and never request changes', async () => {
+test('only P0 and P1 publish native COMMENT and model results never request changes', async () => {
   for (const [index, priority] of ['P0', 'P1', 'P2', 'P3'].entries()) {
     await withGitHub(async ({ state, env }) => {
       const reviewEnv = index % 2 ? await commentEvent(env, '/review') : env;
@@ -1808,6 +1829,10 @@ test('all four model priorities publish native COMMENT and never request changes
       await submit(reviewEnv, revision, JSON.stringify(output));
       const [write, ...other] = reviewWrites(state);
       assert.deepEqual(other, []);
+      if (priority === 'P2' || priority === 'P3') {
+        assert.equal(write, undefined);
+        return;
+      }
       assert.equal(write?.body.event, 'COMMENT');
       assert.equal(write.body.commit_id, revision.head);
       assert.equal(write.body.comments[0].side, 'RIGHT');
@@ -1816,12 +1841,196 @@ test('all four model priorities publish native COMMENT and never request changes
   }
 });
 
+function receipt(sha, target, { runId = '12345', attempt = '1', invocation = 'initial' } = {}) {
+  return `<!-- heluo-forge-pr-agent-review-run:v1 42 ${runId} ${attempt} ${sha} ${target} main ${invocation} -->`;
+}
+
+function persistentReview(sha, target, run) {
+  return { ...freshComment('pr-agent:review:full'),
+    body: `## 洛神评审\n\n<!-- pr-agent:review:full -->\n\n${receipt(sha, target, run)}` };
+}
+
+function historicalThread({ path = 'src/example.js', line = 2, sha = head, priority = 'P1', id = 4725035838,
+  resolved = true, outdated = false, authorReplied = true } = {}) {
+  const root = { body: `**[${priority}] Existing finding**\n\nEvidence\n\n<!-- heluo-forge-pr-agent-comment:v1 ${digest(path + line)} -->`,
+    author: { __typename: 'Bot', login: 'github-actions', databaseId: 41898282 }, originalCommit: { oid: sha },
+    databaseId: id };
+  return { path, line, originalLine: line, startLine: line, diffSide: 'RIGHT', startDiffSide: null,
+    isResolved: resolved, isOutdated: outdated, root: { nodes: [root] },
+    recent: { nodes: [root, ...(authorReplied ? [{ databaseId: id + 1, author: { login: 'contributor' },
+      bodyText: 'The caller contract already covers this branch.' }] : [])], pageInfo: { hasPreviousPage: false } } };
+}
+
+const replayBase = 'f1673d325e51ad4bb2645a25b8ecbfdc2e844974';
+const replayFirst = 'c2cffa560e5f8184b386117957253a10b2046061';
+const replayPrevious = 'f29abe97a0f24812c00b190fc74bf6fdb7b901a9';
+const replayHead = 'a71c3ab83cb23327d82d83b43b7b741eb8d5d9c8';
+const replayResolvedPath = 'tests/forge-experts-enterprise-e2e.test.mjs';
+const replayDeltaPaths = ['packages/forge-experts/client.js', 'packages/forge-experts/src/dispatch.mjs',
+  'packages/forge-experts/test/client.test.mjs', 'packages/forge-experts/test/dispatch.test.mjs'];
+const replayFullPaths = [...replayDeltaPaths, replayResolvedPath, 'docs/design/verification/forge-experts.md',
+  ...['delegra-client', 'index', 'prestep', 'routes', 'scope', 'selection', 'tool'].map((name) => `packages/forge-experts/src/${name}.mjs`),
+  ...['prestep', 'structure', 'tool'].map((name) => `packages/forge-experts/test/${name}.test.mjs`)];
+
+function fixtureFile(filename, line) {
+  return { filename, status: 'modified', additions: 1, deletions: 1, patch: `@@ -${line} +${line} @@\n-old row\n+new row` };
+}
+
+function rawDiff(files) {
+  return files.map(({ filename, patch }) => [
+    `diff --git a/${filename} b/${filename}`, 'index e652251..1843a8d 100644',
+    `--- a/${filename}`, `+++ b/${filename}`, patch, '',
+  ].join('\n')).join('');
+}
+
+function configureIncrementalReplay(state, env) {
+  const last = { runId: '12101', attempt: '2' };
+  const mode = { ...env, EVENT_HEAD: replayHead, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+  state.pr.head.sha = replayHead;
+  state.pr.base.sha = state.refs.main = replayBase;
+  state.comments.push(persistentReview(replayPrevious, replayBase, last));
+  state.attemptJobs = { '12101/2': [{ name: '洛神 (ubuntu-x64)', run_id: 12101, run_attempt: 2, conclusion: 'success',
+    steps: [{ name: `Confirm incremental baseline ${replayPrevious} ${replayBase} main initial`, conclusion: 'success' }] }] };
+  const files = replayDeltaPaths.map((filename, index) => fixtureFile(filename, index + 11));
+  state.files = [...files, fixtureFile(replayResolvedPath, 519)];
+  state.pr.changed_files = state.files.length;
+  state.compareResponse = { status: 'ahead', base_commit: { sha: replayPrevious }, merge_base_commit: { sha: replayPrevious }, files };
+  state.compareDiff = rawDiff(files);
+  state.checkRuns = Array.from({ length: 20 }, (_, index) => ({ head_sha: replayHead, status: 'completed',
+    conclusion: index < 18 ? 'success' : 'skipped' }));
+  state.threads = [historicalThread({ path: replayResolvedPath, line: 519, sha: replayPrevious, priority: 'P2' })];
+  return { mode, files };
+}
+
+test('a new wording for an author-answered resolved P1 does not add an inline thread on the same revision', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const scoped = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+    state.threads = [historicalThread()];
+    const revision = await capture(scoped);
+    state.comments.push(persistentReview(head, base));
+    await submit(scoped, revision, prioritizedReview('P1', { issue_header: '[P1] [RIGHT] Reworded old problem' }));
+    assert.deepEqual(reviewWrites(state), []);
+    assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^review_key=/mu);
+  });
+});
+
+test('a first full review can publish seven distinct blockers in one batch and skip optional inline findings', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, EVENT_HEAD: replayFirst, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+    state.pr.head.sha = replayFirst;
+    state.pr.base.sha = state.refs.main = replayBase;
+    state.files = replayFullPaths.map((filename, index) => fixtureFile(filename, index + 2));
+    state.pr.changed_files = state.files.length;
+    state.diff = rawDiff(state.files);
+    const revision = await capture(mode);
+    assert.equal(revision.finding_limit, '10');
+    assert.equal(JSON.parse(await readFile(revision.review_context, 'utf8')).mode, 'full');
+    assert.match(await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8'), /^num_max_findings = 10$/mu);
+    state.comments.push(persistentReview(replayFirst, replayBase));
+    const p1 = JSON.parse(prioritizedReview('P1')).key_issues_to_review[0];
+    const findings = replayFullPaths.slice(0, 9).map((filename, index) => ({ ...p1, relevant_file: filename,
+      start_line: index + 2, end_line: index + 2, issue_header: `[${index < 7 ? 'P1' : `P${index - 5}`}] [RIGHT] Replayed defect ${index + 1}` }));
+    const result = JSON.stringify({ merge_recommendation: 'changes_required', security_concerns: 'No', key_issues_to_review: findings });
+    const proof = { files: state.files.map(({ filename }, index) => ({ path: filename,
+      left: digest(`${index + 2}\told row\n`), right: digest(`${index + 2}\tnew row\n`) })) };
+    assert.equal(await approvalRevision(mode, revision, result, proof), undefined);
+    assert.deepEqual(reviewWrites(state).map(({ body }) => [body.event, body.comments?.length]), [['COMMENT', 7]]);
+    assert.deepEqual(reviewWrites(state)[0].body.comments.map(({ path }) => path), replayFullPaths.slice(0, 7));
+    assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^baseline_key=/mu);
+  });
+});
+
+test('the #484 replay selects the last reviewed head and only publishes comments anchored in the delta', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const { mode, files } = configureIncrementalReplay(state, env);
+    const revision = await capture(mode);
+    const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+    assert.equal(context.previousHead, replayPrevious);
+    assert.equal(context.mode, 'incremental');
+    assert.deepEqual(context.files, files);
+    assert.deepEqual(context.checks, { total: 20, inspected: 20, success: 18, skipped: 2, pending: 0, other: 0 });
+    assert.equal(context.threads[0].lastReply, 'The caller contract already covers this branch.');
+    assert.equal(context.threads[0].originalHead, replayPrevious);
+    state.comments.push(persistentReview(replayHead, replayBase));
+    const previous = { issue_header: '[P1] [RIGHT] Reworded history', issue_content: 'Rephrased evidence.',
+      relevant_file: replayResolvedPath, start_line: 519, end_line: 519 };
+    const current = { ...previous, issue_header: '[P1] [RIGHT] New issue', relevant_file: files[0].filename, start_line: 11, end_line: 11 };
+    const oldSide = { ...current, issue_header: '[P1] [LEFT 11-11] Old-side evidence', start_line: 0, end_line: 0 };
+    const review = JSON.stringify({ merge_recommendation: 'changes_required', key_issues_to_review: [previous, current, oldSide] });
+    await submit(mode, revision, review);
+    assert.deepEqual(state.inlineComments.map(({ path, side, line }) => ({ path, side, line })), [{ path: files[0].filename, side: 'RIGHT', line: 11 }]);
+    assert.doesNotMatch(await readFile(env.GITHUB_OUTPUT, 'utf8'), /baseline_key=/u);
+  });
+});
+
+test('a clean delta advances the baseline without inline writes or automatic approval', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const { mode, files } = configureIncrementalReplay(state, env);
+    state.threads.push(historicalThread({ id: 4725011058, sha: replayPrevious, resolved: false }));
+    const revision = await capture(mode);
+    state.comments.push(persistentReview(replayHead, replayBase));
+    const proof = { version: 2, mode: 'incremental', previousHead: replayPrevious, files: files.map(({ filename }, index) => ({
+      path: filename, left: digest(`${index + 11}\told row\n`), right: digest(`${index + 11}\tnew row\n`),
+    })) };
+    assert.equal(await approvalRevision({ ...mode, ...approvalEnv }, revision, cleanReview(), proof), undefined);
+    assert.deepEqual(reviewWrites(state), []);
+    assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), new RegExp(`^baseline_key=${replayHead} ${replayBase} main initial$`, 'mu'));
+  });
+});
+
+test('an unconfirmed newest review, invalid delta or missing thread state falls back to full review', async (t) => {
+  const cases = {
+    'latest attempt has no successful marker': (state) => state.comments.push({
+      ...persistentReview('c'.repeat(40), replayBase, { runId: '13000' }), updated_at: new Date(Date.now() + 3000).toISOString(),
+    }),
+    'newer native attempt failed before updating the old summary': (state) => {
+      state.runs[13000] = { id: 13000, run_attempt: 2, event: 'workflow_run', status: 'completed', conclusion: 'failure',
+        display_title: `洛神 · PR #42 ${'d'.repeat(40)}`, updated_at: new Date(Date.now() + 3000).toISOString() };
+      state.attemptJobs['13000/2'] = [{ name: '洛神 (ubuntu-x64)', run_id: 13000, run_attempt: 2, conclusion: 'failure',
+        steps: [{ name: 'Begin native review', conclusion: 'success' }] }];
+    },
+    'rebase or force push': (state) => { state.compareResponse.merge_base_commit.sha = base; },
+    'raw diff lacks compared rows': (state) => { state.compareDiff = state.compareDiff.replace('+new row', '+different'); },
+    'GraphQL temporarily unavailable': (state) => { state.threadStatus = 503; },
+    'GraphQL partial data with errors': (state) => { state.threadErrors = [{ type: 'FORBIDDEN' }]; },
+    'twenty-one open blockers cannot fit': (state) => {
+      state.threads = Array.from({ length: 21 }, (_, index) => historicalThread({ id: 1000 + index, resolved: false }));
+    },
+  };
+  for (const [name, change] of Object.entries(cases)) await t.test(name, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode } = configureIncrementalReplay(state, env);
+      change(state);
+      const revision = await capture(mode);
+      const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+      assert.equal(context.mode, 'full');
+      assert.equal(context.previousHead, undefined);
+    });
+  });
+});
+
+test('the native publisher checks subsequent GraphQL pages and the current attempt marker', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const mode = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
+    state.threadPages = {
+      first: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'next' } },
+      next: { nodes: [historicalThread()], pageInfo: { hasNextPage: false, endCursor: null } },
+    };
+    const revision = await capture(mode);
+    const reviewContext = JSON.parse(await readFile(revision.review_context, 'utf8'));
+    assert.equal(reviewContext.threads.length, 1);
+    state.comments.push(persistentReview(head, base, { attempt: '7' }));
+    await assert.rejects(submit(mode, revision, cleanReview()), /summary and review were not both refreshed/u);
+    assert.deepEqual(reviewWrites(state), []);
+  });
+});
+
 test('a modified-file deletion publishes an explicitly scoped LEFT comment', async () => {
   await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
     state.files[0].patch = '@@ -1,2 +1 @@\n function count() {\n-  runRequiredCheck();';
-    const output = prioritizedReview('P2', {
-      issue_header: '[P2] [LEFT 2-2] Required check removed', start_line: 0, end_line: 0,
+    const output = prioritizedReview('P1', {
+      issue_header: '[P1] [LEFT 2-2] Required check removed', start_line: 0, end_line: 0,
     });
     await submit(env, revision, output);
     const [write] = reviewWrites(state);
@@ -1865,7 +2074,7 @@ test('a quoted or uppercase review command without options uses the same side-aw
     const manual = await commentEvent(env, '/"ReVIEW"');
     const revision = await capture(manual);
     assert.equal(revision.upstream_inline, 'false');
-    await submit(manual, revision, prioritizedReview('P3'));
+    await submit(manual, revision, prioritizedReview('P1'));
     assert.equal(reviewWrites(state)[0]?.body.event, 'COMMENT');
   });
 });

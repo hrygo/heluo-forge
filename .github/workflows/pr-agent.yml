@@ -38,6 +38,7 @@ concurrency:
 
 permissions:
   actions: read
+  checks: read
   contents: read
   issues: write
   pull-requests: write
@@ -117,6 +118,8 @@ jobs:
         id: revision
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_AGENT_COVERAGE_INVOCATION: initial
+          PR_AGENT_REVIEW_CONTEXT_PATH: .pr-agent-review-context-${{ github.run_id }}-${{ github.run_attempt }}-initial.json
         run: &capture_revision node scripts/pr-agent-workflow.mjs capture
 
       - name: Run PR-Agent summary
@@ -134,6 +137,10 @@ jobs:
           GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "true"
           GITHUB_ACTION_CONFIG__AUTO_REVIEW: "false"
           GITHUB_ACTION_CONFIG__PUSH_COMMANDS: "/describe"
+
+      - name: Begin native review
+        if: ${{ !cancelled() && steps.revision.outputs.review_context != '' }}
+        run: echo 'Native PR review started.'
 
       # The summary step can fail the job without preventing review of the PR.
       - name: Run PR-Agent
@@ -160,11 +167,12 @@ jobs:
           PR_REVIEWER__FINAL_UPDATE_MESSAGE: "false"
           PR_REVIEWER__ENABLE_LARGE_PR_CHUNKING: "true"
           PR_REVIEWER__MAX_NUMBER_OF_CALLS: "5"
-          PR_REVIEWER__NUM_MAX_FINDINGS: "4"
+          PR_REVIEWER__NUM_MAX_FINDINGS: ${{ steps.retry_revision.outputs.finding_limit || steps.revision.outputs.finding_limit }}
           PR_REVIEWER__ENABLE_REVIEW_COVERAGE_FOOTER: "true"
           # The pinned runner records hashes of rows in the actual model request.
           PR_AGENT_COVERAGE_INVOCATION: ${{ steps.retry_revision.outputs.head != '' && 'retry' || 'initial' }}
-          PR_AGENT_COVERAGE_PATH: ${{ vars.PR_AGENT_AUTO_APPROVE == 'true' && format('/github/workspace/.pr-agent-coverage-{0}-{1}-{2}.json', github.run_id, github.run_attempt, steps.retry_revision.outputs.head != '' && 'retry' || 'initial') || '' }}
+          PR_AGENT_COVERAGE_PATH: ${{ format('/github/workspace/.pr-agent-coverage-{0}-{1}-{2}.json', github.run_id, github.run_attempt, steps.retry_revision.outputs.head != '' && 'retry' || 'initial') }}
+          PR_AGENT_REVIEW_CONTEXT_PATH: ${{ (steps.retry_revision.outputs.review_context || steps.revision.outputs.review_context) && format('/github/workspace/{0}', steps.retry_revision.outputs.review_context || steps.revision.outputs.review_context) || '' }}
 
       - name: Validate PR-Agent review
         id: validation
@@ -175,6 +183,7 @@ jobs:
           REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
           PR_AGENT_COVERAGE_INVOCATION: initial
           PR_AGENT_COVERAGE_PATH: .pr-agent-coverage-${{ github.run_id }}-${{ github.run_attempt }}-initial.json
+          PR_AGENT_REVIEW_CONTEXT_PATH: ${{ steps.revision.outputs.review_context }}
           REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
@@ -186,15 +195,17 @@ jobs:
       # in the same job so PR-Agent refreshes its persistent comments.
       - name: Capture refreshed PR revision
         id: retry_revision
-        if: ${{ steps.validation.outputs.retry == 'true' }}
+        if: ${{ !cancelled() && steps.validation.outputs.retry == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_HEAD: ${{ steps.revision.outputs.head }}
           EXPECTED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
+          PR_AGENT_COVERAGE_INVOCATION: retry
+          PR_AGENT_REVIEW_CONTEXT_PATH: .pr-agent-review-context-${{ github.run_id }}-${{ github.run_attempt }}-retry.json
         run: *capture_revision
 
       - name: Retry PR-Agent summary
-        if: ${{ github.event_name == 'workflow_run' && steps.retry_revision.outputs.head != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_run' && steps.retry_revision.outputs.head != '' }}
         uses: docker://pragent/pr-agent@sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe # 0.50.0-github_action
         env: *pr_agent_summary_env
 
@@ -207,17 +218,22 @@ jobs:
 
       - name: Validate refreshed PR-Agent review
         id: retry_validation
-        if: ${{ steps.validation.outputs.retry == 'true' }}
+        if: ${{ !cancelled() && steps.validation.outputs.retry == 'true' && steps.retry_revision.outputs.head != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVIEW_RESULT: ${{ steps.pr_agent_retry.outputs.review }}
           PR_AGENT_COVERAGE_INVOCATION: retry
           PR_AGENT_COVERAGE_PATH: .pr-agent-coverage-${{ github.run_id }}-${{ github.run_attempt }}-retry.json
+          PR_AGENT_REVIEW_CONTEXT_PATH: ${{ steps.retry_revision.outputs.review_context }}
           REVIEWED_HEAD: ${{ steps.retry_revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.retry_revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.retry_revision.outputs.base_ref }}
           REVIEW_STARTED_AT: ${{ steps.retry_revision.outputs.started }}
         run: *validate_review
+
+      - name: Confirm incremental baseline ${{ steps.retry_validation.outputs.baseline_key || steps.validation.outputs.baseline_key }}
+        if: ${{ steps.retry_validation.outputs.baseline_key != '' || (steps.validation.outputs.retry != 'true' && steps.validation.outputs.baseline_key != '') }}
+        run: echo 'Incremental baseline verified for the captured revision.'
 
       - name: Confirm completed automatic review ${{ steps.retry_validation.outputs.review_key || steps.validation.outputs.review_key }}
         if: ${{ github.event_name == 'workflow_run' && (steps.retry_validation.outputs.review_key != '' || (steps.validation.outputs.retry != 'true' && steps.validation.outputs.review_key != '')) }}

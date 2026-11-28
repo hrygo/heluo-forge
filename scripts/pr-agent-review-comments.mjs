@@ -1,9 +1,21 @@
 import { createHash } from 'node:crypto';
+import { isSha } from './pr-agent-github.mjs';
 
 const markerPattern = /(?:^|\n)(<!-- heluo-forge-pr-agent-comment:v1 [a-f0-9]{64} -->)$/u;
 
 export function getReviewCommentMarker(body) {
   return typeof body === 'string' ? markerPattern.exec(body.trimEnd())?.[1] : undefined;
+}
+
+export function getReviewCommentBase(body) {
+  if (!getReviewCommentMarker(body)) return;
+  return /^<!-- heluo-forge-pr-agent-comment-base:v1 ([a-f0-9]{40}) -->$/u.exec(body.trimEnd().split('\n\n').at(-2))?.[1];
+}
+
+export function reviewPriority(issue) {
+  const heading = typeof issue?.issue_header === 'string' ? issue.issue_header.trim() : '';
+  const match = /^\[(P[0-3])\][ \t]+([^\r\n]+)$/u.exec(heading);
+  if (match && !/\[P[0-9]+\]/iu.test(match[2])) return match[1];
 }
 
 export function parseReviewPatch(patch) {
@@ -95,9 +107,11 @@ function parseFinding(issue) {
   return { heading: priority ? `${priority} ${title}` : title, content, side, start, end };
 }
 
-export function buildReviewComments({ issues, files, head }) {
+export function buildReviewComments({ issues, files, head, base, deltaFiles }) {
   if (!Array.isArray(issues) || !Array.isArray(files) || typeof head !== 'string' || !head) return [];
   const paths = indexChangedPaths(files);
+  const delta = deltaFiles && new Map(deltaFiles.map(({ filename, patch }) => [filename,
+    new Set(parseReviewPatch(patch).hunks.flatMap(({ RIGHT }) => RIGHT.lines.map(({ number }) => number)))]));
   const parsedPatches = new Map();
   const comments = new Map();
   for (const issue of issues) {
@@ -109,19 +123,30 @@ export function buildReviewComments({ issues, files, head }) {
     if (candidates.length !== 1) continue;
     const [{ file, onlySide }] = candidates;
     const side = requestedSide ?? onlySide;
-    if (!side) continue;
+    if (!side || (delta && side !== 'RIGHT')) continue;
 
     if (!parsedPatches.has(file)) parsedPatches.set(file, parseReviewPatch(file.patch).hunks);
     const hunk = parsedPatches.get(file).find(({ [side]: range }) =>
       start >= range.start && end < range.end);
-    const line = hunk?.[side].lines.find(({ number }) => number >= start && number <= end)?.number;
+    const line = hunk?.[side].lines.find(({ number }) => number >= start && number <= end &&
+      (!delta || delta.get(file.filename)?.has(number)))?.number;
     if (line === undefined) continue;
 
     const path = file.filename;
     const hash = createHash('sha256').update(JSON.stringify([head, path, side, line, heading, content])).digest('hex');
     const marker = `<!-- heluo-forge-pr-agent-comment:v1 ${hash} -->`;
-    const body = `**${heading}**\n\n${content}\n\n${marker}`;
+    const baseMarker = side === 'LEFT' && isSha(base) ? `<!-- heluo-forge-pr-agent-comment-base:v1 ${base} -->\n\n` : '';
+    const body = `**${heading}**\n\n${content}\n\n${baseMarker}${marker}`;
     comments.set(marker, { path, line, side, body });
   }
   return [...comments.values()];
+}
+
+export function withoutResolvedDuplicates(comments, threads, head, base) {
+  // LEFT additionally needs the original target revision. Incremental comments
+  // must hit a changed row, so an older thread cannot suppress a new change.
+  return comments.filter(({ path, side, line }) => !threads.some((thread) => thread.resolved && !thread.outdated &&
+    thread.lastReply && thread.originalHead === head && thread.path === path &&
+    (side === 'RIGHT' || (isSha(base) && thread.originalBase === base)) &&
+    thread.side === side && thread.start <= line && line <= thread.end));
 }
