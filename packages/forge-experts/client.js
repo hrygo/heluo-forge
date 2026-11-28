@@ -32,9 +32,10 @@ window.__ModuleLoader__.load({
       cancelled: '已取消',
       pending_delivery: '受理状态未知（请对账）',
       unknown: '受理状态未知（请对账）',
+      not_found: '任务不可访问',
     }));
 
-    const TERMINAL_TASK_STATUSES = new Set(['completed', 'succeeded', 'failed', 'cancelled']);
+    const TERMINAL_TASK_STATUSES = new Set(['completed', 'succeeded', 'failed', 'cancelled', 'not_found']);
 
     const ERROR_NOTICE = Object.freeze(Object.assign(Object.create(null), {
       EXPERT_MANAGEMENT_DISABLED: '专家智能体管理入口当前未开放。',
@@ -301,11 +302,19 @@ window.__ModuleLoader__.load({
       return prevGen !== null && nextGen !== null && nextGen < prevGen;
     }
 
+    function advancesTaskGeneration(prev, patch) {
+      return Number.isInteger(prev?.runGeneration) && Number.isInteger(patch?.runGeneration)
+        && patch.runGeneration > prev.runGeneration;
+    }
+
+    function sameCardTask(left, right) {
+      if (left?.taskId && right?.taskId) return left.taskId === right.taskId;
+      return Boolean(left?.requestId && left.requestId === right?.requestId);
+    }
+
     function mergeTaskGeneration(prev, patch, { resetPreviousResult = false } = {}) {
       if (isStaleGeneration(prev, patch)) return prev;
-      const prevGen = Number.isInteger(prev?.runGeneration) ? prev.runGeneration : null;
-      const nextGen = Number.isInteger(patch?.runGeneration) ? patch.runGeneration : null;
-      const generationChanged = prevGen !== null && nextGen !== null && nextGen > prevGen;
+      const generationChanged = advancesTaskGeneration(prev, patch);
       const base = { ...(prev ?? {}) };
       if (resetPreviousResult || generationChanged) {
         base.summary = null;
@@ -335,46 +344,117 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
       const pendingFollowupBackupRef = React.useRef(null);
+      const taskRef = React.useRef(initial);
+      const operationRef = React.useRef(null);
+      const reconcileVersionRef = React.useRef(0);
+      const resultAccessDeniedRef = React.useRef(false);
+      const switchedTask = initial !== initialRef.current
+        && !sameCardTask(initialRef.current, initial)
+        && !sameCardTask(taskRef.current, initial);
+      const model = deriveTaskCardModel(switchedTask ? initial : task);
+      const activeRequestId = model.requestId;
+      const showRaw = rawExpanded && !switchedTask;
+
+      // Keep the latest committed card data available to async callbacks before React renders it.
+      function updateTask(next) {
+        const visible = next && resultAccessDeniedRef.current
+          ? mergeTaskGeneration(next, {}, { resetPreviousResult: true })
+          : next;
+        taskRef.current = visible;
+        setTask(visible);
+      }
+
+      function beginOperation() {
+        if (switchedTask || operationRef.current) return null;
+        const operation = { task: taskRef.current, reconcileVersion: reconcileVersionRef.current };
+        operationRef.current = operation;
+        setBusy(true);
+        setNotice(null);
+        return operation;
+      }
+
+      function isCurrentOperation(operation) {
+        const current = taskRef.current;
+        return operationRef.current === operation
+          && current?.taskId === operation.task?.taskId
+          && current?.requestId === operation.task?.requestId;
+      }
+
+      function finishOperation(operation) {
+        if (operationRef.current !== operation) return;
+        operationRef.current = null;
+        setBusy(false);
+      }
+
+      function isSupersededRead(operation, patch) {
+        const current = taskRef.current;
+        return isStaleGeneration(current, patch)
+          || (operation.reconcileVersion !== reconcileVersionRef.current && !advancesTaskGeneration(current, patch));
+      }
+
+      function clearDeniedResult(response) {
+        if (response?.status !== 401 && response?.status !== 403) return false;
+        resultAccessDeniedRef.current = true;
+        updateTask(taskRef.current);
+        setRawExpanded(false);
+        setNotice(resultNotice(response));
+        return true;
+      }
+
+      function applyNotFound(requestId) {
+        const backup = pendingFollowupBackupRef.current;
+        if (backup?.followupRequestId === requestId) {
+          pendingFollowupBackupRef.current = null;
+          updateTask(backup.task);
+          setNotice('已确认本次追问未被远端受理，已恢复原任务状态与追问草稿，可手动重新发送。');
+          return true;
+        }
+
+        const current = taskRef.current;
+        if (current?.taskId && current.status !== 'unknown' && current.status !== 'pending_delivery') return false;
+        updateTask(mergeTaskGeneration(current, { status: 'not_found' }, { resetPreviousResult: true }));
+        setRawExpanded(false);
+        setNotice(ERROR_NOTICE.EXPERT_TASK_NOT_FOUND);
+        return true;
+      }
+
       React.useEffect(() => {
-        if (initial && initial !== initialRef.current) {
-          const switchedTask = initialRef.current?.taskId && initial.taskId && initialRef.current.taskId !== initial.taskId;
-          initialRef.current = initial;
-          if (switchedTask) {
-            pendingFollowupBackupRef.current = null;
-            setTask(initial);
-            setFollowupText('');
-            setRawExpanded(false);
-            setNotice(null);
-          } else if (!pendingFollowupBackupRef.current) {
-            setTask((prev) => mergeTaskGeneration(prev, initial));
-          }
+        if (initial === initialRef.current) return;
+        initialRef.current = initial;
+        if (switchedTask) {
+          operationRef.current = null;
+          resultAccessDeniedRef.current = false;
+          pendingFollowupBackupRef.current = null;
+          updateTask(initial);
+          setBusy(false);
+          setFollowupText('');
+          setRawExpanded(false);
+          setNotice(null);
+        } else if (!pendingFollowupBackupRef.current
+          && (taskRef.current?.status !== 'not_found' || (initial?.status !== 'unknown' && initial?.status !== 'pending_delivery'))) {
+          updateTask(mergeTaskGeneration(taskRef.current, initial));
         }
       }, [initial]);
-      const model = deriveTaskCardModel(task ?? initial);
-      const activeRequestId = model.requestId;
-      const taskRef = React.useRef(task ?? initial);
-      taskRef.current = task ?? initial;
+
       React.useEffect(() => {
         if (!activeRequestId) return undefined;
         const onReconciled = (entry) => {
-          if (!entry || entry.requestId !== activeRequestId) return;
+          const current = taskRef.current;
+          if (!entry || entry.requestId !== activeRequestId
+            || typeof current?.requestId !== 'string' || current.requestId.trim() !== activeRequestId) return;
           if (entry.notFound === true) {
-            if (pendingFollowupBackupRef.current && pendingFollowupBackupRef.current.followupRequestId === activeRequestId) {
-              const backup = pendingFollowupBackupRef.current.task;
-              pendingFollowupBackupRef.current = null;
-              setTask(backup);
-              setNotice('已确认本次追问未被远端受理，已恢复原任务状态与追问草稿，可手动重新发送。');
-            }
+            if (applyNotFound(activeRequestId)) reconcileVersionRef.current += 1;
             return;
           }
-          if (isStaleGeneration(taskRef.current, entry)) return;
+          if (isStaleGeneration(current, entry)) return;
+          reconcileVersionRef.current += 1;
           if (pendingFollowupBackupRef.current?.followupRequestId === activeRequestId) {
             const acceptedText = pendingFollowupBackupRef.current.submittedText;
             pendingFollowupBackupRef.current = null;
             setFollowupText((curr) => (curr === acceptedText ? '' : curr));
           }
           setRawExpanded(false);
-          setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(entry, prev)));
+          updateTask(mergeTaskGeneration(current, pickTaskReconcileFields(entry, current)));
           setNotice('已按原请求号完成权威状态对账。');
         };
         taskReconciledListeners.add(onReconciled);
@@ -384,47 +464,42 @@ window.__ModuleLoader__.load({
       }, [activeRequestId]);
 
       const handleReconcile = async () => {
-        if (!model.requestId || busy) return;
-        setBusy(true);
-        setNotice(null);
+        if (!model.canReconcile) return;
+        const operation = beginOperation();
+        if (!operation) return;
         try {
           const res = await reconcileTaskByRequest(model.requestId);
+          if (!isCurrentOperation(operation) || isSupersededRead(operation, res.body)) return;
           if (!res.ok) {
-            if (resultCode(res) === 'EXPERT_TASK_NOT_FOUND'
-              && pendingFollowupBackupRef.current
-              && pendingFollowupBackupRef.current.followupRequestId === model.requestId) {
-              const backup = pendingFollowupBackupRef.current.task;
-              pendingFollowupBackupRef.current = null;
-              setTask(backup);
-              setNotice('已确认本次追问未被远端受理，已恢复原任务状态与追问草稿，可手动重新发送。');
-              return;
+            if (resultCode(res) !== 'EXPERT_TASK_NOT_FOUND' || !applyNotFound(model.requestId)) {
+              setNotice(resultNotice(res));
             }
-            setNotice(resultNotice(res));
             return;
           }
-          if (isStaleGeneration(taskRef.current, res.body)) return;
           if (pendingFollowupBackupRef.current?.followupRequestId === model.requestId) {
             const acceptedText = pendingFollowupBackupRef.current.submittedText;
             pendingFollowupBackupRef.current = null;
             setFollowupText((curr) => (curr === acceptedText ? '' : curr));
           }
+          const current = taskRef.current;
           setRawExpanded(false);
-          setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(res.body, prev)));
+          updateTask(mergeTaskGeneration(current, pickTaskReconcileFields(res.body, current)));
           setNotice('已按原请求号完成权威状态对账。');
         } catch {
-          setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
+          if (isCurrentOperation(operation)) setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
         } finally {
-          setBusy(false);
+          finishOperation(operation);
         }
       };
 
       const handleRefresh = async () => {
-        if (!model.taskId || model.isUnknown || busy) return;
+        if (!model.canRefresh) return;
+        const operation = beginOperation();
+        if (!operation) return;
         const targetTaskId = model.taskId;
-        setBusy(true);
-        setNotice(null);
         try {
           const statusRes = await fetchTaskStatus(targetTaskId);
+          if (!isCurrentOperation(operation) || clearDeniedResult(statusRes)) return;
           if (!statusRes.ok) {
             setNotice(resultNotice(statusRes));
             return;
@@ -432,15 +507,18 @@ window.__ModuleLoader__.load({
           const statusPatch = pickTaskMutationFields(statusRes.body);
           let finalPatch = statusPatch;
           let resetPreviousResult = false;
+          let readAuthorizedResult = false;
           const candidateStatus = statusPatch.status ?? taskRef.current?.status;
           if (candidateStatus === 'completed' || candidateStatus === 'succeeded' || candidateStatus === 'waiting_user') {
             const resultRes = await fetchTaskResult(targetTaskId).catch(() => null);
+            if (!isCurrentOperation(operation) || clearDeniedResult(resultRes)) return;
             if (resultRes?.ok && resultRes.body) {
               const statusGen = Number.isInteger(statusPatch.runGeneration) ? statusPatch.runGeneration : null;
               const resultGen = Number.isInteger(resultRes.body.runGeneration) ? resultRes.body.runGeneration : null;
               if (statusGen !== null && resultGen !== null && resultGen !== statusGen) {
                 // Generation advanced between /tasks/:id and /tasks/:id/result: re-read authoritative status instead of mixing snapshots.
                 const retryStatus = await fetchTaskStatus(targetTaskId).catch(() => null);
+                if (!isCurrentOperation(operation) || clearDeniedResult(retryStatus)) return;
                 if (retryStatus?.ok && retryStatus.body) {
                   finalPatch = pickTaskMutationFields(retryStatus.body);
                   resetPreviousResult = true;
@@ -451,48 +529,41 @@ window.__ModuleLoader__.load({
               } else {
                 // Only merge allowlisted presentation fields so /result never clobbers authoritative status/taskId.
                 finalPatch = { ...statusPatch, ...pickTaskResultFields(resultRes.body) };
+                readAuthorizedResult = true;
               }
             }
           }
-          const latestPrev = taskRef.current;
-          if (latestPrev?.taskId && latestPrev.taskId !== targetTaskId) return;
-          if (pendingFollowupBackupRef.current || isStaleGeneration(latestPrev, finalPatch)) return;
-          const prevGen = Number.isInteger(latestPrev?.runGeneration) ? latestPrev.runGeneration : null;
-          const nextGen = Number.isInteger(finalPatch?.runGeneration) ? finalPatch.runGeneration : null;
-          if (prevGen !== null && nextGen !== null && nextGen > prevGen) {
-            setRawExpanded(false);
-          }
-          setTask((prev) => {
-            if (prev?.taskId && prev.taskId !== targetTaskId) return prev;
-            if (pendingFollowupBackupRef.current || isStaleGeneration(prev, finalPatch)) return prev;
-            return mergeTaskGeneration(prev, finalPatch, { resetPreviousResult });
-          });
+          if (pendingFollowupBackupRef.current || isSupersededRead(operation, finalPatch)) return;
+          const current = taskRef.current;
+          if (advancesTaskGeneration(current, finalPatch)) setRawExpanded(false);
+          if (readAuthorizedResult) resultAccessDeniedRef.current = false;
+          updateTask(mergeTaskGeneration(current, finalPatch, { resetPreviousResult }));
         } catch {
-          setNotice(ERROR_NOTICE.EXPERT_DIRECTORY_UNAVAILABLE);
+          if (isCurrentOperation(operation)) setNotice(ERROR_NOTICE.EXPERT_DIRECTORY_UNAVAILABLE);
         } finally {
-          setBusy(false);
+          finishOperation(operation);
         }
       };
 
       const handleFollowup = async () => {
-        if (!model.showFollowupInput || busy || !followupText.trim()) return;
+        if (!model.showFollowupInput || !followupText.trim()) return;
+        const operation = beginOperation();
+        if (!operation) return;
         const submittedText = followupText;
         const followupRequestId = generateClientRequestId();
-        setBusy(true);
-        setNotice(null);
+        const markFollowupUnknown = (requestId) => {
+          pendingFollowupBackupRef.current = { task: operation.task, followupRequestId: requestId, submittedText };
+          updateTask({ ...taskRef.current, status: 'unknown', requestId });
+        };
         try {
           const res = await postTaskFollowup(model.taskId, { taskText: submittedText, requestId: followupRequestId });
+          if (!isCurrentOperation(operation)) return;
           if (!res.ok) {
             if (resultCode(res) === 'EXPERT_ACCEPTANCE_UNKNOWN') {
               const pendingReqId = typeof res?.body?.error?.details?.requestId === 'string' && res.body.error.details.requestId.trim()
                 ? res.body.error.details.requestId.trim()
                 : followupRequestId;
-              pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId: pendingReqId, submittedText };
-              setTask((prev) => ({
-                ...(prev ?? {}),
-                status: 'unknown',
-                requestId: pendingReqId,
-              }));
+              markFollowupUnknown(pendingReqId);
             }
             setNotice(resultNotice(res));
             return;
@@ -500,42 +571,39 @@ window.__ModuleLoader__.load({
           pendingFollowupBackupRef.current = null;
           setFollowupText((curr) => (curr === submittedText ? '' : curr));
           setRawExpanded(false);
-          setTask((prev) => mergeTaskGeneration(prev, { ...pickTaskMutationFields(res.body), requestId: followupRequestId }, { resetPreviousResult: true }));
+          updateTask(mergeTaskGeneration(taskRef.current, { ...pickTaskMutationFields(res.body), requestId: followupRequestId }, { resetPreviousResult: true }));
         } catch {
-          pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId, submittedText };
-          setTask((prev) => ({
-            ...(prev ?? {}),
-            status: 'unknown',
-            requestId: followupRequestId,
-          }));
+          if (!isCurrentOperation(operation)) return;
+          markFollowupUnknown(followupRequestId);
           setNotice(ERROR_NOTICE.EXPERT_ACCEPTANCE_UNKNOWN);
         } finally {
-          setBusy(false);
+          finishOperation(operation);
         }
       };
 
       const handleCancel = async () => {
-        if (!model.taskId || !model.canCancel || busy) return;
-        setBusy(true);
-        setNotice(null);
+        if (!model.canCancel) return;
+        const operation = beginOperation();
+        if (!operation) return;
         try {
           const res = await postTaskCancel(model.taskId);
+          if (!isCurrentOperation(operation)) return;
           if (!res.ok) {
             setNotice(resultNotice(res));
             return;
           }
           const patch = pickTaskMutationFields(res.body);
-          setTask((prev) => mergeTaskGeneration(prev, patch));
-          const nextStatus = patch.status ?? task?.status;
+          updateTask(mergeTaskGeneration(taskRef.current, patch));
+          const nextStatus = patch.status ?? taskRef.current?.status;
           if (nextStatus === 'cancelling' || nextStatus === 'cancelled' || patch.cancelRequested === true) {
             setNotice('取消请求已提交；专家已经执行的外部动作不会被自动撤销。');
           } else {
             setNotice('已同步服务端最新任务状态。');
           }
         } catch {
-          setNotice(ERROR_NOTICE.EXPERT_REQUEST_FAILED);
+          if (isCurrentOperation(operation)) setNotice(ERROR_NOTICE.EXPERT_REQUEST_FAILED);
         } finally {
-          setBusy(false);
+          finishOperation(operation);
         }
       };
 
@@ -556,7 +624,7 @@ window.__ModuleLoader__.load({
         model.summary ? h('div', { 'data-testid': 'fexp-task-summary' }, model.summary) : null,
         model.waitingNotice ? h('div', { role: 'status', 'data-testid': 'fexp-task-waiting-notice' }, model.waitingNotice) : null,
         model.cancellationNotice ? h('div', { role: 'status', 'data-testid': 'fexp-task-cancel-notice' }, model.cancellationNotice) : null,
-        notice ? h('div', { role: 'status', 'data-testid': 'fexp-task-notice' }, notice) : null,
+        !switchedTask && notice ? h('div', { role: 'status', 'data-testid': 'fexp-task-notice' }, notice) : null,
         model.result !== null ? h('div', { 'data-testid': 'fexp-task-result' }, typeof model.result === 'string' ? model.result : JSON.stringify(model.result)) : null,
         model.sources.length > 0 ? h('ul', { 'data-testid': 'fexp-task-sources' },
           ...model.sources.map((src, idx) => h('li', { key: src?.id ?? idx }, src?.title ?? src?.uri ?? '已授权来源')),
@@ -568,13 +636,13 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             'data-testid': 'fexp-raw-toggle',
-            'aria-expanded': rawExpanded,
+            'aria-expanded': showRaw,
             onClick: () => setRawExpanded((prev) => !prev),
-          }, rawExpanded ? '收起专家原文' : '展开专家原文'),
-          rawExpanded ? h('pre', { 'data-testid': 'fexp-raw-content' }, model.rawResult) : null,
+          }, showRaw ? '收起专家原文' : '展开专家原文'),
+          showRaw ? h('pre', { 'data-testid': 'fexp-raw-content' }, model.rawResult) : null,
         ) : null,
         model.showFollowupInput ? h('div', { 'data-testid': 'fexp-followup-box' },
-          h('input', { type: 'text', value: followupText, disabled: busy, placeholder: '输入补充说明…', onChange: (e) => setFollowupText(e.target.value) }),
+          h('input', { type: 'text', value: switchedTask ? '' : followupText, disabled: busy, placeholder: '输入补充说明…', onChange: (e) => setFollowupText(e.target.value) }),
           h('button', { type: 'button', disabled: busy, 'data-testid': 'fexp-followup-btn', onClick: handleFollowup }, '发送追问'),
         ) : null,
         h('div', { className: 'fexp-task-card-actions' },

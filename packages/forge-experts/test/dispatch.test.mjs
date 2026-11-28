@@ -6,7 +6,7 @@ import { createExpertsHost } from '../src/index.mjs';
 import { API_PREFIX, REQUEST_HEADER } from '../src/routes.mjs';
 import { ExpertsError } from '../src/errors.mjs';
 
-function createMemoryStorage({ asyncGet = false, failPutPredicate = null } = {}) {
+function createMemoryStorage({ asyncGet = false, failPutPredicate = null, beforeGet, onPut } = {}) {
   const domains = new Map();
   return {
     domains,
@@ -27,6 +27,8 @@ function createMemoryStorage({ asyncGet = false, failPutPredicate = null } = {})
           return {
             get(key) {
               const value = rows.get(key);
+              const barrier = beforeGet?.(spec.name, tableName, key);
+              if (barrier) return barrier.then(() => value);
               return (asyncGet && spec.name === 'forge_experts_requests') ? Promise.resolve(value) : value;
             },
             async put(key, value) {
@@ -35,6 +37,7 @@ function createMemoryStorage({ asyncGet = false, failPutPredicate = null } = {})
               }
               const parsed = schema?.parse ? schema.parse(value) : value;
               rows.set(key, parsed);
+              onPut?.(spec.name, tableName, parsed);
             },
           };
         },
@@ -99,6 +102,7 @@ function makeHarness({
   let callableInScope = true;
   let createCalls = 0;
   let createBehavior = 'accept';
+  const followupCalls = [];
   let nextRequestSeq = 0;
   const tasksByRequest = backend?.tasksByRequest ?? new Map();
   const tasksById = backend?.tasksById ?? new Map();
@@ -198,13 +202,16 @@ function makeHarness({
         artifacts: [],
       };
     },
-    createDelegraFollowup: async ({ taskId, requestId }) => ({
-      scope,
-      taskId,
-      requestId,
-      status: 'queued',
-      runGeneration: 2,
-    }),
+    createDelegraFollowup: async (params) => {
+      followupCalls.push(params);
+      return {
+        scope,
+        taskId: params.taskId,
+        requestId: params.requestId,
+        status: 'queued',
+        runGeneration: 2,
+      };
+    },
     cancelDelegraTask: async ({ taskId }) => ({
       scope,
       taskId,
@@ -219,7 +226,9 @@ function makeHarness({
     setAccepting: (value) => { acceptingTasks = value; },
     setCallableInScope: (value) => { callableInScope = value; },
     setCreateBehavior: (value) => { createBehavior = value; },
+    setSubject: (value) => { scope.subject = value; },
     getCreateCalls: () => createCalls,
+    followupCalls,
     async enableExpert() {
       const cat = await invokeRoute(host, { path: `${API_PREFIX}/catalog?view=callable` });
       const editToken = cat.body.items[0].preference.editToken;
@@ -1327,6 +1336,141 @@ test('followupTask rejects reused requestId with conflicting payload (409 EXPERT
     assert.equal(finalizedRes.body.items[0].preserveDraft, true);
     assert.equal('draft' in finalizedRes.body.items[0], false);
   } finally {
+    await h.host.close();
+  }
+});
+
+for (const blockedTable of ['pending_index', 'correlations']) {
+  test(`GET /tasks/pending rejects a scope change during the ${blockedTable} read (#484)`, async () => {
+    const readStarted = Promise.withResolvers();
+    const releaseRead = Promise.withResolvers();
+    let blockRead = false;
+    const storage = createMemoryStorage({
+      beforeGet(domain, table) {
+        if (blockRead && domain === 'forge_experts_requests' && table === blockedTable) {
+          blockRead = false;
+          readStarted.resolve();
+          return releaseRead.promise;
+        }
+      },
+    });
+    const h = makeHarness({ storage });
+    await h.host.open();
+    try {
+      await h.enableExpert();
+      const selection = await invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/selections`,
+        headers: mutationHeaders(),
+        body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Initial task' },
+      });
+      h.setCreateBehavior('unknown');
+      const dispatch = await invokeRoute(h.host, {
+        method: 'POST',
+        path: `${API_PREFIX}/tasks`,
+        headers: mutationHeaders(),
+        body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Initial task' },
+      });
+      assert.equal(dispatch.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+
+      const path = `${API_PREFIX}/tasks/pending`;
+      blockRead = true;
+      const oldList = invokeRoute(h.host, { path });
+      await readStarted.promise;
+      h.setSubject('emp-1002');
+      const current = await h.host.scope.resolveForRequest();
+      releaseRead.resolve();
+
+      const stale = await oldList;
+      assert.equal(stale.status, 409);
+      assert.equal(stale.body.error.code, 'EXPERT_SCOPE_MISMATCH');
+      assert.equal('items' in stale.body, false);
+      const currentList = await invokeRoute(h.host, { path });
+      assert.equal(currentList.status, 200);
+      assert.deepEqual(currentList.body, { scopeEpoch: current.scopeEpoch, items: [] });
+    } finally {
+      releaseRead.resolve();
+      await h.host.close();
+    }
+  });
+}
+
+test('concurrent followups with the same requestId persist and deliver only the winning payload (#484)', async () => {
+  const firstReadStarted = Promise.withResolvers();
+  const secondReadStarted = Promise.withResolvers();
+  const releaseReads = Promise.withResolvers();
+  let readsRemaining = 0;
+  const requestId = 'fu-concurrent-1';
+  const writes = [];
+  const storage = createMemoryStorage({
+    beforeGet(domain, table) {
+      if (domain === 'forge_experts_requests' && table === 'correlations' && readsRemaining > 0) {
+        readsRemaining -= 1;
+        (readsRemaining === 1 ? firstReadStarted : secondReadStarted).resolve();
+        return releaseReads.promise;
+      }
+    },
+    onPut(domain, table, record) {
+      if (domain === 'forge_experts_requests' && table === 'correlations' && record.requestId === requestId) {
+        writes.push(record);
+      }
+    },
+  });
+  const h = makeHarness({ storage });
+  await h.host.open();
+  try {
+    await h.enableExpert();
+    const selection = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/selections`,
+      headers: mutationHeaders(),
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-1', scopeEpoch: 2, taskText: 'Initial task' },
+    });
+    const dispatch = await invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks`,
+      headers: mutationHeaders(),
+      body: { selectionToken: selection.body.selectionToken, sessionId: 'sess-1', taskText: 'Initial task' },
+    });
+    assert.equal(dispatch.status, 201);
+    const submit = (taskText) => invokeRoute(h.host, {
+      method: 'POST',
+      path: `${API_PREFIX}/tasks/${dispatch.body.taskId}/followups`,
+      headers: mutationHeaders(),
+      body: { taskText, requestId },
+    });
+
+    readsRemaining = 2;
+    const winner = submit('First payload');
+    await firstReadStarted.promise;
+    const contender = submit('Different payload');
+    await Promise.race([secondReadStarted.promise, contender]);
+    releaseReads.resolve();
+    const [accepted, busy] = await Promise.all([winner, contender]);
+    readsRemaining = 0;
+
+    assert.deepEqual(h.followupCalls.map(({ taskText }) => taskText), ['First payload']);
+    assert.equal(accepted.status, 201);
+    assert.equal(busy.status, 503);
+    assert.equal(busy.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+    assert.deepEqual(writes.map(({ status, payloadDigest }) => [status, payloadDigest]), [
+      ['pending_delivery', h.followupCalls[0].payloadDigest],
+      ['accepted', h.followupCalls[0].payloadDigest],
+    ]);
+
+    // Once the winner completes, its stored digest still enforces the serial conflict rule.
+    const conflict = await submit('Different payload');
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.body.error.code, 'EXPERT_IDEMPOTENCY_CONFLICT');
+    assert.equal(writes.length, 2);
+    assert.equal(h.followupCalls.length, 1);
+
+    const currentScope = await h.host.scope.resolveForRequest();
+    assert.deepEqual(await h.host.dispatch.getCorrelation(currentScope, requestId), writes[1]);
+    // The conflicting attempt also releases its reservation for a subsequent matching replay.
+    assert.equal((await submit('First payload')).status, 201);
+  } finally {
+    releaseReads.resolve();
     await h.host.close();
   }
 });
