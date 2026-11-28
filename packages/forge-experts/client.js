@@ -319,17 +319,24 @@ window.__ModuleLoader__.load({
       const initial = props.initialTask ?? props.task ?? null;
       const [task, setTask] = React.useState(initial);
       const initialRef = React.useRef(initial);
-      React.useEffect(() => {
-        if (initial && initial !== initialRef.current) {
-          initialRef.current = initial;
-          setTask(initial);
-        }
-      }, [initial]);
       const [rawExpanded, setRawExpanded] = React.useState(false);
       const [followupText, setFollowupText] = React.useState('');
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
       const pendingFollowupBackupRef = React.useRef(null);
+      React.useEffect(() => {
+        if (initial && initial !== initialRef.current) {
+          const switchedTask = initialRef.current?.taskId && initial.taskId && initialRef.current.taskId !== initial.taskId;
+          initialRef.current = initial;
+          setTask(initial);
+          if (switchedTask) {
+            pendingFollowupBackupRef.current = null;
+            setFollowupText('');
+            setRawExpanded(false);
+            setNotice(null);
+          }
+        }
+      }, [initial]);
       const model = deriveTaskCardModel(task ?? initial);
       const activeRequestId = model.requestId;
       React.useEffect(() => {
@@ -347,6 +354,7 @@ window.__ModuleLoader__.load({
           }
           if (pendingFollowupBackupRef.current?.followupRequestId === activeRequestId) {
             pendingFollowupBackupRef.current = null;
+            setFollowupText('');
           }
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(entry, prev)));
@@ -377,7 +385,11 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
-          pendingFollowupBackupRef.current = null;
+          if (pendingFollowupBackupRef.current?.followupRequestId === model.requestId) {
+            pendingFollowupBackupRef.current = null;
+            setFollowupText('');
+          }
+          setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(res.body, prev)));
           setNotice('已按原请求号完成权威状态对账。');
         } catch {

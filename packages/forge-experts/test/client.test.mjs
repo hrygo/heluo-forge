@@ -1328,3 +1328,130 @@ test('reconnect inside 5s cooldown schedules a single trailing reconcile once co
     restore();
   }
 });
+
+test('manual and automatic reconciliation clear accepted followupText even when reconciled status is waiting_user (#484)', async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let moduleDef = null;
+  const eventSources = [];
+  const sentReqIds = [];
+
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url;
+      this.onmessage = null;
+      this.onerror = null;
+      eventSources.push(this);
+    }
+    emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
+    close() {}
+  }
+
+  globalThis.window = {
+    __ModuleLoader__: { load(def) { moduleDef = def; } },
+    EventSource: FakeEventSource,
+  };
+  globalThis.fetch = async (url, init) => {
+    if (url.includes('/followups') && init?.method === 'POST') {
+      sentReqIds.push(JSON.parse(init.body).requestId);
+      throw new Error('dropped after accept');
+    }
+    if (url.includes('/tasks/by-request/')) {
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { taskId: 'task-clr-1', status: 'waiting_user', runGeneration: 2 }; },
+      };
+    }
+    return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+  };
+
+  try {
+    new Function(clientSource)();
+    const stateSlots = [];
+    const refSlots = [];
+    const effectCleanups = [];
+    let stateIdx = 0;
+    let refIdx = 0;
+    const exported = moduleDef.factory((dep) => {
+      if (dep === 'react') {
+        return {
+          createElement: (type, props, ...children) => ({ type, props, children }),
+          useState(init) {
+            const idx = stateIdx++;
+            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+            return [
+              stateSlots[idx],
+              (next) => { stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next; },
+            ];
+          },
+          useRef(init) {
+            const idx = refIdx++;
+            if (!(idx in refSlots)) refSlots[idx] = { current: init };
+            return refSlots[idx];
+          },
+          useCallback: (fn) => fn,
+          useEffect(fn) {
+            const cleanup = fn();
+            if (typeof cleanup === 'function') effectCleanups.push(cleanup);
+          },
+        };
+      }
+      throw new Error(`Unexpected require: ${dep}`);
+    });
+
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: false });
+
+    const initialTask = { taskId: 'task-clr-1', requestId: 'req-0', status: 'waiting_user', runGeneration: 1 };
+    const renderCard = () => {
+      stateIdx = 0;
+      refIdx = 0;
+      return exported.ExpertTaskStatusCard({ initialTask });
+    };
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    // 1. Manual reconcile confirms acceptance (status: waiting_user) -> followupText is cleared.
+    const t0 = renderCard();
+    findNodes(t0, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'Accepted followup 1' } });
+    const t1 = renderCard();
+    await findNodes(t1, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+    const tUnknown1 = renderCard();
+    await findNodes(tUnknown1, (n) => n.props?.['data-testid'] === 'fexp-task-reconcile')[0].props.onClick();
+    const tAfterManual = renderCard();
+    assert.equal(tAfterManual.props['data-task-status'], 'waiting_user');
+    assert.equal(findNodes(tAfterManual, (n) => n.type === 'input')[0].props.value, '', 'manual reconcile must clear accepted followupText');
+
+    // 2. Auto SSE task-reconciled confirms acceptance (status: waiting_user) -> followupText is cleared.
+    findNodes(tAfterManual, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'Accepted followup 2' } });
+    const t2 = renderCard();
+    await findNodes(t2, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+    renderCard();
+    eventSources[0].emit({
+      type: 'task-reconciled',
+      requestId: sentReqIds[1],
+      taskId: 'task-clr-1',
+      status: 'waiting_user',
+      runGeneration: 3,
+    });
+    const tAfterAuto = renderCard();
+    assert.equal(tAfterAuto.props['data-task-status'], 'waiting_user');
+    assert.equal(findNodes(tAfterAuto, (n) => n.type === 'input')[0].props.value, '', 'auto reconcile must clear accepted followupText');
+
+    for (const c of effectCleanups) c();
+    for (const d of disposers) d();
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});

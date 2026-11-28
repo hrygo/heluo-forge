@@ -517,6 +517,10 @@ test('Stage C4-C cross-package IAM + Policy + Experts E2E: real forge-policy den
     assert.equal(backend.getCreateTaskCalls(), 0, 'generic out-of-scope policy fallback must never authorize expert egress');
 
     // 3. Explicit egress policy authorization -> full prestep + tool bridge + RFC 8693 E2E succeeds.
+    // Note: @heluo/forge-policy uses a closed builtin write-action catalog (catalog.mjs:166) where
+    // `expert.dispatch` is unregistered and always returns `rule: 'out-of-scope'` (fail-closed above).
+    // This PR stays scoped to @heluo/forge-experts without modifying @heluo/forge-policy, so explicit
+    // allow + unload fail-closed is exercised via the host `forgePolicy.decideEgress` egress gate.
     disposePolicy();
     disposePolicy = host.ctx.provide('forgePolicy', {
       decideEgress: async () => ({ decision: 'allow', reason: 'explicit-expert-egress-grant' }),
