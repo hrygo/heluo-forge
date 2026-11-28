@@ -1,6 +1,7 @@
 /**
  * Same-origin HTTP routes and SSE invalidation stream for @heluo/forge-experts (P2 / P5 / P8).
  */
+import { randomUUID } from 'node:crypto';
 import { ExpertsError, serializeError } from './errors.mjs';
 
 export const API_PREFIX = '/api/forge-experts';
@@ -128,6 +129,7 @@ function scopeKeyOf(scope) {
 }
 
 export function createExpertsRoutes(ports) {
+  const hostInstanceId = randomUUID();
   const sseClients = new Map();
 
   function broadcast(event, targetScope = null) {
@@ -184,7 +186,8 @@ export function createExpertsRoutes(ports) {
         res.setHeader('cache-control', 'no-store');
         res.setHeader('x-content-type-options', 'nosniff');
         sseClients.set(res, scopeKey);
-        res.write(`data: ${JSON.stringify({ type: 'ready', scopeEpoch: scope.scopeEpoch, viewVersion: ports.getViewVersion() })}\n\n`);
+        const ready = { type: 'ready', hostInstanceId, scopeEpoch: scope.scopeEpoch, viewVersion: ports.getViewVersion() };
+        res.write(`data: ${JSON.stringify(ready)}\n\n`);
         const cleanup = () => sseClients.delete(res);
         req.on?.('close', cleanup);
         res.on?.('close', cleanup);

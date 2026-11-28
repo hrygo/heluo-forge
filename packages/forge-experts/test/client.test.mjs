@@ -10,21 +10,29 @@ function loadClientModule({ eventSources = [], fetchImpl = null, react = null } 
   const previousFetch = globalThis.fetch;
 
   class FakeEventSource {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 2;
+
     constructor(url) {
       this.url = url;
       this.closed = false;
+      this.readyState = FakeEventSource.CONNECTING;
       this.onmessage = null;
       this.onerror = null;
       eventSources.push(this);
     }
     emit(payload) {
+      this.readyState = FakeEventSource.OPEN;
       this.onmessage?.({ data: JSON.stringify(payload) });
     }
-    fail() {
+    fail(readyState = FakeEventSource.CONNECTING) {
+      this.readyState = readyState;
       this.onerror?.(new Error('sse-drop'));
     }
     close() {
       this.closed = true;
+      this.readyState = FakeEventSource.CLOSED;
     }
   }
 
@@ -1822,7 +1830,7 @@ function mountDraftRecovery(t, fetchImpl) {
     },
     effect(register) { dispose = register(); },
   }, { dispatchEnabled: true });
-  return { getSource: () => source, stream: eventSources[0], dispose: () => dispose?.() };
+  return { getSource: () => source, stream: eventSources[0], eventSources, dispose: () => dispose?.() };
 }
 
 test('an IAM scope change discards buffered and queued drafts and delayed finalized projections (#484)', async (t) => {
@@ -1971,6 +1979,153 @@ test('initial ready binds recovery and a restarted Host with a lower epoch clear
   assert.deepEqual(restored, []);
   stream.emit({ ...failed, scopeEpoch });
   assert.deepEqual(restored, ['restarted host draft']);
+});
+
+test('a delayed lower-epoch mentions response cannot discard a draft in the confirmed scope (#484)', async (t) => {
+  const sessionId = 'sess-mentions-order';
+  const expertId = 'exp-fin-1';
+  const olderReply = Promise.withResolvers();
+  let queries = 0;
+  const mentions = (scopeEpoch) => cardJson(200, {
+    scopeEpoch, viewVersion: 1, candidates: [{ expertId, displayName: '专家', scopeEpoch, viewVersion: 1 }],
+  });
+  const { getSource, stream } = mountDraftRecovery(t, (url) => {
+    if (url.includes('/mentions')) return ++queries === 1 ? olderReply.promise : mentions(6);
+    if (url.endsWith('/selections')) return cardJson(201, {
+      scopeEpoch: 6, sessionId, expertId, selectionToken: 'selection-current', draftRecoveryId: 'recovery-current',
+    });
+    if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+    if (url.endsWith('/turns/finalized')) return cardJson(200, { scopeEpoch: 6, items: [] });
+    assert.fail(url);
+  });
+  const source = getSource();
+  const olderQuery = source.query('older', { sessionId });
+  const [picked] = await source.query('current', { sessionId });
+  const recovered = [];
+  source.onDraftRecovery(({ draft }) => recovered.push(draft.taskText));
+  assert.equal((await source.prepareSubmit({ picked, sessionId, taskText: 'Current draft' })).ok, true);
+
+  stream.emit({ type: 'ready', scopeEpoch: 6, hostInstanceId: 'host-instance' });
+  olderReply.resolve(mentions(5));
+  assert.deepEqual(await olderQuery, []);
+  stream.emit({
+    type: 'turn-finalized', scopeEpoch: 6, sessionId, expertId, draftRecoveryId: 'recovery-current',
+    status: 'failed', preserveDraft: true,
+  });
+  assert.deepEqual(recovered, ['Current draft']);
+  assert.equal(getSource(), source);
+});
+
+test('ready isolates same-epoch Host instances while same-instance reconnect still recovers drafts (#484)', async (t) => {
+  const sessionId = 'sess-instance-restart';
+  const expertId = 'exp-fin-1';
+  const pendingSubmit = Promise.withResolvers();
+  let submissions = 0;
+  let polls = 0;
+  const failed = (draftRecoveryId) => ({
+    type: 'turn-finalized', sessionId, expertId, draftRecoveryId, scopeEpoch: 2, status: 'failed', preserveDraft: true,
+  });
+  const { getSource, stream } = mountDraftRecovery(t, (url) => {
+    if (url.includes('/mentions')) return cardJson(200, {
+      scopeEpoch: 2, viewVersion: 1, candidates: [{ expertId, displayName: '专家', scopeEpoch: 2, viewVersion: 1 }],
+    });
+    if (url.endsWith('/selections')) {
+      submissions += 1;
+      if (submissions === 3) return pendingSubmit.promise;
+      return cardJson(201, {
+        scopeEpoch: 2, sessionId, expertId,
+        selectionToken: `selection-${submissions}`, draftRecoveryId: `recovery-${submissions}`,
+      });
+    }
+    if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+    if (url.endsWith('/turns/finalized')) {
+      polls += 1;
+      return cardJson(200, { scopeEpoch: 2, items: [failed('recovery-4')] });
+    }
+    assert.fail(url);
+  });
+  stream.emit({ type: 'ready', scopeEpoch: 2, hostInstanceId: 'host-instance-a' });
+  const previous = getSource();
+  const [picked] = await previous.query('', { sessionId });
+  assert.equal((await previous.prepareSubmit({ picked, sessionId, taskText: 'Previous queued draft' })).ok, true);
+  assert.equal((await previous.prepareSubmit({ picked, sessionId, taskText: 'Previous buffered draft' })).ok, true);
+  stream.emit(failed('recovery-1'));
+  const lateSubmit = previous.prepareSubmit({ picked, sessionId, taskText: 'Previous in-flight draft' });
+
+  stream.fail();
+  stream.emit({ type: 'ready', scopeEpoch: 2, hostInstanceId: 'host-instance-b' });
+  const current = getSource();
+  const recovered = [];
+  current.onDraftRecovery(({ draft }) => recovered.push(draft.taskText));
+  stream.emit(failed('recovery-2'));
+  assert.deepEqual(recovered, []);
+  pendingSubmit.resolve(cardJson(201, {
+    scopeEpoch: 2, sessionId, expertId, selectionToken: 'selection-3', draftRecoveryId: 'recovery-3',
+  }));
+  const late = await lateSubmit;
+  assert.equal(late.ok, false);
+  assert.equal(Object.hasOwn(late, 'draft'), false);
+  assert.equal(polls, 0);
+
+  const [newPick] = await current.query('', { sessionId });
+  assert.equal((await current.prepareSubmit({ picked: newPick, sessionId, taskText: 'Current reconnect draft' })).ok, true);
+  stream.fail();
+  stream.emit({ type: 'ready', scopeEpoch: 2, hostInstanceId: 'host-instance-b' });
+  getSource().onDraftRecovery(({ draft }) => recovered.push(draft.taskText));
+  await new Promise(setImmediate);
+  assert.deepEqual(recovered, ['Current reconnect draft']);
+  assert.equal(polls, 1);
+});
+
+test('a permanently closed EventSource retries after login without overlapping native retries or surviving disposal (#484)', async (t) => {
+  const scheduled = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (callback, delay) => {
+    const timer = { callback, delay, cleared: false };
+    scheduled.push(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = (timer) => { timer.cleared = true; };
+  try {
+    const { getSource, stream, eventSources, dispose } = mountDraftRecovery(t, (url) => {
+      if (url.endsWith('/tasks/reconcile')) return cardJson(200, { reconciled: [], notFound: [] });
+      assert.fail(url);
+    });
+    const staleMessage = stream.onmessage;
+    const staleError = stream.onerror;
+
+    stream.fail();
+    assert.equal(getSource(), null);
+    assert.deepEqual(scheduled, [], 'CONNECTING uses EventSource native retry');
+
+    // A 401 response leaves the native EventSource permanently CLOSED.
+    stream.fail(stream.constructor.CLOSED);
+    stream.fail(stream.constructor.CLOSED);
+    assert.deepEqual(scheduled.map((timer) => timer.delay), [5_000]);
+    assert.equal(stream.closed, true);
+    scheduled[0].callback();
+    assert.equal(eventSources.length, 2);
+    const replacement = eventSources[1];
+
+    staleMessage({ data: JSON.stringify({ type: 'ready', scopeEpoch: 1, hostInstanceId: 'old-host' }) });
+    staleError();
+    assert.equal(getSource(), null, 'callbacks from the replaced connection cannot activate the candidate source');
+    assert.equal(scheduled.length, 1);
+    replacement.emit({ type: 'ready', scopeEpoch: 2, hostInstanceId: 'current-host' });
+    assert.equal(getSource()?.trigger, '@');
+
+    replacement.fail(replacement.constructor.CLOSED);
+    assert.equal(scheduled.length, 2);
+    dispose();
+    assert.equal(scheduled[1].cleared, true);
+    scheduled[1].callback();
+    assert.equal(eventSources.length, 2);
+    assert.equal(getSource(), null);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
 });
 
 test('ExpertTaskStatusCard ignores late handleRefresh response when a newer generation arrives via reconcile during /result (#484)', async () => {

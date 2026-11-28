@@ -170,18 +170,54 @@ window.__ModuleLoader__.load({
 
     function openEventStream(onMessage, onError) {
       if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return () => {};
-      const source = new window.EventSource(`${API_BASE}/events`);
-      source.onmessage = (event) => {
-        let payload;
-        try { payload = JSON.parse(event.data); } catch { return; }
-        if (!payload || typeof payload !== 'object') return;
-        onMessage(payload);
-      };
-      if (typeof onError === 'function') {
-        source.onerror = () => onError();
+      const EventSource = window.EventSource;
+      const closedState = EventSource.CLOSED ?? 2;
+      const retryDelayMs = 5_000;
+      let source = null;
+      let retryTimer = null;
+      let disposed = false;
+
+      function closeSource() {
+        const current = source;
+        source = null;
+        if (!current) return;
+        current.onmessage = null;
+        current.onerror = null;
+        try { current.close(); } catch { /* closing */ }
       }
+
+      function connect() {
+        const current = new EventSource(`${API_BASE}/events`);
+        source = current;
+        current.onmessage = (event) => {
+          if (source !== current) return;
+          let payload;
+          try { payload = JSON.parse(event.data); } catch { return; }
+          if (!payload || typeof payload !== 'object') return;
+          onMessage(payload);
+        };
+        current.onerror = () => {
+          if (source !== current) return;
+          // A non-retryable HTTP response can permanently close the native stream.
+          if (current.readyState === closedState) {
+            closeSource();
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              if (!disposed) connect();
+            }, retryDelayMs);
+          }
+          if (typeof onError === 'function') onError();
+        };
+      }
+
+      connect();
       return () => {
-        try { source.close(); } catch { /* closing */ }
+        disposed = true;
+        if (retryTimer !== null) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        closeSource();
       };
     }
 
@@ -944,6 +980,7 @@ window.__ModuleLoader__.load({
       let activeEpoch = 0;
       let activeVersion = 0;
       let recoveryScopeEpoch = 0;
+      let recoveryHostInstanceId = null;
       let scopeGeneration = 0;
       let pollGeneration = 0;
       let streamConnected = true;
@@ -963,10 +1000,12 @@ window.__ModuleLoader__.load({
       };
 
       const isScopeEpoch = (epoch) => Number.isSafeInteger(epoch) && epoch > 0;
-      const updateRecoveryScope = (epoch, scopeChanged = false) => {
+      const updateRecoveryScope = (epoch, { scopeChanged = false, hostInstanceId = null } = {}) => {
         const nextEpoch = isScopeEpoch(epoch) ? epoch : 0;
-        if ((!nextEpoch && !scopeChanged) || (nextEpoch && nextEpoch === recoveryScopeEpoch)) return false;
-        const changed = recoveryScopeEpoch !== 0 || scopeChanged;
+        const hostChanged = Boolean(hostInstanceId && recoveryHostInstanceId && hostInstanceId !== recoveryHostInstanceId);
+        if (hostInstanceId) recoveryHostInstanceId = hostInstanceId;
+        if (!hostChanged && ((!nextEpoch && !scopeChanged) || (nextEpoch && nextEpoch === recoveryScopeEpoch))) return false;
+        const changed = hostChanged || recoveryScopeEpoch !== 0 || scopeChanged;
         recoveryScopeEpoch = nextEpoch;
         if (changed) {
           scopeGeneration += 1;
@@ -1015,7 +1054,9 @@ window.__ModuleLoader__.load({
             if (!sessionId || disposed || mountedGen !== generation) return [];
             const result = await fetchMentions({ sessionId, query: typeof text === 'string' ? text : '' });
             if (disposed || mountedGen !== generation || !result.ok) return [];
-            if (updateRecoveryScope(result.body?.scopeEpoch)) {
+            const epoch = result.body?.scopeEpoch;
+            if (isScopeEpoch(epoch) && epoch < recoveryScopeEpoch) return [];
+            if (updateRecoveryScope(epoch)) {
               dropGroup();
               registerGroup();
               return [];
@@ -1186,8 +1227,10 @@ window.__ModuleLoader__.load({
           if (disposed) return;
           if (payload.type === 'ready') {
             if (!isScopeEpoch(payload.scopeEpoch)) return;
+            const hostInstanceId = normalizeCardId(payload.hostInstanceId);
+            if (hostInstanceId && hostInstanceId === recoveryHostInstanceId && payload.scopeEpoch < recoveryScopeEpoch) return;
             streamConnected = true;
-            if (updateRecoveryScope(payload.scopeEpoch)) dropGroup();
+            if (updateRecoveryScope(payload.scopeEpoch, { hostInstanceId })) dropGroup();
             registerGroup();
             if (enableSelectionBinding) {
               triggerReconcile();
@@ -1217,7 +1260,7 @@ window.__ModuleLoader__.load({
             return;
           }
           if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {
-            if (payload.type === 'scope-changed') updateRecoveryScope(payload.scopeEpoch, true);
+            if (payload.type === 'scope-changed') updateRecoveryScope(payload.scopeEpoch, { scopeChanged: true });
             dropGroup();
             registerGroup();
           }
