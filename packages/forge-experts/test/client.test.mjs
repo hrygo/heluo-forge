@@ -1168,3 +1168,163 @@ test('ExpertTaskStatusCard uses independent followup requestId when fetch drops 
     else globalThis.fetch = previousFetch;
   }
 });
+
+test('ExpertTaskStatusCard restores waiting_user and followup draft when reconcile confirms EXPERT_TASK_NOT_FOUND without auto-resending (#484)', async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  let moduleDef = null;
+  let followupCalls = 0;
+
+  globalThis.window = {
+    __ModuleLoader__: { load(def) { moduleDef = def; } },
+  };
+  globalThis.fetch = async (url, init) => {
+    if (url.includes('/followups') && init?.method === 'POST') {
+      followupCalls += 1;
+      if (followupCalls === 1) throw new Error('network dropped before reaching host');
+      return { ok: true, status: 201, async json() { return { taskId: 'task-nf-1', status: 'running', runGeneration: 2 }; } };
+    }
+    if (url.includes('/tasks/by-request/')) {
+      return {
+        ok: false,
+        status: 404,
+        async json() { return { error: { code: 'EXPERT_TASK_NOT_FOUND', message: 'not found' } }; },
+      };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    new Function(clientSource)();
+    const stateSlots = [];
+    const refSlots = [];
+    let stateIdx = 0;
+    let refIdx = 0;
+    const exported = moduleDef.factory((dep) => {
+      if (dep === 'react') {
+        return {
+          createElement: (type, props, ...children) => ({ type, props, children }),
+          useState(init) {
+            const idx = stateIdx++;
+            if (!(idx in stateSlots)) stateSlots[idx] = typeof init === 'function' ? init() : init;
+            return [
+              stateSlots[idx],
+              (next) => {
+                stateSlots[idx] = typeof next === 'function' ? next(stateSlots[idx]) : next;
+              },
+            ];
+          },
+          useRef(init) {
+            const idx = refIdx++;
+            if (!(idx in refSlots)) refSlots[idx] = { current: init };
+            return refSlots[idx];
+          },
+          useCallback: (fn) => fn,
+          useEffect: () => {},
+        };
+      }
+      throw new Error(`Unexpected require: ${dep}`);
+    });
+
+    const initialTask = { taskId: 'task-nf-1', requestId: 'req-orig-1', status: 'waiting_user', runGeneration: 1 };
+    const renderCard = () => {
+      stateIdx = 0;
+      refIdx = 0;
+      return exported.ExpertTaskStatusCard({ initialTask });
+    };
+    const findNodes = (node, pred, acc = []) => {
+      if (!node || typeof node !== 'object') return acc;
+      if (pred(node)) acc.push(node);
+      for (const child of node.children ?? []) findNodes(child, pred, acc);
+      return acc;
+    };
+
+    const t0 = renderCard();
+    findNodes(t0, (n) => n.type === 'input')[0].props.onChange({ target: { value: 'Unsent followup draft' } });
+    const t1 = renderCard();
+    await findNodes(t1, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+
+    const tUnknown = renderCard();
+    assert.equal(tUnknown.props['data-task-status'], 'unknown');
+    await findNodes(tUnknown, (n) => n.props?.['data-testid'] === 'fexp-task-reconcile')[0].props.onClick();
+
+    // Confirmed not accepted -> restores waiting_user + draft, does NOT auto-resend.
+    const tRestored = renderCard();
+    assert.equal(followupCalls, 1, 'must not auto-resend after not_found confirmation');
+    assert.equal(tRestored.props['data-task-status'], 'waiting_user');
+    assert.equal(findNodes(tRestored, (n) => n.type === 'input')[0].props.value, 'Unsent followup draft');
+
+    // User can explicitly retry now.
+    await findNodes(tRestored, (n) => n.props?.['data-testid'] === 'fexp-followup-btn')[0].props.onClick();
+    const tRetried = renderCard();
+    assert.equal(followupCalls, 2);
+    assert.equal(tRetried.props['data-task-status'], 'running');
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});
+
+test('reconnect inside 5s cooldown schedules a single trailing reconcile once cooldown elapses (#484)', async () => {
+  const eventSources = [];
+  let reconcileCalls = 0;
+  const scheduledTimers = [];
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  const origDateNow = Date.now;
+  let fakeNow = 1_700_000_000_000;
+
+  Date.now = () => fakeNow;
+  globalThis.setTimeout = (fn, delay) => {
+    const token = { fn, delay, cleared: false };
+    scheduledTimers.push(token);
+    return token;
+  };
+  globalThis.clearTimeout = (token) => {
+    if (token && typeof token === 'object') token.cleared = true;
+  };
+
+  const fetchImpl = async (url, init) => {
+    if (url.includes('/tasks/reconcile') && init?.method === 'POST') {
+      reconcileCalls += 1;
+      return { ok: true, status: 200, async json() { return { reconciled: [], notFound: [], stillPending: [] }; } };
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const { exported, restore } = loadClientModule({ eventSources, fetchImpl });
+  try {
+    const disposers = [];
+    exported.apply({
+      slots: { inject(_n, fn) { fn(); return () => {}; }, register() { return () => {}; } },
+      effect(register) { const d = register(); if (typeof d === 'function') disposers.push(d); },
+    }, { dispatchEnabled: false });
+
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 1, viewVersion: 1 });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    assert.equal(reconcileCalls, 1);
+
+    // Reconnect 1s later (inside 5s cooldown) -> coalesced into one trailing timer.
+    fakeNow += 1_000;
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 1, viewVersion: 1 });
+    eventSources[0].emit({ type: 'ready', scopeEpoch: 1, viewVersion: 1 });
+    assert.equal(reconcileCalls, 1);
+    assert.equal(scheduledTimers.length, 1);
+    assert.equal(scheduledTimers[0].delay, 4_000);
+
+    // Cooldown elapses and trailing timer fires -> second reconcile runs.
+    fakeNow += 4_000;
+    scheduledTimers[0].fn();
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    assert.equal(reconcileCalls, 2);
+
+    for (const d of disposers) d();
+  } finally {
+    Date.now = origDateNow;
+    globalThis.setTimeout = origSetTimeout;
+    globalThis.clearTimeout = origClearTimeout;
+    restore();
+  }
+});

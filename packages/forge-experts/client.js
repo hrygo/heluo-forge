@@ -329,12 +329,25 @@ window.__ModuleLoader__.load({
       const [followupText, setFollowupText] = React.useState('');
       const [busy, setBusy] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
+      const pendingFollowupBackupRef = React.useRef(null);
       const model = deriveTaskCardModel(task ?? initial);
       const activeRequestId = model.requestId;
       React.useEffect(() => {
         if (!activeRequestId) return undefined;
         const onReconciled = (entry) => {
           if (!entry || entry.requestId !== activeRequestId) return;
+          if (entry.notFound === true) {
+            if (pendingFollowupBackupRef.current && pendingFollowupBackupRef.current.followupRequestId === activeRequestId) {
+              const backup = pendingFollowupBackupRef.current.task;
+              pendingFollowupBackupRef.current = null;
+              setTask(backup);
+              setNotice('已确认本次追问未被远端受理，已恢复原任务状态与追问草稿，可手动重新发送。');
+            }
+            return;
+          }
+          if (pendingFollowupBackupRef.current?.followupRequestId === activeRequestId) {
+            pendingFollowupBackupRef.current = null;
+          }
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(entry, prev)));
           setNotice('已按原请求号完成权威状态对账。');
@@ -352,9 +365,19 @@ window.__ModuleLoader__.load({
         try {
           const res = await reconcileTaskByRequest(model.requestId);
           if (!res.ok) {
+            if (resultCode(res) === 'EXPERT_TASK_NOT_FOUND'
+              && pendingFollowupBackupRef.current
+              && pendingFollowupBackupRef.current.followupRequestId === model.requestId) {
+              const backup = pendingFollowupBackupRef.current.task;
+              pendingFollowupBackupRef.current = null;
+              setTask(backup);
+              setNotice('已确认本次追问未被远端受理，已恢复原任务状态与追问草稿，可手动重新发送。');
+              return;
+            }
             setNotice(resultNotice(res));
             return;
           }
+          pendingFollowupBackupRef.current = null;
           setTask((prev) => mergeTaskGeneration(prev, pickTaskReconcileFields(res.body, prev)));
           setNotice('已按原请求号完成权威状态对账。');
         } catch {
@@ -416,6 +439,7 @@ window.__ModuleLoader__.load({
               const pendingReqId = typeof res?.body?.error?.details?.requestId === 'string' && res.body.error.details.requestId.trim()
                 ? res.body.error.details.requestId.trim()
                 : followupRequestId;
+              pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId: pendingReqId };
               setTask((prev) => ({
                 ...(prev ?? {}),
                 status: 'unknown',
@@ -425,10 +449,12 @@ window.__ModuleLoader__.load({
             setNotice(resultNotice(res));
             return;
           }
+          pendingFollowupBackupRef.current = null;
           setFollowupText('');
           setRawExpanded(false);
           setTask((prev) => mergeTaskGeneration(prev, pickTaskMutationFields(res.body), { resetPreviousResult: true }));
         } catch {
+          pendingFollowupBackupRef.current = { task: task ?? initial, followupRequestId };
           setTask((prev) => ({
             ...(prev ?? {}),
             status: 'unknown',
@@ -669,12 +695,15 @@ window.__ModuleLoader__.load({
       const RECONCILE_COOLDOWN_MS = 5_000;
       let reconcileInFlight = false;
       let lastReconcileAt = 0;
-      return () => {
-        const nowMs = Date.now();
-        if (reconcileInFlight || (lastReconcileAt !== 0 && nowMs - lastReconcileAt < RECONCILE_COOLDOWN_MS)) return;
+      let trailingTimer = null;
+      let queuedWhileInFlight = false;
+      let disposed = false;
+
+      const runNow = () => {
+        if (disposed || reconcileInFlight) return;
         reconcileInFlight = true;
-        lastReconcileAt = nowMs;
-        // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重与冷却防重连风暴，失败时重置冷却以允许下次重连重试。
+        lastReconcileAt = Date.now();
+        // 启动/重连后按原 requestId 对账未终态任务，绝不盲目重发（#247）；加在途去重、冷却与合并补跑，失败时重置冷却以允许下次重连重试。
         postReconcilePending().then((res) => {
           if (res && !res.ok) {
             lastReconcileAt = 0;
@@ -688,6 +717,13 @@ window.__ModuleLoader__.load({
               notifyTaskReconciled(entry);
             }
           }
+          if (Array.isArray(res?.body?.notFound)) {
+            for (const requestId of res.body.notFound) {
+              if (typeof requestId === 'string' && requestId.trim()) {
+                notifyTaskReconciled({ requestId: requestId.trim(), notFound: true });
+              }
+            }
+          }
         }).catch(() => {
           lastReconcileAt = 0;
           if (typeof console !== 'undefined') {
@@ -695,22 +731,65 @@ window.__ModuleLoader__.load({
           }
         }).finally(() => {
           reconcileInFlight = false;
+          if (!disposed && queuedWhileInFlight) {
+            queuedWhileInFlight = false;
+            trigger();
+          }
         });
       };
+
+      const trigger = () => {
+        if (disposed) return;
+        if (reconcileInFlight) {
+          queuedWhileInFlight = true;
+          return;
+        }
+        const nowMs = Date.now();
+        const elapsed = lastReconcileAt === 0 ? RECONCILE_COOLDOWN_MS : (nowMs - lastReconcileAt);
+        if (elapsed < RECONCILE_COOLDOWN_MS) {
+          if (!trailingTimer) {
+            trailingTimer = setTimeout(() => {
+              trailingTimer = null;
+              runNow();
+            }, RECONCILE_COOLDOWN_MS - elapsed);
+          }
+          return;
+        }
+        if (trailingTimer) {
+          clearTimeout(trailingTimer);
+          trailingTimer = null;
+        }
+        runNow();
+      };
+
+      const dispose = () => {
+        disposed = true;
+        queuedWhileInFlight = false;
+        if (trailingTimer) {
+          clearTimeout(trailingTimer);
+          trailingTimer = null;
+        }
+      };
+
+      return { trigger, dispose };
     }
 
     // 存量任务恢复流（§9.2）：即使停用新委派（dispatchEnabled: false），重连 ready 后仍自动按原 requestId 对账并通知卡片，不开放新委派。
     function mountTaskReconcileStream() {
-      const triggerReconcile = createReconcileTrigger();
-      return openEventStream((payload) => {
+      const reconciler = createReconcileTrigger();
+      const closeStream = openEventStream((payload) => {
         if (payload.type === 'ready') {
-          triggerReconcile();
+          reconciler.trigger();
           return;
         }
         if (payload.type === 'task-reconciled') {
           notifyTaskReconciled(payload);
         }
       });
+      return () => {
+        closeStream();
+        reconciler.dispose();
+      };
     }
 
     function mountMentionsSource(ctx, { enableSelectionBinding }) {
@@ -725,7 +804,8 @@ window.__ModuleLoader__.load({
       // Hoisted to mountMentionsSource closure so SSE reconnect/invalidation never drops buffered user drafts (#245/#246).
       const pendingDrafts = new Map();
       let draftRecoveryListener = null;
-      const triggerReconcile = createReconcileTrigger();
+      const reconciler = createReconcileTrigger();
+      const triggerReconcile = reconciler.trigger;
 
       const rememberPendingDraft = (sessionKey, draft) => {
         pendingDrafts.delete(sessionKey);
@@ -924,6 +1004,7 @@ window.__ModuleLoader__.load({
 
       return () => {
         closeStream();
+        reconciler.dispose();
         pendingDrafts.clear();
         draftRecoveryListener = null;
         dropGroup();

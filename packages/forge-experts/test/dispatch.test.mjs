@@ -1114,3 +1114,68 @@ test('pending_index fails closed with EXPERT_RATE_LIMITED at capacity (100) with
     await dispatch.close();
   }
 });
+
+test('timed-out in-flight reconcile reads keep occupying concurrency slots and do not launch a 6th upstream read (#484)', async () => {
+  const sharedStorage = createMemoryStorage();
+  const scope = {
+    instanceId: 'delegra-prod-01',
+    orgId: 'org-alpha',
+    issuer: 'https://iam.corp.example',
+    subject: 'emp-1001',
+    verifiedAt: '2026-11-24T00:00:00Z',
+    validUntil: '2026-11-24T23:59:59Z',
+  };
+  let seq = 0;
+  let byRequestCalls = 0;
+  const resolvers = [];
+
+  const { createDispatchService } = await import('../src/dispatch.mjs');
+  const dispatch = createDispatchService({
+    isDispatchEnabled: () => true,
+    resolveScope: async () => ({ ...scope, scopeEpoch: 1 }),
+    assertScopeCurrent: () => {},
+    consumeSelection: () => ({ expertId: 'exp-fin-1', delegationScope: 'proj-fin', sessionId: 'sess-1' }),
+    runInPreferenceBoundary: (fn) => fn(),
+    listConfirmedEnabled: async () => [{ expertId: 'exp-fin-1', authContinuityDigest: 'sha256:c1' }],
+    isPreferencePending: () => false,
+    checkDelegraSessionScope: async () => ({
+      scopeVerified: true,
+      results: [{ expertId: 'exp-fin-1', callableInScope: true, authContinuityDigest: 'sha256:c1', acceptingTasks: 'accepting' }],
+    }),
+    evaluatePolicy: async () => ({ decision: 'allow' }),
+    openStorageDomain: (spec) => sharedStorage.open(spec),
+    generateRequestId: () => `req-conc-${++seq}`,
+    reconcileTimeoutMs: 20,
+    createDelegraTask: async () => {
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'wire dropped', { status: 503, retryable: true });
+    },
+    getDelegraTaskByRequest: async ({ requestId }) => {
+      byRequestCalls += 1;
+      await new Promise((resolve) => { resolvers.push(resolve); });
+      return { taskId: `task-${requestId}`, requestId, status: 'running' };
+    },
+    getDelegraTask: async () => ({}),
+    getDelegraTaskResult: async () => ({}),
+    createDelegraFollowup: async () => ({}),
+    cancelDelegraTask: async () => ({}),
+  });
+
+  await dispatch.open();
+  try {
+    for (let i = 0; i < 6; i += 1) {
+      await assert.rejects(
+        () => dispatch.dispatchTask({ selectionToken: `tok-${i}`, sessionId: 'sess-1', taskText: `Task ${i}` }),
+        (err) => err instanceof ExpertsError && err.code === 'EXPERT_ACCEPTANCE_UNKNOWN',
+      );
+    }
+
+    const res = await dispatch.reconcilePendingRequests();
+    assert.equal(byRequestCalls, 5, '6th upstream read must not start while 5 timed-out reads are still in flight');
+    assert.equal(res.stillPending.length, 6);
+
+    for (const r of resolvers) r();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    await dispatch.close();
+  }
+});
