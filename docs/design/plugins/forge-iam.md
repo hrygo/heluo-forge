@@ -393,7 +393,7 @@ Host 在读取机密模式的 Discovery 前检查其协议，并在换票、刷�
 #### 5.2.3 最小只读订阅接缝（source/mock 已实现）
 
 系统定义了轻量级只读订阅接缝（`iam-view-observer` 与 `iam-view-consumer`）：
-- **数据白名单**：仅对外投射 12 项非敏感字段，禁止包含令牌、Verifier、密钥或网关 Key 原文；
+- **数据白名单**：仅对外投射 13 项非敏感字段（含 `identity` 只读显示投影），禁止包含令牌、Verifier、密钥或网关 Key 原文；
 - **唯一刷新主权**：订阅监听仅观察快照变更，后台定时同步严格收敛于 Host 单飞任务，禁止客户端每帧强制刷新；
 - **代际隔离**：网络中断或订阅取消时即时清理异步等待队列，废弃过时响应。
 
@@ -412,8 +412,16 @@ export type IamState =
 export interface IamPrincipal {
   readonly issuer: string;
   readonly subject: string;
-  readonly displayName?: string;
   readonly groups?: readonly string[];
+}
+
+/**
+ * UserInfo 只读显示投影（issue #160）。仅此两个字段；
+ * 令牌、sub、authTime 等原始响应内容严禁进入任何读取面。
+ */
+export interface IamIdentity {
+  readonly workNo?: string;
+  readonly name?: string;
 }
 
 export interface GatewayCredentialView {
@@ -430,6 +438,7 @@ export interface GatewayCredentialView {
 export interface IamView {
   readonly state: IamState;
   readonly principal?: IamPrincipal;
+  readonly identity?: IamIdentity | null;
   readonly accessExpiresAt?: string;
   /** HTTP 与 SSE 视图的 Host 取样时间，Unix 毫秒。与会话状态及到期字段取自同一次计算。 */
   readonly sampledAt?: number;
@@ -492,6 +501,22 @@ export interface IamView {
 5. **CLI 令牌时钟保护**：CLI 直读及桥接响应后的存储回读均拒绝距到期不超过 30 秒的令牌；`whoami` 的身份状态与 Host 的会话快照不使用该提前期。Host 按配置的刷新提前量判断是否刷新。
 
 路线 B 的 Host 传输层可读取当前令牌用于 `X-IAM-Token` 组装，该消费不改变上表读取面，也不新增令牌字段。令牌同时参与模型访问后，`POST /api/forge-iam/token` 的暴露面须单独评审，收紧或保留需书面决定。
+
+#### 5.5.4 UserInfo 身份投影契约
+
+登录成功后经 UserInfo 端点取回一次用户属性，作为只读显示投影随会话发布：
+
+| 内部字段 | 含义 | 消费边界 |
+|---|---|---|
+| `workNo` | 工号 | 账户页姓名缺失时的回退显示 |
+| `name` | 姓名 | 账户页优先显示 |
+
+- **映射由配置给出，内部键固定**：内部键恒为 `workNo`/`name`，映射到哪个企业 IAM 声明由插件配置 `profileFields`（与私版 `HELUO_IAM_PROFILE_FIELDS` 同一映射）给出，取值须为合法的 claim 名 token。**未配置则不取 UserInfo、不投影**，不猜测任何字段名，也不维护猜测性回退链。
+- **口径已由 IAM 确认（2026-11-24，FB-IAM-06 闭环）**：工号=`employeeNumber`、姓名=`displayName`、OA 账号=`giveName`。OA 账号当前无投影槽位（内部键仅 `workNo`/`name`），暂不接入，后续如需展示再扩键。确认样例映射 `workNo=employeeNumber,name=displayName` 已写入 [私版 env 样例](../../../deploy/private-bundle.env.example)；历史两口径并存（`work_no`/`pinyin`，2026-10-28 答复）就此作废，`work_no`/`pinyin` 用例保留仅作映射机制回归。联调时仍须以一份脱敏响应样例复核字段名（FB-IAM-06 闭环条件之二）。
+- **严格投影**：只取命中映射的字符串值，去空白、限长；`sub`、`authTime` 等其余声明整体丢弃。
+- **失败降级**：端点不可达、401/5xx、超时（5 秒上限）、JSON 非法或字段缺失均只丢弃投影，不影响登录就绪；投影随会话失效（登出、会话失效、重新登录）即时清空。访问令牌刷新**不**清空投影：刷新保留同一 `grantIdentity`（同一会话同一主体），identity 保持稳定，刷新路径亦不重新请求 UserInfo。
+- **令牌传递**：`userInfoTokenTransport` 配置 `header`（默认，标准 OIDC `Authorization: Bearer`）或 `query`（企业 IAM profile 端点实测要求 `?access_token=`）；令牌经 URL 传递时严禁进入日志与诊断数据。
+- **PII 边界**：投影仅进入视图 `identity` 与 `GET /api/forge-iam/session` 的 `identity` 字段；审计主体保持 `iss`/`sub`（或其哈希），姓名与工号不进入审计、模型执行请求与日志。
 
 ### 5.6 宿主能力核验与状态订阅
 
@@ -1143,12 +1168,12 @@ flowchart TD
 | 11 | 刷新令牌不可撤销的用户端文案与审计字段呈现规范 | 平台组 | 保证界面与审计如实呈现“访问令牌已撤销 / 刷新令牌自然过期” |
 | 12 | 机密客户端的凭据预置与轮换 | 平台组 + IAM | 核对目标终端预置、服务端轮换生效、旧会话拒绝和新登录 |
 | 13 | 实际签发响应是否与书面基线一致（AT 7200 秒、RT 滑动 7300 秒），以及是否返回 `refresh_expires_in` | IAM 团队 + 平台组 | 书面基线已由 6.0.3 反馈给出，本条只核验真实响应与休眠、断网恢复；调整提前量时按[后台续期时机与恢复余量](#731-后台续期时机与恢复余量)复核恢复目标 |
-| 14 | UserInfo 工号与姓名字段的最终口径：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法 | IAM 团队 | 取较新日期的 `work_no`/`pinyin` 为默认候选映射，联调确认前不把任一字段名写入契约；统一账户页展示名与审计主体显示名 |
+| 14 | UserInfo 工号与姓名字段的最终口径：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法 | IAM 团队 | **已确认（2026-11-24）**：工号=`employeeNumber`、姓名=`displayName`、OA 账号=`giveName`（暂无投影槽位，不接入）。默认候选映射更新为 `workNo=employeeNumber,name=displayName`；联调时以脱敏响应样例复核，统一账户页展示名与审计主体显示名 |
 | 15 | 回调前缀匹配的边界：合法前缀限定为 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均被拒。大小写、尾斜杠与非数字端口未验 | IAM 团队 | 2026-11-23 答复：OIDC 授权流程不校验 `redirect_uri`，OAuth 授权流程校验。边界改为客户端职责，见 ADR-33；OAuth 流程的拒绝样例仍未提供，转 FB-IAM-09 |
 | 16 | PKCE 参数细节：2026-11-23 答复为 S256 可正常发码、`plain` 与 `S256` 均可用且不强制、省略参数按 `plain`、未登记参数静默忽略；厂商回函所称“不支持 PKCE”与实测不符 | IAM 团队 + 平台组 | 2026-11-23 答复：S256 可正常发码，省略 `code_challenge_method` 按 `plain`。参数显式携带、不降级；仍待我方一次真实往返留证 |
 | 17 | 网关身份头名与 consumer 类型的配置化，以及切换为 `Authorization: Bearer` 的适配边界 | 平台组 | 已实现：`iamTokenHeader`/`consumerTypeHeader`/`consumerType` 三键配置化，默认值保持现值；改为 `Authorization: Bearer` 的适配随 AIGS 立项 |
 | 18 | 官方旁路环境变量（如 `DEEPSEEK_API_KEY`）的运行期检测与处置口径 | 平台组 | 已实现检测与告警（`detectEnvBypass`、`formatEnvBypassWarning`）；阻断未实现，须用户裁决，不能以关闭检测换取可用性 |
-| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 已实现：插件配置 `profileFields` 与私版 `HELUO_IAM_PROFILE_FIELDS` 均落为同一映射，仅接受 `workNo`/`name`；未配置时不读取 UserInfo。字段名仍等第 14 项答复 |
+| 19 | UserInfo 工号姓名字段映射的配置化落点 | 平台组 | 已实现：插件配置 `profileFields` 与私版 `HELUO_IAM_PROFILE_FIELDS` 均落为同一映射，仅接受 `workNo`/`name`；未配置时不读取 UserInfo。字段名已随第 14 项确认（2026-11-24，`employeeNumber`/`displayName`），确认样例映射已写入 env 样例 |
 | 20 | 运行期独占断言的覆盖面扩展：从单一 `deepseekAccount` 服务到装配可见的官方行结论 | 平台组 | 已实现：`exclusiveServices` 列表化（默认 `['deepseekAccount']`），企业可把官方行对应服务登记进去；未登记的行仍由装配期断言覆盖 |
 
 ### 12.2 已审定不采用的设计选项

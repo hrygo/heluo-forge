@@ -22,10 +22,17 @@ export function inspectSessionRecord(record) {
   return { state: 'active', grant: parsed.value };
 }
 
-/** Shared token-free session projection for Host and read-only adapters. */
-export function sessionView(grant, status) {
+/**
+ * Shared token-free session projection for Host and read-only adapters.
+ *
+ * `identity` is the optional UserInfo display projection (issue #160). Only the
+ * Host passes it: it holds the projected profile for the live session. The
+ * offline CLI reads a stored grant record, which carries no profile, so it must
+ * never carry one either.
+ */
+export function sessionView(grant, status, identity) {
   const summary = grant ? summarizeGrant(grant) : {};
-  return {
+  const view = {
     status,
     signedIn: summary.signedIn === true && Boolean(summary.principal),
     principal: summary.principal
@@ -34,4 +41,6 @@ export function sessionView(grant, status) {
     accessExpiresAt: summary.accessExpiresAt ?? null,
     scope: summary.scope ?? null,
   };
+  if (identity !== undefined) view.identity = identity;
+  return view;
 }

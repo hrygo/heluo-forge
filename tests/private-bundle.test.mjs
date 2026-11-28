@@ -982,12 +982,12 @@ test('客户端密钥只允许与 confidential 搭配', () => {
 });
 
 test('profile fields map claim names into the iam config', () => {
-  const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=workNo=work_no,name=pinyin'].join('\n'));
-  assert.deepEqual(buildConfig(entries).iam.profileFields, { workNo: 'work_no', name: 'pinyin' });
+  const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=workNo=employeeNumber,name=displayName'].join('\n'));
+  assert.deepEqual(buildConfig(entries).iam.profileFields, { workNo: 'employeeNumber', name: 'displayName' });
 });
 
 test('profile fields refuse unknown keys, missing pairs and non-token claims', () => {
-  for (const value of ['dept=department', 'workNo', 'workNo=work no', 'name=pinyin=extra', '=work_no']) {
+  for (const value of ['dept=department', 'workNo', 'workNo=work no', 'name=displayName=extra', '=work_no']) {
     const entries = parseEnvConfig([...ENV, `HELUO_IAM_PROFILE_FIELDS=${value}`].join('\n'));
     expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
   }
@@ -996,18 +996,18 @@ test('profile fields refuse unknown keys, missing pairs and non-token claims', (
 test('a repeated profile key is refused instead of shipping an empty mapping', () => {
   // Dropping the mapping would leave the account panel blank with a green build,
   // which is exactly what this key is meant to prevent.
-  for (const value of ['workNo=work_no,workNo=pinyin', 'name=pinyin,workNo=work_no,name=work_no']) {
+  for (const value of ['workNo=employeeNumber,workNo=displayName', 'name=displayName,workNo=employeeNumber,name=work_no']) {
     const entries = parseEnvConfig([...ENV, `HELUO_IAM_PROFILE_FIELDS=${value}`].join('\n'));
     expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
   }
 });
 
 test('the shipped profile mapping passes the plugin schema', () => {
-  const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=name=pinyin,workNo=work_no'].join('\n'));
+  const entries = parseEnvConfig([...ENV, 'HELUO_IAM_PROFILE_FIELDS=name=displayName,workNo=employeeNumber'].join('\n'));
   const { iam } = buildConfig(entries);
   const result = validateConfig({ ...iam });
   assert.equal('issues' in result, false, JSON.stringify(result.issues ?? []));
-  assert.deepEqual(result.value.profileFields, { name: 'pinyin', workNo: 'work_no' });
+  assert.deepEqual(result.value.profileFields, { name: 'displayName', workNo: 'employeeNumber' });
 });
 
 test('private metadata distinguishes Nacos and IAM client secrets in every combination', t => {

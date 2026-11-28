@@ -16,7 +16,7 @@ import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
-import { grantIdentity, safeMessage } from './service-helpers.mjs';
+import { grantIdentity, safeMessage, sameSessionIdentity } from './service-helpers.mjs';
 import { createCredentialRegistry } from './credential-registry.mjs';
 import { createExtTokenStore } from './ext-token-store.mjs';
 import { createExtTokensService, createCredentialBroker } from './service-ext-tokens.mjs';
@@ -54,7 +54,9 @@ export function createIamService(rawConfig, options = {}) {
   const logRenewal = typeof options.logRenewal === 'function' ? (event, fields) => {
     try { options.logRenewal(event, fields); } catch { /* diagnostics cannot change the session */ }
   } : undefined;
-  // Empty by default: IAM has not confirmed field names, so no name is shown.
+  // Empty by default: the confirmed claim names (employeeNumber/displayName,
+  // 2026-11-24) ship through plugin config or the private .env, never as a
+  // hardcoded default, so an unconfigured deployment still shows nothing.
   // `options.profileFields` is the caller seam used by isolated tests; apply
   // never supplies it, so the plugin config is the production source and the
   // private template writes the same keys through it.
@@ -83,6 +85,7 @@ export function createIamService(rawConfig, options = {}) {
     logRenewal,
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
+    getIdentityProfile: () => service.getIdentityProfile(),
     scheduleReconcile: () => selection.schedule(),
     scheduleRenewal: () => token.scheduleRenewal(),
     clearPendingObservation: () => { observedPending = null; },
@@ -341,7 +344,7 @@ export function createIamService(rawConfig, options = {}) {
      */
     getSession() {
       ctx.recheckExclusive();
-      return sessionView(ctx.lastGrant, ctx.state);
+      return sessionView(ctx.lastGrant, ctx.state, service.getIdentityProfile() ?? undefined);
     },
 
     hydrate: reconcile.hydrate,
@@ -406,12 +409,16 @@ clearGatewayCredential: gateway.clearCredential,
       return { issuer: ctx.lastGrant.issuer, subject: ctx.lastGrant.subject };
     },
 
-    /** Projected UserInfo for future display; empty until IAM confirms fields. */
+    /** Projected UserInfo for display; hidden whenever the owning session is gone. */
     getIdentityProfile() {
-      // A profile is only valid for the grant that produced it: every path that
-      // clears or replaces lastGrant hides it, without touching each call site.
+      // The profile is bound to the session that produced it: the session
+      // identity hides it on sign-out, session loss, and re-login, while a
+      // token refresh preserves the session identity and keeps it visible —
+      // without touching each call site. The comparison is deliberately on the
+      // session quartet alone, so a grant that changes shape cannot silently
+      // drop a projection the user is still entitled to see.
       if (!ctx.lastGrant || !grants.identityProfile) return undefined;
-      if (!isDeepStrictEqual(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
+      if (!sameSessionIdentity(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
       return { ...grants.identityProfile.profile };
     },
 

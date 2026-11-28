@@ -347,7 +347,8 @@ export function buildConfig(entries) {
       continue;
     }
     if (envKey === 'HELUO_IAM_PROFILE_FIELDS') {
-      // `workNo=work_no,name=pinyin`. Claim names are tokens, and only the two
+      // `workNo=employeeNumber,name=displayName` (IAM-confirmed 2026-11-24).
+      // Claim names are tokens, and only the two
       // known profile keys are accepted, so a typo fails the build instead of
       // silently showing nothing on the account panel. A repeated key is also a
       // failure: the last-wins or drop-the-mapping outcomes both ship a config

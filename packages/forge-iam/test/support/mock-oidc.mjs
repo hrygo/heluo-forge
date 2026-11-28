@@ -80,17 +80,41 @@ export async function startMockOidc({
       }
       if (url.pathname === '/userinfo' && req.method === 'GET') {
         counts.userInfo += 1;
+        // 企业 IAM 实测契约：Bearer 头或 ?access_token= query 二选一；
+        // 令牌无效返回 401（issue #160 联调口径）。
         const authorization = req.headers.authorization ?? null;
-        lastUserInfo = { authorization };
+        const queryToken = url.searchParams.get('access_token');
+        lastUserInfo = { authorization, queryToken };
         if (control.userInfoMode === 'http500') { res.writeHead(500); res.end(); return; }
         if (control.userInfoMode === 'malformed') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('not-json'); return; }
-        const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+        if (control.userInfoMode === 'unauthorized') { res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: ['expired_accessToken'] })); return; }
+        const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : (queryToken ?? '');
         if (!accessTokens.has(token)) { res.writeHead(401); res.end(); return; }
         const { subject } = accessTokens.get(token);
-        return json(res, 200, {
-          sub: subject, work_no: '10001234', pinyin: 'Zhang San',
-          employeeNumber: '10001234', name: 'Zhang San',
-        });
+        // 真实响应形态（issue #160）：默认形态即 IAM 已确认口径
+        // （2026-11-24，employeeNumber/displayName/giveName）；workNoPinyin*
+        // 为已作废口径的形态，保留供映射机制回归。测试各自按对应映射取值。
+        // sub/authTime 必须被严格投影丢弃。全部为占位值，不含真实个人数据。
+        const workNoPinyin = control.userInfoMode.startsWith('workNoPinyin');
+        const body = workNoPinyin
+          ? {
+            sub: subject,
+            work_no: '10001234',
+            pinyin: 'Zhang San',
+            authTime: 1794363364,
+          }
+          : {
+            sub: subject,
+            employeeNumber: '10001234',
+            displayName: 'Zhang San',
+            giveName: 'zhangsan',
+            authTime: 1794363364,
+          };
+        if (control.userInfoMode.endsWith('MissingName') || control.userInfoMode === 'missingName') {
+          delete body.displayName;
+          delete body.pinyin;
+        }
+        return json(res, 200, body);
       }
       if (url.pathname === '/authorize') {
         counts.authorize += 1;
