@@ -197,11 +197,12 @@ async function withGitHub(run) {
     } else if (request.method === 'GET' && path === '/collaborators/maintainer/permission') {
       response.end(JSON.stringify({ user: maintainer, permission: state.permission }));
     } else if (request.method === 'GET' && path === '/actions/workflows/pr-agent.yml/runs') {
-      response.statusCode = state.runListStatus;
       const event = url.searchParams.get('event');
       const status = url.searchParams.get('status');
+      const history = !event && !status ? state.runHistoryPages?.[page] : undefined;
+      response.statusCode = history?.status ?? state.runListStatus;
       const runs = Object.values(state.runs).filter((run) => (!event || run.event === event) && (!status || run.conclusion === status));
-      response.end(JSON.stringify({ workflow_runs: pageOf(runs), total_count: runs.length }));
+      response.end(JSON.stringify(history?.data ?? { workflow_runs: pageOf(runs), total_count: runs.length }));
     } else if (request.method === 'GET' && /^\/actions\/runs\/\d+\/jobs$/u.test(path)) {
       const jobs = state.jobs[path.split('/').at(-2)] ?? [];
       response.end(JSON.stringify({ total_count: jobs.length, jobs: pageOf(jobs) }));
@@ -2202,6 +2203,55 @@ test('a later push checks previous runs whose latest attempt can hide a native r
         const next = await capture(mode);
         assert.equal(JSON.parse(await readFile(next.review_context, 'utf8')).mode, expected);
         assert.ok(state.requests.some(({ url }) => url.includes('/actions/runs/13000/attempts/1/jobs')));
+      });
+    });
+  }
+});
+
+test('a baseline on the first page requires verified workflow history from later pages', async (t) => {
+  const cases = [
+    { name: 'a failed rerun of an older run on the second page', outcome: 'failure', mode: 'full', jobRead: true },
+    { name: 'a fully checked second page with no failure', outcome: 'success', mode: 'incremental', jobRead: true },
+    { name: 'the second page is unavailable', status: 503, mode: 'full' },
+    { name: 'the second page is shorter than reported', omitRun: true, mode: 'full' },
+    { name: 'a run is repeated across the two pages', repeatRun: true, mode: 'full' },
+    { name: 'the total count changes across pages', secondTotal: 102, mode: 'full' },
+    { name: 'the total count exceeds the page budget', firstTotal: 10_001, readSecond: false, mode: 'full' },
+  ];
+  for (const row of cases) {
+    const { name, outcome = 'success', mode: expected, jobRead, status, omitRun, repeatRun, readSecond = true,
+      firstTotal = 101, secondTotal = 101 } = row;
+    await t.test(name, async () => {
+      await withGitHub(async ({ state, env }) => {
+        const { mode } = configureIncrementalReplay(state, env);
+        const confirmedAt = state.comments.at(-1).updated_at;
+        const before = new Date(Date.parse(confirmedAt) - 60_000).toISOString();
+        const after = new Date(Date.parse(confirmedAt) + 60_000).toISOString();
+        const baseline = { id: 12101, run_attempt: 2, event: 'workflow_run', status: 'completed', conclusion: 'success',
+          display_title: `洛神 · PR #42 ${replayPrevious}`, created_at: confirmedAt, updated_at: confirmedAt };
+        const recent = Array.from({ length: 99 }, (_, index) => ({ ...baseline, id: 13100 - index,
+          display_title: '洛神 · PR #17', created_at: after, updated_at: after }));
+        const older = { ...baseline, id: 12000, created_at: before, updated_at: after, conclusion: outcome,
+          display_title: `洛神 · PR #42 ${'8'.repeat(40)}` };
+        const secondPage = omitRun ? [] : [repeatRun ? baseline : older];
+        state.runHistoryPages = {
+          1: { data: { workflow_runs: [...recent, baseline], total_count: firstTotal } },
+          2: { status, data: { workflow_runs: secondPage, total_count: secondTotal } },
+        };
+        state.attemptJobs['12000/1'] = [{ name: '洛神 (ubuntu-x64)', run_id: 12000, run_attempt: 1, status: 'completed',
+          conclusion: 'success', completed_at: before, steps: [] }];
+        state.attemptJobs['12000/2'] = [{ name: '洛神 (ubuntu-x64)', run_id: 12000, run_attempt: 2, status: 'completed',
+          conclusion: outcome, completed_at: after, steps: [{ name: 'Begin native review', conclusion: 'success' }] }];
+
+        const revision = await capture(mode);
+        const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+        assert.equal(context.mode, expected);
+        assert.equal(context.previousHead, expected === 'incremental' ? replayPrevious : undefined);
+        assert.equal(state.requests.some(({ url }) => url.includes('/actions/workflows/pr-agent.yml/runs?per_page=100&page=2')), readSecond);
+        if (jobRead) {
+          const attempt = outcome === 'failure' ? 2 : 1;
+          assert.ok(state.requests.some(({ url }) => url.includes(`/actions/runs/12000/attempts/${attempt}/jobs`)));
+        }
       });
     });
   }
