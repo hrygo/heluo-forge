@@ -90,8 +90,10 @@ function mapUpstreamError(status, body, { transportUnknownOn5xx = false } = {}) 
     : `Delegra request failed with HTTP ${status}`;
   const requestTraceId = typeof body?.error?.requestTraceId === 'string' ? body.error.requestTraceId : undefined;
   const details = requestTraceId ? { requestTraceId } : undefined;
+  const uncertainWrite5xx = transportUnknownOn5xx && status >= 500;
 
-  if (KNOWN_UPSTREAM_CODES.has(rawCode)) {
+  // A generic internal failure cannot establish that the upstream write was rejected.
+  if (KNOWN_UPSTREAM_CODES.has(rawCode) && !(uncertainWrite5xx && rawCode === 'EXPERT_INTERNAL_ERROR')) {
     // §8.2: fold upstream 403 EXPERT_SCOPE_MISMATCH to 409 in Host vocabulary
     // and derive retryable authoritatively rather than trusting upstream flags.
     const mappedStatus = rawCode === 'EXPERT_SCOPE_MISMATCH' ? 409 : ERROR_STATUS[rawCode];
@@ -118,7 +120,7 @@ function mapUpstreamError(status, body, { transportUnknownOn5xx = false } = {}) 
     const code = transportUnknownOn5xx ? 'EXPERT_ACCEPTANCE_UNKNOWN' : 'EXPERT_DIRECTORY_UNAVAILABLE';
     return new ExpertsError(code, message, { status: 503, retryable: true, details });
   }
-  if (transportUnknownOn5xx && status >= 500) {
+  if (uncertainWrite5xx) {
     return new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task acceptance outcome is unknown; reconcile via by-request', {
       status: 503,
       retryable: true,
@@ -305,7 +307,19 @@ export function createDelegraClient(options) {
       throw new ExpertsError('EXPERT_INTERNAL_ERROR', 'Delegra returned an empty response payload');
     }
 
-    const verifiedScope = assertScopeEnvelope(parsed.scope, expectedScope);
+    let verifiedScope;
+    try {
+      verifiedScope = assertScopeEnvelope(parsed.scope, expectedScope);
+    } catch (error) {
+      if (!transportUnknownOnFailure || !(error instanceof ExpertsError) || error.code !== 'EXPERT_SCOPE_MISMATCH') {
+        throw error;
+      }
+      // Discard the invalid receipt. It provides no evidence that the write was rejected.
+      throw new ExpertsError('EXPERT_ACCEPTANCE_UNKNOWN', 'Task acceptance scope could not be verified; reconcile via by-request', {
+        status: 503,
+        retryable: true,
+      });
+    }
     return { status, data: parsed, scope: verifiedScope };
   }
 
