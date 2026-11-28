@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "title": "DOP Workbench",
+    "description": "Connect to the enterprise DOP workbench for cross-platform to-dos, progress boards, and full-lifecycle delivery across requirements, projects, dev, test, and efficiency.",
+    "detail": "docs/DETAIL.en.md"
+  },
+  "plugin": {
+    "name": "DOP Workbench",
+    "description": "Connect to the enterprise DOP workbench for cross-platform to-dos, progress boards, and full-lifecycle delivery across requirements, projects, dev, test, and efficiency."
+  },
+  "entry": {
+    "buttonLabel": "DOP Workbench",
+    "buttonTooltip": "Open DOP Workbench (Right Sidebar Tab)",
+    "tabTitle": "DOP Workbench"
+  },
+  "banner": {
+    "localLoopback": "Local Endpoint",
+    "drawerFallback": "Showing DOP Workbench in standalone drawer."
+  },
+  "status": {
+    "loading": "Loading DOP Workbench...",
+    "configMissingTitle": "DOP Base URL Required",
+    "configMissingDesc": "Set HELUO_DOP_BASE_URL or save your DOP service URL (apiBaseUrl) in Connection Settings below.",
+    "unauthorizedTitle": "Sign-In Required",
+    "unauthorizedDesc": "Please sign in under Settings → Enterprise Account (IAM), then click Retry.",
+    "retry": "Retry"
+  },
+  "topbar": {
+    "refresh": "Refresh",
+    "todos": "Todos",
+    "customize": "Customize"
+  }
+}

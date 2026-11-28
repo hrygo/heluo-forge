@@ -1,0 +1,206 @@
+[
+  {
+    "file": "asd_story_reqItem_query.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 90,
+    "note": "故事→RMP条目映射(空态)"
+  },
+  {
+    "file": "auth_error_dop_403.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 141,
+    "note": "DOP 无效/过期 token → HTTP 403 Access Denied"
+  },
+  {
+    "file": "auth_error_dop_noauth_403.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 141,
+    "note": "DOP 无 token → 403"
+  },
+  {
+    "file": "commonDashboard_requirement_managed.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 6306,
+    "note": "我的需求-我负责(4视角互斥参数之一) | items 截断 3/10"
+  },
+  {
+    "file": "commonDashboard_requirement_participant.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 3589,
+    "note": "我的需求-我参与(对比视角参数差异) | items 截断 2/4"
+  },
+  {
+    "file": "myIssue_list.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 13946,
+    "note": "工作台故事/任务聚合(4视角OR合并+typeIds) | items 截断 3/5"
+  },
+  {
+    "file": "odo_itsm_list.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 1423,
+    "note": "ITSM待办"
+  },
+  {
+    "file": "odo_myTasks.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 139,
+    "note": "流程待办(新版流程)"
+  },
+  {
+    "file": "project_progress_participant.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 263,
+    "note": "项目进展 qType=participant"
+  },
+  {
+    "file": "project_progress_responsible.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 263,
+    "note": "项目进展 qType=responsible"
+  },
+  {
+    "file": "release_progress_creator.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 109,
+    "note": "实施进展-排期 personnel=creator"
+  },
+  {
+    "file": "release_progress_participate.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 109,
+    "note": "实施进展-排期 personnel=participate"
+  },
+  {
+    "file": "release_progress_responsible.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 109,
+    "note": "实施进展-排期 personnel=responsible"
+  },
+  {
+    "file": "requirement_inProgress_business.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 112,
+    "note": "需求进行中 business 对照"
+  },
+  {
+    "file": "requirement_inProgress_manager.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 112,
+    "note": "需求进行中(5阶段节点)"
+  },
+  {
+    "file": "requirement_one.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 6675,
+    "note": "需求详情(双负责人 manager/businessOwner, reqDocs)"
+  },
+  {
+    "file": "requirement_progress_business.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 167,
+    "note": "需求进展 type=business(平均时长为null的对照)"
+  },
+  {
+    "file": "requirement_progress_manager.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 164,
+    "note": "需求进展 type=manager"
+  },
+  {
+    "file": "rmp_getOutlineTree.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 1388,
+    "note": "RMP单篇大纲树(262→3) | data 截断 3/262"
+  },
+  {
+    "file": "rmp_getTabContent.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 463,
+    "note": "RMP条目正文(getTabContent 空内容真实结构)"
+  },
+  {
+    "file": "rmp_listAllNewVerDoc.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 1165,
+    "note": "RMP文档搜索(仅最新版) | data.resultList 截断 2/6"
+  },
+  {
+    "file": "rmp_listAllTodoTask.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 334,
+    "note": "RMP平台待办(工作台需求平台tab)"
+  },
+  {
+    "file": "rmp_listAllVerDoc.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 1600,
+    "note": "RMP文档搜索(全部版本) 53条→3条 | data.resultList 截断 3/10"
+  },
+  {
+    "file": "rmp_listRelDocByReqCode.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 184,
+    "note": "需求编号关联RMP文档(空态合法)"
+  },
+  {
+    "file": "story_one.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 18307,
+    "note": "故事详情(64字段; sprint=null/priority=null 真实空态)"
+  },
+  {
+    "file": "story_progress_creator.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 87,
+    "note": "实施进展-故事4态 creator"
+  },
+  {
+    "file": "story_progress_participate.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 87,
+    "note": "实施进展-故事4态 participate"
+  },
+  {
+    "file": "story_progress_responsible.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 87,
+    "note": "实施进展-故事4态 personnel=responsible"
+  },
+  {
+    "file": "tmp_defect_myDefect.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 89,
+    "note": "阻塞缺陷(功能BUG/SQL风险) | items 截断 3/0"
+  },
+  {
+    "file": "todo_list.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 90,
+    "note": "全局待办(空态结构)"
+  },
+  {
+    "file": "uam_myProfile.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 3988,
+    "note": "当前视角/角色来源: teams[].parent 小组, simulating, dashboardId"
+  },
+  {
+    "file": "odo_procalmation.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 4089,
+    "note": "公告/发布窗口 GET /odo/api/procalmation/list（真实纯数组 data[] + 顶层 total，已二次脱敏并裁薄 4 条）"
+  },
+  {
+    "file": "sprint_issue_list.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 24267,
+    "note": "迭代故事 GET /asd/api/sprint/{sprintId}/issue/list（真实 63 字段结构，已二次脱敏并裁薄 1 条）"
+  },
+  {
+    "file": "odo_itsm_process_url.json",
+    "source": "intranet-corpus-resanitized",
+    "bytes": 203,
+    "note": "ITSM 详情换票跳链 GET /odo/api/online/process/url?wjbiid=...（已二次脱敏至本地挡板域）"
+  }
+]

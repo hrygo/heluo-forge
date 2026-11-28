@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.51.0 |
+| 版本 | V0.52.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 负责 | 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-25 |
+| 最后更新 | 2026-11-28 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -35,6 +35,7 @@
 | `@heluo/forge-hindsight` | Host + Client 插件 | [plugins/forge-hindsight.md](plugins/forge-hindsight.md) |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) |
 | `@heluo/forge-devops` | CLI 接入（工具面 + 设置页 + 新会话变更选择器） | [plugins/forge-devops.md](plugins/forge-devops.md) |
+| `@heluo/forge-devops-workbench` | Host + Client 插件 | [plugins/forge-devops-workbench.md](plugins/forge-devops-workbench.md) |
 | `@heluo/forge-gitee` | CLI 接入（工具面 + 设置页） | [plugins/forge-gitee.md](plugins/forge-gitee.md) |
 | `@heluo/forge-experts` | Host + Client 插件（规划） | [专家智能体管理插件详细设计](plugins/forge-experts.md) |
 | `@heluo/forge-sdd` | 已退役（包与 CLI 已删除；非 Host） | [plugins/forge-sdd.md](plugins/forge-sdd.md) |
@@ -79,6 +80,7 @@ Delegra 侧的专家执行面横跨运行时镜像与 Kubernetes 沙箱，同属
 | `forge-brand` | [品牌与外观实现与验证记录](plugins/forge-brand.md#实现与验证记录) |
 | `forge-engineering` | [研发工具组合](plugins/forge-engineering.md#实现与验证记录) |
 | `forge-devops` | [DevOps 接入](plugins/forge-devops.md#实现与验证记录) |
+| `forge-devops-workbench` | [DOP 工作台实现与验证记录](plugins/forge-devops-workbench.md#实现与验证记录) |
 | `forge-gitee` | [Gitee 接入](plugins/forge-gitee.md#实现与验证记录) |
 | `forge-market`（历史参考包） | [历史实现及证据边界](plugins/forge-market.md#11-历史参考实现不属目标) |
 | `market-index` | [只读索引校验器](services/market-index.md#实现与验证记录) |

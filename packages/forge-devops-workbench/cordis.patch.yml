@@ -1,0 +1,5 @@
+# @heluo/forge-devops-workbench 补丁层（独立只读工作台插件，零内置 Mock）
+- insert:
+    - id: heluo-devops-workbench
+      name: '@heluo/forge-devops-workbench'
+      config: {}

@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-11-26 12:41:25",
+  "status": 403,
+  "error": "Forbidden",
+  "message": "Access Denied",
+  "path": "/user/myProfile"
+}

@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-11-26 12:34:42",
+  "infocode": "VP000000",
+  "msg": null,
+  "redirectUrl": null,
+  "data": {
+    "currentPage": 1,
+    "numPerPage": 10,
+    "totalPages": 1,
+    "totalRows": 6,
+    "resultList": [
+      {
+        "iis_lockval": "0",
+        "code": "DOC-MOCK-1001",
+        "iis_lock": "未锁定",
+        "docver": "1.4.0",
+        "iid": "90001101",
+        "docid": "90001004",
+        "unitid": null,
+        "docname": "示例业务需求规格说明书_1.0.0",
+        "reqcode": null,
+        "docstatus": "已发版",
+        "username": "示例用户1",
+        "deptname": "示例部门1"
+      },
+      {
+        "iis_lockval": "0",
+        "code": "DOC-MOCK-1002",
+        "iis_lock": "未锁定",
+        "docver": "2.1.0",
+        "iid": "90001102",
+        "docid": "90001005",
+        "unitid": null,
+        "docname": "示例业务需求规格说明书_1.0.0",
+        "reqcode": null,
+        "docstatus": "已发版",
+        "username": "示例用户2",
+        "deptname": "示例部门1"
+      }
+    ]
+  },
+  "status": 200,
+  "requestTraceId": "MOCK-TRACE-1003"
+}

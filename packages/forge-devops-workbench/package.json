@@ -1,0 +1,56 @@
+{
+  "name": "@heluo/forge-devops-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "icon": "./icon.svg",
+  "description": "接入企业 DOP 研发协同工作台，一站式汇聚待办与进展看板，覆盖需求、项目、研发、测试与效能全流程，在对话中随时协同推进交付。",
+  "engines": {
+    "dsh": ">=0.2.2-rc.5"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./client.js",
+    "./config": "./src/shared/config.mjs",
+    "./http": "./src/http.mjs",
+    "./portal-links": "./src/portal-links.mjs",
+    "./prompt-builder": "./src/prompt-builder.mjs",
+    "./tools": "./src/tools.mjs",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "src",
+    "client.js",
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots",
+        "locale"
+      ]
+    }
+  }
+}

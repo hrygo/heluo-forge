@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-11-26 12:37:07",
+  "infocode": "VP000000",
+  "msg": null,
+  "redirectUrl": null,
+  "data": [
+    {
+      "scode": "ART-MOCK-1001",
+      "doc_name": "示例业务需求说明书_1.0",
+      "parent_id": "90002000",
+      "sname": "1.1 业务背景与导出范围",
+      "idoc_id": "90002001",
+      "disp_indx": 810,
+      "doc_outline_id": "90002101",
+      "sys_name": "示例数据中台1",
+      "sbus_version": "1.0.0",
+      "row_id": 0,
+      "bus_flag": "1"
+    },
+    {
+      "scode": "ART-MOCK-1002",
+      "doc_name": "示例业务需求说明书_1.0",
+      "parent_id": "90002000",
+      "sname": "1.2 异常预警规则与通知渠道",
+      "idoc_id": "90002002",
+      "disp_indx": 182,
+      "doc_outline_id": "90002102",
+      "sys_name": "示例数据中台1",
+      "sbus_version": "2.0.0",
+      "row_id": 1,
+      "bus_flag": "1"
+    },
+    {
+      "scode": "ART-MOCK-1003",
+      "doc_name": "示例业务需求说明书_1.0",
+      "parent_id": "90002000",
+      "sname": "1.3 安全与合规留痕（空正文）",
+      "idoc_id": "90002003",
+      "disp_indx": 17,
+      "doc_outline_id": "90002103",
+      "sys_name": "示例数据中台1",
+      "sbus_version": "1.0.0",
+      "row_id": 2,
+      "bus_flag": "1"
+    }
+  ],
+  "status": 200,
+  "requestTraceId": "MOCK-TRACE-1001"
+}

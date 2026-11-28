@@ -1,0 +1,169 @@
+{
+  "avatarTypeId": null,
+  "dashboardId": "newdashboard",
+  "email": "user01[at]corp.example",
+  "firstOrg": {
+    "code": "ORG-MOCK-001",
+    "fullName": "示例单位/示例部门",
+    "levelCode": "8",
+    "name": "示例一级部门",
+    "parentCode": "ORG-MOCK-012"
+  },
+  "lastLoginDate": "2026-11-23 09:03:16",
+  "loginCode": "000001",
+  "mobile": "000-0000-0001",
+  "name": "示例用户000001",
+  "roles": [
+    {
+      "id": "role-mock-001",
+      "name": "系统级报表管理",
+      "permissions": [
+        {
+          "code": "edit_analysis",
+          "id": "14443255a5494697954e001eb2c0e50a",
+          "name": "按钮-编辑月报分析"
+        },
+        {
+          "code": "tab_monthlyreview",
+          "id": "1658ebdaf58f4674bff416dfed52e00b",
+          "name": "Tab页-项目月报"
+        }
+      ],
+      "type": {
+        "id": "system",
+        "name": "示例用户27"
+      }
+    },
+    {
+      "id": "role-mock-002",
+      "name": "示例用户28",
+      "permissions": [
+        {
+          "code": "create_issue",
+          "id": "06de4e477f6140feb8788242418d992e",
+          "name": "示例用户29"
+        },
+        {
+          "code": "open_sprint",
+          "id": "076cc6119b194bf789a25d2f6161e7d1",
+          "name": "示例用户30"
+        }
+      ],
+      "type": {
+        "id": "system",
+        "name": "示例用户27"
+      }
+    }
+  ],
+  "secondOrg": {
+    "code": "ORG-MOCK-002",
+    "fullName": "示例单位/示例部门",
+    "levelCode": "9",
+    "name": "示例二级部门",
+    "parentCode": "ORG-MOCK-013"
+  },
+  "simulating": null,
+  "supplier": null,
+  "teams": [
+    {
+      "asd": true,
+      "belongTo": false,
+      "id": "team-mock-001",
+      "name": "示例部门5",
+      "parent": {
+        "id": "group-mock-001",
+        "internalRelease": 0,
+        "managerUser": null,
+        "managers": null,
+        "name": "示例部门6",
+        "parent": null,
+        "signature": null,
+        "type": {
+          "id": "group",
+          "name": "小组"
+        }
+      },
+      "pcm": true,
+      "preferred": false,
+      "promote": 1,
+      "roles": [
+        {
+          "id": "role-team-mock-001",
+          "name": "分队默认用户",
+          "permissions": [
+            {
+              "code": "a460c1_access",
+              "id": "034d48755b9c4216bf260bde32a637d4",
+              "name": "示例用户23"
+            },
+            {
+              "code": "56b370_access",
+              "id": "0b1a414957c845d1af18cb6e5b99cb35",
+              "name": "示例用户23"
+            }
+          ],
+          "type": {
+            "id": "default",
+            "name": "默认角色"
+          }
+        }
+      ],
+      "type": {
+        "id": "team",
+        "name": "分队"
+      }
+    },
+    {
+      "asd": false,
+      "belongTo": false,
+      "id": "team-mock-001",
+      "name": "示例部门7",
+      "parent": {
+        "id": "group-mock-001",
+        "internalRelease": 0,
+        "managerUser": null,
+        "managers": null,
+        "name": "示例部门7",
+        "parent": null,
+        "signature": null,
+        "type": {
+          "id": "group",
+          "name": "小组"
+        }
+      },
+      "pcm": false,
+      "preferred": false,
+      "promote": null,
+      "roles": [
+        {
+          "id": "role-team-mock-001",
+          "name": "分队默认用户",
+          "permissions": [
+            {
+              "code": "a460c1_access",
+              "id": "034d48755b9c4216bf260bde32a637d4",
+              "name": "示例用户23"
+            },
+            {
+              "code": "56b370_access",
+              "id": "0b1a414957c845d1af18cb6e5b99cb35",
+              "name": "示例用户23"
+            }
+          ],
+          "type": {
+            "id": "default",
+            "name": "默认角色"
+          }
+        }
+      ],
+      "type": {
+        "id": "team",
+        "name": "分队"
+      }
+    }
+  ],
+  "type": {
+    "id": "employee",
+    "name": "员工"
+  }
+}

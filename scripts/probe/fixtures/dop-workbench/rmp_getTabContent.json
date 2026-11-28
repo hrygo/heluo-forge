@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-11-26 13:00:21",
+  "infocode": "VP000000",
+  "msg": null,
+  "redirectUrl": null,
+  "data": {
+    "iart_type": null,
+    "iid": null,
+    "sname": null,
+    "entityid": 56,
+    "html": "<p>示例需求正文（1.1 业务背景与导出范围）：系统需支持企业客户与运营团队在日终批量完成后导出多维度业务汇总报表。当前待与业务澄清口径包括：单次导出的历史回溯天数上限（如 90天/180天/365天）、导出格式范围及大额文件异步打包阈值。</p>",
+    "sbus_version": null,
+    "fbus_version_index": null
+  },
+  "status": 200,
+  "requestTraceId": "MOCK-TRACE-1002"
+}

@@ -1,0 +1,776 @@
+{
+  "acceptanceEndDate": null,
+  "acceptanceStartDate": null,
+  "accountingRule": null,
+  "actualOnlineDate": "2026-11-05 00:00:00",
+  "analysisEndDate": null,
+  "analysisStartDate": null,
+  "analysisState": {
+    "id": "analysed",
+    "name": "已评审"
+  },
+  "assignee": {
+    "avatarDecor": {
+      "frameId": "specification_expert"
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-001",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000001",
+    "name": "示例用户1",
+    "secondOrg": {
+      "code": "ORG-MOCK-002",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "assistanceStories": [],
+  "business": {
+    "avatarDecor": {
+      "frameId": "daily_login"
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-003",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000002",
+    "name": "示例用户2",
+    "secondOrg": {
+      "code": "ORG-MOCK-004",
+      "name": "示例二级部门"
+    },
+    "sex": "女",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "businessOwner": {
+    "avatarDecor": {
+      "frameId": "daily_login"
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-003",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000002",
+    "name": "示例用户2",
+    "secondOrg": {
+      "code": "ORG-MOCK-004",
+      "name": "示例二级部门"
+    },
+    "sex": "女",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "businessPartners": [],
+  "category": {
+    "id": "requirement",
+    "name": "需求类"
+  },
+  "code": "STORY-MOCK-1004",
+  "completeDate": "2026-11-06 14:50:16",
+  "completedPoint": null,
+  "concentration": null,
+  "coreSystem": false,
+  "createDate": "2026-10-27 09:56:33",
+  "createUser": {
+    "avatarDecor": {
+      "frameId": "daily_login"
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-003",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000002",
+    "name": "示例用户2",
+    "secondOrg": {
+      "code": "ORG-MOCK-004",
+      "name": "示例二级部门"
+    },
+    "sex": "女",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "defectEventInfo": null,
+  "delayState": null,
+  "deleted": 0,
+  "descAsA": null,
+  "descIWant": null,
+  "descSoThat": null,
+  "description": "<p>示例用户故事描述：在数据中台新增日终自动化汇总作业与按项目维度导出明细接口，并针对核对异常记录输出预警事件；其中文件敏感列掩码策略、历史回溯天数上限、告警阈值及审计归档周期需结合业务与合规要求进一步澄清。</p>",
+  "devEndDate": null,
+  "devStartDate": null,
+  "epgState": {
+    "id": "released",
+    "name": "已上线",
+    "sequence": 11
+  },
+  "eventCode": null,
+  "id": "19591151fa7542719a15384996b0e4b9",
+  "mainStory": null,
+  "manager": {
+    "avatarDecor": {
+      "frameId": "specification_expert"
+    },
+    "blocked": 0,
+    "email": "user01[at]corp.example",
+    "firstOrg": {
+      "code": "ORG-MOCK-001",
+      "name": "示例一级部门"
+    },
+    "loginCode": "000001",
+    "name": "示例用户1",
+    "secondOrg": {
+      "code": "ORG-MOCK-002",
+      "name": "示例二级部门"
+    },
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "employee",
+      "name": "员工"
+    }
+  },
+  "parent": null,
+  "parentId": null,
+  "planOnlineDate": "2026-11-05 00:00:00",
+  "postponeStart": null,
+  "priority": null,
+  "progressState": {
+    "id": "normal",
+    "name": "正常"
+  },
+  "rank": 1793066193348,
+  "regressionEndDate": null,
+  "regressionStartDate": null,
+  "relatedReqItem": null,
+  "releaseDelay": 0,
+  "releaseInAdvance": null,
+  "releaseInfo": {
+    "businessManager": null,
+    "createDate": "2026-10-28 10:02:27",
+    "createUser": {
+      "avatarDecor": {
+        "frameId": "specification_expert"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-001",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000001",
+      "name": "示例用户1",
+      "secondOrg": {
+        "code": "ORG-MOCK-002",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "deployOnline": 1,
+    "description": null,
+    "emergencyType": {
+      "id": "0",
+      "name": "常规"
+    },
+    "favorite": null,
+    "id": "7d8c62b588b7454287190bd5d2b7b7d7",
+    "manageUser": {
+      "avatarDecor": {
+        "frameId": "daily_login"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-001",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000005",
+      "name": "示例用户3",
+      "secondOrg": {
+        "code": "ORG-MOCK-002",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "milestoneId": "530b3f39302a41a7b968b7535a63342b",
+    "model": {
+      "id": "cross",
+      "name": "标准模式"
+    },
+    "name": "示例配置发布变更",
+    "noFuncTestState": "1",
+    "originalReleaseDate": null,
+    "plan": "0",
+    "planType": "1",
+    "processState": {
+      "id": "released",
+      "name": "已上线"
+    },
+    "progressStatusId": "complete",
+    "projectId": "1a4dc8c87cb84511b7316757034b0b28",
+    "purpose": null,
+    "releaseDate": "2026-11-05 00:00:00",
+    "releaseNum": "REL-MOCK-10010",
+    "released": 1,
+    "sprint": null,
+    "stage": {
+      "id": "productionValidation",
+      "name": "投产验证",
+      "sequence": 8
+    },
+    "stageStatus": {
+      "id": "complete",
+      "name": "已完成"
+    },
+    "state": {
+      "id": "approved",
+      "name": "已审批"
+    },
+    "team": {
+      "id": "team-mock-001",
+      "internalRelease": 1,
+      "managerUser": {
+        "avatarDecor": {
+          "frameId": "specification_expert"
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-001",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": {
+          "code": "ORG-MOCK-002",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "managers": [
+        {
+          "avatarDecor": null,
+          "blocked": null,
+          "email": null,
+          "firstOrg": null,
+          "loginCode": "000003",
+          "name": "示例用户4",
+          "secondOrg": null,
+          "sex": "男",
+          "state": null,
+          "type": null
+        },
+        {
+          "avatarDecor": null,
+          "blocked": null,
+          "email": null,
+          "firstOrg": null,
+          "loginCode": "000001",
+          "name": "示例用户1",
+          "secondOrg": null,
+          "sex": "男",
+          "state": null,
+          "type": null
+        }
+      ],
+      "name": "示例分队1",
+      "parent": {
+        "id": "group-mock-001",
+        "internalRelease": 0,
+        "managerUser": null,
+        "managers": null,
+        "name": "示例小组1",
+        "parent": null,
+        "signature": null,
+        "type": {
+          "id": "group",
+          "name": "小组"
+        }
+      },
+      "signature": null,
+      "type": {
+        "id": "team",
+        "name": "分队"
+      }
+    },
+    "testManager": null,
+    "updateDate": "2026-11-06 15:06:48",
+    "updateUser": {
+      "avatarDecor": {
+        "frameId": null
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000007",
+      "name": "示例用户6",
+      "secondOrg": {
+        "code": "ORG-MOCK-010",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    }
+  },
+  "reqItems": null,
+  "requirement": {
+    "acceptedDate": "2026-11-13 17:22:47",
+    "accountFlag": "0",
+    "actualLineDate": "2026-11-30 00:00:00",
+    "annualPlan": 1,
+    "applyDate": "2026-03-27 00:00:00",
+    "applyUser": {
+      "avatarDecor": {
+        "frameId": "daily_login"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000002",
+      "name": "示例用户2",
+      "secondOrg": {
+        "code": "ORG-MOCK-004",
+        "name": "示例二级部门"
+      },
+      "sex": "女",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "archInfo": {
+      "acceptEndDate": null,
+      "acceptStartDate": null,
+      "archLabel": {
+        "archDesignBaseDays": null,
+        "id": "not_involved",
+        "name": "无架构变更",
+        "viewOrder": 5,
+        "visible": 1
+      },
+      "archManager": {
+        "avatarDecor": {
+          "frameId": null
+        },
+        "blocked": 0,
+        "email": "user01[at]corp.example",
+        "firstOrg": {
+          "code": "ORG-MOCK-003",
+          "name": "示例一级部门"
+        },
+        "loginCode": "000008",
+        "name": "示例用户7",
+        "secondOrg": {
+          "code": "ORG-MOCK-007",
+          "name": "示例二级部门"
+        },
+        "sex": "男",
+        "state": null,
+        "type": {
+          "id": "employee",
+          "name": "员工"
+        }
+      },
+      "requirementId": "f87413d270e5491f91e4746a251852e0",
+      "reviewPlanEndDate": null,
+      "reviewPlanStartDate": null
+    },
+    "archManager": {
+      "avatarDecor": {
+        "frameId": null
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000008",
+      "name": "示例用户7",
+      "secondOrg": {
+        "code": "ORG-MOCK-007",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "archReview": null,
+    "archReviewPlanEndDate": null,
+    "archReviewPlanStartDate": null,
+    "assignee": {
+      "avatarDecor": {
+        "frameId": "daily_login"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000002",
+      "name": "示例用户2",
+      "secondOrg": {
+        "code": "ORG-MOCK-004",
+        "name": "示例二级部门"
+      },
+      "sex": "女",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "backGround": "<p>示例需求背景：需要提升跨系统协作效率与可追溯性。</p>",
+    "benefitInfos": [],
+    "branchName": null,
+    "budget": null,
+    "businessOwner": {
+      "avatarDecor": {
+        "frameId": "daily_login"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000002",
+      "name": "示例用户2",
+      "secondOrg": {
+        "code": "ORG-MOCK-004",
+        "name": "示例二级部门"
+      },
+      "sex": "女",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "category": {
+      "id": "daily_optimization",
+      "name": "日常优化",
+      "oa": "5"
+    },
+    "categoryDescription": null,
+    "categoryL1": {
+      "id": "js",
+      "name": "技术支撑",
+      "oa": "6",
+      "sequence": 6
+    },
+    "categoryL2": {
+      "categoryL1Id": "js",
+      "id": "js",
+      "name": "技术平台",
+      "oa": "1",
+      "sequence": 38
+    },
+    "completeDate": null,
+    "complianceFlag": "0",
+    "confirmCreateStoryDate": null,
+    "createDate": "2026-03-31 14:37:45",
+    "description": "<p>示例用户故事描述：在数据中台新增日终自动化汇总作业与按项目维度导出明细接口，并针对核对异常记录输出预警事件；其中文件敏感列掩码策略、历史回溯天数上限、告警阈值及审计归档周期需结合业务与合规要求进一步澄清。</p>",
+    "effectData": null,
+    "effectDataOA": null,
+    "effectDifferent": null,
+    "effectDifferentOA": null,
+    "id": "f87413d270e5491f91e4746a251852e0",
+    "implementationOrg": {
+      "code": "ORG-MOCK-002",
+      "name": "示例一级部门"
+    },
+    "important": {
+      "id": "normal",
+      "name": "常规"
+    },
+    "incomeFlag": null,
+    "involveCoreProjectGroups": 0,
+    "involveMobileApp": null,
+    "involveMobileAppExperienceTeam": null,
+    "isProject": "0",
+    "isProjectComplete": "0",
+    "manager": {
+      "avatarDecor": {
+        "frameId": "daily_login"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-003",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000002",
+      "name": "示例用户2",
+      "secondOrg": {
+        "code": "ORG-MOCK-004",
+        "name": "示例二级部门"
+      },
+      "sex": "女",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "mobileAppExperienceTeamDesc": null,
+    "mobileAppParticipateUsers": [],
+    "mode": {
+      "description": "迭代开展“用户故事拆分->故事分析及评审”，无需做整体需求分析。用户故事未评审，不允许拆分系统变更",
+      "id": "agile",
+      "name": "敏捷"
+    },
+    "name": "示例需求/故事名称",
+    "necessityType": null,
+    "no": "REQ-MOCK-1010",
+    "oaType": {
+      "id": "develop_not_production",
+      "name": "需开发产品类，非产品类需求"
+    },
+    "onlineDate": "2026-12-31 00:00:00",
+    "orgCode": "ORG-MOCK-004",
+    "orgName": "示例部门1",
+    "planAnalyseStartDate": null,
+    "planReviewEndDate": null,
+    "projectManager": {
+      "avatarDecor": {
+        "frameId": "specification_expert"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-001",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000001",
+      "name": "示例用户1",
+      "secondOrg": {
+        "code": "ORG-MOCK-002",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "projectWbDevWorkload": null,
+    "projectWbTestWorkload": null,
+    "reportUser": null,
+    "reqBenefit": null,
+    "reqDocs": [],
+    "reqTopic": null,
+    "reqUrgency": null,
+    "responsibleOrg": {
+      "id": "4",
+      "name": "示例一级部门"
+    },
+    "reviewEndDate": "2026-04-02 10:05:53",
+    "reviewStartDate": "2026-04-02 10:02:13",
+    "stage": {
+      "id": "in_operation",
+      "name": "实施中"
+    },
+    "state": {
+      "id": "normal",
+      "name": "正常"
+    },
+    "systemOffline": 0,
+    "systemOfflineReviewResult": null,
+    "tagType": null,
+    "team": null,
+    "totalScore": null,
+    "type": {
+      "id": "functional_optimization",
+      "name": "功能优化"
+    },
+    "urgency": "非紧急",
+    "wbDevWorkloadEvaluation": null,
+    "wbTestWorkloadEvaluation": null
+  },
+  "rollbackComment": null,
+  "rollbackState": null,
+  "scheduleDelay": 0,
+  "state": {
+    "active": 1,
+    "id": "f3cccbcbc44b4d4c9ebd8622fb3186e7",
+    "name": "已上线",
+    "nextStates": [
+      {
+        "active": 1,
+        "checked": null,
+        "id": "f3cccbcbc44b4d4c9ebd8622fb3186e7",
+        "name": "已上线",
+        "sequence": 100,
+        "typeId": "released"
+      }
+    ],
+    "sequence": 100,
+    "teamId": "team-mock-001",
+    "type": {
+      "id": "released",
+      "name": "已上线"
+    }
+  },
+  "storyPoint": null,
+  "storySign": null,
+  "summary": "日终汇总报表自动化导出接口与异常差异预警通知（STORY-MOCK-1004）",
+  "systemChanges": [
+    {
+      "code": "CHG-MOCK-2026-01",
+      "summary": "报表导出服务接口改造",
+      "systemName": "示例数据中台"
+    }
+  ],
+  "tagType": null,
+  "tags": [],
+  "team": {
+    "id": "team-mock-001",
+    "internalRelease": 1,
+    "managerUser": {
+      "avatarDecor": {
+        "frameId": "specification_expert"
+      },
+      "blocked": 0,
+      "email": "user01[at]corp.example",
+      "firstOrg": {
+        "code": "ORG-MOCK-001",
+        "name": "示例一级部门"
+      },
+      "loginCode": "000001",
+      "name": "示例用户1",
+      "secondOrg": {
+        "code": "ORG-MOCK-002",
+        "name": "示例二级部门"
+      },
+      "sex": "男",
+      "state": null,
+      "type": {
+        "id": "employee",
+        "name": "员工"
+      }
+    },
+    "managers": [
+      {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000003",
+        "name": "示例用户4",
+        "secondOrg": null,
+        "sex": "男",
+        "state": null,
+        "type": null
+      },
+      {
+        "avatarDecor": null,
+        "blocked": null,
+        "email": null,
+        "firstOrg": null,
+        "loginCode": "000001",
+        "name": "示例用户1",
+        "secondOrg": null,
+        "sex": "男",
+        "state": null,
+        "type": null
+      }
+    ],
+    "name": "示例分队1",
+    "parent": {
+      "id": "group-mock-001",
+      "internalRelease": 0,
+      "managerUser": null,
+      "managers": null,
+      "name": "示例小组1",
+      "parent": null,
+      "signature": null,
+      "type": {
+        "id": "group",
+        "name": "小组"
+      }
+    },
+    "signature": null,
+    "type": {
+      "id": "team",
+      "name": "分队"
+    }
+  },
+  "testReportBriefs": null,
+  "type": {
+    "id": "main_story",
+    "name": "主办故事"
+  },
+  "updateDate": "2026-11-06 14:50:16",
+  "updateUser": {
+    "avatarDecor": {
+      "frameId": null
+    },
+    "blocked": 0,
+    "email": null,
+    "firstOrg": null,
+    "loginCode": "000001",
+    "name": "示例用户000001",
+    "secondOrg": null,
+    "sex": "男",
+    "state": null,
+    "type": {
+      "id": "virtual",
+      "name": "虚拟账号"
+    }
+  }
+}

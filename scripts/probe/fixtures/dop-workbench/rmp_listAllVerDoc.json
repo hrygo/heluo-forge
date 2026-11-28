@@ -1,0 +1,58 @@
+{
+  "timestamp": "2026-11-26 12:34:41",
+  "infocode": "VP000000",
+  "msg": null,
+  "redirectUrl": null,
+  "data": {
+    "currentPage": 1,
+    "numPerPage": 10,
+    "totalPages": 6,
+    "totalRows": 53,
+    "resultList": [
+      {
+        "iis_lockval": "0",
+        "code": "DOC-MOCK-1001",
+        "iis_lock": "未锁定",
+        "docver": "1.1.0",
+        "iid": "90001101",
+        "docid": "90001001",
+        "unitid": null,
+        "docname": "示例业务需求规格说明书_1.0.0",
+        "reqcode": null,
+        "docstatus": "已发版",
+        "username": "示例用户1",
+        "deptname": "示例部门1"
+      },
+      {
+        "iis_lockval": "0",
+        "code": "DOC-MOCK-1001",
+        "iis_lock": "未锁定",
+        "docver": "1.2.0",
+        "iid": "90001101",
+        "docid": "90001002",
+        "unitid": null,
+        "docname": "示例业务需求规格说明书_1.0.0",
+        "reqcode": null,
+        "docstatus": "已发版",
+        "username": "示例用户1",
+        "deptname": "示例部门1"
+      },
+      {
+        "iis_lockval": "0",
+        "code": "DOC-MOCK-1001",
+        "iis_lock": "未锁定",
+        "docver": "2.0.0",
+        "iid": "90001101",
+        "docid": "90001003",
+        "unitid": null,
+        "docname": "示例业务需求规格说明书_1.0.0",
+        "reqcode": null,
+        "docstatus": "已发版",
+        "username": "示例用户1",
+        "deptname": "示例部门1"
+      }
+    ]
+  },
+  "status": 200,
+  "requestTraceId": "MOCK-TRACE-1005"
+}

@@ -1,0 +1,43 @@
+{
+  "code": 0,
+  "data": [
+    {
+      "createTime": "2026-10-29 14:51:06",
+      "createUserCode": "000006",
+      "createUserName": "示例用户6",
+      "endTime": "2026-10-30 14:51:06",
+      "endTipsTime": "2026-11-06 00:00:00",
+      "id": "0372a50e95644dce87bf4ba61364e050",
+      "isPush": "1",
+      "isTop": "0",
+      "procalmation": "各位同事：本周六上午 09:00-10:00 将对测试环境进行例行维护升级，期间相关服务将短暂中断，请提前安排工作计划。",
+      "procalmationTitle": "研发平台例行维护窗口通知",
+      "procalmationType": "1",
+      "startTime": "2026-10-29 14:51:06",
+      "state": "1",
+      "updateTime": "2026-10-29 14:51:06",
+      "updateUserCode": "000006",
+      "updateUserName": "示例用户6"
+    },
+    {
+      "createTime": "2026-01-28 11:50:30",
+      "createUserCode": "000002",
+      "createUserName": "示例用户2",
+      "endTime": "2026-01-29 11:50:30",
+      "endTipsTime": "2026-02-06 00:00:00",
+      "id": "d8aa1e4542e74346a9fdafb0c0ecaf7a",
+      "isPush": "0",
+      "isTop": "0",
+      "procalmation": "各位同事：排期下研发过程文档中【代码评审检查单模板】已更新，请采用新版模板开展代码评审，谢谢！",
+      "procalmationTitle": "代码评审检查单模板更新",
+      "procalmationType": "1",
+      "startTime": "2026-01-28 11:50:30",
+      "state": "1",
+      "updateTime": "2026-01-28 11:50:30",
+      "updateUserCode": "000002",
+      "updateUserName": "示例用户2"
+    }
+  ],
+  "message": null,
+  "total": 2
+}
