@@ -282,7 +282,7 @@ export function createDispatchService(ports) {
   const pendingIndexQueues = new Map();
   const inFlightReconciles = new Map();
   const inFlightDeliveries = new Set();
-  const inFlightReconcileReads = new Set();
+  const inFlightReconcileReadsByScope = new Map();
   const reconcileTimeoutMs = Number.isInteger(ports.reconcileTimeoutMs) && ports.reconcileTimeoutMs > 0
     ? ports.reconcileTimeoutMs
     : 10_000;
@@ -339,7 +339,7 @@ export function createDispatchService(ports) {
     pendingIndexQueues.clear();
     inFlightReconciles.clear();
     inFlightDeliveries.clear();
-    inFlightReconcileReads.clear();
+    inFlightReconcileReadsByScope.clear();
     if (domainHandle) {
       const closing = domainHandle;
       domainHandle = null;
@@ -945,13 +945,25 @@ export function createDispatchService(ports) {
 
       const reconcileOne = async (requestId) => {
         const readKey = deriveCorrelationKey({ ...scope, requestId });
-        if (inFlightDeliveries.has(readKey) || inFlightReconcileReads.has(readKey)) {
+        const existingReads = inFlightReconcileReadsByScope.get(scopeKey);
+        if (inFlightDeliveries.has(readKey)
+          || existingReads?.has(readKey)
+          || (existingReads?.size ?? 0) >= RECONCILE_CONCURRENCY) {
           stillPending.push(requestId);
           return;
         }
         const record = await readCorrelation(scope, requestId);
         if (!record || (record.status !== 'pending_delivery' && record.status !== 'unknown')) {
           await syncPendingIndex(scope, requestId, 'accepted');
+          return;
+        }
+        let activeReads = inFlightReconcileReadsByScope.get(scopeKey);
+        if (!activeReads) {
+          activeReads = new Set();
+          inFlightReconcileReadsByScope.set(scopeKey, activeReads);
+        }
+        if (activeReads.has(readKey) || activeReads.size >= RECONCILE_CONCURRENCY) {
+          stillPending.push(requestId);
           return;
         }
         let notified = false;
@@ -971,12 +983,15 @@ export function createDispatchService(ports) {
           return entry;
         };
         try {
-          inFlightReconcileReads.add(readKey);
+          activeReads.add(readKey);
           const readPromise = reconcileByRequest({ requestId }).then((result) => {
             buildAndNotify(result);
             return result;
           }).finally(() => {
-            inFlightReconcileReads.delete(readKey);
+            activeReads.delete(readKey);
+            if (activeReads.size === 0 && inFlightReconcileReadsByScope.get(scopeKey) === activeReads) {
+              inFlightReconcileReadsByScope.delete(scopeKey);
+            }
           });
           // Sink late rejections after timeout so timed-out background reads never cause unhandled rejections.
           readPromise.catch(() => {});
