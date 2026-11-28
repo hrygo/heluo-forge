@@ -49,6 +49,38 @@ test('scope manager rejects unauthenticated IAM session and advances epoch on id
   assert.ok(changes.length >= 2);
 });
 
+test('stale Delegra verification cannot replace the newer IAM scope or advance its epoch (#484)', async () => {
+  const lookupStarted = Promise.withResolvers();
+  const releaseOldLookup = Promise.withResolvers();
+  const changes = [];
+  let subject = SCOPE_A.subject;
+  let delayOldLookup = false;
+  const scope = createScopeManager({
+    getIamSession: () => ({ state: 'ready', issuer: SCOPE_A.issuer, subject }),
+    async resolveDelegraScope(session) {
+      if (session.subject === SCOPE_B.subject) return SCOPE_B;
+      if (delayOldLookup) {
+        lookupStarted.resolve();
+        await releaseOldLookup.promise;
+      }
+      return SCOPE_A;
+    },
+    onScopeChanged: ({ scope: current }) => changes.push(current.subject),
+  });
+  await scope.resolveForRequest();
+
+  delayOldLookup = true;
+  const stale = scope.resolveForRequest();
+  await lookupStarted.promise;
+  subject = SCOPE_B.subject;
+  const current = await scope.resolveForRequest();
+  releaseOldLookup.resolve();
+
+  await assert.rejects(stale, { code: 'EXPERT_SCOPE_MISMATCH' });
+  assert.doesNotThrow(() => scope.assertCurrent(current.scopeEpoch, current));
+  assert.deepEqual(changes, [SCOPE_A.subject, SCOPE_B.subject]);
+});
+
 test('catalog separates directory vs callable views, deduplicates in-flight reads, and discards late responses after scope change', async () => {
   let activeSession = { state: 'ready', issuer: SCOPE_A.issuer, subject: SCOPE_A.subject };
   let activeBound = SCOPE_A;

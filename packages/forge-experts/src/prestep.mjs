@@ -29,10 +29,10 @@ function isPlainObject(value) {
 }
 
 function scopeKeyOf(scope) {
-  if (!scope || typeof scope !== 'object') return null;
+  if (!scope || !Number.isInteger(scope.scopeEpoch) || scope.scopeEpoch < 1) return null;
   const parts = [scope.instanceId, scope.orgId, scope.issuer, scope.subject];
   if (parts.some((p) => typeof p !== 'string' || !p.trim())) return null;
-  return JSON.stringify(parts.map((p) => p.trim()));
+  return JSON.stringify([...parts.map((p) => p.trim()), scope.scopeEpoch]);
 }
 
 function snapshotDraft({ taskText, draftVersion, reuseRefs }) {
@@ -79,6 +79,7 @@ export function createPreStepGuard(ports) {
     const wireEvent = Object.freeze({
       sessionId,
       expertId,
+      scopeEpoch: scope?.scopeEpoch,
       ...(draftDigest ? { draftDigest } : {}),
       ...(draftRecoveryId ? { draftRecoveryId } : {}),
       status,

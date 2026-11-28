@@ -463,6 +463,7 @@ export function createDispatchService(ports) {
   async function writeCorrelationBestEffort(scope, record) {
     try {
       await writeCorrelation(scope, record);
+      return true;
     } catch (persistError) {
       // Surface minimal diagnostic metadata so stuck pending records remain observable.
       try {
@@ -472,6 +473,7 @@ export function createDispatchService(ports) {
           message: persistError?.message ?? String(persistError),
         });
       } catch { /* diagnostics isolation */ }
+      return false;
     }
   }
 
@@ -804,19 +806,24 @@ export function createDispatchService(ports) {
             expertId: record.expertId,
             delegationScope: record.delegationScope,
           });
-          if (record.status === 'not_found') {
-            // A later acceptance can supersede a settled 404. Re-register recovery before
-            // saving it so a failed acceptance write can be retried after restart.
-            await syncPendingIndex(scope, cleanId, 'unknown', { strict: true });
-            assertReadbackCurrent();
-          }
           if (isReconcilableStatus(record.status)) {
-            await writeCorrelationBestEffort(scope, {
+            let reservationError = null;
+            if (record.status === 'not_found') {
+              // Restore recovery for a late acceptance. A durable accepted record also settles the request.
+              try {
+                await syncPendingIndex(scope, cleanId, 'unknown', { strict: true });
+              } catch (error) {
+                reservationError = error;
+              }
+              assertReadbackCurrent();
+            }
+            const persisted = await writeCorrelationBestEffort(scope, {
               ...record,
               taskId: authoritative.taskId ?? record.taskId,
               status: 'accepted',
               updatedAt: new Date(now()).toISOString(),
             });
+            if (!persisted && reservationError) throw reservationError;
           }
         }
         return record;

@@ -407,7 +407,8 @@ window.__ModuleLoader__.load({
       }
 
       function clearDeniedResult(response) {
-        if (response?.status !== 401 && response?.status !== 403) return false;
+        const taskNotFound = response?.status === 404 && resultCode(response) === 'EXPERT_TASK_NOT_FOUND';
+        if (!taskNotFound && response?.status !== 401 && response?.status !== 403) return false;
         resultAccessDeniedRef.current = true;
         updateTask(taskRef.current);
         setRawExpanded(false);
@@ -942,13 +943,37 @@ window.__ModuleLoader__.load({
       let generation = 0;
       let activeEpoch = 0;
       let activeVersion = 0;
+      let recoveryScopeEpoch = 0;
+      let scopeGeneration = 0;
+      let pollGeneration = 0;
+      let streamConnected = true;
+      let disposed = false;
       const MAX_PENDING_DRAFTS = 32;
-      // Hoisted to mountMentionsSource closure so SSE reconnect/invalidation never drops buffered user drafts (#245/#246).
+      // Reconnect and candidate invalidation retain drafts for the same verified scope.
       const pendingDrafts = new Map();
       const pendingRecoveries = [];
       let draftRecoveryListener = null;
       const reconciler = createReconcileTrigger();
       const triggerReconcile = reconciler.trigger;
+
+      const clearRecovery = () => {
+        pendingDrafts.clear();
+        pendingRecoveries.length = 0;
+        draftRecoveryListener = null;
+      };
+
+      const isScopeEpoch = (epoch) => Number.isSafeInteger(epoch) && epoch > 0;
+      const updateRecoveryScope = (epoch, scopeChanged = false) => {
+        const nextEpoch = isScopeEpoch(epoch) ? epoch : 0;
+        if ((!nextEpoch && !scopeChanged) || (nextEpoch && nextEpoch === recoveryScopeEpoch)) return false;
+        const changed = recoveryScopeEpoch !== 0 || scopeChanged;
+        recoveryScopeEpoch = nextEpoch;
+        if (changed) {
+          scopeGeneration += 1;
+          clearRecovery();
+        }
+        return changed;
+      };
 
       const draftBufferKey = (sessionId, { draftRecoveryId, draftDigest } = {}) => {
         const recoveryId = normalizeCardId(draftRecoveryId);
@@ -987,9 +1012,14 @@ window.__ModuleLoader__.load({
           label: '专家智能体',
           async query(text, queryCtx) {
             const sessionId = typeof queryCtx?.sessionId === 'string' ? queryCtx.sessionId : '';
-            if (!sessionId) return [];
+            if (!sessionId || disposed || mountedGen !== generation) return [];
             const result = await fetchMentions({ sessionId, query: typeof text === 'string' ? text : '' });
-            if (mountedGen !== generation || !result.ok) return [];
+            if (disposed || mountedGen !== generation || !result.ok) return [];
+            if (updateRecoveryScope(result.body?.scopeEpoch)) {
+              dropGroup();
+              registerGroup();
+              return [];
+            }
             activeEpoch = result.body?.scopeEpoch ?? activeEpoch;
             activeVersion = result.body?.viewVersion ?? activeVersion;
             const list = Array.isArray(result.body?.candidates) ? result.body.candidates : [];
@@ -1015,7 +1045,7 @@ window.__ModuleLoader__.load({
             });
           },
           onPick(picked) {
-            if (!picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion) {
+            if (disposed || mountedGen !== generation || !picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion) {
               return { accepted: false, reason: 'EXPERT_SCOPE_MISMATCH' };
             }
             return { accepted: true, expertId: picked.expertId, scopeEpoch: picked.scopeEpoch, viewVersion: picked.viewVersion };
@@ -1026,27 +1056,33 @@ window.__ModuleLoader__.load({
           // 生产 @ 选择绑定：仅在用户显式点选且未失效时向 Host 申请单次 selectionToken；
           // 任何失效、撤权或网络异常均保留草稿并给出明确提示，不静默发送（#245 / #246）。
           sourceSpec.onDraftRecovery = (listener) => {
-            draftRecoveryListener = typeof listener === 'function' ? listener : null;
-            if (typeof draftRecoveryListener === 'function' && pendingRecoveries.length > 0) {
-              for (const event of pendingRecoveries.splice(0)) {
-                try { draftRecoveryListener(event); } catch { /* best effort */ }
-              }
+            if (disposed || mountedGen !== generation) return () => {};
+            const registration = typeof listener === 'function' ? { notify: listener } : null;
+            draftRecoveryListener = registration;
+            while (registration && draftRecoveryListener === registration && pendingRecoveries.length > 0) {
+              const event = pendingRecoveries.shift();
+              try { registration.notify(event); } catch { /* best effort */ }
             }
             return () => {
-              if (draftRecoveryListener === listener) draftRecoveryListener = null;
+              if (draftRecoveryListener === registration) draftRecoveryListener = null;
             };
           };
           sourceSpec.prepareSubmit = async ({ picked, sessionId, taskText, draftVersion, reuseRefs = [] } = {}) => {
             const draft = { taskText: typeof taskText === 'string' ? taskText : '', draftVersion: draftVersion ?? null, reuseRefs: Array.isArray(reuseRefs) ? [...reuseRefs] : [] };
-            if (!picked || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion || !picked.expertId) {
-              return {
-                ok: false,
-                code: 'EXPERT_SELECTION_INVALID',
-                preserveDraft: true,
-                draft,
-                notice: ERROR_NOTICE.EXPERT_SELECTION_INVALID,
-              };
-            }
+            const submitEpoch = recoveryScopeEpoch;
+            const submitScopeGeneration = scopeGeneration;
+            const isSameScope = () => !disposed && submitEpoch !== 0 && submitEpoch === recoveryScopeEpoch
+              && submitScopeGeneration === scopeGeneration;
+            const isCurrentSubmit = () => isSameScope() && mountedGen === generation;
+            const staleSelection = (includeDraft = true) => ({
+              ok: false,
+              code: 'EXPERT_SELECTION_INVALID',
+              preserveDraft: true,
+              ...(includeDraft ? { draft } : {}),
+              notice: ERROR_NOTICE.EXPERT_SELECTION_INVALID,
+            });
+            if (!isCurrentSubmit() || !picked || picked.scopeEpoch !== submitEpoch
+              || picked.scopeEpoch !== activeEpoch || picked.viewVersion !== activeVersion || !picked.expertId) return staleSelection();
             try {
               const result = await postSelectionPrepare({
                 expertId: picked.expertId,
@@ -1057,6 +1093,8 @@ window.__ModuleLoader__.load({
                 ...(Number.isInteger(draft.draftVersion) ? { draftVersion: draft.draftVersion } : {}),
                 ...(draft.reuseRefs.length > 0 ? { reuseRefs: draft.reuseRefs } : {}),
               });
+              // Only the original editor retains the draft when the browser has moved to another scope.
+              if (!isCurrentSubmit()) return staleSelection(isSameScope());
               if (!result.ok || !result.body?.selectionToken) {
                 return {
                   ok: false,
@@ -1066,6 +1104,7 @@ window.__ModuleLoader__.load({
                   notice: resultNotice(result),
                 };
               }
+              if (result.body.scopeEpoch !== undefined && result.body.scopeEpoch !== submitEpoch) return staleSelection(false);
               const cleanSession = normalizeCardId(sessionId);
               if (cleanSession) {
                 rememberPendingDraft(draftBufferKey(cleanSession, result.body), draft);
@@ -1083,6 +1122,7 @@ window.__ModuleLoader__.load({
                 preserveDraft: false,
               };
             } catch {
+              if (!isCurrentSubmit()) return staleSelection(isSameScope());
               return {
                 ok: false,
                 code: 'EXPERT_DIRECTORY_UNAVAILABLE',
@@ -1095,11 +1135,17 @@ window.__ModuleLoader__.load({
         }
 
         unregister = triggers.registerSource(sourceSpec);
-        return { pendingDrafts, getRecoveryListener: () => draftRecoveryListener };
       };
 
-      let activeHooks = registerGroup();
+      registerGroup();
       const handleTurnFinalized = (payload, { requireBufferedMatch = false } = {}) => {
+        if (disposed || !recoveryScopeEpoch) return;
+        if (payload?.scopeEpoch !== undefined) {
+          if (payload.scopeEpoch !== recoveryScopeEpoch) return;
+        } else if (!requireBufferedMatch && scopeGeneration !== 0) {
+          // Legacy SSE frames cannot prove ownership after an identity change.
+          return;
+        }
         // An expired attempt can still receive a definite outcome. Keep its draft for that outcome.
         if (payload?.status === 'acceptance_unknown') return;
         const sessionKey = normalizeCardId(payload?.sessionId);
@@ -1127,9 +1173,8 @@ window.__ModuleLoader__.load({
           draft: recoveredDraft,
           notice,
         };
-        const listener = activeHooks?.getRecoveryListener?.() ?? draftRecoveryListener;
-        if (typeof listener === 'function') {
-          try { listener(recoveryEvent); } catch { /* best effort */ }
+        if (draftRecoveryListener) {
+          try { draftRecoveryListener.notify(recoveryEvent); } catch { /* best effort */ }
         } else {
           pendingRecoveries.push(recoveryEvent);
           while (pendingRecoveries.length > MAX_PENDING_DRAFTS) pendingRecoveries.shift();
@@ -1138,14 +1183,24 @@ window.__ModuleLoader__.load({
 
       const closeStream = openEventStream(
         (payload) => {
+          if (disposed) return;
           if (payload.type === 'ready') {
-            activeHooks = registerGroup() ?? activeHooks;
+            if (!isScopeEpoch(payload.scopeEpoch)) return;
+            streamConnected = true;
+            if (updateRecoveryScope(payload.scopeEpoch)) dropGroup();
+            registerGroup();
             if (enableSelectionBinding) {
               triggerReconcile();
-              if (pendingDrafts.size > 0) {
+              if (recoveryScopeEpoch && pendingDrafts.size > 0) {
+                const epoch = recoveryScopeEpoch;
+                const generationAtStart = scopeGeneration;
+                const poll = ++pollGeneration;
+                const isCurrentPoll = () => !disposed && poll === pollGeneration
+                  && generationAtStart === scopeGeneration && epoch === recoveryScopeEpoch;
                 fetchRecentFinalizedTurns().then((res) => {
-                  if (!res?.ok || !Array.isArray(res.body?.items)) return;
+                  if (!isCurrentPoll() || !res?.ok || res.body?.scopeEpoch !== epoch || !Array.isArray(res.body.items)) return;
                   for (const item of res.body.items) {
+                    if (!isCurrentPoll()) break;
                     handleTurnFinalized(item, { requireBufferedMatch: true });
                   }
                 }).catch(() => {});
@@ -1157,27 +1212,30 @@ window.__ModuleLoader__.load({
             notifyTaskReconciled(payload);
             return;
           }
-          if (payload.type === 'turn-finalized' && enableSelectionBinding) {
+          if (payload.type === 'turn-finalized' && enableSelectionBinding && streamConnected) {
             handleTurnFinalized(payload);
             return;
           }
           if (payload.type === 'scope-changed' || payload.type === 'preference-updated' || payload.type === 'mentions-invalidated') {
+            if (payload.type === 'scope-changed') updateRecoveryScope(payload.scopeEpoch, true);
             dropGroup();
-            activeHooks = registerGroup() ?? activeHooks;
+            registerGroup();
           }
         },
         () => {
+          if (disposed) return;
+          streamConnected = false;
+          pollGeneration += 1;
           // SSE 断开时立即撤下旧专家组，待重连 ready 后恢复，防止过期候选留驻已开菜单。
           dropGroup();
         },
       );
 
       return () => {
+        disposed = true;
         closeStream();
         reconciler.dispose();
-        pendingDrafts.clear();
-        pendingRecoveries.length = 0;
-        draftRecoveryListener = null;
+        clearRecovery();
         dropGroup();
       };
     }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { createExpertsHost } from '../src/index.mjs';
 import { EDIT_TOKEN_HEADER } from '../src/routes.mjs';
@@ -48,14 +49,17 @@ function mockHttp(handler, { method, url, headers = {}, body = null }) {
   });
 }
 
-function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = false, sessionScopes = null, checkDelegraSessionScope = null } = {}) {
+function makeHost({
+  managementEnabled = true, isolatedMentionsPreviewEnabled = false, dispatchEnabled = false,
+  sessionScopes = null, checkDelegraSessionScope = null, readIamOrg, beforeResolveDelegraScope,
+} = {}) {
   const data = new Map();
   const scope = { instanceId: 'inst-1', orgId: 'org-a', issuer: 'https://iam.example', subject: 'emp-1', validUntil: '2027-01-01T00:00:00Z' };
   const scopesMap = sessionScopes ?? new Map([['sess-1', 'proj-a']]);
 
   return createExpertsHost({
-    config: { managementEnabled, isolatedMentionsPreviewEnabled, dispatchEnabled: false },
-    getIamSession: () => ({ state: 'ready', issuer: scope.issuer, subject: scope.subject }),
+    config: { managementEnabled, isolatedMentionsPreviewEnabled, dispatchEnabled },
+    getIamSession: () => ({ state: 'ready', issuer: scope.issuer, subject: scope.subject, orgId: readIamOrg?.() }),
     getConnection: () => ({
       requestRejection({ headers }) {
         return headers?.['x-dsh-auth'] === 'ok' ? undefined : 401;
@@ -70,7 +74,10 @@ function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = f
       }),
       async close() {},
     }),
-    resolveDelegraScope: async () => scope,
+    async resolveDelegraScope() {
+      await beforeResolveDelegraScope?.();
+      return scope;
+    },
     fetchDelegraCatalog: async ({ scope: s }) => ({
       scope: s,
       catalogVersion: 'cv-1',
@@ -120,6 +127,150 @@ function makeHost({ managementEnabled = true, isolatedMentionsPreviewEnabled = f
         authContinuityDigest: id === 'exp-1' ? 'dig-1' : 'dig-2',
       })),
     })),
+  });
+}
+
+async function openExpertEventStream(host) {
+  const request = Object.assign(new EventEmitter(), {
+    method: 'GET', url: '/api/forge-experts/events', headers: { 'x-dsh-auth': 'ok' },
+  });
+  const frames = [];
+  const response = {
+    statusCode: 200,
+    writableEnded: false,
+    setHeader() {},
+    write(chunk) { frames.push(JSON.parse(chunk.slice(6))); },
+    end(chunk) {
+      this.writableEnded = true;
+      if (chunk) this.body = JSON.parse(chunk);
+    },
+  };
+  await host.handleRequest(request, response);
+  return { frames, response, close: () => request.emit('close') };
+}
+
+async function prepareExpertTurn(host, scopeEpoch, draftVersion = 1) {
+  const draft = { sessionId: 'sess-1', taskText: 'Synthetic draft for recovery', draftVersion, reuseRefs: ['ref-review'] };
+  const selection = await mockHttp(host.handleRequest, {
+    method: 'POST', url: '/api/forge-experts/selections',
+    headers: { 'x-dsh-auth': 'ok', 'x-forge-experts-request': '1', 'content-type': 'application/json' },
+    body: { ...draft, expertId: 'exp-1', scopeEpoch },
+  });
+  assert.equal(selection.statusCode, 201);
+  const pick = JSON.parse(selection.body);
+  const turn = await host.prestep.prepareTurn({ ...draft, selectionToken: pick.selectionToken });
+  assert.equal(turn.allowed, true);
+  return { ...turn, draftRecoveryId: pick.draftRecoveryId };
+}
+
+function recentExpertTurns(host) {
+  return mockHttp(host.handleRequest, {
+    method: 'GET', url: '/api/forge-experts/turns/finalized', headers: { 'x-dsh-auth': 'ok' },
+  });
+}
+
+test('turn recovery stays within its epoch when one employee changes IAM organization with the same Delegra scope', async (t) => {
+  let iamOrg = 'iam-org-before';
+  const host = makeHost({ dispatchEnabled: true, readIamOrg: () => iamOrg });
+  await host.open();
+  t.after(() => host.close());
+  const oldStream = await openExpertEventStream(host);
+  const [{ scopeEpoch: oldEpoch }] = oldStream.frames;
+  const oldTurn = await prepareExpertTurn(host, oldEpoch);
+
+  iamOrg = 'iam-org-after';
+  const newStream = await openExpertEventStream(host);
+  const [{ scopeEpoch: newEpoch }] = newStream.frames;
+  assert.ok(newEpoch > oldEpoch);
+  const oldResult = host.prestep.finalizeTurn({ turnId: oldTurn.turnId });
+  assert.equal(oldResult.preserveDraft, true);
+  assert.equal(oldResult.draft.taskText, 'Synthetic draft for recovery');
+  await new Promise(setImmediate);
+
+  assert.ok(oldStream.frames.some((event) => event.type === 'scope-changed' && event.scopeEpoch === newEpoch));
+  assert.equal(oldStream.frames.some((event) => event.type === 'turn-finalized'), false);
+  assert.equal(newStream.frames.some((event) => event.type === 'turn-finalized'), false);
+  assert.equal(oldStream.response.writableEnded, true);
+  const afterSwitch = await recentExpertTurns(host);
+  assert.equal(afterSwitch.statusCode, 200);
+  assert.deepEqual(JSON.parse(afterSwitch.body), { scopeEpoch: newEpoch, items: [] });
+
+  const current = await prepareExpertTurn(host, newEpoch, 2);
+  host.prestep.finalizeTurn({ turnId: current.turnId });
+  await new Promise(setImmediate);
+  const [published] = newStream.frames.filter((event) => event.type === 'turn-finalized');
+  assert.equal(published.scopeEpoch, newEpoch);
+  assert.equal(published.draftRecoveryId, current.draftRecoveryId);
+  assert.equal(published.status, 'model_did_not_delegate');
+  for (const privateField of ['draft', 'taskText', 'reuseRefs', 'selectionToken']) {
+    assert.equal(Object.hasOwn(published, privateField), false);
+  }
+  newStream.close();
+  const reconnected = await openExpertEventStream(host);
+  assert.equal(reconnected.frames[0].scopeEpoch, newEpoch);
+  const { type, ...item } = published;
+  const recent = await recentExpertTurns(host);
+  assert.deepEqual(JSON.parse(recent.body), { scopeEpoch: newEpoch, items: [item] });
+});
+
+test('turn recovery SSE rechecks live IAM before publishing without another scoped request', async (t) => {
+  let iamOrg = 'iam-org-before';
+  const host = makeHost({ dispatchEnabled: true, readIamOrg: () => iamOrg });
+  await host.open();
+  t.after(() => host.close());
+  const stream = await openExpertEventStream(host);
+  const [{ scopeEpoch }] = stream.frames;
+  const turn = await prepareExpertTurn(host, scopeEpoch);
+
+  iamOrg = 'iam-org-after';
+  const result = host.prestep.finalizeTurn({ turnId: turn.turnId });
+  assert.equal(result.preserveDraft, true);
+  await new Promise(setImmediate);
+
+  assert.equal(host.scope.getSnapshot().scopeEpoch, scopeEpoch);
+  assert.equal(stream.frames.some((event) => event.type === 'turn-finalized'), false);
+});
+
+for (const useStream of [false, true]) {
+  test(`turn recovery ${useStream ? 'SSE registration' : 'HTTP read'} rechecks live IAM when organization changes during scope resolution`, async (t) => {
+    let iamOrg = 'iam-org-before';
+    let pauseScope = false;
+    const scopeReadStarted = Promise.withResolvers();
+    const resumeScope = Promise.withResolvers();
+    const host = makeHost({
+      dispatchEnabled: true,
+      readIamOrg: () => iamOrg,
+      async beforeResolveDelegraScope() {
+        if (!pauseScope) return;
+        scopeReadStarted.resolve();
+        await resumeScope.promise;
+      },
+    });
+    await host.open();
+    t.after(async () => { resumeScope.resolve(); await host.close(); });
+    const stream = await openExpertEventStream(host);
+    const [{ scopeEpoch }] = stream.frames;
+    const turn = await prepareExpertTurn(host, scopeEpoch);
+    host.prestep.finalizeTurn({ turnId: turn.turnId });
+    await new Promise(setImmediate);
+    assert.equal(stream.frames.some((event) => event.type === 'turn-finalized'), true);
+
+    pauseScope = true;
+    const pending = useStream ? openExpertEventStream(host) : recentExpertTurns(host);
+    await scopeReadStarted.promise;
+    iamOrg = 'iam-org-after';
+    resumeScope.resolve();
+
+    const stale = await pending;
+    const response = useStream ? stale.response : stale;
+    assert.equal(response.statusCode, 409);
+    const body = useStream ? response.body : JSON.parse(response.body);
+    assert.equal(body.error.code, 'EXPERT_SCOPE_MISMATCH');
+    assert.equal(Object.hasOwn(body, 'items'), false);
+    if (useStream) {
+      assert.deepEqual(stale.frames, []);
+      assert.equal(host.routes.clientCount(), 1, 'only the previously established stream remains registered');
+    }
   });
 }
 

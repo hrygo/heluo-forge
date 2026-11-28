@@ -58,6 +58,7 @@ export function createExpertsHost(ports) {
         scopeEpoch,
         viewVersion: catalogRef?.getViewVersion() ?? 1,
       });
+      routesRef?.closeAllStreams();
     },
   });
 
@@ -143,6 +144,7 @@ export function createExpertsHost(ports) {
     onCorrelationPersistError: ports.onCorrelationPersistError,
     onPendingIndexError: ports.onPendingIndexError,
     onTaskReconciled: (event) => {
+      if (!event?.scope) return;
       // Never broadcast originSessionRef, expertId, or internal scope on shared SSE streams.
       routesRef?.broadcast({
         type: 'task-reconciled',
@@ -151,7 +153,7 @@ export function createExpertsHost(ports) {
         status: event.status,
         ...(Number.isInteger(event?.runGeneration) ? { runGeneration: event.runGeneration } : {}),
         ...(event?.notFound === true ? { notFound: true } : {}),
-      }, event?.scope ?? null);
+      }, event.scope);
     },
     createDelegraTask: ports.createDelegraTask ?? (() => {
       throw new ExpertsError('EXPERT_DIRECTORY_UNAVAILABLE', 'Delegra task creation connector is not configured');
@@ -188,6 +190,8 @@ export function createExpertsHost(ports) {
     isManagementEnabled: () => managementEnabled,
     getConnection: ports.getConnection,
     resolveScope: () => scope.resolveForRequest(),
+    assertScopeCurrent: (epoch, expectedScope) => scope.assertCurrent(epoch, expectedScope),
+    assertIamIdentityCurrent: (epoch, expectedScope) => scope.assertIamIdentityCurrent(epoch, expectedScope),
     listCatalog: (params) => catalog.list(params),
     listMentions: (params) => mentions.list(params),
     getKnownExpert: (scopeEpoch, expertId) => catalog.getKnownExpert(scopeEpoch, expertId),
@@ -210,9 +214,16 @@ export function createExpertsHost(ports) {
     resolveScope: () => scope.resolveForRequest(),
     inspectSelection: (params) => selection.inspect(params),
     discardSelection: (token) => selection.discard(token),
-    onTurnFinalized: (event) => {
+    onTurnFinalized: async (event) => {
       const { scope: targetScope, ...wireEvent } = event ?? {};
-      routesRef?.broadcast({ type: 'turn-finalized', ...wireEvent }, targetScope ?? null);
+      if (!targetScope) return;
+      try {
+        await scope.assertIamIdentityCurrent(wireEvent.scopeEpoch, targetScope);
+        scope.assertCurrent(wireEvent.scopeEpoch, targetScope);
+      } catch {
+        return;
+      }
+      routesRef?.broadcast({ type: 'turn-finalized', ...wireEvent }, targetScope);
     },
     now: ports.now,
     turnTtlMs: ports.turnTtlMs,

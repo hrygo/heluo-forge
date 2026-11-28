@@ -458,6 +458,7 @@ test('late definite denial restores the original draft after a recent-turn poll 
   const scope = h.getScope();
   const [interim] = h.prestep.listRecentFinalized(scope);
   assert.equal(interim.status, 'acceptance_unknown');
+  assert.equal(interim.scopeEpoch, scope.scopeEpoch);
   assert.equal(interim.preserveDraft, false);
   assert.equal('draft' in interim, false);
   const pendingAfterPrune = h.selection.pendingCount();
@@ -478,12 +479,13 @@ test('late definite denial restores the original draft after a recent-turn poll 
   });
 
   const expectedEvent = {
-    sessionId, expertId, draftDigest: selection.draftDigest,
+    sessionId, expertId, scopeEpoch: scope.scopeEpoch, draftDigest: selection.draftDigest,
     draftRecoveryId: selection.draftRecoveryId,
     status: 'failed', code: 'EXPERT_POLICY_DENIED', preserveDraft: true,
   };
   assert.deepEqual(events[1], { scope, ...expectedEvent });
   assert.deepEqual(h.prestep.listRecentFinalized(scope), [expectedEvent]);
+  assert.deepEqual(h.prestep.listRecentFinalized({ ...scope, scopeEpoch: scope.scopeEpoch + 1 }), []);
   assert.deepEqual(h.prestep.listRecentFinalized(makeScope({ subject: 'emp-bob' })), []);
   assert.equal(pendingAfterPrune, 0);
   const replay = await h.prestep.prepareTurn(turnInput);
