@@ -1957,6 +1957,27 @@ test('CI snapshot counts only distinct runs from consistent pages', async (t) =>
   });
 });
 
+test('CI snapshot is unavailable when a requested page returns too few runs', async (t) => {
+  const cases = [
+    { name: 'page one returns 99 of an expected 100', total: 101, page: 1, received: 99 },
+    { name: 'the last page returns one of two remaining runs', total: 102, page: 2, received: 1 },
+    { name: 'the last page within the sample limit returns only 99 runs', total: 301, page: 3, received: 99 },
+  ];
+  for (const { name, total, page, received } of cases) await t.test(name, async () => {
+    await withGitHub(async ({ state, env }) => {
+      const { mode } = configureIncrementalReplay(state, env);
+      state.checkRuns = Array.from({ length: total }, (_, index) => ({ id: index + 1, head_sha: replayHead,
+        status: 'completed', conclusion: 'success' }));
+      const start = (page - 1) * 100;
+      state.checkRunPages = { [page]: { total_count: total, check_runs: state.checkRuns.slice(start, start + received) } };
+      const revision = await capture(mode);
+      const context = JSON.parse(await readFile(revision.review_context, 'utf8'));
+      assert.equal(context.mode, 'incremental');
+      assert.equal(context.checks, null);
+    });
+  });
+});
+
 test('a new wording for an author-answered resolved P1 does not add an inline thread on the same revision', async () => {
   await withGitHub(async ({ state, env }) => {
     const scoped = { ...env, PR_AGENT_REVIEW_CONTEXT_PATH: env.GITHUB_OUTPUT + '.context' };
