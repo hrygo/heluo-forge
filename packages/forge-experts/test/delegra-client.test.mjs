@@ -382,6 +382,57 @@ test('atomic task creation, idempotent replay, digest conflict, transport-unknow
   assert.equal(factory.activeHandles, 0);
 });
 
+test('Delegra receipt classification preserves uncertainty only for task submissions (#484)', async (t) => {
+  const requestId = 'req-receipt-001';
+  const task = { scope: BASE_SCOPE, requestId, taskText: 'Synthetic task' };
+  const receipt = {
+    taskId: 'task_1', requestId, status: 'accepted', acceptedAt: '2026-11-23T08:01:00Z',
+  };
+  const unknown = { code: 'EXPERT_ACCEPTANCE_UNKNOWN', status: 503, retryable: true };
+  const mismatch = { code: 'EXPERT_SCOPE_MISMATCH', status: 409, retryable: false };
+  const cases = [
+    ['typed internal error', jsonResponse(500, {
+      error: { code: 'EXPERT_INTERNAL_ERROR', requestTraceId: 'trace-receipt' },
+    }), { ...unknown, details: { requestTraceId: 'trace-receipt' } }, {
+      code: 'EXPERT_INTERNAL_ERROR', status: 500, retryable: true, details: { requestTraceId: 'trace-receipt' },
+    }],
+    ['unclassified gateway error', jsonResponse(502, { error: { code: 'BAD_GATEWAY' } }), unknown,
+      { code: 'EXPERT_INTERNAL_ERROR', status: 500, retryable: false }],
+    ['missing receipt scope', jsonResponse(201, receipt), unknown, mismatch],
+    ['mismatched receipt scope', jsonResponse(200, { ...receipt, scope: { ...BASE_SCOPE, subject: 'emp_OTHER' } }),
+      unknown, mismatch],
+    ...[
+      [403, 'EXPERT_CALL_FORBIDDEN', false],
+      [422, 'EXPERT_REQUEST_INVALID', false],
+      [503, 'EXPERT_ISOLATION_UNVERIFIED', true],
+    ].map(([status, code, retryable]) => {
+      const error = { status, code, retryable };
+      return [code, jsonResponse(status, { error: { code } }), error, error];
+    }),
+  ];
+  const operations = [
+    ['create', 'POST', '', (client) => client.createTask({ ...task, expertId: 'exp_finance', delegationScope: 'proj_alpha' })],
+    ['followup', 'POST', '/task_1/followups', (client) => client.createFollowup({ ...task, taskId: 'task_1' })],
+    ['readback', 'GET', `/by-request/${requestId}`, (client) => client.getTaskByRequest({ scope: BASE_SCOPE, requestId })],
+  ];
+
+  for (const [name, response, writeError, readError] of cases) {
+    for (const [operation, method, path, run] of operations) {
+      await t.test(`${operation} with ${name}`, async () => {
+        const factory = createOpaqueHandleFactory(() => response);
+        const client = createDelegraClient({ exchangeCredential: factory.exchangeCredential });
+        await assert.rejects(() => run(client), method === 'POST' ? writeError : readError);
+        assert.equal(factory.requests.length, 1);
+        const [{ url, init }] = factory.requests;
+        assert.equal(new URL(url).pathname, `/api/v1/employee/expert-tasks${path}`);
+        assert.equal(init.method, method);
+        if (method === 'POST') assert.equal(JSON.parse(init.body).requestId, requestId);
+        assert.equal(factory.activeHandles, 0);
+      });
+    }
+  }
+});
+
 test('fail-closed boundaries: scope envelope mismatch, 3xx redirect, stale cursor, rate-limit retryable, pagination cap, oversized scope-check, and IAM auth errors', async () => {
   let mode = 'mismatch';
   let pageSeq = 0;

@@ -191,7 +191,7 @@ function createMockDelegraBackend({
   const tasksByRequest = new Map();
   const tasksById = new Map();
   let createTaskCalls = 0;
-  let dropNextCreateResponse = false;
+  let nextCreateFailure = null;
 
   const fetchImpl = async (rawUrl, init = {}) => {
     const url = String(rawUrl);
@@ -293,11 +293,18 @@ function createMockDelegraBackend({
       };
       tasksByRequest.set(body.requestId, record);
       tasksById.set(taskId, record);
-      if (dropNextCreateResponse) {
-        dropNextCreateResponse = false;
-        throw new TypeError('simulated wire drop after Delegra commit');
+      const failure = nextCreateFailure;
+      nextCreateFailure = null;
+      if (failure === 'wire drop') throw new TypeError('simulated wire drop after Delegra commit');
+      if (failure === 'internal server error') {
+        return {
+          ok: false,
+          status: 500,
+          async json() { return { error: { code: 'EXPERT_INTERNAL_ERROR', message: 'simulated failure after Delegra commit' } }; },
+        };
       }
-      return { ok: true, status: 201, async json() { return record; } };
+      const receipt = failure === 'unverifiable receipt' ? { ...record, scope: null } : record;
+      return { ok: true, status: 201, async json() { return receipt; } };
     }
 
     if (method === 'GET' && pathname.startsWith('/expert-tasks/by-request/')) {
@@ -358,7 +365,7 @@ function createMockDelegraBackend({
     exchangedToken,
     exchangeCalls,
     getCreateTaskCalls: () => createTaskCalls,
-    setDropNextCreateResponse: (v) => { dropNextCreateResponse = v; },
+    setNextCreateFailure: (failure) => { nextCreateFailure = failure; },
     fetchImpl,
   };
 }
@@ -617,12 +624,14 @@ test('Stage C4-C cross-package IAM + Policy + Experts E2E: real forge-policy den
   }
 });
 
-test('Stage C4-C wire-drop unknown acceptance + dispatchEnabled: false kill-switch recovery via /tasks/reconcile (#247 §9.2)', async () => {
+async function verifyUnknownAcceptanceRecovery(t, failure) {
   const storage = createMemoryStorage();
   const backend = createMockDelegraBackend();
   const iam = await createSignedInIam({ fetchImpl: backend.fetchImpl });
+  t.after(() => iam.dispose());
+  let requestId;
 
-  // Phase 1: Dispatch commits on Delegra, then wire drops -> 503 EXPERT_ACCEPTANCE_UNKNOWN persisted in pending_index.
+  // The write commits remotely, but the client cannot verify the acceptance response.
   const host1 = createSyntheticCordisHost({ storage, iam });
   try {
     host1.ctx.provide('forgePolicy', { decideEgress: async () => ({ decision: 'allow' }) });
@@ -646,18 +655,20 @@ test('Stage C4-C wire-drop unknown acceptance + dispatchEnabled: false kill-swit
       method: 'POST',
       path: `${API_PREFIX}/selections`,
       headers: mutationHeaders(),
-      body: { expertId: 'exp-fin-1', sessionId: 'sess-e2e-2', scopeEpoch: mentions.body.scopeEpoch, taskText: 'Wire-drop test' },
+      body: { expertId: 'exp-fin-1', sessionId: 'sess-e2e-2', scopeEpoch: mentions.body.scopeEpoch, taskText: 'Request with an unverified acceptance outcome' },
     });
 
-    backend.setDropNextCreateResponse(true);
+    backend.setNextCreateFailure(failure);
     const unknown = await host1.invokeHttp({
       method: 'POST',
       path: `${API_PREFIX}/tasks`,
       headers: mutationHeaders(),
-      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-e2e-2', taskText: 'Wire-drop test' },
+      body: { selectionToken: sel.body.selectionToken, sessionId: 'sess-e2e-2', taskText: 'Request with an unverified acceptance outcome' },
     });
     assert.equal(unknown.status, 503);
     assert.equal(unknown.body.error.code, 'EXPERT_ACCEPTANCE_UNKNOWN');
+    requestId = unknown.body.error.details.requestId;
+    assert.ok(requestId);
     assert.equal(backend.getCreateTaskCalls(), 1);
   } finally {
     await host1.disposeAll();
@@ -687,6 +698,8 @@ test('Stage C4-C wire-drop unknown acceptance + dispatchEnabled: false kill-swit
     const pendingBefore = await host2.invokeHttp({ path: `${API_PREFIX}/tasks/pending` });
     assert.equal(pendingBefore.status, 200);
     assert.equal(pendingBefore.body.items.length, 1);
+    assert.equal(pendingBefore.body.items[0].requestId, requestId);
+    assert.equal(pendingBefore.body.items[0].status, 'unknown');
 
     const reconciled = await host2.invokeHttp({
       method: 'POST',
@@ -696,15 +709,20 @@ test('Stage C4-C wire-drop unknown acceptance + dispatchEnabled: false kill-swit
     assert.equal(reconciled.status, 200);
     assert.equal(reconciled.body.reconciled.length, 1);
     assert.equal(reconciled.body.reconciled[0].taskId, 'task-e2e-1');
+    assert.equal(reconciled.body.reconciled[0].requestId, requestId);
     assert.equal(backend.getCreateTaskCalls(), 1, 'reconcile must never create a duplicate task');
 
     const pendingAfter = await host2.invokeHttp({ path: `${API_PREFIX}/tasks/pending` });
     assert.deepEqual(pendingAfter.body.items, []);
   } finally {
     await host2.disposeAll();
-    await iam.dispose();
   }
-});
+}
+
+for (const failure of ['wire drop', 'internal server error', 'unverifiable receipt']) {
+  test(`Stage C4-C ${failure} preserves the request ID for restart reconciliation with dispatch disabled (#247)`, (t) =>
+    verifyUnknownAcceptanceRecovery(t, failure));
+}
 
 test('Stage C4-C policy.decide unknown verdict string fails closed as EXPERT_POLICY_DENIED (#484)', async () => {
   const storage = createMemoryStorage();
